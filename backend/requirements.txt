@@ -1,0 +1,48 @@
+# Web Framework
+fastapi==0.100.0
+uvicorn[standard]==0.23.0
+
+# LLM & Agent
+langchain==0.0.300
+openai==0.27.8
+
+# Database
+neo4j==5.11.0
+chromadb==0.4.6
+redis==4.6.0
+
+# Data Processing
+pandas==2.0.0
+numpy==1.24.0
+requests==2.31.0
+beautifulsoup4==4.12.0
+lxml==4.9.0
+
+# Validation & Config
+pydantic==2.0.0
+python-dotenv==1.0.0
+email-validator==2.0.0
+
+# Async
+aiohttp==3.8.0
+aioredis==2.0.0
+
+# Testing
+pytest==7.4.0
+pytest-asyncio==0.21.0
+httpx==0.24.0
+pytest-cov==4.1.0
+
+# Logging
+structlog==23.0.0
+
+# Utils
+python-multipart==0.0.6
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# Development
+black==23.0.0
+isort==5.12.0
+flake8==6.0.0
+mypy==1.4.0
