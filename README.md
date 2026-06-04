@@ -97,6 +97,8 @@ cd backend
 
 # 创建虚拟环境（首次）
 python3 -m venv venv
+
+# 激活虚拟环境
 source venv/bin/activate  # macOS/Linux
 # 或: venv\Scripts\activate  # Windows
 
