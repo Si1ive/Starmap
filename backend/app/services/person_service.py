@@ -165,16 +165,23 @@ class PersonService:
                 )
                 
                 # 转换为模型
-                items = [
-                    PersonListItem(
-                        id=r["id"],
-                        name=r["name"],
-                        category=r.get("category", "other"),
-                        avatar_url=r.get("avatar_url"),
-                        description=r.get("description", "")[:200] if r.get("description") else None
+                items = []
+                for r in results:
+                    # 处理 categories 字段
+                    categories = r.get("categories", ["other"])
+                    if isinstance(categories, str):
+                        categories = [categories]
+                    
+                    items.append(
+                        PersonListItem(
+                            id=r["id"],
+                            name=r["name"],
+                            categories=categories,
+                            avatar_url=r.get("avatar_url"),
+                            summary=r.get("summary", "")[:200] if r.get("summary") else None,
+                            popularity_score=r.get("popularity_score", 0.0)
+                        )
                     )
-                    for r in results
-                ]
             except Exception as e:
                 logger.error("Neo4j搜索失败", error=str(e))
         

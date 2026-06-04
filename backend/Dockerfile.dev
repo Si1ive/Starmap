@@ -2,9 +2,12 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# 安装系统依赖
+# 安装系统依赖（包括 chroma-hnswlib 编译所需依赖）
 RUN apt-get update && apt-get install -y \
     gcc \
+    g++ \
+    cmake \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # 安装Python依赖

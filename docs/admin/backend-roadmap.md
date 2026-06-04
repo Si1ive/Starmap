@@ -257,6 +257,10 @@ async def update_person(
 | 实现停止任务API | `app/api/admin/crawler.py` | POST /admin/crawler/tasks/:id/stop |
 | 实现任务日志API | `app/api/admin/crawler.py` | GET /admin/crawler/tasks/:id/logs |
 | 实现爬虫配置API | `app/api/admin/crawler.py` | GET/PUT /admin/crawler/config |
+| 实现爬取统计API | `app/api/admin/crawler.py` | GET /admin/crawler/stats |
+| 实现数据源统计API | `app/api/admin/crawler.py` | GET /admin/crawler/stats/sources |
+| 实现失败分析API | `app/api/admin/crawler.py` | GET /admin/crawler/stats/failures |
+| 实现实时速率API | `app/api/admin/crawler.py` | GET /admin/crawler/stats/realtime |
 
 **爬虫任务模型**：
 ```python
@@ -351,6 +355,78 @@ async def crawler_logs_websocket(
         await websocket.send_text(log)
     
     await websocket.close()
+
+# 爬取统计API
+@router.get("/crawler/stats")
+async def get_crawler_statistics(
+    days: int = Query(7, ge=1, le=30),
+    current_user: AdminUser = Depends(require_permission("crawler:control"))
+):
+    """获取爬取统计报表"""
+    stats = {
+        "overview": {
+            "total_tasks": await crawler_service.count_total_tasks(),
+            "total_crawled": await crawler_service.count_total_crawled(),
+            "total_success": await crawler_service.count_total_success(),
+            "total_failed": await crawler_service.count_total_failed(),
+            "overall_success_rate": await crawler_service.get_overall_success_rate(),
+            "today_crawled": await crawler_service.count_today_crawled(),
+        },
+        "task_execution": {
+            "running_tasks": await crawler_service.count_running_tasks(),
+            "pending_tasks": await crawler_service.count_pending_tasks(),
+            "today_completed": await crawler_service.count_today_completed(),
+            "today_failed": await crawler_service.count_today_failed(),
+            "avg_task_duration": await crawler_service.get_avg_task_duration(days),
+            "avg_crawl_speed": await crawler_service.get_avg_crawl_speed(),
+        },
+        "source_distribution": await crawler_service.get_source_distribution(days),
+        "failure_analysis": {
+            "top_failure_reasons": await crawler_service.get_top_failure_reasons(5),
+            "failure_trend": await crawler_service.get_failure_trend(days),
+            "retry_success_rate": await crawler_service.get_retry_success_rate(),
+            "failed_resources": await crawler_service.get_recent_failed_resources(10),
+        },
+        "coverage": {
+            "person_count": await crawler_service.get_crawled_person_count(),
+            "work_count": await crawler_service.get_crawled_work_count(),
+            "category_distribution": await crawler_service.get_category_distribution(),
+            "nationality_distribution": await crawler_service.get_nationality_distribution(),
+            "data_completeness": await crawler_service.get_data_completeness(),
+        },
+    }
+    return {"code": 200, "data": stats}
+
+@router.get("/crawler/stats/sources")
+async def get_crawler_source_stats(
+    days: int = Query(7, ge=1, le=30),
+    current_user: AdminUser = Depends(require_permission("crawler:control"))
+):
+    """获取数据源统计"""
+    sources = await crawler_service.get_source_statistics(days)
+    return {"code": 200, "data": sources}
+
+@router.get("/crawler/stats/failures")
+async def get_crawler_failure_stats(
+    days: int = Query(7, ge=1, le=30),
+    current_user: AdminUser = Depends(require_permission("crawler:control"))
+):
+    """获取失败分析统计"""
+    failures = await crawler_service.get_failure_statistics(days)
+    return {"code": 200, "data": failures}
+
+@router.get("/crawler/stats/realtime")
+async def get_crawler_realtime_stats(
+    current_user: AdminUser = Depends(require_permission("crawler:control"))
+):
+    """获取实时爬取速率"""
+    realtime = {
+        "current_speed": await crawler_service.get_current_crawl_speed(),
+        "running_tasks_progress": await crawler_service.get_running_tasks_progress(),
+        "recent_logs": await crawler_service.get_recent_logs(10),
+        "system_load": await crawler_service.get_system_load(),
+    }
+    return {"code": 200, "data": realtime}
 ```
 
 ---
@@ -692,6 +768,10 @@ async def audit_middleware(request: Request, call_next):
 | WS | /admin/crawler/tasks/:id/logs | 实时日志 | L1+ |
 | GET | /admin/crawler/config | 获取配置 | L3 |
 | PUT | /admin/crawler/config | 更新配置 | L3 |
+| GET | /admin/crawler/stats | 爬取统计 | L1+ |
+| GET | /admin/crawler/stats/sources | 数据源统计 | L1+ |
+| GET | /admin/crawler/stats/failures | 失败分析 | L1+ |
+| GET | /admin/crawler/stats/realtime | 实时速率 | L1+ |
 
 ### 对话模块
 

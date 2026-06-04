@@ -202,11 +202,14 @@ class Neo4jClient:
         RETURN p {
             .id,
             .name,
-            .category,
+            .name_en,
+            .gender,
+            .categories,
             .birth_date,
+            .birth_place,
             .nationality,
-            .description,
-            .avatar_url
+            .summary,
+            .popularity_score
         } AS person
         """
         results = await self.execute_query(query, {"person_id": person_id})
@@ -234,16 +237,16 @@ class Neo4jClient:
         if category and category != "all":
             query = """
             MATCH (p:Person)
-            WHERE p.name CONTAINS $keyword 
-               OR p.description CONTAINS $keyword
-               OR ANY(alias IN p.aliases WHERE alias CONTAINS $keyword)
-            AND p.category = $category
+            WHERE (p.name CONTAINS $keyword 
+               OR p.summary CONTAINS $keyword
+               OR p.name_en CONTAINS $keyword)
+            AND $category IN p.categories
             RETURN p {
                 .id,
                 .name,
-                .category,
-                .avatar_url,
-                .description
+                .categories,
+                .summary,
+                .popularity_score
             } AS person
             SKIP $skip LIMIT $limit
             """
@@ -257,14 +260,14 @@ class Neo4jClient:
             query = """
             MATCH (p:Person)
             WHERE p.name CONTAINS $keyword 
-               OR p.description CONTAINS $keyword
-               OR ANY(alias IN p.aliases WHERE alias CONTAINS $keyword)
+               OR p.summary CONTAINS $keyword
+               OR p.name_en CONTAINS $keyword
             RETURN p {
                 .id,
                 .name,
-                .category,
-                .avatar_url,
-                .description
+                .categories,
+                .summary,
+                .popularity_score
             } AS person
             SKIP $skip LIMIT $limit
             """
