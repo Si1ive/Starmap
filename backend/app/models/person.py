@@ -17,12 +17,22 @@ class PersonBase(BaseModel):
     """人物基础模型"""
     
     name: str = Field(..., min_length=1, max_length=100, description="人物姓名")
-    category: str = Field(
-        default="other",
-        description="人物分类",
-        examples=["actor", "singer", "director", "other"]
+    name_en: Optional[str] = Field(
+        default=None,
+        max_length=100,
+        description="英文名"
     )
-    description: Optional[str] = Field(
+    gender: Optional[str] = Field(
+        default=None,
+        description="性别",
+        examples=["male", "female"]
+    )
+    categories: List[str] = Field(
+        default=["other"],
+        description="人物分类列表",
+        examples=[["actor"], ["singer", "songwriter"]]
+    )
+    summary: Optional[str] = Field(
         default=None,
         max_length=5000,
         description="人物简介"
@@ -35,6 +45,17 @@ class PersonBase(BaseModel):
     birth_date: Optional[str] = Field(
         default=None,
         description="出生日期（YYYY-MM-DD格式）"
+    )
+    birth_place: Optional[str] = Field(
+        default=None,
+        max_length=100,
+        description="出生地"
+    )
+    popularity_score: Optional[float] = Field(
+        default=0.0,
+        ge=0,
+        le=100,
+        description="人气分数"
     )
     avatar_url: Optional[str] = Field(
         default=None,
@@ -53,18 +74,35 @@ class PersonCreate(PersonBase):
         default=None,
         description="人物唯一标识（可选，不传则自动生成）"
     )
+    # 兼容旧字段
+    category: Optional[str] = Field(
+        default=None,
+        description="人物分类（兼容旧版，优先使用categories）"
+    )
+    description: Optional[str] = Field(
+        default=None,
+        max_length=5000,
+        description="人物简介（兼容旧版，优先使用summary）"
+    )
 
 
 class PersonUpdate(BaseModel):
     """更新人物请求模型"""
     
     name: Optional[str] = Field(default=None, min_length=1, max_length=100)
-    category: Optional[str] = None
-    description: Optional[str] = Field(default=None, max_length=5000)
+    name_en: Optional[str] = Field(default=None, max_length=100)
+    gender: Optional[str] = None
+    categories: Optional[List[str]] = None
+    summary: Optional[str] = Field(default=None, max_length=5000)
     nationality: Optional[str] = Field(default=None, max_length=50)
     birth_date: Optional[str] = None
+    birth_place: Optional[str] = Field(default=None, max_length=100)
+    popularity_score: Optional[float] = Field(default=None, ge=0, le=100)
     avatar_url: Optional[str] = None
     aliases: Optional[List[str]] = None
+    # 兼容旧字段
+    category: Optional[str] = None
+    description: Optional[str] = Field(default=None, max_length=5000)
 
 
 class Person(PersonBase):
@@ -77,10 +115,14 @@ class Person(PersonBase):
             "example": {
                 "id": "jay-chou",
                 "name": "周杰伦",
-                "category": "singer",
-                "description": "华语流行乐男歌手、音乐人...",
-                "nationality": "中国台湾",
+                "name_en": "Jay Chou",
+                "gender": "male",
+                "categories": ["singer", "actor", "director"],
+                "summary": "华语流行乐男歌手、音乐人...",
+                "nationality": "中国",
                 "birth_date": "1979-01-18",
+                "birth_place": "台湾省新北市",
+                "popularity_score": 95.5,
                 "avatar_url": "https://example.com/avatar.jpg",
                 "aliases": ["Jay Chou", "周董"]
             }
@@ -93,12 +135,26 @@ class PersonListItem(BaseModel):
     
     id: str = Field(..., description="人物唯一标识")
     name: str = Field(..., description="人物姓名")
-    category: str = Field(..., description="人物分类")
+    categories: List[str] = Field(default=["other"], description="人物分类列表")
     avatar_url: Optional[str] = Field(default=None, description="头像URL")
-    description: Optional[str] = Field(
+    summary: Optional[str] = Field(
         default=None,
         max_length=200,
         description="人物简介（摘要）"
+    )
+    popularity_score: Optional[float] = Field(
+        default=0.0,
+        description="人气分数"
+    )
+    # 兼容旧字段
+    category: Optional[str] = Field(
+        default=None,
+        description="人物分类（兼容旧版）"
+    )
+    description: Optional[str] = Field(
+        default=None,
+        max_length=200,
+        description="人物简介（兼容旧版）"
     )
 
 
