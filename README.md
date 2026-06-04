@@ -22,7 +22,7 @@ StarMap是一个基于知识图谱的艺人信息探索系统，支持通过自�
 | 图数据库 | Neo4j 5.x - 人物关系网络 |
 | 向量数据库 | ChromaDB - 语义搜索 |
 | 缓存 | Redis - 会话与热点数据 |
-| 部署 | Docker + Docker Compose |
+| 部署 | **Podman** + Podman Compose |
 
 ## 数据库架构
 
@@ -39,7 +39,7 @@ StarMap是一个基于知识图谱的艺人信息探索系统，支持通过自�
 
 - Python 3.11+
 - Node.js 18+
-- Docker + Docker Compose（或 Colima 替代方案）
+- **Podman** + podman-compose
 
 ### 1. 克隆项目
 
@@ -48,27 +48,40 @@ git clone <repo-url>
 cd starmap
 ```
 
-### 2. 启动数据库服务（Docker）
+### 2. 安装 Podman（macOS）
+
+```bash
+# 安装 Podman 和 podman-compose
+brew install podman podman-compose
+
+# 初始化 Podman 虚拟机（首次）
+podman machine init
+
+# 启动虚拟机
+podman machine start
+```
+
+### 3. 启动数据库服务（Podman）
 
 ```bash
 # 启动 MySQL + Neo4j + Redis + ChromaDB
-docker-compose up -d mysql neo4j redis chromadb
+podman-compose -f docker-compose.podman.yml up -d
 
 # 查看服务状态
-docker-compose ps
+podman-compose -f docker-compose.podman.yml ps
 
 # 查看服务日志
-docker-compose logs -f mysql
-docker-compose logs -f neo4j
-docker-compose logs -f redis
-docker-compose logs -f chromadb
+podman-compose -f docker-compose.podman.yml logs -f mysql
+podman-compose -f docker-compose.podman.yml logs -f neo4j
+podman-compose -f docker-compose.podman.yml logs -f redis
+podman-compose -f docker-compose.podman.yml logs -f chromadb
 ```
 
 服务启动后访问：
 - Neo4j Browser: http://localhost:7474 (用户名: neo4j, 密码: starmap123)
 - ChromaDB API: http://localhost:8001
 
-### 3. 初始化 MySQL 数据库
+### 4. 初始化 MySQL 数据库
 
 ```bash
 cd backend
@@ -77,7 +90,7 @@ cd backend
 python scripts/init_database.py --all
 ```
 
-### 4. 启动后端服务（本地开发模式）
+### 5. 启动后端服务（本地开发模式）
 
 ```bash
 cd backend
@@ -99,7 +112,7 @@ python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 - API 文档: http://localhost:8000/docs
 - 健康检查: http://localhost:8000/health
 
-### 5. 启动前端服务
+### 6. 启动前端服务
 
 ```bash
 cd frontend
@@ -114,7 +127,7 @@ npm run dev
 前端服务：
 - 开发服务器: http://localhost:5173
 
-### 6. 验证服务状态
+### 7. 验证服务状态
 
 ```bash
 # 检查所有服务健康状态
@@ -182,49 +195,32 @@ starmap/
 │   ├── src/                # 源代码
 │   └── public/             # 静态资源
 ├── frontend-admin/          # 管理端 (React)
-├── docker-compose.yml       # Docker编排
+├── docker-compose.podman.yml  # Podman 编排配置
 └── README.md               # 项目说明
 ```
 
 ## 常见问题排查
 
-### Docker 服务启动失败
+### Podman 服务启动失败
 
-**问题**: `docker-compose up` 报错或容器无法启动
+**问题**: `podman-compose up` 报错或容器无法启动
 
 **解决方案**:
 ```bash
-# 1. 检查 Docker 是否运行
-docker info
+# 1. 检查 Podman 虚拟机是否运行
+podman machine list
 
-# 2. 清理并重新启动
-docker-compose down
-docker system prune -f  # 清理未使用的镜像和缓存
-docker-compose up -d mysql neo4j redis chromadb
+# 2. 如果未运行，启动虚拟机
+podman machine start
 
-# 3. 查看具体错误日志
-docker-compose logs mysql
-docker-compose logs neo4j
-```
+# 3. 清理并重新启动
+podman-compose -f docker-compose.podman.yml down
+podman system prune -f  # 清理未使用的镜像和缓存
+podman-compose -f docker-compose.podman.yml up -d
 
-### macOS 没有 Docker Desktop
-
-**方案一：使用 Colima（推荐）**
-```bash
-# 安装 Colima
-brew install colima docker docker-compose
-
-# 启动 Colima（分配 4GB 内存）
-colima start --memory 4
-
-# 验证
-docker info
-```
-
-**方案二：使用 OrbStack**
-```bash
-brew install --cask orbstack
-orbctl start
+# 4. 查看具体错误日志
+podman-compose -f docker-compose.podman.yml logs mysql
+podman-compose -f docker-compose.podman.yml logs neo4j
 ```
 
 ### 后端启动报错：模块未找到
@@ -263,7 +259,7 @@ kill -9 <PID>
 
 **检查服务是否运行**:
 ```bash
-docker-compose ps
+podman-compose -f docker-compose.podman.yml ps
 # 应该看到 mysql、neo4j、redis、chromadb 都是 healthy 状态
 ```
 
@@ -289,13 +285,13 @@ cat backend/.env
 
 ```bash
 # 查看磁盘使用
-docker system df
+podman system df
 
 # 清理构建缓存（可释放数GB空间）
-docker builder prune -f
+podman builder prune -f
 
 # 清理所有未使用资源
-docker system prune -a -f
+podman system prune -a -f
 ```
 
 ## 数据库监控与访问
@@ -304,13 +300,13 @@ docker system prune -a -f
 
 ```bash
 # 查看所有容器资源占用
-docker stats --no-stream
+podman stats --no-stream
 
 # 查看容器日志
-docker-compose logs -f mysql
-docker-compose logs -f neo4j
-docker-compose logs -f redis
-docker-compose logs -f chromadb
+podman-compose -f docker-compose.podman.yml logs -f mysql
+podman-compose -f docker-compose.podman.yml logs -f neo4j
+podman-compose -f docker-compose.podman.yml logs -f redis
+podman-compose -f docker-compose.podman.yml logs -f chromadb
 
 # 检查服务健康状态
 curl http://localhost:8000/health
@@ -321,7 +317,7 @@ curl http://localhost:8000/health
 **命令行访问**:
 ```bash
 # 进入 MySQL 容器
-docker exec -it starmap-mysql mysql -u starmap -p starmap
+podman exec -it starmap-mysql mysql -u starmap -p starmap
 # 密码: starmap123
 
 # 常用查询
@@ -343,7 +339,7 @@ open http://localhost:7474
 **命令行查询**：
 ```bash
 # 进入 Neo4j 容器执行 Cypher 查询
-docker exec -it starmap-neo4j cypher-shell -u neo4j -p starmap123
+podman exec -it starmap-neo4j cypher-shell -u neo4j -p starmap123
 
 # 常用查询
 MATCH (n) RETURN count(n) as nodes;                    # 统计节点数
@@ -365,7 +361,7 @@ brew install --cask redisinsight
 **命令行操作**：
 ```bash
 # 进入 Redis 容器
-docker exec -it starmap-redis redis-cli
+podman exec -it starmap-redis redis-cli
 
 # 常用命令
 KEYS *                    # 查看所有键
@@ -420,7 +416,7 @@ print(results)
 
 ```bash
 # 1. 确保数据库服务运行
-docker-compose up -d mysql neo4j redis chromadb
+podman-compose -f docker-compose.podman.yml up -d
 
 # 2. 启动后端服务（会自动创建 ChromaDB 集合）
 cd backend
@@ -443,13 +439,13 @@ python scripts/init_database.py --all --clear # 清空后重新导入
 
 ```bash
 # MySQL 表数量（应显示 8 张表 + 2 个视图）
-docker exec starmap-mysql mysql -u starmap -p starmap -e "SHOW TABLES;"
+podman exec starmap-mysql mysql -u starmap -p starmap -e "SHOW TABLES;"
 
 # Neo4j 节点数（应显示 13 个节点）
-docker exec starmap-neo4j cypher-shell -u neo4j -p starmap123 "MATCH (n) RETURN count(n) as nodes;"
+podman exec starmap-neo4j cypher-shell -u neo4j -p starmap123 "MATCH (n) RETURN count(n) as nodes;"
 
 # Redis 键数量（应为 0 或少量缓存）
-docker exec starmap-redis redis-cli dbsize
+podman exec starmap-redis redis-cli dbsize
 
 # ChromaDB 集合（应显示 persons 集合有 8 条向量）
 curl http://localhost:8001/api/v2/tenants/default_tenant/databases/default_database/collections
