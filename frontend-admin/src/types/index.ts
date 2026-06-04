@@ -57,10 +57,14 @@ export interface CrawlerTask {
   source: 'wikipedia' | 'douban' | 'other'
   target_count: number
   completed_count: number
+  success_count: number
+  fail_count: number
+  success_rate: number
   progress: number
   status: 'pending' | 'running' | 'completed' | 'failed' | 'stopped'
   started_at?: string
   completed_at?: string
+  estimated_completion?: string
   error_message?: string
 }
 

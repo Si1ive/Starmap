@@ -5,31 +5,22 @@ import { ArrowLeftOutlined, ZoomInOutlined, ZoomOutOutlined } from '@ant-design/
 import * as d3 from 'd3'
 import { getPersonRelations } from '@/api/person'
 import Loading from '@/components/Loading'
+import type { IRelationNode, IRelationEdge } from '@/types'
 
 const { Title, Text } = Typography
 
-interface GraphNode {
-  id: string
-  name: string
-  type: string
-  avatar?: string
+interface GraphData {
+  center: IRelationNode
+  nodes: IRelationNode[]
+  edges: IRelationEdge[]
+}
+
+// D3 内部使用的节点类型（包含 x, y 等模拟属性）
+interface D3Node extends IRelationNode {
   x?: number
   y?: number
   fx?: number | null
   fy?: number | null
-}
-
-interface GraphLink {
-  source: string | GraphNode
-  target: string | GraphNode
-  type: string
-  label: string
-}
-
-interface GraphData {
-  center: { id: string; name: string }
-  nodes: GraphNode[]
-  edges: GraphLink[]
 }
 
 const GraphPage: React.FC = () => {
@@ -62,20 +53,15 @@ const GraphPage: React.FC = () => {
 
     setLoading(true)
     try {
-      const response = await getPersonRelations(id, { depth: 2 })
-      const data = (response as any)?.data || response
+      const data = await getPersonRelations(id, { depth: 2 })
 
       if (data) {
         // 确保中心节点在 nodes 中
         const nodes = data.nodes || []
-        const centerExists = nodes.some((n: GraphNode) => n.id === data.center?.id)
+        const centerExists = nodes.some((n: IRelationNode) => n.id === data.center?.id)
 
         if (!centerExists && data.center) {
-          nodes.unshift({
-            id: data.center.id,
-            name: data.center.name,
-            type: 'person'
-          })
+          nodes.unshift(data.center)
         }
 
         setGraphData({
@@ -117,13 +103,13 @@ const GraphPage: React.FC = () => {
 
     const g = svg.append('g')
 
-    // 准备数据
-    const nodes: GraphNode[] = graphData.nodes.map((n) => ({ ...n }))
-    const links: GraphLink[] = graphData.edges.map((e) => ({ ...e }))
+    // 准备数据 - 转换为 D3Node
+    const nodes: D3Node[] = graphData.nodes.map((n) => ({ ...n }))
+    const links = graphData.edges.map((e) => ({ ...e }))
 
     // 创建力导向模拟
-    const simulation = d3.forceSimulation<GraphNode>(nodes)
-      .force('link', d3.forceLink<GraphNode, GraphLink>(links)
+    const simulation = d3.forceSimulation<D3Node>(nodes)
+      .force('link', d3.forceLink<D3Node, typeof links[0]>(links)
         .id((d) => d.id)
         .distance(150)
       )
@@ -164,7 +150,7 @@ const GraphPage: React.FC = () => {
       .attr('font-size', 11)
       .attr('fill', '#666')
       .attr('text-anchor', 'middle')
-      .text((d) => d.label)
+      .text((d) => d.type)
 
     // 绘制节点
     const node = g.append('g')
@@ -173,11 +159,11 @@ const GraphPage: React.FC = () => {
       .enter()
       .append('g')
       .attr('cursor', 'pointer')
-      .call(d3.drag<SVGGElement, GraphNode>()
+      .call(d3.drag<SVGGElement, D3Node>()
         .on('start', (event, d) => {
           if (!event.active) simulation.alphaTarget(0.3).restart()
-          d.fx = d.x
-          d.fy = d.y
+          d.fx = d.x ?? null
+          d.fy = d.y ?? null
         })
         .on('drag', (event, d) => {
           d.fx = event.x
@@ -203,16 +189,7 @@ const GraphPage: React.FC = () => {
       .attr('stroke-width', 3)
       .attr('opacity', 0.9)
 
-    // 节点文字
-    node.append('text')
-      .attr('dy', 45)
-      .attr('text-anchor', 'middle')
-      .attr('font-size', 12)
-      .attr('font-weight', 500)
-      .attr('fill', '#333')
-      .text((d) => d.name)
-
-    // 节点类型标签
+    // 节点文字（名字首字）
     node.append('text')
       .attr('dy', 5)
       .attr('text-anchor', 'middle')
@@ -220,17 +197,26 @@ const GraphPage: React.FC = () => {
       .attr('fill', '#fff')
       .text((d) => d.name.charAt(0))
 
+    // 节点名称标签
+    node.append('text')
+      .attr('dy', 50)
+      .attr('text-anchor', 'middle')
+      .attr('font-size', 12)
+      .attr('font-weight', 500)
+      .attr('fill', '#333')
+      .text((d) => d.name)
+
     // 更新位置
     simulation.on('tick', () => {
       link
-        .attr('x1', (d) => (d.source as GraphNode).x!)
-        .attr('y1', (d) => (d.source as GraphNode).y!)
-        .attr('x2', (d) => (d.target as GraphNode).x!)
-        .attr('y2', (d) => (d.target as GraphNode).y!)
+        .attr('x1', (d) => (d.source as unknown as D3Node).x!)
+        .attr('y1', (d) => (d.source as unknown as D3Node).y!)
+        .attr('x2', (d) => (d.target as unknown as D3Node).x!)
+        .attr('y2', (d) => (d.target as unknown as D3Node).y!)
 
       linkLabel
-        .attr('x', (d) => ((d.source as GraphNode).x! + (d.target as GraphNode).x!) / 2)
-        .attr('y', (d) => ((d.source as GraphNode).y! + (d.target as GraphNode).y!) / 2)
+        .attr('x', (d) => ((d.source as unknown as D3Node).x! + (d.target as unknown as D3Node).x!) / 2)
+        .attr('y', (d) => ((d.source as unknown as D3Node).y! + (d.target as unknown as D3Node).y!) / 2)
 
       node.attr('transform', (d) => `translate(${d.x},${d.y})`)
     })

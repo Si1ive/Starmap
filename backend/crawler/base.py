@@ -4,14 +4,14 @@
 - 请求频率控制（≤1 req/s）
 - User-Agent 池轮换
 - 重试机制
-- 日志记录
+- 日志记录（自动写入数据库）
 - 响应缓存
 """
 
 import time
 import random
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Callable
 from dataclasses import dataclass
 
 import requests
@@ -106,6 +106,9 @@ class BaseCrawler:
         retry_delay: float = 2.0,
         use_proxy: bool = False,
         proxy_url: Optional[str] = None,
+        source_id: Optional[str] = None,
+        task_id: Optional[str] = None,
+        log_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     ):
         """初始化爬虫
 
@@ -116,6 +119,9 @@ class BaseCrawler:
             retry_delay: 重试间隔（秒）
             use_proxy: 是否使用代理
             proxy_url: 代理URL
+            source_id: 爬取源ID，用于日志记录
+            task_id: 任务ID，用于日志记录
+            log_callback: 日志回调函数，接收日志字典
         """
         # 确保请求频率不超过1 req/s
         self.delay = max(delay, 1.0)
@@ -124,6 +130,9 @@ class BaseCrawler:
         self.retry_delay = retry_delay
         self.use_proxy = use_proxy
         self.proxy_url = proxy_url
+        self.source_id = source_id
+        self.task_id = task_id
+        self.log_callback = log_callback
 
         # 上次请求时间
         self._last_request_time: Optional[float] = None
@@ -145,7 +154,7 @@ class BaseCrawler:
 
         logger.info(
             f"BaseCrawler initialized: delay={delay}s, timeout={timeout}s, "
-            f"max_retries={max_retries}"
+            f"max_retries={max_retries}, source_id={source_id}, task_id={task_id}"
         )
 
     def _get_random_user_agent(self) -> str:
@@ -170,6 +179,58 @@ class BaseCrawler:
                 "https": self.proxy_url,
             }
         return None
+
+    def _log(
+        self,
+        level: str,
+        message: str,
+        stage: Optional[str] = None,
+        status: Optional[str] = None,
+        duration_ms: Optional[int] = None,
+        error_type: Optional[str] = None,
+        error_detail: Optional[str] = None,
+        resource_url: Optional[str] = None,
+        resource_name: Optional[str] = None,
+        resource_type: Optional[str] = None,
+        action: Optional[str] = None,
+        retry_count: int = 0,
+        details: Optional[Dict[str, Any]] = None,
+    ):
+        """记录日志（支持回调写入数据库）"""
+        log_data = {
+            "task_id": self.task_id,
+            "source_id": self.source_id,
+            "level": level,
+            "stage": stage,
+            "resource_url": resource_url,
+            "resource_name": resource_name,
+            "resource_type": resource_type,
+            "action": action,
+            "status": status,
+            "duration_ms": duration_ms,
+            "message": message,
+            "error_type": error_type,
+            "error_detail": error_detail,
+            "retry_count": retry_count,
+            "details": details,
+        }
+
+        # 调用回调函数写入数据库
+        if self.log_callback:
+            try:
+                self.log_callback(log_data)
+            except Exception as e:
+                logger.warning(f"Log callback failed: {e}")
+
+        # 同时写入本地日志
+        if level in ("ERROR", "CRITICAL"):
+            logger.error(message)
+        elif level == "WARNING":
+            logger.warning(message)
+        elif level == "SUCCESS":
+            logger.info(f"[SUCCESS] {message}")
+        else:
+            logger.info(message)
 
     def fetch(self, url: str, headers: Optional[Dict[str, str]] = None) -> CrawlResult:
         """获取页面内容
@@ -203,16 +264,32 @@ class BaseCrawler:
                 proxies=self._get_proxies(),
             )
             duration = time.time() - start_time
+            duration_ms = int(duration * 1000)
 
             # 检查状态码
             if response.status_code == 429:
-                logger.warning(f"Rate limited: {url}")
+                self._log(
+                    level="WARNING",
+                    message=f"Rate limited: {url}",
+                    stage="fetch",
+                    status="failed",
+                    resource_url=url,
+                    duration_ms=duration_ms,
+                    error_type="RateLimitError",
+                    error_detail=f"HTTP 429 from {url}",
+                )
                 raise RateLimitError(f"Rate limited by {url}")
 
             response.raise_for_status()
 
-            logger.info(
-                f"Fetched: {url} - Status {response.status_code} - {duration:.2f}s"
+            self._log(
+                level="SUCCESS",
+                message=f"Fetched: {url} - Status {response.status_code} - {duration:.2f}s",
+                stage="fetch",
+                status="success",
+                resource_url=url,
+                duration_ms=duration_ms,
+                details={"status_code": response.status_code},
             )
 
             return CrawlResult(
@@ -225,7 +302,17 @@ class BaseCrawler:
 
         except requests.exceptions.RequestException as e:
             duration = time.time() - start_time
-            logger.error(f"Failed to fetch {url}: {e}")
+            duration_ms = int(duration * 1000)
+            self._log(
+                level="ERROR",
+                message=f"Failed to fetch {url}: {e}",
+                stage="fetch",
+                status="failed",
+                resource_url=url,
+                duration_ms=duration_ms,
+                error_type=type(e).__name__,
+                error_detail=str(e),
+            )
             return CrawlResult(
                 url=url,
                 error=str(e),
@@ -249,12 +336,27 @@ class BaseCrawler:
 
             if attempt < self.max_retries:
                 wait = self.retry_delay * (2 ** attempt)  # 指数退避
-                logger.warning(
-                    f"Retry {attempt + 1}/{self.max_retries} for {url} after {wait:.1f}s"
+                self._log(
+                    level="WARNING",
+                    message=f"Retry {attempt + 1}/{self.max_retries} for {url} after {wait:.1f}s",
+                    stage="fetch",
+                    status="retry",
+                    resource_url=url,
+                    retry_count=attempt + 1,
+                    details={"wait_time": wait, "attempt": attempt + 1},
                 )
                 time.sleep(wait)
 
-        logger.error(f"Failed to fetch {url} after {self.max_retries + 1} attempts")
+        self._log(
+            level="ERROR",
+            message=f"Failed to fetch {url} after {self.max_retries + 1} attempts",
+            stage="fetch",
+            status="failed",
+            resource_url=url,
+            retry_count=self.max_retries,
+            error_type="MaxRetriesExceeded",
+            error_detail=f"Failed after {self.max_retries + 1} attempts",
+        )
         return result
 
     def parse(self, html: str) -> Any:

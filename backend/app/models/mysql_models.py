@@ -225,6 +225,7 @@ class CrawlTask(Base):
         Enum("full", "incremental", "targeted")
     )
     source: Mapped[Optional[str]] = mapped_column(String(50))
+    source_id: Mapped[Optional[str]] = mapped_column(String(32), comment="爬取源ID")
     target_count: Mapped[Optional[int]]
     completed_count: Mapped[int] = mapped_column(default=0)
     success_count: Mapped[int] = mapped_column(default=0)
@@ -250,6 +251,7 @@ class CrawlTask(Base):
         Index("idx_ct_status", "status"),
         Index("idx_ct_task_type", "task_type"),
         Index("idx_ct_source", "source"),
+        Index("idx_ct_source_id", "source_id"),
         Index("idx_ct_created_at", "created_at"),
         {"comment": "爬虫任务表"}
     )
@@ -261,9 +263,13 @@ class CrawlLog(Base):
     
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     task_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_id: Mapped[Optional[str]] = mapped_column(String(32), comment="爬取源ID")
     level: Mapped[str] = mapped_column(
-        Enum("INFO", "WARNING", "ERROR", "DEBUG"),
+        Enum("INFO", "WARNING", "ERROR", "DEBUG", "SUCCESS", "CRITICAL"),
         default="INFO"
+    )
+    stage: Mapped[Optional[str]] = mapped_column(
+        String(50), comment="阶段: fetch/parse/validate/store"
     )
     
     resource_url: Mapped[Optional[str]] = mapped_column(String(500))
@@ -281,11 +287,13 @@ class CrawlLog(Base):
     error_type: Mapped[Optional[str]] = mapped_column(String(50))
     error_detail: Mapped[Optional[str]] = mapped_column(Text)
     retry_count: Mapped[int] = mapped_column(default=0)
+    details: Mapped[Optional[dict]] = mapped_column(JSON, comment="详细日志信息")
     
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     
     __table_args__ = (
         Index("idx_cl_task_id", "task_id"),
+        Index("idx_cl_source_id", "source_id"),
         Index("idx_cl_level", "level"),
         Index("idx_cl_status", "status"),
         Index("idx_cl_resource_type", "resource_type"),
@@ -323,6 +331,181 @@ class AdminUser(Base):
         Index("idx_au_role", "role"),
         Index("idx_au_is_active", "is_active"),
         {"comment": "管理员用户表"}
+    )
+
+
+class CrawlSource(Base):
+    """爬取源配置表"""
+    __tablename__ = "crawl_sources"
+    
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="唯一标识")
+    name: Mapped[str] = mapped_column(String(100), nullable=False, comment="源名称")
+    code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, comment="源编码")
+    type: Mapped[Optional[str]] = mapped_column(String(50), comment="源类型")
+    base_url: Mapped[Optional[str]] = mapped_column(String(500), comment="基础URL")
+    config: Mapped[Optional[dict]] = mapped_column(JSON, comment="源配置")
+    
+    # 频率控制
+    request_interval: Mapped[float] = mapped_column(DECIMAL(3, 1), default=1.0, comment="请求间隔(秒)")
+    daily_limit: Mapped[int] = mapped_column(default=1000, comment="每日请求上限")
+    concurrent_limit: Mapped[int] = mapped_column(default=5, comment="并发数限制")
+    
+    # 状态
+    status: Mapped[str] = mapped_column(
+        Enum("active", "inactive", "error", "deprecated"),
+        default="active"
+    )
+    health_status: Mapped[str] = mapped_column(
+        Enum("healthy", "degraded", "down"),
+        default="healthy"
+    )
+    last_health_check: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    
+    # 统计
+    total_requests: Mapped[int] = mapped_column(BigInteger, default=0)
+    total_success: Mapped[int] = mapped_column(BigInteger, default=0)
+    total_failed: Mapped[int] = mapped_column(BigInteger, default=0)
+    avg_response_time: Mapped[Optional[float]] = mapped_column(DECIMAL(8, 2))
+    
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+    
+    __table_args__ = (
+        Index("idx_cs_status", "status"),
+        Index("idx_cs_type", "type"),
+        Index("idx_cs_health", "health_status"),
+        {"comment": "爬取源配置表"}
+    )
+
+
+class CrawlSourceStats(Base):
+    """爬取源日统计表"""
+    __tablename__ = "crawl_source_stats"
+    
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    source_id: Mapped[str] = mapped_column(String(32), nullable=False, comment="爬取源ID")
+    stat_date: Mapped[datetime] = mapped_column(Date, nullable=False, comment="统计日期")
+    
+    # 请求统计
+    total_requests: Mapped[int] = mapped_column(default=0)
+    success_requests: Mapped[int] = mapped_column(default=0)
+    failed_requests: Mapped[int] = mapped_column(default=0)
+    timeout_requests: Mapped[int] = mapped_column(default=0)
+    rate_limited_requests: Mapped[int] = mapped_column(default=0)
+    
+    # 数据产出
+    persons_extracted: Mapped[int] = mapped_column(default=0)
+    works_extracted: Mapped[int] = mapped_column(default=0)
+    relations_extracted: Mapped[int] = mapped_column(default=0)
+    valid_records: Mapped[int] = mapped_column(default=0)
+    duplicate_records: Mapped[int] = mapped_column(default=0)
+    
+    # 性能指标
+    avg_response_time: Mapped[Optional[float]] = mapped_column(DECIMAL(8, 2))
+    min_response_time: Mapped[Optional[float]] = mapped_column(DECIMAL(8, 2))
+    max_response_time: Mapped[Optional[float]] = mapped_column(DECIMAL(8, 2))
+    p95_response_time: Mapped[Optional[float]] = mapped_column(DECIMAL(8, 2))
+    
+    # 数据质量
+    avg_completeness: Mapped[Optional[float]] = mapped_column(DECIMAL(5, 2))
+    
+    # 资源消耗
+    total_duration: Mapped[int] = mapped_column(default=0, comment="总耗时(秒)")
+    data_size_mb: Mapped[Optional[float]] = mapped_column(DECIMAL(8, 2))
+    
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    
+    __table_args__ = (
+        UniqueConstraint("source_id", "stat_date", name="uk_source_date"),
+        Index("idx_css_stat_date", "stat_date"),
+        Index("idx_css_source_id", "source_id"),
+        {"comment": "爬取源日统计表"}
+    )
+
+
+class CrawlSchedule(Base):
+    """定时任务配置表"""
+    __tablename__ = "crawl_schedules"
+    
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    
+    task_type: Mapped[str] = mapped_column(
+        Enum("full", "incremental", "targeted", "health_check", "cleanup"),
+        nullable=False
+    )
+    source_ids: Mapped[Optional[List[str]]] = mapped_column(JSON)
+    target_config: Mapped[Optional[dict]] = mapped_column(JSON)
+    
+    cron_expression: Mapped[str] = mapped_column(String(100), nullable=False)
+    timezone: Mapped[str] = mapped_column(String(50), default="Asia/Shanghai")
+    
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    max_retries: Mapped[int] = mapped_column(default=3)
+    retry_interval: Mapped[int] = mapped_column(default=300)
+    concurrent_limit: Mapped[int] = mapped_column(default=1)
+    timeout: Mapped[int] = mapped_column(default=3600)
+    
+    notify_on_success: Mapped[bool] = mapped_column(Boolean, default=False)
+    notify_on_failure: Mapped[bool] = mapped_column(Boolean, default=True)
+    notify_emails: Mapped[Optional[List[str]]] = mapped_column(JSON)
+    
+    total_runs: Mapped[int] = mapped_column(default=0)
+    success_runs: Mapped[int] = mapped_column(default=0)
+    failed_runs: Mapped[int] = mapped_column(default=0)
+    last_run_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    last_run_status: Mapped[Optional[str]] = mapped_column(
+        Enum("success", "failed", "running", "timeout")
+    )
+    last_run_duration: Mapped[Optional[int]]
+    next_run_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    
+    created_by: Mapped[Optional[str]] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+    
+    __table_args__ = (
+        Index("idx_csch_enabled", "is_enabled"),
+        Index("idx_csch_next_run", "next_run_at"),
+        Index("idx_csch_task_type", "task_type"),
+        {"comment": "定时任务配置表"}
+    )
+
+
+class CrawlScheduleRun(Base):
+    """定时任务执行历史表"""
+    __tablename__ = "crawl_schedule_runs"
+    
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    schedule_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    task_id: Mapped[Optional[str]] = mapped_column(String(32))
+    
+    status: Mapped[str] = mapped_column(
+        Enum("running", "success", "failed", "timeout", "cancelled"),
+        nullable=False
+    )
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    duration: Mapped[Optional[int]]
+    
+    total_requests: Mapped[int] = mapped_column(default=0)
+    success_count: Mapped[int] = mapped_column(default=0)
+    failed_count: Mapped[int] = mapped_column(default=0)
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
+    log_summary: Mapped[Optional[str]] = mapped_column(Text)
+    
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    
+    __table_args__ = (
+        Index("idx_csr_schedule_id", "schedule_id"),
+        Index("idx_csr_status", "status"),
+        Index("idx_csr_started_at", "started_at"),
+        {"comment": "定时任务执行历史表"}
     )
 
 

@@ -1,9 +1,8 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { Input, Button, List, Avatar, Typography, message } from 'antd'
 import { UserOutlined, RobotOutlined } from '@ant-design/icons'
-import { sendMessage } from '@/api/chat'
+import { sendMessage, getChatHistory } from '@/api/chat'
 import { useAppStore } from '@/store'
-import Loading from '@/components/Loading'
 import type { IMessage } from '@/types'
 
 const { TextArea } = Input
@@ -26,6 +25,27 @@ const ChatPage: React.FC = () => {
     scrollToBottom()
   }, [messages, scrollToBottom])
 
+  // 如果有sessionId，加载历史对话
+  useEffect(() => {
+    const loadHistory = async () => {
+      if (!sessionId) return
+      try {
+        const history = await getChatHistory(sessionId)
+        if (history.messages) {
+          setMessages(history.messages.map((msg, index) => ({
+            id: `${sessionId}-${index}`,
+            role: msg.role as 'user' | 'assistant' | 'system',
+            content: msg.content,
+            timestamp: msg.timestamp || new Date().toISOString()
+          })))
+        }
+      } catch (error) {
+        console.error('加载对话历史失败:', error)
+      }
+    }
+    loadHistory()
+  }, [sessionId])
+
   const handleSend = useCallback(async () => {
     if (!input.trim()) return
 
@@ -41,22 +61,20 @@ const ChatPage: React.FC = () => {
     setLoading(true)
 
     try {
-      const response = await sendMessage({
+      const data = await sendMessage({
         message: userMessage.content,
         session_id: sessionId || undefined
       })
 
-      const data = (response as any)?.data || response
-
       // 保存 session_id
-      if (data?.session_id && !sessionId) {
+      if (data.session_id && !sessionId) {
         setSessionId(data.session_id)
       }
 
       const assistantMessage: IMessage = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: data?.message || '抱歉，我没有理解您的问题。',
+        content: data.message || '抱歉，我没有理解您的问题。',
         timestamp: new Date().toISOString()
       }
 

@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import query, chat, person, recommend
+from app.api import query, chat, person, recommend, admin
 from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
 from app.db.neo4j import neo4j_client
@@ -118,6 +118,7 @@ app.include_router(query.router, prefix="/api/v1")
 app.include_router(chat.router, prefix="/api/v1")
 app.include_router(person.router, prefix="/api/v1")
 app.include_router(recommend.router, prefix="/api/v1")
+app.include_router(admin.router, prefix="/api/v1")
 
 
 @app.get("/health")

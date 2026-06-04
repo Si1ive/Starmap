@@ -39,6 +39,11 @@ pytest-cov==4.1.0
 # Logging
 structlog==25.5.0
 
+# Scheduling & WebSocket
+apscheduler==3.10.4
+websockets==12.0
+pytz==2024.1
+
 # Utils
 python-multipart==0.0.6
 python-jose[cryptography]==3.3.0

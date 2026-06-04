@@ -4,28 +4,27 @@ import { useNavigate } from 'react-router-dom'
 import { searchPersons } from '@/api/person'
 import PersonCard from '@/components/PersonCard'
 import Loading from '@/components/Loading'
-import type { IPerson } from '@/types'
+import type { IPersonListItem } from '@/types'
 
 const { Title, Text } = Typography
 
 interface Category {
   name: string
   key: string
-  count: number
   description: string
 }
 
 const categories: Category[] = [
-  { name: '演员', key: 'actor', count: 0, description: '电影、电视剧演员' },
-  { name: '歌手', key: 'singer', count: 0, description: '流行、摇滚、民谣歌手' },
-  { name: '导演', key: 'director', count: 0, description: '电影、电视剧导演' },
-  { name: '编剧', key: 'writer', count: 0, description: '影视编剧' },
+  { name: '演员', key: 'actor', description: '电影、电视剧演员' },
+  { name: '歌手', key: 'singer', description: '流行、摇滚、民谣歌手' },
+  { name: '导演', key: 'director', description: '电影、电视剧导演' },
+  { name: '编剧', key: 'writer', description: '影视编剧' },
 ]
 
 const BrowsePage: React.FC = () => {
   const navigate = useNavigate()
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null)
-  const [persons, setPersons] = useState<IPerson[]>([])
+  const [persons, setPersons] = useState<IPersonListItem[]>([])
   const [loading, setLoading] = useState(false)
   const [categoryCounts, setCategoryCounts] = useState<Record<string, number>>({})
 
@@ -34,12 +33,11 @@ const BrowsePage: React.FC = () => {
     const counts: Record<string, number> = {}
     for (const cat of categories) {
       try {
-        const response = await searchPersons({
+        const data = await searchPersons({
           q: '',
           category: cat.key,
           page_size: 1
         })
-        const data = (response as any)?.data || response
         counts[cat.key] = data?.total || 0
       } catch {
         counts[cat.key] = 0
@@ -56,13 +54,12 @@ const BrowsePage: React.FC = () => {
   const fetchPersonsByCategory = useCallback(async (category: string) => {
     setLoading(true)
     try {
-      const response = await searchPersons({
+      const data = await searchPersons({
         q: '',
         category,
         page: 1,
         page_size: 20
       })
-      const data = (response as any)?.data || response
       setPersons(data?.items || [])
     } catch (error) {
       console.error('获取分类数据错误:', error)

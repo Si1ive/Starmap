@@ -5,7 +5,7 @@ interface LoadingProps {
   loading: boolean
   empty?: boolean
   emptyDescription?: string
-  children: React.ReactNode
+  children?: React.ReactNode
 }
 
 const Loading: React.FC<LoadingProps> = ({

@@ -22,15 +22,30 @@ import {
 import { getPersonDetail } from '@/api/person'
 import { useAppStore } from '@/store'
 import Loading from '@/components/Loading'
-import type { IPerson, IWork, IRelation } from '@/types'
+import type { IPerson } from '@/types'
 
 const { Title, Text } = Typography
 const { TabPane } = Tabs
 
+// 扩展 IPerson 包含后端返回的额外字段
 interface PersonDetail extends IPerson {
-  biography?: string
-  works?: IWork[]
-  relations?: IRelation[]
+  biography?: string | null
+  works?: Array<{
+    id: string
+    title: string
+    type: string
+    year?: number
+    role?: string
+  }>
+  relations?: Array<{
+    person: {
+      id: string
+      name: string
+      avatar_url?: string | null
+    }
+    type: string
+    description: string
+  }>
   awards?: Array<{
     name: string
     category: string
@@ -56,8 +71,7 @@ const PersonPage: React.FC = () => {
 
     setLoading(true)
     try {
-      const response = await getPersonDetail(id)
-      const data = (response as any)?.data || response
+      const data = await getPersonDetail(id)
       setPerson(data)
       setCurrentPerson({ id: data.id, name: data.name })
     } catch (error) {
@@ -98,7 +112,7 @@ const PersonPage: React.FC = () => {
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 24 }}>
               <Avatar
                 size={120}
-                src={person.avatar}
+                src={person.avatar_url || undefined}
                 icon={<UserOutlined />}
                 style={{ backgroundColor: '#1890ff', flexShrink: 0 }}
               />
@@ -114,13 +128,13 @@ const PersonPage: React.FC = () => {
                   )}
                 </div>
                 <div style={{ marginBottom: 12 }}>
-                  {person.categories.map((cat) => (
+                  {person.categories?.map((cat) => (
                     <Tag key={cat} color="blue" style={{ marginBottom: 4 }}>
                       {cat}
                     </Tag>
-                  ))}
+                  )) || <Tag color="default">其他</Tag>}
                 </div>
-                <Text type="secondary">{person.summary}</Text>
+                <Text type="secondary">{person.summary || '暂无简介'}</Text>
                 <div style={{ marginTop: 12 }}>
                   <Button
                     type="primary"
@@ -155,17 +169,25 @@ const PersonPage: React.FC = () => {
                   )}
                   {person.gender && (
                     <Descriptions.Item label="性别">
-                      {person.gender === 'male' ? '男' : '女'}
+                      {person.gender === 'male' ? '男' : person.gender === 'female' ? '女' : person.gender}
                     </Descriptions.Item>
                   )}
-                  {person.height && (
-                    <Descriptions.Item label="身高">{person.height} cm</Descriptions.Item>
+                  {person.popularity_score !== undefined && person.popularity_score !== null && (
+                    <Descriptions.Item label="人气分数">{person.popularity_score.toFixed(1)}</Descriptions.Item>
                   )}
                 </Descriptions>
                 {person.biography && (
                   <div style={{ marginTop: 24 }}>
                     <Title level={5}>人物简介</Title>
                     <Text>{person.biography}</Text>
+                  </div>
+                )}
+                {person.aliases && person.aliases.length > 0 && (
+                  <div style={{ marginTop: 16 }}>
+                    <Title level={5}>别名</Title>
+                    {person.aliases.map((alias) => (
+                      <Tag key={alias}>{alias}</Tag>
+                    ))}
                   </div>
                 )}
               </TabPane>
@@ -187,26 +209,21 @@ const PersonPage: React.FC = () => {
                   <List
                     grid={{ gutter: 16, xs: 1, sm: 2, md: 3 }}
                     dataSource={person.works}
-                    renderItem={(work: IWork) => (
+                    renderItem={(work) => (
                       <List.Item>
                         <Card size="small" title={work.title}>
                           <div>
                             <Tag color="green">{work.type}</Tag>
-                            {work.release_date && (
+                            {work.year && (
                               <Text type="secondary" style={{ marginLeft: 8 }}>
-                                {work.release_date}
+                                {work.year}
                               </Text>
                             )}
                           </div>
-                          {work.rating && (
+                          {work.role && (
                             <div style={{ marginTop: 8 }}>
-                              <Text type="warning">评分: {work.rating}</Text>
+                              <Text type="secondary">角色: {work.role}</Text>
                             </div>
-                          )}
-                          {work.summary && (
-                            <Text type="secondary" ellipsis style={{ marginTop: 8, display: 'block' }}>
-                              {work.summary}
-                            </Text>
                           )}
                         </Card>
                       </List.Item>
@@ -234,7 +251,7 @@ const PersonPage: React.FC = () => {
                   <List
                     grid={{ gutter: 16, xs: 1, sm: 2, md: 3 }}
                     dataSource={person.relations}
-                    renderItem={(relation: IRelation) => (
+                    renderItem={(relation) => (
                       <List.Item>
                         <Card
                           size="small"
@@ -243,13 +260,13 @@ const PersonPage: React.FC = () => {
                         >
                           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                             <Avatar
-                              src={relation.person.avatar}
+                              src={relation.person.avatar_url || undefined}
                               icon={<UserOutlined />}
                               style={{ backgroundColor: '#1890ff' }}
                             />
                             <div>
                               <div style={{ fontWeight: 500 }}>{relation.person.name}</div>
-                              <Tag size="small" color="purple">
+                              <Tag color="purple">
                                 {relation.description || relation.type}
                               </Tag>
                             </div>
@@ -308,7 +325,6 @@ const PersonPage: React.FC = () => {
                         <div>
                           <Text strong>{item.event}</Text>
                           <Tag
-                            size="small"
                             color={item.type === 'career' ? 'blue' : 'green'}
                             style={{ marginLeft: 8 }}
                           >

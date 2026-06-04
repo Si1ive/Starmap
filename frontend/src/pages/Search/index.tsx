@@ -6,13 +6,13 @@ import { searchPersons } from '@/api/person'
 import { useAppStore } from '@/store'
 import PersonCard from '@/components/PersonCard'
 import Loading from '@/components/Loading'
-import type { IPerson } from '@/types'
+import type { IPersonListItem } from '@/types'
 
 const { Search } = Input
 const { Title } = Typography
 
 const SearchPage: React.FC = () => {
-  const [results, setResults] = useState<IPerson[]>([])
+  const [results, setResults] = useState<IPersonListItem[]>([])
   const [loading, setLoading] = useState(false)
   const [searched, setSearched] = useState(false)
   const navigate = useNavigate()
@@ -25,16 +25,14 @@ const SearchPage: React.FC = () => {
     setSearched(true)
 
     try {
-      const response = await searchPersons({
+      const data = await searchPersons({
         q: value.trim(),
         page: 1,
         page_size: 20
       })
 
-      // 适配 API 响应格式 { code, data, message, request_id }
-      const data = (response as any)?.data || response
-      const items = data?.items || []
-      setResults(items)
+      // 后端直接返回 PersonSearchResult，无需解包
+      setResults(data.items || [])
       addSearchHistory(value.trim())
     } catch (error) {
       console.error('搜索错误:', error)
