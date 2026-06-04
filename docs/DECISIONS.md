@@ -162,6 +162,57 @@
 
 ---
 
+---
+
+### 2026-06-03：引入 MySQL 作为主存储
+
+**背景**：
+- 爬虫采集的原始数据（人物、作品）是结构化数据，没有复杂关系
+- 直接存入 Neo4j（图数据库）不合适，因为：
+  - 新数据没有建立关系，无法发挥图数据库优势
+  - 图数据库不适合列表查询、分页、筛选等操作
+  - 缺乏事务支持，数据一致性难以保证
+- 需要存储爬虫任务、日志、管理员用户等非图数据
+
+**选项**：
+- 选项A：继续使用 Neo4j 作为唯一主存储
+- 选项B：引入 MySQL 作为主存储，Neo4j 仅用于关系网络
+
+**决策**：选择选项B
+
+**原因**：
+- MySQL 适合存储结构化数据（人物属性、作品信息）
+- MySQL 支持事务，保证数据一致性
+- MySQL 的列表查询、分页、筛选性能更好
+- Neo4j 专注关系网络，发挥图遍历优势
+- 爬虫任务、日志、审计等数据天然适合关系型数据库
+- 团队对 MySQL 运维经验丰富
+
+**影响**：
+- 增加一个数据库服务（Docker Compose 中添加 MySQL）
+- 需要设计 MySQL ↔ Neo4j 数据同步机制
+- 需要创建 ORM 模型和连接封装
+- 需要更新架构文档和数据模型文档
+- 需要创建数据库初始化脚本
+- 增加运维复杂度（备份、监控）
+
+**具体方案**：
+- MySQL 8.0，使用 SQLAlchemy 2.0 + asyncmy 异步驱动
+- 表结构：persons, works, person_works, person_relations, crawl_tasks, crawl_logs, admin_users, audit_logs
+- 同步策略：关系创建时同步到 Neo4j，人物/作品更新时异步同步
+- 连接池：10个连接，支持自动重连
+
+**负责人**：Backend + Data
+
+**相关文档**：
+- [数据模型文档](./tech/data-model.md)
+- [架构设计文档](./tech/architecture.md)
+- [MySQL 连接模块](../backend/app/db/mysql.py)
+- [ORM 模型](../backend/app/models/mysql_models.py)
+- [同步脚本](../backend/scripts/sync_to_neo4j.py)
+
+---
+
 ## 待决策事项
 
 | 日期 | 决策 | 选项 | 建议决策人 | 截止时间 |

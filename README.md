@@ -25,26 +25,380 @@ StarMap是一个基于知识图谱的艺人信息探索系统，支持通过自�
 
 ## 快速开始
 
+### 环境要求
+
+- Python 3.11+
+- Node.js 18+
+- Docker + Docker Compose（或 Colima 替代方案）
+
+### 1. 克隆项目
+
 ```bash
-# 1. 克隆项目
 git clone <repo-url>
 cd starmap
+```
 
-# 2. 启动基础设施
-docker-compose up -d
+### 2. 启动数据库服务（Docker）
 
-# 3. 安装后端依赖
-cd backend && pip install -r requirements.txt
+```bash
+# 启动 Neo4j、Redis、ChromaDB
+docker-compose up -d neo4j redis chromadb
 
-# 4. 运行后端
-uvicorn app.main:app --reload
+# 查看服务状态
+docker-compose ps
 
-# 5. 安装前端依赖
-cd ../frontend && npm install
+# 查看服务日志
+docker-compose logs -f neo4j
+docker-compose logs -f redis
+docker-compose logs -f chromadb
+```
 
-# 6. 运行前端
+服务启动后访问：
+- Neo4j Browser: http://localhost:7474 (用户名: neo4j, 密码: starmap123)
+- ChromaDB API: http://localhost:8001
+
+### 3. 启动后端服务（本地开发模式）
+
+```bash
+cd backend
+
+# 创建虚拟环境（首次）
+python3 -m venv venv
+source venv/bin/activate  # macOS/Linux
+# 或: venv\Scripts\activate  # Windows
+
+# 安装依赖（首次）
+pip install -r requirements.txt
+
+# 启动服务
+python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+后端服务：
+- API 地址: http://localhost:8000
+- API 文档: http://localhost:8000/docs
+- 健康检查: http://localhost:8000/health
+
+### 4. 启动前端服务
+
+```bash
+cd frontend
+
+# 安装依赖（首次）
+npm install
+
+# 启动开发服务器
 npm run dev
 ```
+
+前端服务：
+- 开发服务器: http://localhost:5173
+
+### 5. 验证服务状态
+
+```bash
+# 检查所有服务健康状态
+curl http://localhost:8000/health
+
+# 预期响应
+{
+    "status": "healthy",
+    "version": "1.0.0",
+    "services": {
+        "neo4j": "up",
+        "redis": "up",
+        "chromadb": "up"
+    }
+}
+```
+
+---
+
+## 常见问题排查
+
+### Docker 服务启动失败
+
+**问题**: `docker-compose up` 报错或容器无法启动
+
+**解决方案**:
+```bash
+# 1. 检查 Docker 是否运行
+docker info
+
+# 2. 清理并重新启动
+docker-compose down
+docker system prune -f  # 清理未使用的镜像和缓存
+docker-compose up -d neo4j redis chromadb
+
+# 3. 查看具体错误日志
+docker-compose logs neo4j
+```
+
+### macOS 没有 Docker Desktop
+
+**方案一：使用 Colima（推荐）**
+```bash
+# 安装 Colima
+brew install colima docker docker-compose
+
+# 启动 Colima（分配 4GB 内存）
+colima start --memory 4
+
+# 验证
+docker info
+```
+
+**方案二：使用 OrbStack**
+```bash
+brew install --cask orbstack
+orbctl start
+```
+
+### 后端启动报错：模块未找到
+
+```bash
+cd backend
+source venv/bin/activate
+
+# 重新安装依赖
+pip install -r requirements.txt
+
+# 如果 chroma-hnswlib 编译失败，安装编译工具
+# macOS:
+brew install cmake gcc
+
+# 然后重新安装
+pip install --no-cache-dir chromadb
+```
+
+### 端口被占用
+
+```bash
+# 查找占用端口的进程
+lsof -i :8000  # 后端端口
+lsof -i :5173  # 前端端口
+lsof -i :7474  # Neo4j 端口
+lsof -i :6379  # Redis 端口
+lsof -i :8001  # ChromaDB 端口
+
+# 终止进程
+kill -9 <PID>
+```
+
+### 数据库连接失败
+
+**检查服务是否运行**:
+```bash
+docker-compose ps
+# 应该看到 neo4j、redis、chromadb 都是 healthy 状态
+```
+
+**检查环境变量**:
+```bash
+# 后端默认连接本地数据库，确认以下配置
+cat backend/.env
+# 应该包含:
+# NEO4J_URI=bolt://localhost:7687
+# NEO4J_USER=neo4j
+# NEO4J_PASSWORD=starmap123
+# REDIS_URL=redis://localhost:6379
+# CHROMA_HOST=localhost
+# CHROMA_PORT=8001
+```
+
+### 构建缓存过大
+
+```bash
+# 查看磁盘使用
+docker system df
+
+# 清理构建缓存（可释放数GB空间）
+docker builder prune -f
+
+# 清理所有未使用资源
+docker system prune -a -f
+```
+
+---
+
+## 数据库监控与访问
+
+### 服务状态监控
+
+```bash
+# 查看所有容器资源占用
+docker stats --no-stream
+
+# 查看容器日志
+docker-compose logs -f neo4j
+docker-compose logs -f redis
+docker-compose logs -f chromadb
+
+# 检查服务健康状态
+curl http://localhost:8000/health
+```
+
+### Neo4j 图数据库
+
+**可视化界面**：
+```bash
+# 浏览器访问
+open http://localhost:7474
+```
+- 用户名：`neo4j`
+- 密码：`starmap123`
+
+**命令行查询**：
+```bash
+# 进入 Neo4j 容器执行 Cypher 查询
+docker exec -it starmap-neo4j cypher-shell -u neo4j -p starmap123
+
+# 常用查询
+MATCH (n) RETURN count(n) as nodes;                    # 统计节点数
+MATCH ()-[r]->() RETURN count(r) as relations;         # 统计关系数
+MATCH (n) RETURN n LIMIT 10;                           # 查看前10个节点
+```
+
+### Redis 缓存
+
+**使用 RedisInsight（推荐）**：
+```bash
+# 安装可视化工具
+brew install --cask redisinsight
+
+# 启动后添加连接
+# Host: localhost, Port: 6379, Name: starmap-redis
+```
+
+**命令行操作**：
+```bash
+# 进入 Redis 容器
+docker exec -it starmap-redis redis-cli
+
+# 常用命令
+KEYS *                    # 查看所有键
+INFO memory               # 查看内存使用
+DBSIZE                    # 查看键数量
+```
+
+### ChromaDB 向量数据库
+
+**HTTP API 查询**：
+```bash
+# 查看集合列表
+curl http://localhost:8001/api/v2/tenants/default_tenant/databases/default_database/collections
+
+# 查看集合中的数据
+curl http://localhost:8001/api/v2/tenants/default_tenant/databases/default_database/collections/persons
+
+# 向量相似度搜索
+curl -X POST http://localhost:8001/api/v2/tenants/default_tenant/databases/default_database/collections/persons/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query_embeddings": [[0.1, 0.2, ...]],
+    "n_results": 5
+  }'
+```
+
+**Python 客户端**：
+```python
+import chromadb
+
+client = chromadb.HttpClient(host="localhost", port=8001)
+
+# 列出所有集合
+print(client.list_collections())
+
+# 获取集合并查询
+collection = client.get_collection("persons")
+results = collection.query(
+    query_texts=["周杰伦风格的中国风歌手"],
+    n_results=5
+)
+print(results)
+```
+
+**注意**：ChromaDB 没有官方可视化界面，建议使用 Python 客户端或 HTTP API 进行查询。
+
+---
+
+## 数据库初始化
+
+**当前状态**：数据库服务已启动，但**数据为空**（未初始化）。
+
+### 初始化步骤
+
+```bash
+# 1. 确保数据库服务运行
+docker-compose up -d neo4j redis chromadb
+
+# 2. 启动后端服务（会自动创建 ChromaDB 集合）
+cd backend
+source venv/bin/activate
+python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+# 3. 导入测试数据（开发阶段）
+# TODO: 运行数据导入脚本
+# python scripts/import_test_data.py
+```
+
+### 数据库初始化
+
+```bash
+# 1. 确保数据库服务运行
+docker-compose up -d neo4j redis chromadb
+
+# 2. 启动后端服务（会自动创建 ChromaDB 集合）
+cd backend
+source venv/bin/activate
+python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+# 3. 导入测试数据（新终端）
+cd backend
+source venv/bin/activate
+python scripts/init_database.py --all
+
+# 或分别初始化
+python scripts/init_database.py --neo4j      # 仅 Neo4j
+python scripts/init_database.py --chromadb   # 仅 ChromaDB
+python scripts/init_database.py --all --clear # 清空后重新导入
+```
+
+### 验证初始化
+
+```bash
+# Neo4j 节点数（应显示 13 个节点）
+docker exec starmap-neo4j cypher-shell -u neo4j -p starmap123 "MATCH (n) RETURN count(n) as nodes;"
+
+# Redis 键数量（应为 0 或少量缓存）
+docker exec starmap-redis redis-cli dbsize
+
+# ChromaDB 集合（应显示 persons 集合有 8 条向量）
+curl http://localhost:8001/api/v2/tenants/default_tenant/databases/default_database/collections
+```
+
+### 后台账号密码
+
+| 服务 | 地址 | 账号 | 密码 | 说明 |
+|------|------|------|------|------|
+| **Neo4j** | http://localhost:7474 | `neo4j` | `starmap123` | 图数据库管理界面 |
+| **Redis** | localhost:6379 | - | - | 本地开发无密码 |
+| **ChromaDB** | http://localhost:8001 | - | - | 本地开发无认证 |
+| **后端 API** | http://localhost:8000 | - | - | 开发环境无认证 |
+| **前端（用户端）** | http://localhost:5173 | - | - | 无需登录 |
+| **前端（管理端）** | http://localhost:5174 | `admin` | `admin123` | 演示账号 |
+
+### 服务端口一览
+
+| 服务 | 端口 | 用途 |
+|------|------|------|
+| 后端 API | 8000 | FastAPI 服务 |
+| Neo4j HTTP | 7474 | 图数据库浏览器 |
+| Neo4j Bolt | 7687 | 图数据库驱动连接 |
+| Redis | 6379 | 缓存服务 |
+| ChromaDB | 8001 | 向量数据库 API |
+| 前端（用户端） | 5173 | Vite 开发服务器 |
+| 前端（管理端） | 5174 | Vite 开发服务器 |
 
 ## 项目结构
 
