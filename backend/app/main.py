@@ -19,6 +19,7 @@ from app.core.logging import configure_logging, get_logger
 from app.db.neo4j import neo4j_client
 from app.db.redis import redis_client
 from app.db.chroma import chroma_client
+from app.db.mysql import mysql_client
 from app.middleware.error_handler import (
     ErrorHandlerMiddleware,
     api_exception_handler,
@@ -60,6 +61,37 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("ChromaDB连接失败，服务将在降级模式下运行", error=str(e))
     
+    # 初始化 MySQL 连接
+    try:
+        await mysql_client.connect()
+        logger.info("MySQL连接成功")
+        
+        # 执行数据库迁移
+        try:
+            from app.tasks.migrate import run_migrations
+            await run_migrations()
+            logger.info("数据库迁移完成")
+        except Exception as e:
+            logger.warning("数据库迁移失败", error=str(e))
+    except Exception as e:
+        logger.warning("MySQL连接失败，服务将在降级模式下运行", error=str(e))
+    
+    # 初始化 APScheduler 调度器
+    try:
+        from app.tasks.scheduler import init_scheduler
+        scheduler = await init_scheduler()
+        logger.info("APScheduler调度器初始化成功")
+    except Exception as e:
+        logger.warning("APScheduler调度器初始化失败", error=str(e))
+    
+    # 初始化日志处理器
+    try:
+        from app.services.log_handler import init_log_handler
+        await init_log_handler()
+        logger.info("日志处理器初始化成功")
+    except Exception as e:
+        logger.warning("日志处理器初始化失败", error=str(e))
+    
     logger.info("StarMap API 启动完成")
     yield
     
@@ -83,6 +115,29 @@ async def lifespan(app: FastAPI):
         logger.info("ChromaDB连接已关闭")
     except Exception as e:
         logger.error("ChromaDB关闭失败", error=str(e))
+    
+    # 关闭 MySQL 连接
+    try:
+        await mysql_client.close()
+        logger.info("MySQL连接已关闭")
+    except Exception as e:
+        logger.error("MySQL关闭失败", error=str(e))
+    
+    # 关闭 APScheduler 调度器
+    try:
+        from app.tasks.scheduler import shutdown_scheduler
+        await shutdown_scheduler()
+        logger.info("APScheduler调度器已关闭")
+    except Exception as e:
+        logger.error("APScheduler调度器关闭失败", error=str(e))
+    
+    # 关闭日志处理器
+    try:
+        from app.services.log_handler import shutdown_log_handler
+        await shutdown_log_handler()
+        logger.info("日志处理器已关闭")
+    except Exception as e:
+        logger.error("日志处理器关闭失败", error=str(e))
     
     logger.info("StarMap API 已关闭")
 

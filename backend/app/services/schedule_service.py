@@ -17,6 +17,20 @@ from app.models.mysql_models import CrawlSchedule, CrawlScheduleRun
 
 logger = get_logger(__name__)
 
+# 调度器实例（由 scheduler.py 初始化后设置）
+_scheduler_instance = None
+
+
+def set_scheduler_instance(scheduler):
+    """设置调度器实例"""
+    global _scheduler_instance
+    _scheduler_instance = scheduler
+
+
+def get_scheduler_instance():
+    """获取调度器实例"""
+    return _scheduler_instance
+
 
 class CrawlerScheduleService:
     """定时任务管理服务"""
@@ -82,6 +96,14 @@ class CrawlerScheduleService:
         self.db.add(schedule)
         await self.db.commit()
         await self.db.refresh(schedule)
+        
+        # 注册到调度器
+        try:
+            from app.tasks.scheduler import add_schedule_to_scheduler
+            await add_schedule_to_scheduler(schedule)
+        except Exception as e:
+            logger.warning(f"注册到调度器失败: {e}")
+        
         logger.info(f"Created crawl schedule: {schedule.name} ({schedule.id})")
         return schedule
 
@@ -104,6 +126,14 @@ class CrawlerScheduleService:
         schedule.updated_at = datetime.utcnow()
         await self.db.commit()
         await self.db.refresh(schedule)
+        
+        # 更新调度器中的任务
+        try:
+            from app.tasks.scheduler import update_schedule_in_scheduler
+            await update_schedule_in_scheduler(schedule)
+        except Exception as e:
+            logger.warning(f"更新调度器任务失败: {e}")
+        
         logger.info(f"Updated crawl schedule: {schedule.name} ({schedule.id})")
         return schedule
 
@@ -112,6 +142,13 @@ class CrawlerScheduleService:
         schedule = await self.get_schedule_by_id(schedule_id)
         if not schedule:
             return False
+
+        # 从调度器移除
+        try:
+            from app.tasks.scheduler import remove_schedule_from_scheduler
+            await remove_schedule_from_scheduler(schedule_id)
+        except Exception as e:
+            logger.warning(f"从调度器移除任务失败: {e}")
 
         await self.db.delete(schedule)
         await self.db.commit()
@@ -135,6 +172,14 @@ class CrawlerScheduleService:
         schedule.updated_at = datetime.utcnow()
         await self.db.commit()
         await self.db.refresh(schedule)
+        
+        # 更新调度器
+        try:
+            from app.tasks.scheduler import update_schedule_in_scheduler
+            await update_schedule_in_scheduler(schedule)
+        except Exception as e:
+            logger.warning(f"更新调度器任务状态失败: {e}")
+        
         logger.info(f"Toggled crawl schedule {schedule_id}: enabled={enabled}")
         return schedule
 

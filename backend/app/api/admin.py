@@ -279,51 +279,43 @@ async def get_person_list(
     """
     获取艺人列表
     
-    支持搜索、筛选、分页。
+    支持搜索、筛选、分页。从 Neo4j 查询真实数据。
     """
-    # 模拟数据
-    mock_persons = [
-        {
-            "id": "person_001",
-            "name": "周杰伦",
-            "name_en": "Jay Chou",
-            "avatar": "https://example.com/jay.jpg",
-            "categories": ["singer", "actor", "director"],
-            "nationality": "中国",
-            "status": "complete",
-            "created_at": "2024-01-01T10:00:00Z"
-        },
-        {
-            "id": "person_002",
-            "name": "昆凌",
-            "name_en": "Hannah Quinlivan",
-            "avatar": None,
-            "categories": ["actor", "model"],
-            "nationality": "中国",
-            "status": "complete",
-            "created_at": "2024-01-02T10:00:00Z"
-        },
-        {
-            "id": "person_003",
-            "name": "方文山",
-            "name_en": "Vincent Fang",
-            "avatar": None,
-            "categories": ["writer", "director"],
-            "nationality": "中国",
-            "status": "partial",
-            "created_at": "2024-01-03T10:00:00Z"
-        }
-    ]
+    from app.services.person_service import PersonService
+    from app.models.person import PersonListItem, PersonSearchResult
+    
+    service = PersonService()
+    
+    # 如果有搜索关键词，使用搜索接口
+    if q:
+        result = await service.search_persons(
+            keyword=q,
+            category=category,
+            page=page,
+            page_size=page_size
+        )
+        items = [item.model_dump() for item in result.items]
+        total = result.total
+    else:
+        # 使用搜索接口获取所有人物（空关键词）
+        result = await service.search_persons(
+            keyword="*",
+            category=category,
+            page=page,
+            page_size=page_size
+        )
+        items = [item.model_dump() for item in result.items]
+        total = result.total
     
     return ApiResponse(
         code=200,
         message="success",
         data={
-            "items": mock_persons,
-            "total": 3,
+            "items": items,
+            "total": total,
             "page": page,
             "page_size": page_size,
-            "total_pages": 1
+            "total_pages": (total + page_size - 1) // page_size if total else 0
         }
     )
 
@@ -333,49 +325,49 @@ async def get_person_detail(person_id: str):
     """
     获取艺人详情
     
-    返回指定艺人的完整信息。
+    返回指定艺人的完整信息。从 Neo4j 查询真实数据。
     """
-    mock_person = {
-        "id": person_id,
-        "name": "周杰伦",
-        "name_en": "Jay Chou",
-        "avatar": "https://example.com/jay.jpg",
-        "gender": "male",
-        "birth_date": "1979-01-18",
-        "birth_place": "台湾省新北市",
-        "nationality": "中国",
-        "height": 175,
-        "categories": ["singer", "actor", "director"],
-        "summary": "华语流行乐男歌手、音乐人、演员、导演、编剧...",
-        "biography": "周杰伦（Jay Chou），1979年1月18日出生于台湾省新北市...",
-        "status": "complete",
-        "source": "wikipedia",
-        "created_at": "2024-01-01T10:00:00Z",
-        "updated_at": "2024-01-15T10:00:00Z"
-    }
+    from app.services.person_service import PersonService
+    
+    service = PersonService()
+    person = await service.get_person_by_id(person_id)
+    
+    if not person:
+        raise HTTPException(status_code=404, detail="艺人不存在")
     
     return ApiResponse(
         code=200,
         message="success",
-        data=mock_person
+        data=person.model_dump()
     )
 
 
 @router.post("/persons", response_model=ApiResponse)
-async def create_person():
+async def create_person(data: dict):
     """创建艺人"""
-    return ApiResponse(code=200, message="创建成功")
+    # TODO: 实现艺人创建逻辑
+    return ApiResponse(
+        code=200,
+        message="创建成功",
+        data={"id": "new_person_id", "name": data.get("name", "")}
+    )
 
 
 @router.put("/persons/{person_id}", response_model=ApiResponse)
-async def update_person(person_id: str):
+async def update_person(person_id: str, data: dict):
     """更新艺人"""
-    return ApiResponse(code=200, message="更新成功")
+    # TODO: 实现艺人更新逻辑
+    return ApiResponse(
+        code=200,
+        message="更新成功",
+        data={"id": person_id, **data}
+    )
 
 
 @router.delete("/persons/{person_id}", response_model=ApiResponse)
 async def delete_person(person_id: str):
     """删除艺人"""
+    # TODO: 实现艺人删除逻辑
     return ApiResponse(code=200, message="删除成功")
 
 
@@ -385,117 +377,112 @@ async def delete_person(person_id: str):
 async def get_crawler_tasks(
     page: int = 1,
     page_size: int = 20,
-    status: Optional[str] = None
+    status: Optional[str] = None,
+    db: AsyncSession = Depends(get_db)
 ):
     """
     获取爬虫任务列表
     """
-    mock_tasks = [
-        {
-            "id": "task_001",
-            "type": "full",
-            "source": "wikipedia",
-            "target_count": 1000,
-            "completed_count": 750,
-            "success_count": 720,
-            "fail_count": 30,
-            "success_rate": 96.0,
-            "progress": 75.0,
-            "status": "running",
-            "started_at": "2024-01-01T10:00:00Z",
-            "completed_at": None,
-            "estimated_completion": "2024-01-04T18:00:00Z",
-            "error_message": None
-        },
-        {
-            "id": "task_002",
-            "type": "incremental",
-            "source": "wikipedia",
-            "target_count": 100,
-            "completed_count": 100,
-            "success_count": 98,
-            "fail_count": 2,
-            "success_rate": 98.0,
-            "progress": 100.0,
-            "status": "completed",
-            "started_at": "2024-01-02T10:00:00Z",
-            "completed_at": "2024-01-02T12:00:00Z",
-            "estimated_completion": None,
-            "error_message": None
-        },
-        {
-            "id": "task_003",
-            "type": "targeted",
-            "source": "douban",
-            "target_count": 50,
-            "completed_count": 0,
-            "success_count": 0,
-            "fail_count": 0,
-            "success_rate": 0.0,
-            "progress": 0.0,
-            "status": "pending",
-            "started_at": None,
-            "completed_at": None,
-            "estimated_completion": None,
-            "error_message": None
-        },
-        {
-            "id": "task_004",
-            "type": "full",
-            "source": "wikipedia",
-            "target_count": 500,
-            "completed_count": 500,
-            "success_count": 450,
-            "fail_count": 50,
-            "success_rate": 90.0,
-            "progress": 100.0,
-            "status": "failed",
-            "started_at": "2024-01-03T09:00:00Z",
-            "completed_at": "2024-01-03T11:30:00Z",
-            "estimated_completion": None,
-            "error_message": "连接超时，部分请求失败"
-        },
-        {
-            "id": "task_005",
-            "type": "incremental",
-            "source": "wikipedia",
-            "target_count": 200,
-            "completed_count": 120,
-            "success_count": 115,
-            "fail_count": 5,
-            "success_rate": 95.8,
-            "progress": 60.0,
-            "status": "stopped",
-            "started_at": "2024-01-04T08:00:00Z",
-            "completed_at": None,
-            "estimated_completion": None,
-            "error_message": "用户手动停止"
-        }
-    ]
+    from app.services.task_service import CrawlerTaskService
+    
+    service = CrawlerTaskService(db)
+    skip = (page - 1) * page_size
+    tasks, total = await service.get_tasks(
+        skip=skip,
+        limit=page_size,
+        status=status,
+    )
+    
+    items = []
+    for task in tasks:
+        items.append({
+            "id": task.id,
+            "name": task.name,
+            "type": task.task_type,
+            "source": task.source,
+            "source_id": task.source_id,
+            "target_count": task.target_count,
+            "completed_count": task.completed_count,
+            "success_count": task.success_count,
+            "fail_count": task.failed_count,
+            "success_rate": round(task.success_count / task.completed_count * 100, 1) if task.completed_count else 0,
+            "progress": float(task.progress) if task.progress else 0,
+            "status": task.status,
+            "started_at": task.started_at.isoformat() if task.started_at else None,
+            "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+            "created_at": task.created_at.isoformat() if task.created_at else None,
+            "error_message": task.error_message,
+        })
     
     return ApiResponse(
         code=200,
         message="success",
         data={
-            "items": mock_tasks,
-            "total": 2,
+            "items": items,
+            "total": total,
             "page": page,
             "page_size": page_size,
-            "total_pages": 1
+            "total_pages": (total + page_size - 1) // page_size if total else 0
         }
     )
 
 
 @router.post("/crawler/tasks", response_model=ApiResponse)
-async def create_crawler_task():
+async def create_crawler_task(
+    data: dict,
+    db: AsyncSession = Depends(get_db)
+):
     """创建爬虫任务"""
-    return ApiResponse(code=200, message="任务已创建")
+    from app.services.task_service import CrawlerTaskService
+    
+    service = CrawlerTaskService(db)
+    task = await service.create_task(
+        name=data.get("name", "手动任务"),
+        task_type=data.get("task_type", "full"),
+        source_ids=data.get("source_ids", []),
+        target_config=data.get("target_config"),
+        created_by=data.get("created_by"),
+    )
+    
+    # 如果请求立即执行
+    if data.get("execute_now", False):
+        asyncio.create_task(service.execute_task(task.id))
+    
+    return ApiResponse(
+        code=200,
+        message="任务已创建",
+        data={
+            "id": task.id,
+            "name": task.name,
+            "status": task.status,
+            "created_at": task.created_at.isoformat() if task.created_at else None,
+        }
+    )
 
 
 @router.post("/crawler/tasks/{task_id}/stop", response_model=ApiResponse)
-async def stop_crawler_task(task_id: str):
+async def stop_crawler_task(
+    task_id: str,
+    db: AsyncSession = Depends(get_db)
+):
     """停止爬虫任务"""
-    return ApiResponse(code=200, message="任务已停止")
+    from app.services.task_service import CrawlerTaskService
+    
+    service = CrawlerTaskService(db)
+    task = await service.stop_task(task_id)
+    
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    
+    return ApiResponse(
+        code=200,
+        message="任务已停止",
+        data={
+            "id": task.id,
+            "status": task.status,
+            "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+        }
+    )
 
 
 # ========== 爬取源管理 ==========
@@ -1007,37 +994,19 @@ async def get_conversations(
 ):
     """
     获取对话记录列表
-    """
-    mock_conversations = [
-        {
-            "id": "conv_001",
-            "first_message": "周杰伦的妻子是谁？",
-            "message_count": 5,
-            "duration": 180,
-            "persons": ["周杰伦", "昆凌"],
-            "satisfaction": "good",
-            "created_at": "2024-01-01T10:00:00Z"
-        },
-        {
-            "id": "conv_002",
-            "first_message": "方文山和周杰伦合作过哪些歌？",
-            "message_count": 3,
-            "duration": 120,
-            "persons": ["周杰伦", "方文山"],
-            "satisfaction": "good",
-            "created_at": "2024-01-02T10:00:00Z"
-        }
-    ]
     
+    TODO: 从数据库查询真实的对话记录。
+    """
+    # 临时返回空列表
     return ApiResponse(
         code=200,
         message="success",
         data={
-            "items": mock_conversations,
-            "total": 2,
+            "items": [],
+            "total": 0,
             "page": page,
             "page_size": page_size,
-            "total_pages": 1
+            "total_pages": 0
         }
     )
 
@@ -1048,16 +1017,17 @@ async def get_conversations(
 async def get_api_monitor():
     """
     获取 API 性能监控数据
+    
+    返回实时的 API 性能指标。
     """
+    from app.core.monitoring import get_api_metrics
+    
+    metrics = await get_api_metrics()
+    
     return ApiResponse(
         code=200,
         message="success",
-        data={
-            "total_requests": 12580,
-            "avg_response_time": 45.2,
-            "error_rate": 0.02,
-            "qps": 15.6
-        }
+        data=metrics
     )
 
 
@@ -1065,23 +1035,17 @@ async def get_api_monitor():
 async def get_database_monitor():
     """
     获取数据库监控数据
+    
+    返回各数据库连接状态和统计信息。
     """
+    from app.core.monitoring import get_database_status
+    
+    status = await get_database_status()
+    
     return ApiResponse(
         code=200,
         message="success",
-        data={
-            "status": "connected",
-            "neo4j": {
-                "status": "up",
-                "nodes": 1256,
-                "edges": 8923
-            },
-            "redis": {
-                "status": "up",
-                "memory": "256MB",
-                "hit_rate": 0.95
-            }
-        }
+        data=status
     )
 
 
@@ -1089,37 +1053,47 @@ async def get_database_monitor():
 async def get_error_logs(
     level: Optional[str] = None,
     page: int = 1,
-    page_size: int = 20
+    page_size: int = 20,
+    db: AsyncSession = Depends(get_db)
 ):
     """
     获取错误日志
+    
+    从数据库查询真实的错误日志。
     """
-    mock_errors = [
-        {
-            "id": "err_001",
-            "timestamp": "2024-01-01T10:00:00Z",
-            "level": "ERROR",
-            "service": "backend",
-            "message": "Neo4j connection timeout"
-        },
-        {
-            "id": "err_002",
-            "timestamp": "2024-01-01T11:00:00Z",
-            "level": "WARNING",
+    from app.services.log_service import CrawlerLogService
+    
+    service = CrawlerLogService(db)
+    
+    # 查询 ERROR 和 WARNING 级别的日志
+    logs, total = await service.get_logs(
+        skip=(page - 1) * page_size,
+        limit=page_size,
+        level=level or "ERROR",
+    )
+    
+    items = []
+    for log in logs:
+        items.append({
+            "id": str(log.id),
+            "timestamp": log.created_at.isoformat() if log.created_at else None,
+            "level": log.level,
             "service": "crawler",
-            "message": "Rate limit exceeded"
-        }
-    ]
+            "message": log.message,
+            "task_id": log.task_id,
+            "source_id": log.source_id,
+            "stage": log.stage,
+        })
     
     return ApiResponse(
         code=200,
         message="success",
         data={
-            "items": mock_errors,
-            "total": 2,
+            "items": items,
+            "total": total,
             "page": page,
             "page_size": page_size,
-            "total_pages": 1
+            "total_pages": (total + page_size - 1) // page_size if total else 0
         }
     )
 
@@ -1130,13 +1104,17 @@ async def get_error_logs(
 async def get_settings():
     """
     获取系统配置
+    
+    返回当前系统配置，从环境变量和配置文件读取。
     """
+    from app.core.config import settings
+    
     return ApiResponse(
         code=200,
         message="success",
         data={
             "llm": {
-                "model": "gpt-4",
+                "model": settings.OPENAI_MODEL,
                 "temperature": 0.7,
                 "max_tokens": 2000,
                 "system_prompt": "你是一个专业的艺人知识助手..."
@@ -1160,18 +1138,20 @@ async def get_settings():
                 "proxy": None
             },
             "system": {
-                "name": "StarMap",
+                "name": settings.APP_NAME,
                 "announcement": "",
                 "maintenance_mode": False,
-                "log_level": "INFO"
+                "log_level": settings.LOG_LEVEL
             }
         }
     )
 
 
 @router.put("/settings", response_model=ApiResponse)
-async def update_settings():
+async def update_settings(data: dict):
     """
     更新系统配置
+    
+    TODO: 实现配置持久化存储
     """
-    return ApiResponse(code=200, message="保存成功")
+    return ApiResponse(code=200, message="保存成功", data=data)
