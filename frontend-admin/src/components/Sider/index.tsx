@@ -5,9 +5,15 @@ import {
   UserOutlined,
   VideoCameraOutlined,
   BugOutlined,
+  BarChartOutlined,
+  ToolOutlined,
   MessageOutlined,
   MonitorOutlined,
+  ApiOutlined,
+  DatabaseOutlined,
+  WarningOutlined,
   SettingOutlined,
+  TeamOutlined,
 } from '@ant-design/icons'
 import { useAdminStore } from '@/store'
 
@@ -17,10 +23,37 @@ const menuItems = [
   { key: '/admin/dashboard', icon: <DashboardOutlined />, label: '数据看板' },
   { key: '/admin/persons', icon: <UserOutlined />, label: '艺人管理' },
   { key: '/admin/works', icon: <VideoCameraOutlined />, label: '作品管理' },
-  { key: '/admin/crawler', icon: <BugOutlined />, label: '爬虫管理' },
+  {
+    key: '/admin/crawler-group',
+    icon: <BugOutlined />,
+    label: '爬虫管理',
+    children: [
+      { key: '/admin/crawler', label: '任务列表' },
+      { key: '/admin/crawler/stats', icon: <BarChartOutlined />, label: '爬取统计' },
+      { key: '/admin/crawler/config', icon: <ToolOutlined />, label: '爬虫配置' },
+    ],
+  },
   { key: '/admin/conversations', icon: <MessageOutlined />, label: '对话管理' },
-  { key: '/admin/monitor', icon: <MonitorOutlined />, label: '系统监控' },
-  { key: '/admin/settings', icon: <SettingOutlined />, label: '系统配置' },
+  {
+    key: '/admin/monitor-group',
+    icon: <MonitorOutlined />,
+    label: '系统监控',
+    children: [
+      { key: '/admin/monitor', label: '概览' },
+      { key: '/admin/monitor/api', icon: <ApiOutlined />, label: 'API性能' },
+      { key: '/admin/monitor/database', icon: <DatabaseOutlined />, label: '数据库' },
+      { key: '/admin/monitor/errors', icon: <WarningOutlined />, label: '错误日志' },
+    ],
+  },
+  {
+    key: '/admin/settings-group',
+    icon: <SettingOutlined />,
+    label: '系统配置',
+    children: [
+      { key: '/admin/settings', label: '基础配置' },
+      { key: '/admin/settings/users', icon: <TeamOutlined />, label: '用户管理' },
+    ],
+  },
 ]
 
 const AppSider = () => {
@@ -28,13 +61,41 @@ const AppSider = () => {
   const location = useLocation()
   const { collapsed, permissions } = useAdminStore()
 
-  // 根据权限过滤菜单
-  const filteredItems = menuItems.filter((item) => {
-    if (item.key === '/admin/settings') {
-      return permissions.includes('settings:manage')
-    }
-    return true
-  })
+  // 根据权限过滤菜单项
+  const filterByPermission = (items: any[]) => {
+    return items.filter((item) => {
+      // 配置模块需要 settings:manage 权限
+      if (item.key === '/admin/settings' || item.key === '/admin/settings-group') {
+        return permissions.includes('settings:manage')
+      }
+      // 用户管理需要 user:manage 权限
+      if (item.key === '/admin/settings/users') {
+        return permissions.includes('user:manage')
+      }
+      // 爬虫统计/配置需要 crawler:manage 权限
+      if (item.key === '/admin/crawler/stats' || item.key === '/admin/crawler/config') {
+        return permissions.includes('crawler:manage')
+      }
+      // 监控详情需要 monitor:view 权限
+      if (item.key === '/admin/monitor/api' || item.key === '/admin/monitor/database' || item.key === '/admin/monitor/errors') {
+        return permissions.includes('monitor:view')
+      }
+      // 有子菜单的项：如果子菜单全被过滤掉，则隐藏父菜单
+      if (item.children) {
+        item.children = filterByPermission(item.children)
+        return item.children.length > 0
+      }
+      return true
+    })
+  }
+
+  const filteredItems = filterByPermission([...menuItems])
+
+  // 获取当前选中的菜单key和展开的子菜单key
+  const selectedKey = location.pathname
+  const openKeys = ['/admin/crawler-group', '/admin/monitor-group', '/admin/settings-group'].filter(
+    (key) => location.pathname.startsWith(key.replace('-group', '').replace('/admin/settings-group', '/admin/settings'))
+  )
 
   return (
     <Sider
@@ -68,7 +129,8 @@ const AppSider = () => {
       <Menu
         theme="dark"
         mode="inline"
-        selectedKeys={[location.pathname]}
+        selectedKeys={[selectedKey]}
+        defaultOpenKeys={collapsed ? [] : openKeys}
         items={filteredItems}
         onClick={({ key }) => navigate(key)}
         style={{ borderRight: 0 }}

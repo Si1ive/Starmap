@@ -301,38 +301,95 @@ class CrawlerTaskService:
         """执行全量更新任务"""
         logger.info(f"Executing full update task: {task.id}")
         
-        # 获取所有关联的爬取源
-        source_service = CrawlerSourceService(self.db)
-        sources = []
+        # 获取任务配置
+        config = task.config or {}
+        source_ids = config.get("source_ids", [])
+        keywords = config.get("keywords", [])
+        spider_type = config.get("spider_type", "person")
         
-        # 从 config 中获取 source_ids
-        source_ids = []
-        if task.config and isinstance(task.config, dict):
-            source_ids = task.config.get("source_ids", [])
-        elif task.source_id:
-            source_ids = [task.source_id]
-        
-        for source_id in source_ids:
-            source = await source_service.get_source_by_id(source_id)
-            if source:
-                sources.append(source)
-        
-        total_sources = len(sources)
-        if total_sources == 0:
-            logger.warning(f"No sources found for task: {task.id}")
+        if not keywords:
+            logger.warning(f"No keywords provided for task: {task.id}")
             return
         
-        # 逐个执行爬取
-        for i, source in enumerate(sources):
-            # 更新进度
-            progress = int((i / total_sources) * 100)
-            await self.update_task_progress(task.id, progress)
-            
-            # 执行爬取（这里需要集成具体的爬虫类）
-            await self._crawl_source(task, source)
+        # 创建爬虫引擎
+        from crawler.engine import CrawlerEngine, Scheduler, Downloader
+        from crawler.pipelines import (
+            DataCleaningPipeline,
+            DataValidationPipeline,
+            DatabaseStoragePipeline,
+            Neo4jStoragePipeline,
+            LogPipeline,
+        )
         
-        # 完成
-        await self.update_task_progress(task.id, 100)
+        # 根据 spider_type 选择爬虫
+        if spider_type == "person":
+            from crawler.spiders.person_spider import PersonSpider
+            spider = PersonSpider(
+                source=config.get("source", "baike"),
+                keywords=keywords,
+            )
+        elif spider_type == "work":
+            from crawler.spiders.work_spider import WorkSpider
+            spider = WorkSpider(
+                source=config.get("source", "douban"),
+                keywords=keywords,
+            )
+        else:
+            raise ValueError(f"Unknown spider type: {spider_type}")
+        
+        # 创建管道
+        pipelines = [
+            DataCleaningPipeline(),
+            DataValidationPipeline(),
+            DatabaseStoragePipeline(),
+            Neo4jStoragePipeline(),
+            LogPipeline(),
+        ]
+        
+        # 创建引擎
+        engine = CrawlerEngine(
+            spider=spider,
+            scheduler=Scheduler(),
+            downloader=Downloader(
+                concurrent_limit=config.get("concurrent_limit", 3),
+                delay=config.get("delay", 1.0),
+                timeout=config.get("timeout", 30),
+            ),
+            pipelines=pipelines,
+            max_concurrent=config.get("concurrent_limit", 3),
+        )
+        
+        # 启动引擎
+        logger.info(f"Starting crawler engine for task: {task.id}")
+        
+        # 在后台运行引擎，同时更新进度
+        engine_task = asyncio.create_task(engine.start())
+        
+        # 定期更新任务进度
+        while not engine_task.done():
+            await asyncio.sleep(2)
+            stats = engine.get_stats()
+            progress = min(95, stats["responses_received"] * 10)  # 粗略估算
+            await self.update_task_progress(
+                task.id,
+                progress=progress,
+                total_requests=stats["requests_scheduled"],
+                success_count=stats["items_scraped"],
+            )
+        
+        # 获取最终结果
+        try:
+            final_stats = await engine_task
+            await self.update_task_progress(
+                task.id,
+                progress=100,
+                total_requests=final_stats["requests_scheduled"],
+                success_count=final_stats["items_scraped"],
+            )
+            logger.info(f"Crawler engine finished for task: {task.id}, stats: {final_stats}")
+        except Exception as e:
+            logger.error(f"Crawler engine failed for task: {task.id}, error: {e}")
+            raise
 
     async def _execute_incremental_update(self, task: CrawlTask) -> None:
         """执行增量更新任务"""
@@ -352,14 +409,18 @@ class CrawlerTaskService:
         """执行定向爬取任务"""
         logger.info(f"Executing targeted crawl task: {task.id}")
         
-        # TODO: 实现定向爬取逻辑
-        # 1. 解析 target_config
-        # 2. 针对特定目标执行爬取
+        # 定向爬取使用与全量更新相同的引擎，但配置更具体
+        config = task.config or {}
         
-        await asyncio.sleep(1)  # 占位
+        # 定向爬取通常有明确的 targets
+        targets = config.get("targets", [])
+        if not targets:
+            logger.warning(f"No targets provided for targeted crawl: {task.id}")
+            return
         
-        # 更新进度
-        await self.update_task_progress(task.id, 100)
+        # 复用全量更新的逻辑
+        config["keywords"] = targets
+        await self._execute_full_update(task)
 
     async def _execute_health_check(self, task: CrawlTask) -> None:
         """执行健康检查任务"""
@@ -397,20 +458,13 @@ class CrawlerTaskService:
 
     async def _crawl_source(self, task: CrawlTask, source: CrawlSource) -> None:
         """
-        执行单个爬取源的爬取
+        执行单个爬取源的爬取（已废弃，使用 CrawlerEngine 替代）
         
         Args:
             task: 任务实例
             source: 爬取源实例
         """
         logger.info(f"Crawling source: {source.name} ({source.id})")
-        
-        # TODO: 集成 BaseCrawler 实现实际爬取
-        # 1. 根据 source.type 创建对应的爬虫实例
-        # 2. 配置爬虫参数（延迟、重试等）
-        # 3. 执行爬取
-        # 4. 解析数据
-        # 5. 验证并导入
         
         # 记录开始日志
         await self.log_service.create_log({
@@ -424,8 +478,47 @@ class CrawlerTaskService:
         })
         
         try:
-            # 模拟爬取过程
-            await asyncio.sleep(1)
+            # 使用新的 CrawlerEngine 执行爬取
+            config = task.config or {}
+            keywords = config.get("keywords", [])
+            
+            if not keywords:
+                logger.warning(f"No keywords for source: {source.id}")
+                return
+            
+            # 创建爬虫
+            from crawler.spiders.person_spider import PersonSpider
+            spider = PersonSpider(
+                source=source.code or "baike",
+                keywords=keywords,
+            )
+            
+            # 创建引擎
+            from crawler.engine import CrawlerEngine, Scheduler, Downloader
+            from crawler.pipelines import (
+                DataCleaningPipeline,
+                DataValidationPipeline,
+                DatabaseStoragePipeline,
+                LogPipeline,
+            )
+            
+            engine = CrawlerEngine(
+                spider=spider,
+                scheduler=Scheduler(),
+                downloader=Downloader(
+                    concurrent_limit=source.concurrent_limit or 3,
+                    delay=source.request_interval or 1.0,
+                ),
+                pipelines=[
+                    DataCleaningPipeline(),
+                    DataValidationPipeline(),
+                    DatabaseStoragePipeline(),
+                    LogPipeline(),
+                ],
+            )
+            
+            # 执行爬取
+            stats = await engine.start()
             
             # 记录成功日志
             await self.log_service.create_log({
@@ -435,11 +528,13 @@ class CrawlerTaskService:
                 "stage": "fetch",
                 "status": "success",
                 "resource_url": source.base_url,
-                "message": f"Successfully crawled source: {source.name}",
+                "message": f"Successfully crawled source: {source.name}, "
+                           f"items={stats.get('items_scraped', 0)}, "
+                           f"requests={stats.get('requests_scheduled', 0)}",
             })
             
             # 更新统计
-            task.success_count = (task.success_count or 0) + 1
+            task.success_count = (task.success_count or 0) + stats.get("items_scraped", 0)
             
         except Exception as e:
             # 记录失败日志

@@ -10,10 +10,16 @@ import WorkList from '@/pages/Work/List'
 import WorkDetail from '@/pages/Work/Detail'
 import WorkEdit from '@/pages/Work/Edit'
 import CrawlerList from '@/pages/Crawler/List'
+import CrawlerStats from '@/pages/Crawler/Stats'
+import CrawlerConfig from '@/pages/Crawler/Config'
 import ConversationList from '@/pages/Conversation/List'
 import ConversationDetail from '@/pages/Conversation/Detail'
 import MonitorOverview from '@/pages/Monitor/Overview'
+import ApiMonitor from '@/pages/Monitor/Api'
+import DatabaseMonitor from '@/pages/Monitor/Database'
+import MonitorErrors from '@/pages/Monitor/Errors'
 import Settings from '@/pages/Settings'
+import SettingsUsers from '@/pages/Settings/Users'
 
 // 路由守卫组件
 const PrivateRoute = ({ children, permission }: { children: React.ReactNode; permission?: string }) => {
@@ -107,6 +113,22 @@ const AppRoutes = () => {
 
         {/* 爬虫管理 */}
         <Route path="crawler" element={<CrawlerList />} />
+        <Route
+          path="crawler/stats"
+          element={
+            <PrivateRoute permission="crawler:manage">
+              <CrawlerStats />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="crawler/config"
+          element={
+            <PrivateRoute permission="crawler:manage">
+              <CrawlerConfig />
+            </PrivateRoute>
+          }
+        />
 
         {/* 对话管理 */}
         <Route path="conversations" element={<ConversationList />} />
@@ -114,6 +136,30 @@ const AppRoutes = () => {
 
         {/* 系统监控 */}
         <Route path="monitor" element={<MonitorOverview />} />
+        <Route
+          path="monitor/api"
+          element={
+            <PrivateRoute permission="monitor:view">
+              <ApiMonitor />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="monitor/database"
+          element={
+            <PrivateRoute permission="monitor:view">
+              <DatabaseMonitor />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="monitor/errors"
+          element={
+            <PrivateRoute permission="monitor:view">
+              <MonitorErrors />
+            </PrivateRoute>
+          }
+        />
 
         {/* 系统配置 */}
         <Route
@@ -121,6 +167,14 @@ const AppRoutes = () => {
           element={
             <PrivateRoute permission="settings:manage">
               <Settings />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="settings/users"
+          element={
+            <PrivateRoute permission="user:manage">
+              <SettingsUsers />
             </PrivateRoute>
           }
         />

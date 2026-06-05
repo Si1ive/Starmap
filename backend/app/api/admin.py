@@ -451,15 +451,45 @@ async def create_crawler_task(
     data: dict,
     db: AsyncSession = Depends(get_db)
 ):
-    """创建爬虫任务"""
+    """
+    创建爬虫任务
+    
+    支持创建不同类型的爬虫任务，配置爬虫引擎参数。
+    
+    请求示例:
+    ```json
+    {
+        "name": "爬取周杰伦信息",
+        "task_type": "targeted",
+        "source_ids": ["source_001"],
+        "config": {
+            "spider_type": "person",
+            "source": "baike",
+            "keywords": ["周杰伦"],
+            "concurrent_limit": 3,
+            "delay": 1.0,
+            "timeout": 30
+        },
+        "execute_now": true
+    }
+    ```
+    """
     from app.services.task_service import CrawlerTaskService
     
     service = CrawlerTaskService(db)
+    
+    # 构建任务配置
+    config = data.get("config", {})
+    target_config = {
+        **config,
+        "source_ids": data.get("source_ids", []),
+    }
+    
     task = await service.create_task(
         name=data.get("name", "手动任务"),
-        task_type=data.get("task_type", "full"),
+        task_type=data.get("task_type", "targeted"),
         source_ids=data.get("source_ids", []),
-        target_config=data.get("target_config"),
+        target_config=target_config,
         created_by=data.get("created_by"),
     )
     
@@ -474,6 +504,7 @@ async def create_crawler_task(
             "id": task.id,
             "name": task.name,
             "status": task.status,
+            "config": task.config,
             "created_at": task.created_at.isoformat() if task.created_at else None,
         }
     )
@@ -1404,3 +1435,187 @@ async def get_conversation_detail(conversation_id: str):
             "updated_at": "2024-01-01T10:00:35Z",
         }
     )
+
+
+# ========== P1: 爬虫统计相关 ==========
+
+@router.get("/crawler/stats/overview", response_model=ApiResponse)
+async def get_crawler_stats_overview():
+    """爬虫统计概览"""
+    return ApiResponse(
+        code=200,
+        message="success",
+        data={
+            "total_tasks": 23,
+            "total_crawled": 12580,
+            "total_success": 11890,
+            "total_failed": 690,
+            "success_rate": 94.5,
+            "today_crawled": 456,
+            "failure_top5": [
+                {"type": "网络超时", "count": 156, "percent": 35},
+                {"type": "404 Not Found", "count": 89, "percent": 20},
+                {"type": "反爬拦截", "count": 67, "percent": 15},
+                {"type": "解析错误", "count": 45, "percent": 10},
+                {"type": "其他", "count": 89, "percent": 20},
+            ],
+            "recent_records": [
+                {"time": "2024-01-07 15:30:00", "resource": "周杰伦 - Wikipedia", "action": "下载", "status": "success", "duration": 1250},
+                {"time": "2024-01-07 15:29:55", "resource": "昆凌 - Wikipedia", "action": "解析", "status": "success", "duration": 320},
+                {"time": "2024-01-07 15:29:50", "resource": "方文山 - Wikipedia", "action": "下载", "status": "failed", "duration": 5000},
+                {"time": "2024-01-07 15:29:45", "resource": "刘德华 - Douban", "action": "下载", "status": "success", "duration": 890},
+                {"time": "2024-01-07 15:29:40", "resource": "成龙 - Wikipedia", "action": "存储", "status": "success", "duration": 150},
+            ],
+        }
+    )
+
+
+@router.get("/crawler/stats/trend", response_model=ApiResponse)
+async def get_crawler_stats_trend(days: int = 7):
+    """爬虫趋势数据"""
+    return ApiResponse(
+        code=200,
+        message="success",
+        data={
+            "dates": ["01-01", "01-02", "01-03", "01-04", "01-05", "01-06", "01-07"],
+            "success_counts": [890, 920, 850, 960, 1020, 980, 1100],
+            "fail_counts": [30, 25, 40, 20, 35, 28, 15],
+        }
+    )
+
+
+@router.get("/crawler/stats/sources", response_model=ApiResponse)
+async def get_crawler_source_comparison(days: int = 7):
+    """数据源对比"""
+    return ApiResponse(
+        code=200,
+        message="success",
+        data={
+            "items": [
+                {"name": "维基百科", "total_success": 8500, "total_failed": 120},
+                {"name": "豆瓣", "total_success": 2800, "total_failed": 45},
+                {"name": "其他", "total_success": 1280, "total_failed": 32},
+            ]
+        }
+    )
+
+
+# ========== P1: 用户管理相关 ==========
+
+MOCK_USERS = [
+    {
+        "id": "1",
+        "username": "admin",
+        "email": "admin@starmap.com",
+        "role": "super_admin",
+        "permissions": [
+            "dashboard:view", "person:manage", "work:manage",
+            "crawler:manage", "conversation:view", "monitor:view",
+            "settings:manage", "user:manage",
+        ],
+        "is_active": True,
+        "last_login_at": "2024-01-07 15:30:00",
+        "created_at": "2024-01-01",
+    },
+    {
+        "id": "2",
+        "username": "data_admin",
+        "email": "data@starmap.com",
+        "role": "data_admin",
+        "permissions": ["dashboard:view", "person:manage", "work:manage", "crawler:manage", "monitor:view"],
+        "is_active": True,
+        "last_login_at": "2024-01-06 10:00:00",
+        "created_at": "2024-01-02",
+    },
+    {
+        "id": "3",
+        "username": "operator1",
+        "email": "op1@starmap.com",
+        "role": "operator",
+        "permissions": ["dashboard:view", "conversation:view"],
+        "is_active": True,
+        "last_login_at": "2024-01-05 09:00:00",
+        "created_at": "2024-01-03",
+    },
+    {
+        "id": "4",
+        "username": "operator2",
+        "email": "op2@starmap.com",
+        "role": "operator",
+        "permissions": ["dashboard:view", "conversation:view"],
+        "is_active": False,
+        "last_login_at": None,
+        "created_at": "2024-01-04",
+    },
+]
+
+
+class CreateUserRequest(BaseModel):
+    username: str = Field(..., min_length=2, max_length=50)
+    email: str = Field(..., max_length=100)
+    password: str = Field(..., min_length=6)
+    role: str = Field(default="operator")
+    permissions: List[str] = Field(default_factory=list)
+    is_active: bool = Field(default=True)
+
+
+class UpdateUserRequest(BaseModel):
+    email: Optional[str] = None
+    role: Optional[str] = None
+    permissions: Optional[List[str]] = None
+    is_active: Optional[bool] = None
+
+
+@router.get("/users", response_model=ApiResponse)
+async def get_users():
+    """获取用户列表"""
+    return ApiResponse(
+        code=200,
+        message="success",
+        data={"users": MOCK_USERS}
+    )
+
+
+@router.post("/users", response_model=ApiResponse)
+async def create_user(req: CreateUserRequest):
+    """创建用户"""
+    # Mock: 简单返回成功
+    new_user = {
+        "id": str(len(MOCK_USERS) + 1),
+        "username": req.username,
+        "email": req.email,
+        "role": req.role,
+        "permissions": req.permissions,
+        "is_active": req.is_active,
+        "last_login_at": None,
+        "created_at": datetime.now().strftime("%Y-%m-%d"),
+    }
+    MOCK_USERS.append(new_user)
+    return ApiResponse(code=200, message="创建成功", data={"user": new_user})
+
+
+@router.put("/users/{user_id}", response_model=ApiResponse)
+async def update_user(user_id: str, req: UpdateUserRequest):
+    """更新用户"""
+    for user in MOCK_USERS:
+        if user["id"] == user_id:
+            if req.email is not None:
+                user["email"] = req.email
+            if req.role is not None:
+                user["role"] = req.role
+            if req.permissions is not None:
+                user["permissions"] = req.permissions
+            if req.is_active is not None:
+                user["is_active"] = req.is_active
+            return ApiResponse(code=200, message="更新成功", data={"user": user})
+    raise HTTPException(status_code=404, detail="用户不存在")
+
+
+@router.delete("/users/{user_id}", response_model=ApiResponse)
+async def delete_user(user_id: str):
+    """删除用户"""
+    for i, user in enumerate(MOCK_USERS):
+        if user["id"] == user_id:
+            MOCK_USERS.pop(i)
+            return ApiResponse(code=200, message="删除成功")
+    raise HTTPException(status_code=404, detail="用户不存在")
