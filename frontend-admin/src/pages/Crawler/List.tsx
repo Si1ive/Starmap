@@ -8,6 +8,11 @@ import {
   Card,
   Progress,
   Popconfirm,
+  Modal,
+  Form,
+  Input,
+  Select,
+  InputNumber,
   message,
   Statistic,
   Row,
@@ -86,6 +91,8 @@ const CrawlerList = () => {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [params, setParams] = useState({ page: 1, page_size: 20 })
+  const [createModalVisible, setCreateModalVisible] = useState(false)
+  const [createForm] = Form.useForm()
 
   const { data, isLoading } = useQuery({
     queryKey: ['crawlerTasks', params],
@@ -93,10 +100,11 @@ const CrawlerList = () => {
   })
 
   const tasks = data?.data?.items || []
+  const total = data?.data?.total || 0
 
   // 统计数据
   const stats = {
-    total: tasks.length,
+    total,
     running: tasks.filter((t: CrawlerTask) => t.status === 'running').length,
     completed: tasks.filter((t: CrawlerTask) => t.status === 'completed').length,
     failed: tasks.filter((t: CrawlerTask) => t.status === 'failed').length,
@@ -104,14 +112,16 @@ const CrawlerList = () => {
     pending: tasks.filter((t: CrawlerTask) => t.status === 'pending').length,
   }
 
-  const startMutation = useMutation({
+  const createMutation = useMutation({
     mutationFn: createCrawlerTask,
     onSuccess: () => {
-      message.success('任务已启动')
+      message.success('任务已创建并启动')
       queryClient.invalidateQueries({ queryKey: ['crawlerTasks'] })
+      setCreateModalVisible(false)
+      createForm.resetFields()
     },
     onError: () => {
-      message.error('启动失败')
+      message.error('创建失败')
     },
   })
 
@@ -127,6 +137,12 @@ const CrawlerList = () => {
   })
 
   const columns = [
+    {
+      title: '名称',
+      dataIndex: 'name',
+      width: 150,
+      ellipsis: true,
+    },
     {
       title: '任务ID',
       dataIndex: 'id',
@@ -274,7 +290,11 @@ const CrawlerList = () => {
               type="primary"
               size="small"
               icon={<PlayCircleOutlined />}
-              onClick={() => startMutation.mutate({ id: record.id })}
+              onClick={() => createMutation.mutate({
+                name: record.name || record.id,
+                task_type: 'targeted',
+                execute_now: true,
+              })}
             >
               启动
             </Button>
@@ -295,7 +315,11 @@ const CrawlerList = () => {
               type="default"
               size="small"
               icon={<ReloadOutlined />}
-              onClick={() => startMutation.mutate({ id: record.id })}
+              onClick={() => createMutation.mutate({
+                name: `重试-${record.name || record.id}`,
+                task_type: 'targeted',
+                execute_now: true,
+              })}
             >
               重试
             </Button>
@@ -339,7 +363,7 @@ const CrawlerList = () => {
         <Button
           type="primary"
           icon={<PlusOutlined />}
-          onClick={() => message.info('新建任务功能开发中')}
+          onClick={() => setCreateModalVisible(true)}
         >
           新建任务
         </Button>
@@ -410,13 +434,13 @@ const CrawlerList = () => {
           dataSource={tasks}
           rowKey="id"
           loading={isLoading}
-          scroll={{ x: 1200 }}
+          scroll={{ x: 1400 }}
           pagination={{
             current: params.page,
             pageSize: params.page_size,
-            total: data?.data?.total || 0,
+            total,
             showSizeChanger: true,
-            showTotal: (total) => `共 ${total} 条`,
+            showTotal: (t) => `共 ${t} 条`,
           }}
           onChange={(pagination) =>
             setParams((prev) => ({
@@ -427,6 +451,86 @@ const CrawlerList = () => {
           }
         />
       </Card>
+
+      {/* 创建任务弹窗 */}
+      <Modal
+        title="新建爬虫任务"
+        open={createModalVisible}
+        onCancel={() => {
+          setCreateModalVisible(false)
+          createForm.resetFields()
+        }}
+        onOk={() => {
+          createForm.validateFields().then((values) => {
+            createMutation.mutate({
+              ...values,
+              execute_now: values.execute_now ?? true,
+            })
+          })
+        }}
+        confirmLoading={createMutation.isPending}
+        width={600}
+      >
+        <Form form={createForm} layout="vertical">
+          <Form.Item label="任务名称" name="name" rules={[{ required: true, message: '请输入任务名称' }]}>
+            <Input placeholder="如：爬取周杰伦信息" />
+          </Form.Item>
+          <Form.Item label="任务类型" name="task_type" rules={[{ required: true }]}>
+            <Select
+              options={[
+                { label: '定向爬取', value: 'targeted' },
+                { label: '全量爬取', value: 'full' },
+                { label: '增量更新', value: 'incremental' },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item label="爬虫类型" name={['config', 'spider_type']}>
+            <Select
+              options={[
+                { label: '人物爬虫', value: 'person' },
+                { label: '作品爬虫', value: 'work' },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item label="数据源" name={['config', 'source']}>
+            <Select
+              options={[
+                { label: '百度百科', value: 'baike' },
+                { label: '豆瓣', value: 'douban' },
+                { label: '维基百科', value: 'wikipedia' },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item label="关键词" name={['config', 'keywords']}>
+            <Select mode="tags" placeholder="输入关键词后按回车" />
+          </Form.Item>
+          <Row gutter={16}>
+            <Col span={8}>
+              <Form.Item label="并发限制" name={['config', 'concurrent_limit']} initialValue={3}>
+                <InputNumber min={1} max={20} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item label="请求延迟(秒)" name={['config', 'delay']} initialValue={1.0}>
+                <InputNumber min={0} max={60} step={0.5} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item label="超时(秒)" name={['config', 'timeout']} initialValue={30}>
+                <InputNumber min={5} max={120} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item label="立即执行" name="execute_now" valuePropName="checked" initialValue={true}>
+            <Select
+              options={[
+                { label: '立即执行', value: true },
+                { label: '仅创建', value: false },
+              ]}
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   )
 }

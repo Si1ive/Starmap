@@ -12,6 +12,9 @@ import WorkEdit from '@/pages/Work/Edit'
 import CrawlerList from '@/pages/Crawler/List'
 import CrawlerStats from '@/pages/Crawler/Stats'
 import CrawlerConfig from '@/pages/Crawler/Config'
+import CrawlerSources from '@/pages/Crawler/Sources'
+import CrawlerSchedules from '@/pages/Crawler/Schedules'
+import CrawlerLogs from '@/pages/Crawler/Logs'
 import ConversationList from '@/pages/Conversation/List'
 import ConversationDetail from '@/pages/Conversation/Detail'
 import MonitorOverview from '@/pages/Monitor/Overview'
@@ -129,6 +132,23 @@ const AppRoutes = () => {
             </PrivateRoute>
           }
         />
+        <Route
+          path="crawler/sources"
+          element={
+            <PrivateRoute permission="crawler:manage">
+              <CrawlerSources />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="crawler/schedules"
+          element={
+            <PrivateRoute permission="crawler:manage">
+              <CrawlerSchedules />
+            </PrivateRoute>
+          }
+        />
+        <Route path="crawler/logs" element={<CrawlerLogs />} />
 
         {/* 对话管理 */}
         <Route path="conversations" element={<ConversationList />} />

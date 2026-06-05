@@ -19,17 +19,13 @@ const ApiMonitor = () => {
   const apiData = (data?.data || {}) as Record<string, any>
 
   // 概览统计
-  const totalRequests = apiData.total_requests || 125680
-  const avgLatency = apiData.avg_latency || 45
-  const errorRate = apiData.error_rate || 0.8
-  const qps = apiData.qps || 12.5
+  const totalRequests = apiData.total_requests ?? 0
+  const avgLatency = apiData.avg_latency ?? 0
+  const errorRate = apiData.error_rate ?? 0
+  const qps = apiData.qps ?? 0
 
   // P50/P95/P99 延迟
-  const latencyStats = apiData.latency_stats || {
-    p50: 32,
-    p95: 156,
-    p99: 890,
-  }
+  const latencyStats = apiData.latency_stats || {}
 
   // 接口排行
   const endpointColumns = [
@@ -108,16 +104,7 @@ const ApiMonitor = () => {
     },
   ]
 
-  const endpointData = apiData.endpoints || [
-    { endpoint: '/api/v1/query', method: 'POST', calls: 45230, avg_latency: 85, p95: 230, error_rate: 0.3 },
-    { endpoint: '/api/v1/chat', method: 'POST', calls: 32100, avg_latency: 120, p95: 350, error_rate: 0.5 },
-    { endpoint: '/api/v1/person/{id}', method: 'GET', calls: 18500, avg_latency: 32, p95: 89, error_rate: 0.1 },
-    { endpoint: '/api/v1/person/search', method: 'GET', calls: 15300, avg_latency: 65, p95: 180, error_rate: 0.2 },
-    { endpoint: '/api/v1/recommend', method: 'POST', calls: 8900, avg_latency: 210, p95: 560, error_rate: 1.2 },
-    { endpoint: '/api/v1/admin/persons', method: 'GET', calls: 3200, avg_latency: 45, p95: 120, error_rate: 0.1 },
-    { endpoint: '/api/v1/admin/crawler/tasks', method: 'POST', calls: 1850, avg_latency: 320, p95: 890, error_rate: 2.1 },
-    { endpoint: '/api/v1/admin/works', method: 'POST', calls: 600, avg_latency: 180, p95: 450, error_rate: 0.8 },
-  ]
+  const endpointData = apiData.endpoints || []
 
   // 慢查询
   const slowQueryColumns = [
@@ -141,29 +128,10 @@ const ApiMonitor = () => {
     },
   ]
 
-  const slowQueryData = apiData.slow_queries || [
-    { timestamp: '2024-01-07 15:32:10', endpoint: '/api/v1/chat', duration: 2300, status_code: 200, reason: '数据库查询' },
-    { timestamp: '2024-01-07 15:28:45', endpoint: '/api/v1/recommend', duration: 1800, status_code: 200, reason: '外部API' },
-    { timestamp: '2024-01-07 15:15:22', endpoint: '/api/v1/query', duration: 1560, status_code: 200, reason: '大数据量' },
-    { timestamp: '2024-01-07 14:58:30', endpoint: '/api/v1/chat', duration: 5200, status_code: 504, reason: '超时' },
-    { timestamp: '2024-01-07 14:45:11', endpoint: '/api/v1/admin/crawler/tasks', duration: 1200, status_code: 200, reason: '数据库查询' },
-  ]
+  const slowQueryData = apiData.slow_queries || []
 
   // QPS 趋势
-  const qpsTrendData = apiData.qps_trend || [
-    { date: '00:00', count: 5 },
-    { date: '02:00', count: 3 },
-    { date: '04:00', count: 2 },
-    { date: '06:00', count: 4 },
-    { date: '08:00', count: 15 },
-    { date: '10:00', count: 28 },
-    { date: '12:00', count: 22 },
-    { date: '14:00', count: 25 },
-    { date: '16:00', count: 18 },
-    { date: '18:00', count: 14 },
-    { date: '20:00', count: 10 },
-    { date: '22:00', count: 7 },
-  ]
+  const qpsTrendData = apiData.qps_trend || []
 
   return (
     <div>
@@ -222,7 +190,7 @@ const ApiMonitor = () => {
                 <Tooltip title="50%的请求在此时间内完成">
                   <Card size="small" style={{ textAlign: 'center' }}>
                     <div style={{ fontSize: 24, fontWeight: 'bold', color: '#52c41a' }}>
-                      {latencyStats.p50}ms
+                      {latencyStats.p50 ?? '-'}ms
                     </div>
                     <div style={{ color: '#666', marginTop: 4 }}>P50</div>
                   </Card>
@@ -232,7 +200,7 @@ const ApiMonitor = () => {
                 <Tooltip title="95%的请求在此时间内完成">
                   <Card size="small" style={{ textAlign: 'center' }}>
                     <div style={{ fontSize: 24, fontWeight: 'bold', color: '#fa8c16' }}>
-                      {latencyStats.p95}ms
+                      {latencyStats.p95 ?? '-'}ms
                     </div>
                     <div style={{ color: '#666', marginTop: 4 }}>P95</div>
                   </Card>
@@ -242,7 +210,7 @@ const ApiMonitor = () => {
                 <Tooltip title="99%的请求在此时间内完成">
                   <Card size="small" style={{ textAlign: 'center' }}>
                     <div style={{ fontSize: 24, fontWeight: 'bold', color: '#ff4d4f' }}>
-                      {latencyStats.p99}ms
+                      {latencyStats.p99 ?? '-'}ms
                     </div>
                     <div style={{ color: '#666', marginTop: 4 }}>P99</div>
                   </Card>

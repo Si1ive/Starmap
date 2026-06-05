@@ -33,94 +33,10 @@ const MonitorErrors = () => {
   const errorData = (data?.data || {}) as Record<string, any>
 
   // 统计
-  const stats = (errorData.stats || {
-    total_errors: 156,
-    total_warnings: 342,
-    unresolved: 23,
-    today_errors: 12,
-  }) as Record<string, number>
+  const stats = (errorData.stats || {}) as Record<string, number>
 
   // 错误列表
-  const rawLogs: ErrorLog[] = (errorData.logs || [
-    {
-      id: 'err-001',
-      timestamp: '2024-01-07 15:32:10',
-      level: 'critical',
-      module: 'chat',
-      message: 'LLM 服务连接超时 (timeout=30s)',
-      endpoint: '/api/v1/chat',
-      stack_trace: 'Traceback:\n  File "/app/api/chat.py", line 45\n    response = await llm_client.chat(messages)\n  File "/app/services/llm.py", line 89\n    raise TimeoutError("Connection timeout after 30s")\nTimeoutError: Connection timeout after 30s',
-      request_id: 'req-abc123',
-      user_id: 'user-456',
-      resolved: false,
-      count: 5,
-    },
-    {
-      id: 'err-002',
-      timestamp: '2024-01-07 15:28:45',
-      level: 'error',
-      module: 'crawler',
-      message: 'Wikipedia 反爬拦截: HTTP 403',
-      endpoint: '/api/v1/admin/crawler/tasks',
-      stack_trace: 'Traceback:\n  File "/app/services/crawler.py", line 120\n    response = await fetch(url)\n  File "/app/utils/http.py", line 34\n    raise AntiCrawlError("HTTP 403 Forbidden")\nAntiCrawlError: Wikipedia anti-crawl detected',
-      request_id: 'req-def456',
-      user_id: null,
-      resolved: false,
-      count: 3,
-    },
-    {
-      id: 'err-003',
-      timestamp: '2024-01-07 14:58:30',
-      level: 'error',
-      module: 'neo4j',
-      message: 'Neo4j 查询超时: 节点数超过阈值',
-      endpoint: '/api/v1/person/search',
-      stack_trace: 'Traceback:\n  File "/app/services/graph.py", line 67\n    result = await neo4j_client.execute(query)\n  File "/app/db/neo4j.py", line 23\n    raise QueryTimeout("Query timeout after 10s, node count: 12580")\nQueryTimeout: Query timeout after 10s',
-      request_id: 'req-ghi789',
-      user_id: 'user-789',
-      resolved: true,
-      count: 2,
-    },
-    {
-      id: 'err-004',
-      timestamp: '2024-01-07 14:45:11',
-      level: 'warning',
-      module: 'redis',
-      message: 'Redis 内存使用超过 80% 阈值',
-      endpoint: 'N/A',
-      stack_trace: 'Warning: Redis memory usage at 85% (437MB/512MB)',
-      request_id: 'N/A',
-      user_id: null,
-      resolved: false,
-      count: 1,
-    },
-    {
-      id: 'err-005',
-      timestamp: '2024-01-07 13:30:00',
-      level: 'warning',
-      module: 'chromadb',
-      message: 'ChromaDB 查询延迟上升 (>500ms)',
-      endpoint: '/api/v1/query',
-      stack_trace: 'Warning: ChromaDB avg_query_time increased to 520ms (threshold: 500ms)',
-      request_id: 'N/A',
-      user_id: null,
-      resolved: false,
-      count: 1,
-    },
-    {
-      id: 'err-006',
-      timestamp: '2024-01-07 12:15:00',
-      level: 'error',
-      module: 'auth',
-      message: 'JWT token 验证失败: expired',
-      endpoint: '/api/v1/admin/auth/me',
-      stack_trace: 'Traceback:\n  File "/app/api/auth.py", line 28\n    payload = jwt.decode(token)\n  File "/app/utils/jwt.py", line 15\n    raise TokenExpiredError("Token expired at 2024-01-07T11:00:00")\nTokenExpiredError: Token expired',
-      request_id: 'req-jkl012',
-      user_id: 'admin-001',
-      resolved: true,
-      count: 8,
-    },
-  ]) as ErrorLog[]
+  const rawLogs: ErrorLog[] = (errorData.logs || []) as ErrorLog[]
 
   // 过滤
   const filteredLogs = rawLogs.filter((log) => {

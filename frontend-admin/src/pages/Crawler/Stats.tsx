@@ -37,15 +37,7 @@ const CrawlerStats = () => {
   const sources = sourceData?.data || {}
 
   // 失败原因 Top5
-
-
-  const failureData = overview.failure_top5 || [
-    { type: '网络超时', count: 156, percent: 35 },
-    { type: '404 Not Found', count: 89, percent: 20 },
-    { type: '反爬拦截', count: 67, percent: 15 },
-    { type: '解析错误', count: 45, percent: 10 },
-    { type: '其他', count: 89, percent: 20 },
-  ]
+  const failureData = (overview as Record<string, any>).failure_top5 || []
 
   // 最近爬取记录
   const recentColumns = [
@@ -69,13 +61,7 @@ const CrawlerStats = () => {
     { title: '耗时', dataIndex: 'duration', width: 100, render: (v: number) => `${v}ms` },
   ]
 
-  const recentData = overview.recent_records || [
-    { time: '2024-01-07 15:30:00', resource: '周杰伦 - Wikipedia', action: '下载', status: 'success', duration: 1250 },
-    { time: '2024-01-07 15:29:55', resource: '昆凌 - Wikipedia', action: '解析', status: 'success', duration: 320 },
-    { time: '2024-01-07 15:29:50', resource: '方文山 - Wikipedia', action: '下载', status: 'failed', duration: 5000 },
-    { time: '2024-01-07 15:29:45', resource: '刘德华 - Douban', action: '下载', status: 'success', duration: 890 },
-    { time: '2024-01-07 15:29:40', resource: '成龙 - Wikipedia', action: '存储', status: 'success', duration: 150 },
-  ]
+  const recentData = (overview as Record<string, any>).recent_records || []
 
   return (
     <div>

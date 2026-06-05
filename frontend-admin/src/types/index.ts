@@ -81,8 +81,10 @@ export interface Work {
 // 爬虫任务
 export interface CrawlerTask {
   id: string
+  name: string
   type: 'full' | 'incremental' | 'targeted'
-  source: 'wikipedia' | 'douban' | 'other'
+  source: string
+  source_id?: string
   target_count: number
   completed_count: number
   success_count: number
@@ -92,8 +94,67 @@ export interface CrawlerTask {
   status: 'pending' | 'running' | 'completed' | 'failed' | 'stopped'
   started_at?: string
   completed_at?: string
+  created_at?: string
   estimated_completion?: string
   error_message?: string
+}
+
+// 数据源
+export interface CrawlerSource {
+  id: string
+  name: string
+  code: string
+  type: string
+  base_url: string
+  status: string
+  health_status?: string
+  request_interval?: number
+  daily_limit?: number
+  total_requests?: number
+  total_success?: number
+  total_failed?: number
+  avg_response_time?: number
+  created_at?: string
+}
+
+// 定时任务
+export interface CrawlerSchedule {
+  id: string
+  name: string
+  description?: string
+  task_type: string
+  cron_expression: string
+  timezone?: string
+  is_enabled: boolean
+  max_retries?: number
+  total_runs?: number
+  success_runs?: number
+  failed_runs?: number
+  last_run_at?: string
+  last_run_status?: string
+  next_run_at?: string
+  created_at?: string
+}
+
+// 爬虫日志
+export interface CrawlerLog {
+  id: string
+  task_id?: string
+  source_id?: string
+  level: string
+  stage?: string
+  resource_url?: string
+  resource_name?: string
+  resource_type?: string
+  action?: string
+  status?: string
+  duration_ms?: number
+  message?: string
+  error_type?: string
+  error_detail?: string
+  retry_count?: number
+  details?: Record<string, unknown>
+  created_at?: string
 }
 
 // 对话记录

@@ -88,48 +88,7 @@ const SettingsUsers = () => {
     onError: () => message.error('删除失败'),
   })
 
-  const userList: AdminUser[] = data?.data?.users || [
-    {
-      id: '1',
-      username: 'admin',
-      email: 'admin@starmap.com',
-      role: 'super_admin',
-      permissions: permissionOptions.map((p) => p.value),
-      is_active: true,
-      last_login_at: '2024-01-07 15:30:00',
-      created_at: '2024-01-01',
-    },
-    {
-      id: '2',
-      username: 'data_admin',
-      email: 'data@starmap.com',
-      role: 'data_admin',
-      permissions: ['dashboard:view', 'person:manage', 'work:manage', 'crawler:manage', 'monitor:view'],
-      is_active: true,
-      last_login_at: '2024-01-06 10:00:00',
-      created_at: '2024-01-02',
-    },
-    {
-      id: '3',
-      username: 'operator1',
-      email: 'op1@starmap.com',
-      role: 'operator',
-      permissions: ['dashboard:view', 'conversation:view'],
-      is_active: true,
-      last_login_at: '2024-01-05 09:00:00',
-      created_at: '2024-01-03',
-    },
-    {
-      id: '4',
-      username: 'operator2',
-      email: 'op2@starmap.com',
-      role: 'operator',
-      permissions: ['dashboard:view', 'conversation:view'],
-      is_active: false,
-      last_login_at: null,
-      created_at: '2024-01-04',
-    },
-  ]
+  const userList: AdminUser[] = (data?.data?.users || []) as AdminUser[]
 
   const handleEdit = (user: AdminUser) => {
     setEditingUser(user)

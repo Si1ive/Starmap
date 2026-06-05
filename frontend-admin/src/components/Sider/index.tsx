@@ -29,6 +29,9 @@ const menuItems = [
     label: '爬虫管理',
     children: [
       { key: '/admin/crawler', label: '任务列表' },
+      { key: '/admin/crawler/sources', label: '数据源' },
+      { key: '/admin/crawler/schedules', label: '定时任务' },
+      { key: '/admin/crawler/logs', label: '日志查看' },
       { key: '/admin/crawler/stats', icon: <BarChartOutlined />, label: '爬取统计' },
       { key: '/admin/crawler/config', icon: <ToolOutlined />, label: '爬虫配置' },
     ],
@@ -64,20 +67,16 @@ const AppSider = () => {
   // 根据权限过滤菜单项
   const filterByPermission = (items: any[]) => {
     return items.filter((item) => {
-      // 配置模块需要 settings:manage 权限
-      if (item.key === '/admin/settings' || item.key === '/admin/settings-group') {
+      // 配置管理子项需要 settings:manage 权限
+      if (item.key.startsWith('/admin/settings')) {
         return permissions.includes('settings:manage')
       }
-      // 用户管理需要 user:manage 权限
-      if (item.key === '/admin/settings/users') {
-        return permissions.includes('user:manage')
-      }
-      // 爬虫统计/配置需要 crawler:manage 权限
-      if (item.key === '/admin/crawler/stats' || item.key === '/admin/crawler/config') {
+      // 爬虫管理子项需要 crawler:manage 权限
+      if (item.key.startsWith('/admin/crawler/')) {
         return permissions.includes('crawler:manage')
       }
-      // 监控详情需要 monitor:view 权限
-      if (item.key === '/admin/monitor/api' || item.key === '/admin/monitor/database' || item.key === '/admin/monitor/errors') {
+      // 监控管理子项需要 monitor:view 权限
+      if (item.key.startsWith('/admin/monitor/')) {
         return permissions.includes('monitor:view')
       }
       // 有子菜单的项：如果子菜单全被过滤掉，则隐藏父菜单

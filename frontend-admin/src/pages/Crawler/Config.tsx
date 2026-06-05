@@ -46,23 +46,23 @@ const CrawlerConfig = () => {
         layout="vertical"
         initialValues={{
           // 基础配置
-          max_concurrent: settings.max_concurrent || 3,
-          request_delay: settings.request_delay || 1.0,
-          request_timeout: settings.request_timeout || 30,
-          max_retries: settings.max_retries || 3,
-          retry_delay: settings.retry_delay || 5.0,
-          user_agent: settings.user_agent || 'StarMap/1.0',
-          proxy_enabled: settings.proxy_enabled || false,
-          proxy_url: settings.proxy_url || '',
+          max_concurrent: settings.max_concurrent,
+          request_delay: settings.request_delay,
+          request_timeout: settings.request_timeout,
+          max_retries: settings.max_retries,
+          retry_delay: settings.retry_delay,
+          user_agent: settings.user_agent,
+          proxy_enabled: settings.proxy_enabled,
+          proxy_url: settings.proxy_url,
           // 高级配置
-          respect_robots_txt: settings.respect_robots_txt || true,
-          auto_detect_encoding: settings.auto_detect_encoding || true,
-          follow_redirects: settings.follow_redirects || true,
-          max_redirects: settings.max_redirects || 5,
-          max_depth: settings.max_depth || 3,
-          dedup_enabled: settings.dedup_enabled || true,
-          storage_batch_size: settings.storage_batch_size || 100,
-          log_level: settings.log_level || 'INFO',
+          respect_robots_txt: settings.respect_robots_txt,
+          auto_detect_encoding: settings.auto_detect_encoding,
+          follow_redirects: settings.follow_redirects,
+          max_redirects: settings.max_redirects,
+          max_depth: settings.max_depth,
+          dedup_enabled: settings.dedup_enabled,
+          storage_batch_size: settings.storage_batch_size,
+          log_level: settings.log_level,
         }}
       >
         {/* 基础配置 */}

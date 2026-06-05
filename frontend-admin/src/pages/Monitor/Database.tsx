@@ -31,60 +31,7 @@ const DatabaseMonitor = () => {
 
   const dbData = (data?.data || {}) as Record<string, any>
 
-  const databases: DBStatus[] = (dbData.databases || [
-    {
-      name: 'Neo4j',
-      type: '图数据库',
-      status: 'connected',
-      version: '5.15.0',
-      uptime: '15天 3小时',
-      connections: 12,
-      max_connections: 100,
-      size: '2.3 GB',
-      operations_per_sec: 156,
-      cache_hit_rate: 92.5,
-      last_check: '2024-01-07 15:30:00',
-    },
-    {
-      name: 'Redis',
-      type: '缓存',
-      status: 'connected',
-      version: '7.2.3',
-      uptime: '30天 12小时',
-      connections: 8,
-      max_connections: 50,
-      size: '256 MB',
-      operations_per_sec: 2300,
-      cache_hit_rate: 98.7,
-      last_check: '2024-01-07 15:30:00',
-    },
-    {
-      name: 'ChromaDB',
-      type: '向量数据库',
-      status: 'connected',
-      version: '0.4.22',
-      uptime: '10天 8小时',
-      connections: 5,
-      max_connections: 20,
-      size: '1.8 GB',
-      operations_per_sec: 45,
-      cache_hit_rate: 85.3,
-      last_check: '2024-01-07 15:30:00',
-    },
-    {
-      name: 'MySQL',
-      type: '关系数据库',
-      status: 'connected',
-      version: '8.0.35',
-      uptime: '45天 6小时',
-      connections: 18,
-      max_connections: 200,
-      size: '520 MB',
-      operations_per_sec: 320,
-      cache_hit_rate: 96.2,
-      last_check: '2024-01-07 15:30:00',
-    },
-  ]) as DBStatus[]
+  const databases: DBStatus[] = (dbData.databases || []) as DBStatus[]
 
   const getStatusIcon = (status: string) => {
     if (status === 'connected') return <CheckCircleOutlined style={{ color: '#52c41a' }} />
@@ -148,49 +95,13 @@ const DatabaseMonitor = () => {
   ]
 
   // Neo4j 详细信息
-  const neo4jDetail = (dbData.neo4j_detail || {
-    node_count: 12580,
-    relationship_count: 45600,
-    label_distribution: [
-      { label: 'Person', count: 8900 },
-      { label: 'Work', count: 3200 },
-      { label: 'Organization', count: 480 },
-      { label: 'Event', count: 0 },
-    ],
-    query_count_24h: 45230,
-    avg_query_time: 85,
-    slow_queries_24h: 12,
-  }) as Record<string, any>
+  const neo4jDetail = (dbData.neo4j_detail || {}) as Record<string, any>
 
   // Redis 详细信息
-  const redisDetail = (dbData.redis_detail || {
-    key_count: 125000,
-    memory_used: '256 MB',
-    memory_limit: '512 MB',
-    hit_rate: 98.7,
-    miss_rate: 1.3,
-    evicted_keys: 0,
-    key_types: [
-      { type: 'string', count: 80000 },
-      { type: 'hash', count: 25000 },
-      { type: 'set', count: 15000 },
-      { type: 'zset', count: 5000 },
-    ],
-  }) as Record<string, any>
+  const redisDetail = (dbData.redis_detail || {}) as Record<string, any>
 
   // ChromaDB 详细信息
-  const chromaDetail = (dbData.chroma_detail || {
-    collection_count: 3,
-    vector_count: 156000,
-    index_size: '1.8 GB',
-    avg_query_time: 45,
-    embedding_model: 'text2vec-chinese',
-    collections: [
-      { name: 'person_knowledge', vectors: 89000, size: '1.2 GB' },
-      { name: 'work_description', vectors: 45000, size: '0.4 GB' },
-      { name: 'conversation_context', vectors: 22000, size: '0.2 GB' },
-    ],
-  }) as Record<string, any>
+  const chromaDetail = (dbData.chroma_detail || {}) as Record<string, any>
 
   return (
     <div>
@@ -202,7 +113,7 @@ const DatabaseMonitor = () => {
           <Card size="small">
             <Statistic
               title="数据库总数"
-              value={4}
+              value={databases.length}
               prefix={<DatabaseOutlined style={{ color: '#1890ff' }} />}
             />
           </Card>
