@@ -1,0 +1,83 @@
+import { useEffect, useRef } from 'react'
+import * as echarts from 'echarts'
+
+interface BarChartProps {
+  data: { name: string; value: number }[]
+  title?: string
+  color?: string
+  height?: number
+}
+
+const BarChart = ({ data, title = '', color = '#1890ff', height = 300 }: BarChartProps) => {
+  const chartRef = useRef<HTMLDivElement>(null)
+  const chartInstance = useRef<echarts.ECharts | null>(null)
+
+  useEffect(() => {
+    if (!chartRef.current) return
+
+    chartInstance.current = echarts.init(chartRef.current)
+
+    const option: echarts.EChartsOption = {
+      title: {
+        text: title,
+        left: 'center',
+        textStyle: { fontSize: 14, fontWeight: 'normal' },
+      },
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'shadow' },
+      },
+      xAxis: {
+        type: 'category',
+        data: data.map((item) => item.name),
+        axisLabel: { rotate: 30 },
+      },
+      yAxis: {
+        type: 'value',
+        minInterval: 1,
+      },
+      series: [
+        {
+          data: data.map((item) => item.value),
+          type: 'bar',
+          itemStyle: {
+            color: {
+              type: 'linear',
+              x: 0,
+              y: 0,
+              x2: 0,
+              y2: 1,
+              colorStops: [
+                { offset: 0, color: color },
+                { offset: 1, color: color + '60' },
+              ],
+            },
+            borderRadius: [4, 4, 0, 0],
+          },
+        },
+      ],
+      grid: {
+        left: '3%',
+        right: '4%',
+        bottom: '3%',
+        containLabel: true,
+      },
+    }
+
+    chartInstance.current.setOption(option)
+
+    const handleResize = () => {
+      chartInstance.current?.resize()
+    }
+    window.addEventListener('resize', handleResize)
+
+    return () => {
+      window.removeEventListener('resize', handleResize)
+      chartInstance.current?.dispose()
+    }
+  }, [data, title, color])
+
+  return <div ref={chartRef} style={{ width: '100%', height }} />
+}
+
+export default BarChart

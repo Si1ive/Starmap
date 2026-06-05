@@ -8,7 +8,8 @@ import {
   ThunderboltOutlined,
 } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
-import { getDashboardStats } from '@/api'
+import { getDashboardStats, getDashboardCharts } from '@/api'
+import { LineChart, PieChart, BarChart } from '@/components/Chart'
 import type { DashboardStats } from '@/types'
 
 const StatCard = ({
@@ -36,9 +37,14 @@ const StatCard = ({
 )
 
 const Dashboard = () => {
-  const { data: statsData, isLoading } = useQuery({
+  const { data: statsData, isLoading: statsLoading } = useQuery({
     queryKey: ['dashboardStats'],
     queryFn: getDashboardStats,
+  })
+
+  const { data: chartsData, isLoading: chartsLoading } = useQuery({
+    queryKey: ['dashboardCharts'],
+    queryFn: getDashboardCharts,
   })
 
   const stats: DashboardStats = statsData?.data || {
@@ -50,7 +56,9 @@ const Dashboard = () => {
     api_avg_response: 0,
   }
 
-  if (isLoading) {
+  const charts = chartsData?.data || {}
+
+  if (statsLoading) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', padding: '100px 0' }}>
         <Spin size="large" tip="加载中..." />
@@ -116,20 +124,37 @@ const Dashboard = () => {
         </Col>
       </Row>
 
-      {/* 图表区域 - 占位 */}
+      {/* 图表区域 */}
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={12}>
           <Card title="近7日对话趋势" bordered={false} style={{ borderRadius: 8 }}>
-            <div style={{ height: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999' }}>
-              图表数据加载中...
-            </div>
+            {chartsLoading ? (
+              <div style={{ height: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999' }}>
+                图表数据加载中...
+              </div>
+            ) : (
+              <LineChart
+                data={(charts.chat_trend || []) as { date: string; count: number }[]}
+                title=""
+                color="#1890ff"
+                height={300}
+              />
+            )}
           </Card>
         </Col>
         <Col xs={24} lg={12}>
           <Card title="艺人分类分布" bordered={false} style={{ borderRadius: 8 }}>
-            <div style={{ height: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999' }}>
-              图表数据加载中...
-            </div>
+            {chartsLoading ? (
+              <div style={{ height: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999' }}>
+                图表数据加载中...
+              </div>
+            ) : (
+              <PieChart
+                data={(charts.category_distribution || []) as { name: string; value: number }[]}
+                title=""
+                height={300}
+              />
+            )}
           </Card>
         </Col>
       </Row>
@@ -137,16 +162,34 @@ const Dashboard = () => {
       <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
         <Col xs={24} lg={12}>
           <Card title="热门搜索词Top10" bordered={false} style={{ borderRadius: 8 }}>
-            <div style={{ height: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999' }}>
-              图表数据加载中...
-            </div>
+            {chartsLoading ? (
+              <div style={{ height: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999' }}>
+                图表数据加载中...
+              </div>
+            ) : (
+              <BarChart
+                data={(charts.hot_search || []) as { name: string; value: number }[]}
+                title=""
+                color="#52c41a"
+                height={300}
+              />
+            )}
           </Card>
         </Col>
         <Col xs={24} lg={12}>
           <Card title="爬虫任务状态" bordered={false} style={{ borderRadius: 8 }}>
-            <div style={{ height: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999' }}>
-              数据加载中...
-            </div>
+            {chartsLoading ? (
+              <div style={{ height: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999' }}>
+                数据加载中...
+              </div>
+            ) : (
+              <BarChart
+                data={(charts.crawler_status || []) as { name: string; value: number }[]}
+                title=""
+                color="#fa8c16"
+                height={300}
+              />
+            )}
           </Card>
         </Col>
       </Row>

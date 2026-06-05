@@ -240,6 +240,25 @@ async def get_dashboard_charts():
                 {"name": "导演", "value": 198},
                 {"name": "制片人", "value": 87},
                 {"name": "编剧", "value": 173}
+            ],
+            "hot_search": [
+                {"name": "周杰伦", "value": 1250},
+                {"name": "刘德华", "value": 980},
+                {"name": "成龙", "value": 876},
+                {"name": "周星驰", "value": 754},
+                {"name": "张艺谋", "value": 621},
+                {"name": "巩俐", "value": 543},
+                {"name": "周润发", "value": 498},
+                {"name": "梁朝伟", "value": 432},
+                {"name": "张曼玉", "value": 387},
+                {"name": "王家卫", "value": 321}
+            ],
+            "crawler_status": [
+                {"name": "运行中", "value": 3},
+                {"name": "已完成", "value": 12},
+                {"name": "失败", "value": 2},
+                {"name": "已停止", "value": 1},
+                {"name": "待启动", "value": 5}
             ]
         }
     )
@@ -1155,3 +1174,233 @@ async def update_settings(data: dict):
     TODO: 实现配置持久化存储
     """
     return ApiResponse(code=200, message="保存成功", data=data)
+
+
+# ========== 作品管理相关 ==========
+
+@router.get("/works", response_model=ApiResponse)
+async def get_work_list(
+    page: int = 1,
+    page_size: int = 20,
+    q: Optional[str] = None,
+    type: Optional[str] = None,
+    year: Optional[int] = None,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    获取作品列表
+    
+    支持搜索、筛选、分页。
+    """
+    from app.services.work_service import WorkService
+    
+    service = WorkService(db)
+    works, total = await service.get_works(
+        skip=(page - 1) * page_size,
+        limit=page_size,
+        keyword=q,
+        work_type=type,
+        year=year,
+    )
+    
+    return ApiResponse(
+        code=200,
+        message="success",
+        data={
+            "items": [{
+                "id": w.id,
+                "title": w.title,
+                "title_en": w.title_en,
+                "type": w.type,
+                "release_date": w.release_date.isoformat() if w.release_date else None,
+                "poster": w.poster,
+                "rating": float(w.rating) if w.rating else None,
+                "status": w.status,
+                "genre": w.genre,
+                "summary": w.summary,
+                "created_at": w.created_at.isoformat() if w.created_at else None,
+                "updated_at": w.updated_at.isoformat() if w.updated_at else None,
+            } for w in works],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size if total else 0,
+        }
+    )
+
+
+@router.get("/works/{work_id}", response_model=ApiResponse)
+async def get_work_detail(
+    work_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    获取作品详情
+    """
+    from app.services.work_service import WorkService
+    
+    service = WorkService(db)
+    work = await service.get_work_by_id(work_id)
+    
+    if not work:
+        raise HTTPException(status_code=404, detail="作品不存在")
+    
+    return ApiResponse(
+        code=200,
+        message="success",
+        data={
+            "id": work.id,
+            "title": work.title,
+            "title_en": work.title_en,
+            "type": work.type,
+            "release_date": work.release_date.isoformat() if work.release_date else None,
+            "poster": work.poster,
+            "summary": work.summary,
+            "cover": work.cover,
+            "rating": float(work.rating) if work.rating else None,
+            "status": work.status,
+            "source": work.source,
+            "genres": work.genres,
+            "tags": work.tags,
+            "director": work.director,
+            "actors": work.actors,
+            "box_office": work.box_office,
+            "episodes": work.episodes,
+            "platform": work.platform,
+            "artist": work.artist,
+            "record_company": work.record_company,
+            "track_list": work.track_list,
+            "author": work.author,
+            "publisher": work.publisher,
+            "isbn": work.isbn,
+            "related_persons": [{
+                "id": p.id,
+                "name": p.name,
+                "role": p.role,
+            } for p in (work.related_persons or [])],
+            "created_at": work.created_at.isoformat() if work.created_at else None,
+            "updated_at": work.updated_at.isoformat() if work.updated_at else None,
+        }
+    )
+
+
+@router.post("/works", response_model=ApiResponse)
+async def create_work(
+    data: dict,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    创建作品
+    """
+    from app.services.work_service import WorkService
+    
+    service = WorkService(db)
+    work = await service.create_work(data)
+    
+    return ApiResponse(
+        code=200,
+        message="创建成功",
+        data={"id": work.id, "title": work.title}
+    )
+
+
+@router.put("/works/{work_id}", response_model=ApiResponse)
+async def update_work(
+    work_id: str,
+    data: dict,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    更新作品
+    """
+    from app.services.work_service import WorkService
+    
+    service = WorkService(db)
+    work = await service.update_work(work_id, data)
+    
+    if not work:
+        raise HTTPException(status_code=404, detail="作品不存在")
+    
+    return ApiResponse(
+        code=200,
+        message="更新成功",
+        data={"id": work.id, "title": work.title}
+    )
+
+
+@router.delete("/works/{work_id}", response_model=ApiResponse)
+async def delete_work(
+    work_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    删除作品
+    """
+    from app.services.work_service import WorkService
+    
+    service = WorkService(db)
+    success = await service.delete_work(work_id)
+    
+    if not success:
+        raise HTTPException(status_code=404, detail="作品不存在")
+    
+    return ApiResponse(code=200, message="删除成功")
+
+
+# ========== 对话详情相关 ==========
+
+@router.get("/conversations/{conversation_id}", response_model=ApiResponse)
+async def get_conversation_detail(conversation_id: str):
+    """
+    获取对话详情
+    
+    返回指定对话的完整内容，包括消息列表。
+    """
+    # 临时返回 mock 数据
+    return ApiResponse(
+        code=200,
+        message="success",
+        data={
+            "id": conversation_id,
+            "first_message": "周杰伦的妻子是谁？",
+            "messages": [
+                {
+                    "id": "msg_001",
+                    "role": "user",
+                    "content": "周杰伦的妻子是谁？",
+                    "timestamp": "2024-01-01T10:00:00Z",
+                    "sources": [],
+                },
+                {
+                    "id": "msg_002",
+                    "role": "assistant",
+                    "content": "周杰伦的妻子是昆凌（Hannah Quinlivan）。",
+                    "timestamp": "2024-01-01T10:00:05Z",
+                    "sources": [
+                        {"person_id": "person_002", "name": "昆凌", "relation": "妻子"}
+                    ],
+                },
+                {
+                    "id": "msg_003",
+                    "role": "user",
+                    "content": "他们什么时候结婚的？",
+                    "timestamp": "2024-01-01T10:00:30Z",
+                    "sources": [],
+                },
+                {
+                    "id": "msg_004",
+                    "role": "assistant",
+                    "content": "周杰伦和昆凌于2015年1月17日在英国举行婚礼。",
+                    "timestamp": "2024-01-01T10:00:35Z",
+                    "sources": [
+                        {"person_id": "person_001", "name": "周杰伦"},
+                        {"person_id": "person_002", "name": "昆凌"},
+                    ],
+                },
+            ],
+            "persons": ["周杰伦", "昆凌"],
+            "satisfaction": "good",
+            "created_at": "2024-01-01T10:00:00Z",
+            "updated_at": "2024-01-01T10:00:35Z",
+        }
+    )

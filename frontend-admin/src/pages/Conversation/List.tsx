@@ -1,9 +1,11 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Table, Button, Input, Tag, Space, Card, Rate } from 'antd'
 import { SearchOutlined, EyeOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { getConversations } from '@/api'
 const ConversationList = () => {
+  const navigate = useNavigate()
   const [searchParams, setSearchParams] = useState({
     page: 1,
     page_size: 20,
@@ -71,8 +73,8 @@ const ConversationList = () => {
       title: '操作',
       key: 'action',
       width: 100,
-      render: () => (
-        <Button type="text" icon={<EyeOutlined />}>
+      render: (_: unknown, record: any) => (
+        <Button type="text" icon={<EyeOutlined />} onClick={() => navigate(`/admin/conversations/${record.id}`)}>
           查看
         </Button>
       ),

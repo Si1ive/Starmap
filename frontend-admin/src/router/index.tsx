@@ -7,8 +7,11 @@ import PersonList from '@/pages/Person/List'
 import PersonDetail from '@/pages/Person/Detail'
 import PersonEdit from '@/pages/Person/Edit'
 import WorkList from '@/pages/Work/List'
+import WorkDetail from '@/pages/Work/Detail'
+import WorkEdit from '@/pages/Work/Edit'
 import CrawlerList from '@/pages/Crawler/List'
 import ConversationList from '@/pages/Conversation/List'
+import ConversationDetail from '@/pages/Conversation/Detail'
 import MonitorOverview from '@/pages/Monitor/Overview'
 import Settings from '@/pages/Settings'
 
@@ -84,12 +87,30 @@ const AppRoutes = () => {
 
         {/* 作品管理 */}
         <Route path="works" element={<WorkList />} />
+        <Route path="works/:id" element={<WorkDetail />} />
+        <Route
+          path="works/:id/edit"
+          element={
+            <PrivateRoute permission="work:edit">
+              <WorkEdit />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="works/new"
+          element={
+            <PrivateRoute permission="work:edit">
+              <WorkEdit />
+            </PrivateRoute>
+          }
+        />
 
         {/* 爬虫管理 */}
         <Route path="crawler" element={<CrawlerList />} />
 
         {/* 对话管理 */}
         <Route path="conversations" element={<ConversationList />} />
+        <Route path="conversations/:id" element={<ConversationDetail />} />
 
         {/* 系统监控 */}
         <Route path="monitor" element={<MonitorOverview />} />
