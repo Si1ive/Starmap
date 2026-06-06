@@ -351,12 +351,16 @@ HTTP 状态码必须与错误结果一致，`code` 与 HTTP 状态码保持一�
 ```json
 {
   "active_sources": 2,
+  "total_tasks": 12,
   "today_requests": 100,
   "today_success": 90,
   "today_success_rate": 90.0,
   "total_requests": 1000,
   "total_success": 860,
+  "total_failed": 140,
   "overall_success_rate": 86.0,
+  "recent_records": [],
+  "category_distribution": [],
   "scrapy_status": {
     "status": "connected",
     "queue_length": 0,
@@ -371,11 +375,15 @@ HTTP 状态码必须与错误结果一致，`code` 与 HTTP 状态码保持一�
 
 响应：`ApiResponse<CrawlerSourceComparison[]>`
 
+响应项包含：`source_id`、`name`、`type`、`status`、`health_status`、`total_requests`、`success_requests`、`failed_requests`、`success_rate`、`avg_response_time`、`avg_completeness`。
+
 ### GET `/api/v1/admin/crawler/stats/trend`
 
 查询参数：`days`，默认 `30`。
 
 响应：`ApiResponse<CrawlerTrendPoint[]>`
+
+响应项包含：`date`、`requests`、`successes`、`failures`、`success_rate`。
 
 ### GET `/api/v1/admin/crawler/stats/efficiency`
 
@@ -609,6 +617,7 @@ FastAPI 与 Scrapy Service 通过 Redis 解耦：
 - [x] `CrawlTask.task_type` 枚举扩展到 `health_check`、`cleanup`。
 - [x] `CrawlTask` 模型和表结构补齐任务统计和错误字段，或删除未持久化字段使用。
 - [x] `CrawlerSourceService.get_source_stats` 修复 `failed_failed_requests` 拼写。
+- [x] Scrapy 入库完成后写入 `crawl_source_stats`，统计页移除硬编码 mock。
 - [x] 所有 `ApiResponse` 补齐 `request_id`。
 - [ ] HTTP 错误状态码与响应体 `code` 保持一致。
 - [ ] 管理端所有爬虫页面禁止使用未标注的 mock 数据。

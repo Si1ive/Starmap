@@ -140,6 +140,7 @@ def start_task_consumer():
         task_id = task.get("task_id")
         spider_type = task.get("spider_type", "person")
         source = task.get("source", "baike")
+        source_id = task.get("source_id")
         keywords = _normalize_keywords(task.get("keywords"))
         config = task.get("config") or {}
 
@@ -176,6 +177,9 @@ def start_task_consumer():
             ",".join(keywords),
         ]
 
+        if source_id:
+            command.extend(["--source-id", str(source_id)])
+
         if config.get("work_type"):
             command.extend(["--work-type", str(config["work_type"])])
 
@@ -188,7 +192,7 @@ def start_task_consumer():
             _publish_progress(task_id, "failed", 100, error_message=error_message)
 
 
-def run_single_task(task_id, spider_type, source, keywords, work_type=None):
+def run_single_task(task_id, spider_type, source, keywords, source_id=None, work_type=None):
     """
     Run a single task directly.
     
@@ -209,6 +213,7 @@ def run_single_task(task_id, spider_type, source, keywords, work_type=None):
     spider_kwargs = {
         "task_id": task_id,
         "source": source,
+        "source_id": source_id,
         "keywords": keywords,
     }
     if work_type:
@@ -251,6 +256,11 @@ def main():
         help="Task identifier",
     )
     parser.add_argument(
+        "--source-id",
+        default=None,
+        help="Crawl source identifier",
+    )
+    parser.add_argument(
         "--work-type",
         default=None,
         help="Work type for work spider",
@@ -266,6 +276,7 @@ def main():
             spider_type=args.spider,
             source=args.source,
             keywords=args.keywords,
+            source_id=args.source_id,
             work_type=args.work_type,
         )
 

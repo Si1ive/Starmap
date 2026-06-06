@@ -21,7 +21,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.websocket import log_websocket_manager
 from app.db.mysql import mysql_client
-from app.models.mysql_models import CrawlTask
+from app.models.mysql_models import CrawlSource, CrawlTask
 from app.services.log_service import CrawlerLogService
 
 logger = get_logger(__name__)
@@ -79,12 +79,33 @@ class ScrapyBridgeService:
             if isinstance(keywords, str):
                 keywords = [keyword.strip() for keyword in keywords.split(",") if keyword.strip()]
             
+            source_id = task.source_id or (config.get("source_ids") or [None])[0]
+            source_code = config.get("source") or task.source
+            source = None
+            if source_id:
+                result = await self.db.execute(
+                    select(CrawlSource).where(CrawlSource.id == source_id)
+                )
+                source = result.scalar_one_or_none()
+            if not source:
+                result = await self.db.execute(
+                    select(CrawlSource)
+                    .where(CrawlSource.code.in_(self._source_code_candidates(source_code)))
+                    .limit(1)
+                )
+                source = result.scalar_one_or_none()
+            if source:
+                source_code = self._normalize_source_code(source.code or source_code)
+                source_id = source.id
+            source_code = self._normalize_source_code(source_code or "baike")
+
             # Build task message
             task_message = {
                 "task_id": task.id,
                 "task_type": task.task_type,
                 "spider_type": config.get("spider_type", "person"),
-                "source": config.get("source", "baike"),
+                "source": source_code,
+                "source_id": source_id,
                 "keywords": keywords,
                 "config": config,
                 "published_at": datetime.utcnow().isoformat(),
@@ -98,6 +119,7 @@ class ScrapyBridgeService:
             # Log the publish action
             await self.log_service.create_log({
                 "task_id": task.id,
+                "source_id": source_id,
                 "level": "INFO",
                 "stage": "execution",
                 "status": "pending",
@@ -116,6 +138,28 @@ class ScrapyBridgeService:
                 "message": f"Failed to publish task to Scrapy: {str(e)}",
             })
             return False
+
+    @staticmethod
+    def _normalize_source_code(source_code: str) -> str:
+        """Map configured source codes to Scrapy spider source keys."""
+        mapping = {
+            "wikipedia_zh": "wikipedia",
+            "douban_movie": "douban",
+            "baidu_baike": "baike",
+        }
+        return mapping.get(source_code, source_code)
+
+    @staticmethod
+    def _source_code_candidates(source_code: Optional[str]) -> list[str]:
+        """Return database source code candidates for a Scrapy source key."""
+        if not source_code:
+            return []
+        aliases = {
+            "wikipedia": "wikipedia_zh",
+            "douban": "douban_movie",
+            "baike": "baidu_baike",
+        }
+        return [code for code in {source_code, aliases.get(source_code)} if code]
     
     async def subscribe_progress(self, task_id: str, callback: Optional[Callable] = None):
         """

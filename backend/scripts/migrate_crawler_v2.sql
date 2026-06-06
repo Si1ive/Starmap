@@ -153,6 +153,9 @@ INSERT INTO crawl_sources (id, name, code, type, base_url, config, status) VALUE
  'active'),
 ('src_002', '豆瓣电影', 'douban_movie', 'social', 'https://movie.douban.com/',
  '{"selectors": {"title": "span[property=\\"v:itemreviewed\\"]", "rating": "strong[property=\\"v:average\\"]"}, "anti_detection": {"user_agent_rotation": true, "delay_range": [2.0, 5.0]}}',
+ 'active'),
+('src_003', '百度百科', 'baidu_baike', 'encyclopedia', 'https://baike.baidu.com/',
+ '{"selectors": {"title": "h1", "summary": ".lemma-summary"}, "anti_detection": {"user_agent_rotation": true, "delay_range": [1.0, 3.0]}}',
  'active')
 ON DUPLICATE KEY UPDATE 
     name = VALUES(name),

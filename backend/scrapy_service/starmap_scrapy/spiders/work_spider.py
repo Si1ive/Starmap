@@ -38,6 +38,7 @@ class WorkSpider(scrapy.Spider):
     
     # Task context
     task_id = None
+    source_id = None
     source = "douban"
     keywords = []
     work_type = "movie"
@@ -47,6 +48,8 @@ class WorkSpider(scrapy.Spider):
         super().__init__(**kwargs)
         if "task_id" in kwargs:
             self.task_id = kwargs["task_id"]
+        if "source_id" in kwargs:
+            self.source_id = kwargs["source_id"]
         if "source" in kwargs:
             self.source = kwargs["source"]
         if "keywords" in kwargs:

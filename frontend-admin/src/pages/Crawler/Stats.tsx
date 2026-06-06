@@ -32,12 +32,22 @@ const CrawlerStats = () => {
     queryFn: () => getSourceComparison(7),
   })
 
-  const overview = overviewData?.data || {}
-  const trend = trendData?.data || {}
-  const sources = sourceData?.data || {}
+  const overview = (overviewData?.data || {}) as Record<string, any>
+  const trend = Array.isArray(trendData?.data) ? trendData.data : []
+  const sources = Array.isArray(sourceData?.data) ? sourceData.data : []
 
-  // 失败原因 Top5
-  const failureData = (overview as Record<string, any>).failure_top5 || []
+  const trendChartData = trend.map((item: any) => ({
+    date: item.date,
+    count: item.successes || 0,
+  }))
+  const sourceChartData = sources.map((source: any) => ({
+    name: source.name,
+    value: source.success_requests || source.total_requests || 0,
+  }))
+  const failureData = sources
+    .filter((source: any) => (source.failed_requests || 0) > 0)
+    .map((source: any) => ({ name: source.name, value: source.failed_requests || 0 }))
+  const categoryData = overview.category_distribution || []
 
   // 最近爬取记录
   const recentColumns = [
@@ -61,7 +71,7 @@ const CrawlerStats = () => {
     { title: '耗时', dataIndex: 'duration', width: 100, render: (v: number) => `${v}ms` },
   ]
 
-  const recentData = (overview as Record<string, any>).recent_records || []
+  const recentData = overview.recent_records || []
 
   return (
     <div>
@@ -73,7 +83,7 @@ const CrawlerStats = () => {
           <Card size="small">
             <Statistic
               title="总任务数"
-              value={overview.total_tasks || 23}
+              value={overview.total_tasks || 0}
               prefix={<BugOutlined style={{ color: '#1890ff' }} />}
             />
           </Card>
@@ -81,8 +91,8 @@ const CrawlerStats = () => {
         <Col xs={12} sm={8} md={4}>
           <Card size="small">
             <Statistic
-              title="总爬取数"
-              value={overview.total_crawled || 12580}
+              title="总请求数"
+              value={overview.total_requests || 0}
               prefix={<NumberOutlined style={{ color: '#722ed1' }} />}
             />
           </Card>
@@ -91,7 +101,7 @@ const CrawlerStats = () => {
           <Card size="small">
             <Statistic
               title="总成功数"
-              value={overview.total_success || 11890}
+              value={overview.total_success || 0}
               valueStyle={{ color: '#52c41a' }}
               prefix={<CheckCircleOutlined />}
             />
@@ -101,7 +111,7 @@ const CrawlerStats = () => {
           <Card size="small">
             <Statistic
               title="总失败数"
-              value={overview.total_failed || 690}
+              value={overview.total_failed || 0}
               valueStyle={{ color: '#ff4d4f' }}
               prefix={<CloseCircleOutlined />}
             />
@@ -111,9 +121,9 @@ const CrawlerStats = () => {
           <Card size="small">
             <Statistic
               title="整体成功率"
-              value={overview.success_rate || 94.5}
+              value={overview.overall_success_rate || 0}
               suffix="%"
-              valueStyle={{ color: overview.success_rate >= 90 ? '#52c41a' : '#fa8c16' }}
+              valueStyle={{ color: (overview.overall_success_rate || 0) >= 90 ? '#52c41a' : '#fa8c16' }}
               prefix={<CheckCircleOutlined />}
             />
           </Card>
@@ -122,7 +132,7 @@ const CrawlerStats = () => {
           <Card size="small">
             <Statistic
               title="今日爬取"
-              value={overview.today_crawled || 456}
+              value={overview.today_requests || 0}
               prefix={<ThunderboltOutlined style={{ color: '#fa8c16' }} />}
             />
           </Card>
@@ -133,46 +143,12 @@ const CrawlerStats = () => {
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         <Col xs={24} lg={14}>
           <Card title="近7日爬取趋势">
-            {(trend.dates || []).length > 0 ? (
-              <LineChart
-                data={(trend.dates || []).map((d: any, i: number) => ({
-                  date: d,
-                  count: (trend.success_counts || [890, 920, 850, 960, 1020, 980, 1100])[i] || 0,
-                }))}
-                color="#52c41a"
-                height={300}
-              />
-            ) : (
-              <LineChart
-                data={[
-                  { date: '01-01', count: 890 },
-                  { date: '01-02', count: 920 },
-                  { date: '01-03', count: 850 },
-                  { date: '01-04', count: 960 },
-                  { date: '01-05', count: 1020 },
-                  { date: '01-06', count: 980 },
-                  { date: '01-07', count: 1100 },
-                ]}
-                color="#52c41a"
-                height={300}
-              />
-            )}
+            <LineChart data={trendChartData} color="#52c41a" height={300} />
           </Card>
         </Col>
         <Col xs={24} lg={10}>
           <Card title="数据源分布">
-            <PieChart
-              data={
-                (sources.items || []).length > 0
-                  ? sources.items.map((s: any) => ({ name: s.name, value: s.total_success }))
-                  : [
-                      { name: '维基百科', value: 8500 },
-                      { name: '豆瓣', value: 2800 },
-                      { name: '其他', value: 1280 },
-                    ]
-              }
-              height={300}
-            />
+            <PieChart data={sourceChartData} height={300} />
           </Card>
         </Col>
       </Row>
@@ -180,9 +156,9 @@ const CrawlerStats = () => {
       {/* 失败分析 + 覆盖分布 */}
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         <Col xs={24} lg={12}>
-          <Card title="失败原因 Top5">
+          <Card title="失败请求源分布">
             <BarChart
-              data={failureData.map((f: any) => ({ name: f.type, value: f.count }))}
+              data={failureData}
               color="#ff4d4f"
               height={280}
             />
@@ -191,14 +167,7 @@ const CrawlerStats = () => {
         <Col xs={24} lg={12}>
           <Card title="分类覆盖分布">
             <BarChart
-              data={[
-                { name: '演员', value: 456 },
-                { name: '歌手', value: 342 },
-                { name: '导演', value: 198 },
-                { name: '编剧', value: 173 },
-                { name: '制片人', value: 87 },
-                { name: '作曲', value: 65 },
-              ]}
+              data={categoryData}
               color="#1890ff"
               height={280}
             />

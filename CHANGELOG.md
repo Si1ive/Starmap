@@ -13,6 +13,16 @@
 
 ## 2026-06-06
 
+### [会话-Backend/Data/Frontend] 补齐爬虫统计写入闭环
+- **类型**：feat
+- **影响**：backend/app/services/, backend/scrapy_service/, frontend-admin/, docs/api/
+- **描述**：
+  - FastAPI 发布 Scrapy 任务时透传 `source_id` 并按爬取源编码对齐 Scrapy source
+  - Scrapy MySQL Pipeline 在任务结束时 upsert `crawl_source_stats` 并累计更新 `crawl_sources`
+  - 管理端统计页改为消费真实统计数组，移除硬编码趋势、数据源和统计卡片 mock
+  - API 文档补齐统计概览、源对比字段和统计写入闭环状态
+- **注意**：新环境默认源增加 `baidu_baike`，避免 `baike` 任务统计无法归因
+
 ### [会话-Backend/Data] 完善 Scrapy 爬虫任务闭环
 - **类型**：feat
 - **影响**：backend/app/services/, backend/scrapy_service/, docker-compose.yml, frontend-admin/

@@ -51,6 +51,21 @@ class CrawlerTaskService:
             创建的 CrawlTask 实例
         """
         config = target_config or {}
+        source = None
+        if source_ids:
+            result = await self.db.execute(
+                select(CrawlSource).where(CrawlSource.id == source_ids[0])
+            )
+            source = result.scalar_one_or_none()
+        if not source and config.get("source"):
+            result = await self.db.execute(
+                select(CrawlSource)
+                .where(CrawlSource.code.in_(self._source_code_candidates(config["source"])))
+                .limit(1)
+            )
+            source = result.scalar_one_or_none()
+            if source:
+                source_ids = [source.id]
         keywords = config.get("keywords") or config.get("targets") or []
         if isinstance(keywords, str):
             keywords = [keyword.strip() for keyword in keywords.split(",") if keyword.strip()]
@@ -60,7 +75,7 @@ class CrawlerTaskService:
             id=f"task_{uuid.uuid4().hex[:8]}",
             name=name,
             task_type=task_type,
-            source=config.get("source") or (source_ids[0] if source_ids else None),
+            source=config.get("source") or (source.code if source else None),
             source_id=source_ids[0] if source_ids else None,
             target_count=target_count,
             config=config,
@@ -75,6 +90,16 @@ class CrawlerTaskService:
         
         logger.info(f"Created crawl task: {task.name} ({task.id})")
         return task
+
+    @staticmethod
+    def _source_code_candidates(source_code: str) -> List[str]:
+        """Return database source code candidates for a Scrapy source key."""
+        aliases = {
+            "wikipedia": "wikipedia_zh",
+            "douban": "douban_movie",
+            "baike": "baidu_baike",
+        }
+        return [code for code in {source_code, aliases.get(source_code)} if code]
 
     async def create_task_from_schedule(
         self,

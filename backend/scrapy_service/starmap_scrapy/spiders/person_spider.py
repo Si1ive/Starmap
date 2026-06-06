@@ -48,6 +48,7 @@ class PersonSpider(scrapy.Spider):
     
     # Task context (set by TaskConsumerExtension)
     task_id = None
+    source_id = None
     source = "baike"
     keywords = []
     task_config = {}
@@ -57,6 +58,8 @@ class PersonSpider(scrapy.Spider):
         # Allow task parameters to be passed via command line
         if "task_id" in kwargs:
             self.task_id = kwargs["task_id"]
+        if "source_id" in kwargs:
+            self.source_id = kwargs["source_id"]
         if "source" in kwargs:
             self.source = kwargs["source"]
         if "keywords" in kwargs:

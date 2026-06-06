@@ -6,7 +6,10 @@ Writes validated items to MySQL and Neo4j databases.
 
 import json
 import logging
+import re
+import uuid
 from datetime import datetime
+from datetime import date
 from decimal import Decimal, InvalidOperation
 
 import pymysql
@@ -67,13 +70,16 @@ class DatabasePipeline:
         """Close database connection when spider finishes."""
         if self.connection:
             try:
+                self._upsert_source_stats(spider)
                 self.connection.commit()
+            except Exception as e:
+                logger.error(f"Error persisting crawl source stats: {e}")
+                self.connection.rollback()
+            finally:
                 self.connection.close()
                 logger.info(
                     f"Database connection closed. Stats: {self.stats}"
                 )
-            except Exception as e:
-                logger.error(f"Error closing database connection: {e}")
 
     def process_item(self, item, spider):
         """Process item and store in database."""
@@ -338,6 +344,21 @@ class DatabasePipeline:
         """Convert noisy scraped date strings to MySQL DATE-compatible values."""
         if not value:
             return None
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        text = str(value).strip()
+        match = re.search(r"(\d{4})(?:[-年/.](\d{1,2}))?(?:[-月/.](\d{1,2}))?", text)
+        if not match:
+            return None
+        year = int(match.group(1))
+        month = int(match.group(2) or 1)
+        day = int(match.group(3) or 1)
+        try:
+            return datetime(year, month, day).date()
+        except ValueError:
+            return None
 
     def _normalize_datetime(self, value):
         """Convert item timestamp values to MySQL DATETIME-compatible values."""
@@ -350,19 +371,6 @@ class DatabasePipeline:
             return datetime.fromisoformat(text.replace("Z", "+00:00")).replace(tzinfo=None)
         except ValueError:
             return datetime.utcnow()
-        if isinstance(value, datetime):
-            return value.date()
-        text = str(value).strip()
-        match = __import__("re").search(r"(\d{4})(?:[-年/.](\d{1,2}))?(?:[-月/.](\d{1,2}))?", text)
-        if not match:
-            return None
-        year = int(match.group(1))
-        month = int(match.group(2) or 1)
-        day = int(match.group(3) or 1)
-        try:
-            return datetime(year, month, day).date()
-        except ValueError:
-            return None
 
     def _normalize_decimal(self, value, default=None):
         """Convert scraped numeric values to a Decimal-compatible value."""
@@ -403,6 +411,174 @@ class DatabasePipeline:
         if relation_type in {"MARRIED_TO", "COLLABORATED_WITH", "MENTOR_OF", "RELATIVE", "FRIEND"}:
             return relation_type
         return mapping.get(relation_type, "COLLABORATED_WITH")
+
+    def _upsert_source_stats(self, spider):
+        """Persist daily crawl source statistics collected by Scrapy."""
+        source_id = self._resolve_source_id(spider)
+        if not source_id:
+            logger.warning("Skip crawl_source_stats upsert: source_id not found")
+            return
+
+        crawler_stats = getattr(getattr(spider, "crawler", None), "stats", None)
+        get_value = crawler_stats.get_value if crawler_stats else lambda key, default=0: default
+
+        total_requests = int(get_value("downloader/request_count", 0) or 0)
+        response_count = int(get_value("downloader/response_count", 0) or 0)
+        status_failures = sum(
+            int(get_value(f"downloader/response_status_count/{status}", 0) or 0)
+            for status in range(400, 600)
+        )
+        exception_count = int(get_value("downloader/exception_count", 0) or 0)
+        failed_requests = max(status_failures + exception_count, self.stats["errors"])
+        success_requests = max(response_count - failed_requests, 0)
+        valid_records = (
+            self.stats["persons_inserted"]
+            + self.stats["works_inserted"]
+            + self.stats["relations_inserted"]
+        )
+        duration = int(get_value("elapsed_time_seconds", 0) or 0)
+
+        sql = """
+            INSERT INTO crawl_source_stats (
+                source_id, stat_date, total_requests, success_requests, failed_requests,
+                timeout_requests, rate_limited_requests, persons_extracted, works_extracted,
+                relations_extracted, valid_records, duplicate_records, total_duration,
+                created_at
+            ) VALUES (
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s,
+                %s, %s, %s, %s,
+                %s
+            )
+            ON DUPLICATE KEY UPDATE
+                total_requests = total_requests + VALUES(total_requests),
+                success_requests = success_requests + VALUES(success_requests),
+                failed_requests = failed_requests + VALUES(failed_requests),
+                timeout_requests = timeout_requests + VALUES(timeout_requests),
+                rate_limited_requests = rate_limited_requests + VALUES(rate_limited_requests),
+                persons_extracted = persons_extracted + VALUES(persons_extracted),
+                works_extracted = works_extracted + VALUES(works_extracted),
+                relations_extracted = relations_extracted + VALUES(relations_extracted),
+                valid_records = valid_records + VALUES(valid_records),
+                duplicate_records = duplicate_records + VALUES(duplicate_records),
+                total_duration = total_duration + VALUES(total_duration)
+        """
+        params = (
+            source_id,
+            datetime.utcnow().date(),
+            total_requests,
+            success_requests,
+            failed_requests,
+            int(get_value("downloader/exception_type_count/twisted.internet.error.TimeoutError", 0) or 0),
+            int(get_value("downloader/response_status_count/429", 0) or 0),
+            self.stats["persons_inserted"],
+            self.stats["works_inserted"],
+            self.stats["relations_inserted"],
+            valid_records,
+            0,
+            duration,
+            datetime.utcnow(),
+        )
+        self.cursor.execute(sql, params)
+        self._update_source_totals(source_id, total_requests, success_requests, failed_requests)
+        logger.info("Upserted crawl_source_stats for source_id=%s", source_id)
+
+    def _resolve_source_id(self, spider):
+        """Resolve crawl_sources.id from spider kwargs or source code."""
+        source_id = getattr(spider, "source_id", None)
+        if source_id:
+            return source_id
+
+        source_code = getattr(spider, "source", None)
+        if not source_code:
+            return None
+
+        aliases = {
+            "wikipedia": "wikipedia_zh",
+            "douban": "douban_movie",
+            "baike": "baidu_baike",
+        }
+        candidates = [source_code, aliases.get(source_code)]
+        placeholders = ", ".join(["%s"] * len([candidate for candidate in candidates if candidate]))
+        if not placeholders:
+            return None
+
+        sql = f"SELECT id FROM crawl_sources WHERE code IN ({placeholders}) LIMIT 1"
+        self.cursor.execute(sql, tuple(candidate for candidate in candidates if candidate))
+        row = self.cursor.fetchone()
+        if row:
+            return row["id"]
+        return self._create_default_source(source_code)
+
+    def _create_default_source(self, source_code):
+        """Create a default crawl source row when legacy databases lack one."""
+        defaults = {
+            "baike": ("百度百科", "baidu_baike", "encyclopedia", "https://baike.baidu.com/"),
+            "douban": ("豆瓣电影", "douban_movie", "social", "https://movie.douban.com/"),
+            "wikipedia": ("维基百科（中文）", "wikipedia_zh", "encyclopedia", "https://zh.wikipedia.org/wiki/"),
+        }
+        name, code, source_type, base_url = defaults.get(
+            source_code,
+            (source_code, source_code, "other", None),
+        )
+        source_id = f"src_{uuid.uuid4().hex[:8]}"
+        sql = """
+            INSERT INTO crawl_sources (
+                id, name, code, type, base_url, config, status,
+                health_status, request_interval, daily_limit, concurrent_limit,
+                total_requests, total_success, total_failed, created_at, updated_at
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s,
+                %s, %s, %s, %s, %s
+            )
+            ON DUPLICATE KEY UPDATE updated_at = VALUES(updated_at)
+        """
+        self.cursor.execute(
+            sql,
+            (
+                source_id,
+                name,
+                code,
+                source_type,
+                base_url,
+                json.dumps({}, ensure_ascii=False),
+                "active",
+                "healthy",
+                1.0,
+                1000,
+                5,
+                0,
+                0,
+                0,
+                datetime.utcnow(),
+                datetime.utcnow(),
+            ),
+        )
+        self.cursor.execute("SELECT id FROM crawl_sources WHERE code = %s LIMIT 1", (code,))
+        row = self.cursor.fetchone()
+        return row["id"] if row else source_id
+
+    def _update_source_totals(self, source_id, total_requests, success_requests, failed_requests):
+        """Update aggregate counters on crawl_sources."""
+        sql = """
+            UPDATE crawl_sources
+            SET total_requests = total_requests + %s,
+                total_success = total_success + %s,
+                total_failed = total_failed + %s,
+                updated_at = %s
+            WHERE id = %s
+        """
+        self.cursor.execute(
+            sql,
+            (
+                total_requests,
+                success_requests,
+                failed_requests,
+                datetime.utcnow(),
+                source_id,
+            ),
+        )
 
 
 class Neo4jPipeline:

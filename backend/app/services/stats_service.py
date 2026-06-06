@@ -11,7 +11,7 @@ from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.models.mysql_models import CrawlSource, CrawlSourceStats
+from app.models.mysql_models import CrawlLog, CrawlSource, CrawlSourceStats, CrawlTask, Person
 
 logger = get_logger(__name__)
 
@@ -49,17 +49,60 @@ class CrawlerStatsService:
         total_success = await self.db.scalar(
             select(func.coalesce(func.sum(CrawlSourceStats.success_requests), 0))
         ) or 0
+        total_failed = await self.db.scalar(
+            select(func.coalesce(func.sum(CrawlSourceStats.failed_requests), 0))
+        ) or 0
+        total_tasks = await self.db.scalar(select(func.count(CrawlTask.id))) or 0
 
         success_rate = round(total_success / total_requests * 100, 2) if total_requests > 0 else 0
+        recent_result = await self.db.execute(
+            select(CrawlLog)
+            .order_by(CrawlLog.created_at.desc())
+            .limit(10)
+        )
+        recent_records = [
+            {
+                "id": log.id,
+                "time": log.created_at.isoformat() if log.created_at else None,
+                "resource": log.resource_name or log.resource_url or log.task_id,
+                "action": log.action or log.stage or "-",
+                "status": log.status or "pending",
+                "duration": log.duration_ms or 0,
+                "message": log.message,
+            }
+            for log in recent_result.scalars().all()
+        ]
+        category_result = await self.db.execute(
+            select(Person.categories)
+            .where(Person.categories.is_not(None))
+            .order_by(Person.updated_at.desc())
+            .limit(1000)
+        )
+        category_counts: Dict[str, int] = {}
+        for categories in category_result.scalars().all():
+            values = categories if isinstance(categories, list) else []
+            for category in values:
+                category_counts[str(category)] = category_counts.get(str(category), 0) + 1
 
         return {
             "active_sources": active_sources,
+            "total_tasks": int(total_tasks),
             "today_requests": int(today_requests),
             "today_success": int(today_success),
             "today_success_rate": round(today_success / today_requests * 100, 2) if today_requests > 0 else 0,
             "total_requests": int(total_requests),
             "total_success": int(total_success),
+            "total_failed": int(total_failed),
             "overall_success_rate": success_rate,
+            "recent_records": recent_records,
+            "category_distribution": [
+                {"name": name, "value": value}
+                for name, value in sorted(
+                    category_counts.items(),
+                    key=lambda item: item[1],
+                    reverse=True,
+                )[:10]
+            ],
         }
 
     async def get_source_comparison(self, days: int = 7) -> List[Dict[str, Any]]:
@@ -75,6 +118,7 @@ class CrawlerStatsService:
                 CrawlSource.health_status,
                 func.coalesce(func.sum(CrawlSourceStats.total_requests), 0).label("total_requests"),
                 func.coalesce(func.sum(CrawlSourceStats.success_requests), 0).label("success_requests"),
+                func.coalesce(func.sum(CrawlSourceStats.failed_requests), 0).label("failed_requests"),
                 func.avg(CrawlSourceStats.avg_response_time).label("avg_response_time"),
                 func.avg(CrawlSourceStats.avg_completeness).label("avg_completeness"),
             )
@@ -100,6 +144,7 @@ class CrawlerStatsService:
                 "health_status": row.health_status,
                 "total_requests": int(row.total_requests or 0),
                 "success_requests": int(row.success_requests or 0),
+                "failed_requests": int(row.failed_requests or 0),
                 "success_rate": round(
                     (row.success_requests or 0) / (row.total_requests or 1) * 100, 2
                 ),
