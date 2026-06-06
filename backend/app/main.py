@@ -91,6 +91,14 @@ async def lifespan(app: FastAPI):
         logger.info("日志处理器初始化成功")
     except Exception as e:
         logger.warning("日志处理器初始化失败", error=str(e))
+
+    # 初始化 Scrapy 事件监听器
+    try:
+        from app.services.scrapy_bridge import start_scrapy_event_listener
+        await start_scrapy_event_listener()
+        logger.info("Scrapy事件监听器初始化成功")
+    except Exception as e:
+        logger.warning("Scrapy事件监听器初始化失败", error=str(e))
     
     logger.info("StarMap API 启动完成")
     yield
@@ -116,6 +124,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("ChromaDB关闭失败", error=str(e))
     
+    # 关闭 MySQL 连接
+    try:
+        from app.services.scrapy_bridge import stop_scrapy_event_listener
+        await stop_scrapy_event_listener()
+        logger.info("Scrapy事件监听器已关闭")
+    except Exception as e:
+        logger.error("Scrapy事件监听器关闭失败", error=str(e))
+
     # 关闭 MySQL 连接
     try:
         await mysql_client.close()
@@ -187,13 +203,15 @@ async def health_check():
     neo4j_healthy = await neo4j_client.health_check()
     redis_healthy = await redis_client.health_check()
     chroma_healthy = chroma_client.health_check()
+    mysql_healthy = await mysql_client.health_check()
     
-    status = "healthy" if all([neo4j_healthy, redis_healthy, chroma_healthy]) else "degraded"
+    status = "healthy" if all([neo4j_healthy, redis_healthy, chroma_healthy, mysql_healthy]) else "degraded"
     
     return {
         "status": status,
         "version": "1.0.0",
         "services": {
+            "mysql": "up" if mysql_healthy else "down",
             "neo4j": "up" if neo4j_healthy else "down",
             "redis": "up" if redis_healthy else "down",
             "chromadb": "up" if chroma_healthy else "down"

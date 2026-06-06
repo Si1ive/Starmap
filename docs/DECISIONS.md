@@ -33,6 +33,38 @@
 
 ## 已完成的决策
 
+### 2026-06-06：爬虫优先交付架构
+
+**背景**：
+- 项目处于早期开发阶段，但爬虫模块已经同时涉及管理端、后端、数据库、Redis、Scrapy 服务、日志和统计。
+- 现有代码中存在字段命名和模块边界不完全一致的问题。
+- 如果继续并行开发但不冻结契约，前后端和数据库很容易出现冲突。
+
+**选项**：
+- 选项A：继续在 FastAPI 内直接执行爬虫逻辑
+- 选项B：FastAPI 负责任务编排，Scrapy Service 负责实际爬取，通过 Redis 解耦
+
+**决策**：选择选项B
+
+**原因**：
+- 爬虫任务耗时长，不应阻塞 HTTP 请求链路
+- Scrapy 更适合处理下载、限速、重试、反爬和解析管道
+- Redis 队列和 Pub/Sub 能解耦任务执行、进度上报和实时日志
+- MySQL 作为主存储便于管理端查询任务、日志、统计和采集结果
+
+**影响**：
+- `docs/api/README.md` 成为爬虫接口和数据体的真相源
+- `backend/scrapy_service` 成为实际抓取服务
+- `backend/app/services/scrapy_bridge.py` 负责 FastAPI 与 Scrapy Service 的通信
+- 旧版 `backend/crawler` 仅作为兼容或本地调试能力，新增能力优先接入 Scrapy Service
+
+**负责人**：PM + Backend + Data
+
+**相关文档**：
+- [爬虫优先交付计划](./roadmap/crawler-first-delivery-plan.md)
+- [API 契约](./api/README.md)
+- [架构设计](./tech/architecture.md)
+
 ### 2026-06-02：技术选型
 
 **背景**：项目初始化，需要确定技术栈

@@ -99,6 +99,11 @@ def set_request_id(request_id: str) -> None:
     structlog.contextvars.bind_contextvars(request_id=request_id)
 
 
+def get_request_id() -> str:
+    """获取当前请求的追踪ID"""
+    return request_id_var.get() or ""
+
+
 def clear_request_id() -> None:
     """清除当前请求的追踪ID"""
     request_id_var.set(None)

@@ -124,7 +124,12 @@ CREATE TABLE IF NOT EXISTS crawl_schedule_runs (
 -- 5.1 修改 crawl_tasks 表，增加 source_id 字段
 ALTER TABLE crawl_tasks 
     ADD COLUMN IF NOT EXISTS source_id VARCHAR(32) COMMENT '爬取源ID',
+    ADD COLUMN IF NOT EXISTS total_requests INT DEFAULT 0 COMMENT '总请求数',
+    ADD COLUMN IF NOT EXISTS error_message TEXT COMMENT '错误信息',
     ADD INDEX IF NOT EXISTS idx_ct_source_id (source_id);
+
+ALTER TABLE crawl_tasks
+    MODIFY COLUMN task_type ENUM('full', 'incremental', 'targeted', 'health_check', 'cleanup') COMMENT '任务类型';
 
 -- 5.2 修改 crawl_logs 表，增加 source_id 和 details 字段
 ALTER TABLE crawl_logs 

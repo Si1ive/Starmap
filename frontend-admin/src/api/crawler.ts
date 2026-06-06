@@ -7,6 +7,8 @@ export interface CrawlerTaskParams {
   page?: number
   page_size?: number
   status?: string
+  task_type?: string
+  source_id?: string
 }
 
 export const getCrawlerTasks = (
@@ -23,6 +25,10 @@ export const createCrawlerTask = (data: {
   execute_now?: boolean
 }): Promise<ApiResponse<CrawlerTask>> => {
   return adminClient.post('/crawler/tasks', data)
+}
+
+export const startCrawlerTask = (id: string): Promise<ApiResponse<CrawlerTask>> => {
+  return adminClient.post(`/crawler/tasks/${id}/start`)
 }
 
 export const stopCrawlerTask = (id: string): Promise<ApiResponse<CrawlerTask>> => {

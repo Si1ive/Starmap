@@ -82,16 +82,17 @@ export interface Work {
 export interface CrawlerTask {
   id: string
   name: string
-  type: 'full' | 'incremental' | 'targeted'
-  source: string
+  task_type: 'full' | 'incremental' | 'targeted' | 'health_check' | 'cleanup'
+  source?: string
   source_id?: string
-  target_count: number
+  target_count?: number
   completed_count: number
   success_count: number
-  fail_count: number
+  failed_count: number
   success_rate: number
   progress: number
   status: 'pending' | 'running' | 'completed' | 'failed' | 'stopped'
+  config?: Record<string, unknown>
   started_at?: string
   completed_at?: string
   created_at?: string

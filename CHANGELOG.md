@@ -11,6 +11,40 @@
 
 ---
 
+## 2026-06-06
+
+### [会话-Backend/Data] 完善 Scrapy 爬虫任务闭环
+- **类型**：feat
+- **影响**：backend/app/services/, backend/scrapy_service/, docker-compose.yml, frontend-admin/
+- **描述**：
+  - FastAPI 启动 Scrapy Redis 事件监听器，统一持久化进度和日志并广播到管理端 WebSocket
+  - Scrapy Service 改为 Redis 阻塞消费队列，每个任务独立子进程执行，避免空队列退出和 Twisted reactor 重启问题
+  - Scrapy MySQL 落库字段对齐当前 works、person_relations 表结构，避免写入不存在列
+  - 管理端任务表统一读取 task_type，Docker Compose 增加 scrapy-service 消费服务
+- **注意**：backend/scrapy_service/venv 不应提交，提交时需依赖 .gitignore 排除虚拟环境
+
+### [会话-PM] 制定爬虫优先交付基线
+- **类型**：docs
+- **影响**：docs/roadmap/, docs/api/, docs/tech/, docs/team/
+- **描述**：
+  - 新增 `docs/roadmap/crawler-first-delivery-plan.md`
+  - 补齐 `docs/api/README.md` 作为前后端和数据库字段契约
+  - 在架构文档中明确 FastAPI + Redis + Scrapy Service 的爬虫目标链路
+  - 更新工程师任务分配文档，要求所有角色以爬虫契约为准
+  - 新增爬虫优先交付架构决策记录
+- **注意**：@All 爬虫接口字段统一使用 `task_type`、`failed_count`、`snake_case`；任何字段变更必须同步更新 API 文档和前端类型
+
+### [会话-Backend] 对齐爬虫接口与数据字段
+- **类型**：fix
+- **影响**：backend/, frontend-admin/, docs/api/
+- **描述**：
+  - 后端爬虫任务响应统一使用 `task_type` 和 `failed_count`
+  - `CrawlTask` 模型和初始化/迁移脚本补齐 `health_check`、`cleanup`、`total_requests`、`error_message`
+  - 修复源统计 `failed_failed_requests` 拼写错误
+  - 管理端 `CrawlerTask` 类型和任务列表字段同步更新
+  - 管理端成功响应自动携带 `request_id`
+- **注意**：@Frontend 请停止使用旧字段 `type` 和 `fail_count`
+
 ## 2026-06-05
 
 ### [会话-PM] 新增团队协作规范

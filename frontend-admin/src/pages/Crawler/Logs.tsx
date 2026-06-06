@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Card, Table, Tag, Select, Input, Row, Col, Statistic, Badge, Space, Button, message } from 'antd'
 import { SearchOutlined, ExclamationCircleOutlined, WarningOutlined, CheckCircleOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
@@ -6,7 +7,14 @@ import { getCrawlerLogs, getCrawlerLogAnalysis } from '@/api'
 import type { CrawlerLog } from '@/types'
 
 const CrawlerLogs = () => {
-  const [params, setParams] = useState<Record<string, unknown>>({ page: 1, page_size: 50 })
+  const [searchParams] = useSearchParams()
+  const initialTaskId = searchParams.get('task_id') || undefined
+  
+  const [params, setParams] = useState<Record<string, unknown>>({ 
+    page: 1, 
+    page_size: 50,
+    task_id: initialTaskId,
+  })
   const [searchText, setSearchText] = useState('')
   const wsRef = useRef<WebSocket | null>(null)
 
@@ -140,7 +148,14 @@ const CrawlerLogs = () => {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <h2 style={{ margin: 0 }}>爬虫日志</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <h2 style={{ margin: 0 }}>爬虫日志</h2>
+          {initialTaskId && (
+            <Tag color="blue">
+              任务: {initialTaskId}
+            </Tag>
+          )}
+        </div>
         <Button onClick={connectWebSocket}>连接实时日志</Button>
       </div>
 

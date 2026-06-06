@@ -23,6 +23,7 @@
 """
 
 import json
+import asyncio
 from typing import Optional, List
 from datetime import datetime
 
@@ -30,7 +31,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSoc
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.logging import get_logger
+from app.core.logging import get_logger, get_request_id
 from app.core.websocket import log_websocket_manager
 from app.db import get_db
 from app.services.source_service import CrawlerSourceService
@@ -72,7 +73,7 @@ class ApiResponse(BaseModel):
     code: int = 200
     message: str = "success"
     data: Optional[dict] = None
-    request_id: str = ""
+    request_id: str = Field(default_factory=get_request_id)
 
 
 # 模拟管理员数据（开发调试用）
@@ -397,6 +398,8 @@ async def get_crawler_tasks(
     page: int = 1,
     page_size: int = 20,
     status: Optional[str] = None,
+    task_type: Optional[str] = None,
+    source_id: Optional[str] = None,
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -410,6 +413,8 @@ async def get_crawler_tasks(
         skip=skip,
         limit=page_size,
         status=status,
+        task_type=task_type,
+        source_id=source_id,
     )
     
     items = []
@@ -417,20 +422,20 @@ async def get_crawler_tasks(
         items.append({
             "id": task.id,
             "name": task.name,
-            "type": task.task_type,
+            "task_type": task.task_type,
             "source": task.source,
             "source_id": task.source_id,
             "target_count": task.target_count,
             "completed_count": task.completed_count,
             "success_count": task.success_count,
-            "fail_count": task.failed_count,
+            "failed_count": task.failed_count,
             "success_rate": round(task.success_count / task.completed_count * 100, 1) if task.completed_count else 0,
             "progress": float(task.progress) if task.progress else 0,
             "status": task.status,
             "started_at": task.started_at.isoformat() if task.started_at else None,
             "completed_at": task.completed_at.isoformat() if task.completed_at else None,
             "created_at": task.created_at.isoformat() if task.created_at else None,
-            "error_message": task.error_message,
+            "error_message": getattr(task, 'error_message', None),
         })
     
     return ApiResponse(
@@ -495,7 +500,13 @@ async def create_crawler_task(
     
     # 如果请求立即执行
     if data.get("execute_now", False):
-        asyncio.create_task(service.execute_task(task.id))
+        async def _run_task_in_background(task_id: str):
+            from app.db.mysql import mysql_client
+            async with mysql_client.session() as session:
+                bg_service = CrawlerTaskService(session)
+                await bg_service.execute_task(task_id)
+
+        asyncio.create_task(_run_task_in_background(task.id))
     
     return ApiResponse(
         code=200,
@@ -503,9 +514,56 @@ async def create_crawler_task(
         data={
             "id": task.id,
             "name": task.name,
+            "task_type": task.task_type,
+            "source": task.source,
+            "source_id": task.source_id,
+            "target_count": task.target_count,
+            "completed_count": task.completed_count,
+            "success_count": task.success_count,
+            "failed_count": task.failed_count,
+            "success_rate": 0,
+            "progress": float(task.progress) if task.progress else 0,
             "status": task.status,
             "config": task.config,
+            "started_at": task.started_at.isoformat() if task.started_at else None,
+            "completed_at": task.completed_at.isoformat() if task.completed_at else None,
             "created_at": task.created_at.isoformat() if task.created_at else None,
+            "error_message": task.error_message,
+        }
+    )
+
+
+@router.post("/crawler/tasks/{task_id}/start", response_model=ApiResponse)
+async def start_crawler_task(
+    task_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """启动爬虫任务"""
+    from app.services.task_service import CrawlerTaskService
+    
+    service = CrawlerTaskService(db)
+    task = await service.get_task_by_id(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task.status == "running":
+        raise HTTPException(status_code=400, detail="任务已在运行中")
+    
+    # 使用独立的会话在后台执行任务，避免与请求上下文会话冲突
+    async def _run_task_in_background(task_id: str):
+        from app.db.mysql import mysql_client
+        async with mysql_client.session() as session:
+            bg_service = CrawlerTaskService(session)
+            await bg_service.execute_task(task_id)
+    
+    # 注意：不要 await，让任务在后台运行
+    asyncio.ensure_future(_run_task_in_background(task_id))
+    
+    return ApiResponse(
+        code=200,
+        message="任务已启动",
+        data={
+            "id": task.id,
+            "status": "running",
         }
     )
 
@@ -684,6 +742,14 @@ async def get_crawler_overview(db: AsyncSession = Depends(get_db)):
     """获取爬虫总体概览"""
     service = CrawlerStatsService(db)
     overview = await service.get_overview()
+    
+    # 添加 Scrapy 服务状态
+    from app.services.scrapy_bridge import ScrapyBridgeService
+    bridge = ScrapyBridgeService(db)
+    scrapy_status = await bridge.get_scrapy_status()
+    overview["scrapy_status"] = scrapy_status
+    await bridge.close()
+    
     return ApiResponse(code=200, message="success", data=overview)
 
 
@@ -718,6 +784,25 @@ async def get_crawler_efficiency(
     service = CrawlerStatsService(db)
     efficiency = await service.get_efficiency(days)
     return ApiResponse(code=200, message="success", data=efficiency)
+
+
+@router.get("/crawler/scrapy/status", response_model=ApiResponse)
+async def get_scrapy_status(db: AsyncSession = Depends(get_db)):
+    """
+    获取 Scrapy 服务状态
+    
+    返回 Scrapy 爬虫服务的连接状态和队列信息。
+    """
+    from app.services.scrapy_bridge import ScrapyBridgeService
+    bridge = ScrapyBridgeService(db)
+    status = await bridge.get_scrapy_status()
+    await bridge.close()
+    
+    return ApiResponse(
+        code=200,
+        message="success",
+        data=status
+    )
 
 
 # ========== 定时任务 ==========

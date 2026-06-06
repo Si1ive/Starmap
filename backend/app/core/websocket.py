@@ -137,6 +137,19 @@ class LogWebSocketManager:
         """获取当前连接数"""
         return len(self._connections)
 
+    async def disconnect_all(self):
+        """断开所有 WebSocket 连接并停止广播任务"""
+        for websocket in list(self._connections.keys()):
+            await self.disconnect(websocket)
+
+        if self._broadcast_task and not self._broadcast_task.done():
+            self._broadcast_task.cancel()
+            try:
+                await self._broadcast_task
+            except asyncio.CancelledError:
+                pass
+        self._broadcast_task = None
+
 
 # 全局单例
 log_websocket_manager = LogWebSocketManager()

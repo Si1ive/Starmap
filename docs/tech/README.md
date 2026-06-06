@@ -21,7 +21,7 @@
 | UI组件库 | Ant Design | 5.0 | 组件复用 |
 | 状态管理 | Zustand | 4.3 | 状态管理 |
 | 可视化 | D3.js | 7.8 | 关系图谱 |
-| 后端框架 | FastAPI | 0.100 | API服务 |
+| 后端框架 | FastAPI | 0.136 | API服务 |
 | 后端语言 | Python | 3.11 | 业务逻辑 |
 | Agent框架 | LangChain | 0.0.300 | LLM应用 |
 | LLM | OpenAI GPT-4 | - | 自然语言处理 |
@@ -81,14 +81,15 @@ VITE_API_BASE_URL=http://localhost:8000
 
 ```txt
 # 后端 (requirements.txt)
-fastapi==0.100.0
+fastapi==0.136.3
 uvicorn[standard]==0.23.0
 langchain==0.0.300
 openai==0.27.8
 neo4j==5.11.0
 chromadb==0.4.6
 redis==4.6.0
-pydantic==2.0.0
+pydantic==2.13.4
+pydantic-settings==2.14.1
 python-dotenv==1.0.0
 requests==2.31.0
 beautifulsoup4==4.12.0

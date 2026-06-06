@@ -5,8 +5,8 @@
 集成 BaseCrawler 实现实际爬取逻辑。
 """
 
-import uuid
 import asyncio
+import uuid
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.logging import get_logger
 from app.models.mysql_models import CrawlTask, CrawlLog, CrawlSource
 from app.services.log_service import CrawlerLogService
+from app.services.scrapy_bridge import ScrapyBridgeService
 from app.services.source_service import CrawlerSourceService
 
 logger = get_logger(__name__)
@@ -49,18 +50,22 @@ class CrawlerTaskService:
         Returns:
             创建的 CrawlTask 实例
         """
+        config = target_config or {}
+        keywords = config.get("keywords") or config.get("targets") or []
+        if isinstance(keywords, str):
+            keywords = [keyword.strip() for keyword in keywords.split(",") if keyword.strip()]
+        target_count = len(keywords) or len(source_ids) or None
+
         task = CrawlTask(
             id=f"task_{uuid.uuid4().hex[:8]}",
             name=name,
             task_type=task_type,
-            source=source_ids[0] if source_ids else None,
+            source=config.get("source") or (source_ids[0] if source_ids else None),
             source_id=source_ids[0] if source_ids else None,
-            config=target_config or {},
+            target_count=target_count,
+            config=config,
             status="pending",
             progress=0,
-            total_requests=0,
-            success_count=0,
-            failed_count=0,
             created_by=created_by,
         )
         
@@ -112,7 +117,7 @@ class CrawlerTaskService:
         """
         执行爬虫任务
         
-        根据任务类型和配置，执行实际的爬取逻辑。
+        将任务发布到 Scrapy 服务 via Redis，由 Scrapy 执行实际爬取。
         
         Args:
             task_id: 任务ID
@@ -132,29 +137,37 @@ class CrawlerTaskService:
         task.started_at = datetime.utcnow()
         await self.db.commit()
         
-        logger.info(f"Starting crawl task: {task.name} ({task.id})")
+        logger.info(f"Starting crawl task via Scrapy: {task.name} ({task.id})")
         
         try:
-            # 根据任务类型执行不同的逻辑
-            if task.task_type == "full":
-                await self._execute_full_update(task)
-            elif task.task_type == "incremental":
-                await self._execute_incremental_update(task)
-            elif task.task_type == "targeted":
-                await self._execute_targeted_crawl(task)
-            elif task.task_type == "health_check":
-                await self._execute_health_check(task)
-            elif task.task_type == "cleanup":
-                await self._execute_cleanup(task)
-            else:
-                raise ValueError(f"Unknown task type: {task.task_type}")
+            if task.task_type in ("health_check", "cleanup"):
+                if task.task_type == "health_check":
+                    await self._execute_health_check(task)
+                else:
+                    await self._execute_cleanup(task)
+
+                task.status = "completed"
+                task.progress = 100
+                task.completed_at = datetime.utcnow()
+                await self.db.commit()
+                await self.log_service.create_log({
+                    "task_id": task_id,
+                    "level": "INFO",
+                    "stage": "execution",
+                    "status": "success",
+                    "message": f"Task completed: {task.task_type}",
+                })
+                await self.db.refresh(task)
+                return task
+
+            bridge = ScrapyBridgeService(self.db)
             
-            # 任务完成
-            task.status = "completed"
-            task.progress = 100
-            task.completed_at = datetime.utcnow()
+            published = await bridge.publish_task(task)
             
-            logger.info(f"Crawl task completed: {task.name} ({task.id})")
+            if not published:
+                raise RuntimeError("Failed to publish task to Scrapy")
+            
+            logger.info(f"Task published to Scrapy queue: {task.id}")
             
         except Exception as e:
             # 任务失败
@@ -167,13 +180,14 @@ class CrawlerTaskService:
             # 记录错误日志
             await self.log_service.create_log({
                 "task_id": task_id,
-                "level": "error",
+                "level": "ERROR",
                 "stage": "execution",
                 "status": "failed",
                 "message": f"Task execution failed: {str(e)}",
             })
+            
+            await self.db.commit()
         
-        await self.db.commit()
         await self.db.refresh(task)
         
         return task
@@ -205,9 +219,9 @@ class CrawlerTaskService:
         # 记录停止日志
         await self.log_service.create_log({
             "task_id": task_id,
-            "level": "warning",
+            "level": "WARNING",
             "stage": "execution",
-            "status": "stopped",
+            "status": "failed",
             "message": "Task was manually stopped",
         })
         
@@ -226,6 +240,7 @@ class CrawlerTaskService:
         limit: int = 20,
         status: Optional[str] = None,
         task_type: Optional[str] = None,
+        source_id: Optional[str] = None,
     ) -> tuple[List[CrawlTask], int]:
         """
         获取任务列表
@@ -235,6 +250,7 @@ class CrawlerTaskService:
             limit: 限制数量
             status: 状态筛选
             task_type: 任务类型筛选
+            source_id: 爬取源筛选
             
         Returns:
             (任务列表, 总数)
@@ -245,6 +261,8 @@ class CrawlerTaskService:
             query = query.where(CrawlTask.status == status)
         if task_type:
             query = query.where(CrawlTask.task_type == task_type)
+        if source_id:
+            query = query.where(CrawlTask.source_id == source_id)
         
         # 统计总数
         count_query = select(func.count()).select_from(query.subquery())
@@ -307,9 +325,27 @@ class CrawlerTaskService:
         keywords = config.get("keywords", [])
         spider_type = config.get("spider_type", "person")
         
+        logger.info(f"Task config: keywords={keywords}, spider_type={spider_type}, source={config.get('source', 'baike')}")
+        
         if not keywords:
             logger.warning(f"No keywords provided for task: {task.id}")
+            await self.log_service.create_log({
+                "task_id": task.id,
+                "level": "WARNING",
+                "stage": "execution",
+                "status": "pending",
+                "message": "No keywords provided, task skipped",
+            })
             return
+        
+        # 记录任务开始日志
+        await self.log_service.create_log({
+            "task_id": task.id,
+            "level": "INFO",
+            "stage": "execution",
+            "status": "pending",
+            "message": f"Starting crawl with {len(keywords)} keywords: {keywords}",
+        })
         
         # 创建爬虫引擎
         from crawler.engine import CrawlerEngine, Scheduler, Downloader
@@ -366,60 +402,129 @@ class CrawlerTaskService:
         engine_task = asyncio.create_task(engine.start())
         
         # 定期更新任务进度
+        progress_loop_count = 0
         while not engine_task.done():
             await asyncio.sleep(2)
+            progress_loop_count += 1
             stats = engine.get_stats()
             progress = min(95, stats["responses_received"] * 10)  # 粗略估算
-            await self.update_task_progress(
-                task.id,
-                progress=progress,
-                total_requests=stats["requests_scheduled"],
-                success_count=stats["items_scraped"],
-            )
+            
+            logger.info(f"[Progress {progress_loop_count}] Task {task.id}: scheduled={stats['requests_scheduled']}, "
+                       f"received={stats['responses_received']}, items={stats['items_scraped']}, progress={progress}%")
+            
+            # 更新进度（使用当前session，因为后台任务持有独立session）
+            try:
+                task.progress = progress
+                if stats["requests_scheduled"]:
+                    task.total_requests = stats["requests_scheduled"]
+                if stats["items_scraped"]:
+                    task.success_count = stats["items_scraped"]
+                await self.db.commit()
+            except Exception as e:
+                logger.warning(f"Failed to update progress: {e}")
+                await self.db.rollback()
         
         # 获取最终结果
         try:
             final_stats = await engine_task
-            await self.update_task_progress(
-                task.id,
-                progress=100,
-                total_requests=final_stats["requests_scheduled"],
-                success_count=final_stats["items_scraped"],
-            )
+            
+            # 更新最终结果
+            task.progress = 100
+            if final_stats["requests_scheduled"]:
+                task.total_requests = final_stats["requests_scheduled"]
+            if final_stats["items_scraped"]:
+                task.success_count = final_stats["items_scraped"]
+            await self.db.commit()
+            
+            # 记录完成日志
+            await self.log_service.create_log({
+                "task_id": task.id,
+                "level": "INFO",
+                "stage": "execution",
+                "status": "success",
+                "message": f"Crawl completed. Requests: {final_stats['requests_scheduled']}, "
+                           f"Responses: {final_stats['responses_received']}, Items: {final_stats['items_scraped']}",
+            })
+            
             logger.info(f"Crawler engine finished for task: {task.id}, stats: {final_stats}")
         except Exception as e:
             logger.error(f"Crawler engine failed for task: {task.id}, error: {e}")
+            await self.log_service.create_log({
+                "task_id": task.id,
+                "level": "ERROR",
+                "stage": "execution",
+                "status": "failed",
+                "message": f"Crawl failed: {str(e)}",
+            })
             raise
 
     async def _execute_incremental_update(self, task: CrawlTask) -> None:
         """执行增量更新任务"""
         logger.info(f"Executing incremental update task: {task.id}")
         
-        # TODO: 实现增量更新逻辑
-        # 1. 获取上次更新时间
-        # 2. 只爬取更新的内容
-        # 3. 合并到现有数据
+        config = task.config or {}
+        source_ids = config.get("source_ids", [])
+        keywords = config.get("keywords", [])
+        spider_type = config.get("spider_type", "person")
         
-        await asyncio.sleep(1)  # 占位
+        # 获取上次更新时间（从任务配置或数据库中查找）
+        last_update_time = config.get("last_update_time")
+        if not last_update_time:
+            # 查找该来源最近成功完成的任务
+            from sqlalchemy import select
+            from app.models.mysql_models import CrawlTask as CrawlTaskModel
+            
+            result = await self.db.execute(
+                select(CrawlTaskModel)
+                .where(
+                    CrawlTaskModel.task_type == "incremental",
+                    CrawlTaskModel.status == "completed",
+                    CrawlTaskModel.id != task.id,
+                )
+                .order_by(CrawlTaskModel.completed_at.desc())
+                .limit(1)
+            )
+            last_task = result.scalar_one_or_none()
+            if last_task and last_task.completed_at:
+                last_update_time = last_task.completed_at.isoformat()
+                logger.info(f"Using last completed task time: {last_update_time}")
         
         # 更新进度
-        await self.update_task_progress(task.id, 100)
+        await self.update_task_progress(task.id, 10)
+        
+        # 增量更新复用全量更新的爬虫逻辑，但只处理更新的内容
+        # 这里通过 config 标记为增量模式，Spider 可根据此标记调整行为
+        config["incremental_mode"] = True
+        config["last_update_time"] = last_update_time
+        task.config = config
+        await self.db.commit()
+        
+        # 调用全量更新逻辑（Spider 内部根据 incremental_mode 做增量判断）
+        await self._execute_full_update(task)
+        
+        # 更新最后更新时间到配置
+        config["last_update_time"] = datetime.utcnow().isoformat()
+        task.config = config
+        await self.db.commit()
+        
+        logger.info(f"Incremental update completed: {task.id}")
 
     async def _execute_targeted_crawl(self, task: CrawlTask) -> None:
         """执行定向爬取任务"""
         logger.info(f"Executing targeted crawl task: {task.id}")
         
-        # 定向爬取使用与全量更新相同的引擎，但配置更具体
         config = task.config or {}
         
-        # 定向爬取通常有明确的 targets
+        # 定向爬取：优先使用 keywords，兼容 targets 字段
+        keywords = config.get("keywords", [])
         targets = config.get("targets", [])
-        if not targets:
-            logger.warning(f"No targets provided for targeted crawl: {task.id}")
+        if not keywords and not targets:
+            logger.warning(f"No keywords or targets provided for targeted crawl: {task.id}")
             return
         
-        # 复用全量更新的逻辑
-        config["keywords"] = targets
+        # 合并 keywords 和 targets
+        all_keywords = list(set(keywords + targets))
+        config["keywords"] = all_keywords
         await self._execute_full_update(task)
 
     async def _execute_health_check(self, task: CrawlTask) -> None:
@@ -446,15 +551,132 @@ class CrawlerTaskService:
         """执行数据清洗任务"""
         logger.info(f"Executing cleanup task: {task.id}")
         
-        # TODO: 实现数据清洗逻辑
+        config = task.config or {}
+        cleanup_types = config.get("cleanup_types", ["duplicate", "expired", "orphan"])
+        
+        total_cleaned = 0
+        
         # 1. 清理重复数据
+        if "duplicate" in cleanup_types:
+            await self.update_task_progress(task.id, 10)
+            logger.info(f"Cleaning duplicates for task: {task.id}")
+            
+            from sqlalchemy import select, func
+            from app.models.mysql_models import Person
+            
+            # 查找重复的人物（按名称分组）
+            result = await self.db.execute(
+                select(Person.name, func.count(Person.id).label("count"))
+                .group_by(Person.name)
+                .having(func.count(Person.id) > 1)
+            )
+            duplicates = result.all()
+            
+            duplicate_count = len(duplicates)
+            logger.info(f"Found {duplicate_count} duplicate person names")
+            
+            # 合并重复数据（保留最新的一条）
+            for name, count in duplicates:
+                result = await self.db.execute(
+                    select(Person)
+                    .where(Person.name == name)
+                    .order_by(Person.updated_at.desc())
+                )
+                persons = result.scalars().all()
+                
+                # 保留第一条（最新的），其余标记为删除
+                for person in persons[1:]:
+                    person.status = "deleted"
+                    total_cleaned += 1
+            
+            await self.db.commit()
+            logger.info(f"Cleaned {total_cleaned} duplicate records")
+        
         # 2. 清理过期数据
-        # 3. 优化索引
+        if "expired" in cleanup_types:
+            await self.update_task_progress(task.id, 50)
+            logger.info(f"Cleaning expired data for task: {task.id}")
+            
+            from datetime import timedelta
+            from app.models.mysql_models import Person, Work
+            
+            # 清理超过 90 天未更新的 pending 数据
+            expiry_date = datetime.utcnow() - timedelta(days=90)
+            
+            # 清理过期人物
+            result = await self.db.execute(
+                select(Person)
+                .where(
+                    Person.status == "pending",
+                    Person.updated_at < expiry_date,
+                )
+            )
+            expired_persons = result.scalars().all()
+            for person in expired_persons:
+                person.status = "deleted"
+                total_cleaned += 1
+            
+            # 清理过期作品
+            result = await self.db.execute(
+                select(Work)
+                .where(
+                    Work.status == "pending",
+                    Work.updated_at < expiry_date,
+                )
+            )
+            expired_works = result.scalars().all()
+            for work in expired_works:
+                work.status = "deleted"
+                total_cleaned += 1
+            
+            await self.db.commit()
+            logger.info(f"Cleaned {len(expired_persons)} expired persons, {len(expired_works)} expired works")
         
-        await asyncio.sleep(1)  # 占位
+        # 3. 清理孤立数据
+        if "orphan" in cleanup_types:
+            await self.update_task_progress(task.id, 80)
+            logger.info(f"Cleaning orphan data for task: {task.id}")
+            
+            from app.models.mysql_models import PersonWork, PersonRelation
+            
+            # 清理指向已删除人物的关联
+            result = await self.db.execute(
+                select(PersonWork)
+                .join(Person, PersonWork.person_id == Person.id)
+                .where(Person.status == "deleted")
+            )
+            orphan_pws = result.scalars().all()
+            for pw in orphan_pws:
+                await self.db.delete(pw)
+                total_cleaned += 1
+            
+            # 清理指向已删除人物的关系
+            result = await self.db.execute(
+                select(PersonRelation)
+                .join(Person, PersonRelation.source_id == Person.id)
+                .where(Person.status == "deleted")
+            )
+            orphan_rels = result.scalars().all()
+            for rel in orphan_rels:
+                await self.db.delete(rel)
+                total_cleaned += 1
+            
+            await self.db.commit()
+            logger.info(f"Cleaned {len(orphan_pws)} orphan person_works, {len(orphan_rels)} orphan relations")
         
-        # 更新进度
+        # 更新进度和统计
         await self.update_task_progress(task.id, 100)
+        
+        # 记录清洗结果
+        await self.log_service.create_log({
+            "task_id": task.id,
+            "level": "INFO",
+            "stage": "cleanup",
+            "status": "success",
+            "message": f"Cleanup completed: {total_cleaned} records cleaned",
+        })
+        
+        logger.info(f"Cleanup task completed: {task.id}, total_cleaned={total_cleaned}")
 
     async def _crawl_source(self, task: CrawlTask, source: CrawlSource) -> None:
         """
@@ -470,9 +692,9 @@ class CrawlerTaskService:
         await self.log_service.create_log({
             "task_id": task.id,
             "source_id": source.id,
-            "level": "info",
+            "level": "INFO",
             "stage": "fetch",
-            "status": "started",
+            "status": "pending",
             "resource_url": source.base_url,
             "message": f"Started crawling source: {source.name}",
         })
@@ -524,7 +746,7 @@ class CrawlerTaskService:
             await self.log_service.create_log({
                 "task_id": task.id,
                 "source_id": source.id,
-                "level": "success",
+                "level": "INFO",
                 "stage": "fetch",
                 "status": "success",
                 "resource_url": source.base_url,
@@ -541,7 +763,7 @@ class CrawlerTaskService:
             await self.log_service.create_log({
                 "task_id": task.id,
                 "source_id": source.id,
-                "level": "error",
+                "level": "ERROR",
                 "stage": "fetch",
                 "status": "failed",
                 "resource_url": source.base_url,

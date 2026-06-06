@@ -222,7 +222,7 @@ class CrawlTask(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     name: Mapped[Optional[str]] = mapped_column(String(200))
     task_type: Mapped[Optional[str]] = mapped_column(
-        Enum("full", "incremental", "targeted")
+        Enum("full", "incremental", "targeted", "health_check", "cleanup")
     )
     source: Mapped[Optional[str]] = mapped_column(String(50))
     source_id: Mapped[Optional[str]] = mapped_column(String(32), comment="爬取源ID")
@@ -230,12 +230,14 @@ class CrawlTask(Base):
     completed_count: Mapped[int] = mapped_column(default=0)
     success_count: Mapped[int] = mapped_column(default=0)
     failed_count: Mapped[int] = mapped_column(default=0)
+    total_requests: Mapped[int] = mapped_column(default=0)
     status: Mapped[str] = mapped_column(
         Enum("pending", "running", "completed", "failed", "stopped"),
         default="pending"
     )
     progress: Mapped[float] = mapped_column(DECIMAL(5, 2), default=0)
     config: Mapped[Optional[dict]] = mapped_column(JSON)
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
     
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)

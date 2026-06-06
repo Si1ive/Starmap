@@ -15,6 +15,12 @@ from app.models.mysql_models import CrawlLog
 
 logger = get_logger(__name__)
 
+# 允许的 level 值（数据库枚举定义）
+ALLOWED_LEVELS = {"INFO", "WARNING", "ERROR", "DEBUG"}
+
+# 允许的 status 值（数据库枚举定义）
+ALLOWED_STATUSES = {"success", "failed", "retry", "pending"}
+
 
 class CrawlerLogService:
     """爬虫日志服务"""
@@ -63,29 +69,57 @@ class CrawlerLogService:
 
         return list(logs), total
 
-    async def create_log(self, data: Dict[str, Any]) -> CrawlLog:
+    async def create_log(self, data: Dict[str, Any]) -> Optional[CrawlLog]:
         """写入日志"""
-        log = CrawlLog(
-            task_id=data["task_id"],
-            source_id=data.get("source_id"),
-            level=data.get("level", "INFO"),
-            stage=data.get("stage"),
-            resource_url=data.get("resource_url"),
-            resource_name=data.get("resource_name"),
-            resource_type=data.get("resource_type"),
-            action=data.get("action"),
-            status=data.get("status"),
-            duration_ms=data.get("duration_ms"),
-            message=data.get("message"),
-            error_type=data.get("error_type"),
-            error_detail=data.get("error_detail"),
-            retry_count=data.get("retry_count", 0),
-            details=data.get("details"),
-        )
-        self.db.add(log)
-        await self.db.commit()
-        await self.db.refresh(log)
-        return log
+        # 标准化 level 为大写，并映射到数据库允许的枚举值
+        level = (data.get("level") or "INFO").upper()
+        if level not in ALLOWED_LEVELS:
+            # 映射不支持的 level 到允许的枚举
+            level_map = {
+                "SUCCESS": "INFO",
+                "CRITICAL": "ERROR",
+            }
+            level = level_map.get(level, "INFO")
+        
+        # 标准化 status 为枚举允许的值
+        status = data.get("status")
+        if status and status not in ALLOWED_STATUSES:
+            # 映射常见状态值到允许的枚举
+            status_map = {
+                "started": "pending",
+                "stopped": "failed",
+                "skipped": "pending",
+                "completed": "success",
+                "error": "failed",
+            }
+            status = status_map.get(status, "pending")
+        
+        try:
+            log = CrawlLog(
+                task_id=data["task_id"],
+                source_id=data.get("source_id"),
+                level=level,
+                stage=data.get("stage"),
+                resource_url=data.get("resource_url"),
+                resource_name=data.get("resource_name"),
+                resource_type=data.get("resource_type"),
+                action=data.get("action"),
+                status=status,
+                duration_ms=data.get("duration_ms"),
+                message=data.get("message"),
+                error_type=data.get("error_type"),
+                error_detail=data.get("error_detail"),
+                retry_count=data.get("retry_count", 0),
+                details=data.get("details"),
+            )
+            self.db.add(log)
+            await self.db.commit()
+            await self.db.refresh(log)
+            return log
+        except Exception as e:
+            logger.error(f"Failed to create crawl log: {e}, data={data}")
+            await self.db.rollback()
+            return None
 
     async def get_analysis(self, days: int = 7) -> Dict[str, Any]:
         """获取日志分析统计"""

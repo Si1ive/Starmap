@@ -35,7 +35,7 @@ import {
   ExclamationCircleOutlined,
 } from '@ant-design/icons'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getCrawlerTasks, createCrawlerTask, stopCrawlerTask } from '@/api'
+import { getCrawlerTasks, createCrawlerTask, startCrawlerTask, stopCrawlerTask } from '@/api'
 import type { CrawlerTask } from '@/types'
 
 // 状态配置
@@ -52,6 +52,8 @@ const typeMap: Record<string, string> = {
   full: '全量爬取',
   incremental: '增量更新',
   targeted: '定向爬取',
+  health_check: '健康检查',
+  cleanup: '数据清理',
 }
 
 // 数据源映射
@@ -125,6 +127,17 @@ const CrawlerList = () => {
     },
   })
 
+  const startMutation = useMutation({
+    mutationFn: startCrawlerTask,
+    onSuccess: () => {
+      message.success('任务已启动')
+      queryClient.invalidateQueries({ queryKey: ['crawlerTasks'] })
+    },
+    onError: () => {
+      message.error('启动失败')
+    },
+  })
+
   const stopMutation = useMutation({
     mutationFn: stopCrawlerTask,
     onSuccess: () => {
@@ -156,11 +169,11 @@ const CrawlerList = () => {
     },
     {
       title: '任务类型',
-      dataIndex: 'type',
+      dataIndex: 'task_type',
       width: 110,
-      render: (type: string) => (
+      render: (taskType: string) => (
         <Tag color="blue" style={{ fontSize: 12 }}>
-          {typeMap[type] || type}
+          {typeMap[taskType] || taskType}
         </Tag>
       ),
     },
@@ -185,7 +198,7 @@ const CrawlerList = () => {
             </span>
             <span style={{ margin: '0 8px', color: '#d9d9d9' }}>|</span>
             <span style={{ color: '#ff4d4f' }}>
-              <CloseCircleOutlined /> {record.fail_count}
+              <CloseCircleOutlined /> {record.failed_count}
             </span>
             <span style={{ margin: '0 8px', color: '#d9d9d9' }}>|</span>
             <span style={{ color: '#1890ff' }}>
@@ -290,11 +303,7 @@ const CrawlerList = () => {
               type="primary"
               size="small"
               icon={<PlayCircleOutlined />}
-              onClick={() => createMutation.mutate({
-                name: record.name || record.id,
-                task_type: 'targeted',
-                execute_now: true,
-              })}
+              onClick={() => startMutation.mutate(record.id)}
             >
               启动
             </Button>
@@ -315,11 +324,7 @@ const CrawlerList = () => {
               type="default"
               size="small"
               icon={<ReloadOutlined />}
-              onClick={() => createMutation.mutate({
-                name: `重试-${record.name || record.id}`,
-                task_type: 'targeted',
-                execute_now: true,
-              })}
+              onClick={() => startMutation.mutate(record.id)}
             >
               重试
             </Button>
@@ -328,7 +333,7 @@ const CrawlerList = () => {
             type="text"
             size="small"
             icon={<EyeOutlined />}
-            onClick={() => navigate(`/admin/crawler/${record.id}`)}
+            onClick={() => navigate(`/admin/crawler/logs?task_id=${record.id}`)}
           >
             日志
           </Button>
@@ -475,7 +480,7 @@ const CrawlerList = () => {
           <Form.Item label="任务名称" name="name" rules={[{ required: true, message: '请输入任务名称' }]}>
             <Input placeholder="如：爬取周杰伦信息" />
           </Form.Item>
-          <Form.Item label="任务类型" name="task_type" rules={[{ required: true }]}>
+          <Form.Item label="任务类型" name="task_type" rules={[{ required: true }]} initialValue="targeted">
             <Select
               options={[
                 { label: '定向爬取', value: 'targeted' },
@@ -484,7 +489,7 @@ const CrawlerList = () => {
               ]}
             />
           </Form.Item>
-          <Form.Item label="爬虫类型" name={['config', 'spider_type']}>
+          <Form.Item label="爬虫类型" name={['config', 'spider_type']} initialValue="person">
             <Select
               options={[
                 { label: '人物爬虫', value: 'person' },
@@ -492,7 +497,7 @@ const CrawlerList = () => {
               ]}
             />
           </Form.Item>
-          <Form.Item label="数据源" name={['config', 'source']}>
+          <Form.Item label="数据源" name={['config', 'source']} initialValue="baike">
             <Select
               options={[
                 { label: '百度百科', value: 'baike' },
@@ -521,7 +526,7 @@ const CrawlerList = () => {
               </Form.Item>
             </Col>
           </Row>
-          <Form.Item label="立即执行" name="execute_now" valuePropName="checked" initialValue={true}>
+          <Form.Item label="执行方式" name="execute_now" initialValue={true}>
             <Select
               options={[
                 { label: '立即执行', value: true },

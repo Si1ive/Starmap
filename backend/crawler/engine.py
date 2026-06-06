@@ -375,9 +375,14 @@ class CrawlerEngine:
             await pipeline.open()
         
         # 获取初始请求
+        initial_count = 0
         async for request in self.spider.start():
             await self.scheduler.enqueue(request)
             self._stats["requests_scheduled"] += 1
+            initial_count += 1
+            logger.info(f"Scheduled initial request: {request.url}")
+        
+        logger.info(f"Spider generated {initial_count} initial requests, scheduler pending: {self.scheduler.has_pending()}")
         
         # 主循环
         try:
@@ -403,19 +408,26 @@ class CrawlerEngine:
 
     async def _main_loop(self):
         """主循环"""
+        loop_count = 0
         while self.scheduler.has_pending() and self._status == TaskStatus.RUNNING:
+            loop_count += 1
             # 获取下一个请求
             request = await self.scheduler.dequeue()
             if not request:
                 await asyncio.sleep(0.1)
                 continue
             
+            logger.info(f"[Loop {loop_count}] Processing request: {request.url}")
+            
             # 下载
             response = await self.downloader.fetch(request)
             self._stats["responses_received"] += 1
             
+            logger.info(f"[Loop {loop_count}] Response: status={response.status_code}, url={response.url}, duration={response.duration:.2f}s")
+            
             if response.status_code == 0:
                 # 下载失败，调用错误处理
+                logger.warning(f"[Loop {loop_count}] Download failed: {request.url}")
                 if request.errback:
                     await getattr(self.spider, request.errback)(response)
                 continue
@@ -425,18 +437,26 @@ class CrawlerEngine:
             callback = getattr(self.spider, callback_name)
             
             try:
+                result_count = 0
                 async for result in callback(response):
+                    result_count += 1
                     if isinstance(result, Request):
                         # 新的请求
                         await self.scheduler.enqueue(result)
                         self._stats["requests_scheduled"] += 1
+                        logger.info(f"[Loop {loop_count}] New request scheduled: {result.url}")
                     elif isinstance(result, Item):
                         # 数据项
                         await self._process_item(result)
                         self._stats["items_scraped"] += 1
+                        logger.info(f"[Loop {loop_count}] Item scraped: type={result.item_type}, source={result.source_url}")
+                
+                logger.info(f"[Loop {loop_count}] Parsed {result_count} results from {response.url}")
             except Exception as e:
-                logger.error(f"Parse error: {e}, url: {response.url}")
+                logger.error(f"[Loop {loop_count}] Parse error: {e}, url: {response.url}")
                 await self.spider.handle_error(e, request)
+        
+        logger.info(f"Main loop finished after {loop_count} iterations. Status: {self._status.value}")
 
     async def _process_item(self, item: Item):
         """处理数据项"""

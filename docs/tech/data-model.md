@@ -161,15 +161,18 @@ CREATE TABLE person_relations (
 CREATE TABLE crawl_tasks (
     id VARCHAR(32) PRIMARY KEY COMMENT '任务ID',
     name VARCHAR(200) COMMENT '任务名称',
-    task_type ENUM('full', 'incremental', 'targeted') COMMENT '任务类型',
+    task_type ENUM('full', 'incremental', 'targeted', 'health_check', 'cleanup') COMMENT '任务类型',
     source VARCHAR(50) COMMENT '数据源：wikipedia, douban',
+    source_id VARCHAR(32) COMMENT '爬取源ID',
     target_count INT COMMENT '计划爬取数量',
     completed_count INT DEFAULT 0 COMMENT '已完成数量',
     success_count INT DEFAULT 0 COMMENT '成功数量',
     failed_count INT DEFAULT 0 COMMENT '失败数量',
+    total_requests INT DEFAULT 0 COMMENT '总请求数',
     status ENUM('pending', 'running', 'completed', 'failed', 'stopped') DEFAULT 'pending',
     progress DECIMAL(5,2) DEFAULT 0 COMMENT '进度 0-100',
     config JSON COMMENT '任务配置',
+    error_message TEXT COMMENT '错误信息',
     
     -- 时间
     started_at TIMESTAMP NULL,
@@ -181,6 +184,7 @@ CREATE TABLE crawl_tasks (
     INDEX idx_status (status),
     INDEX idx_task_type (task_type),
     INDEX idx_source (source),
+    INDEX idx_source_id (source_id),
     INDEX idx_created_at (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='爬虫任务表';
 ```
@@ -191,7 +195,9 @@ CREATE TABLE crawl_tasks (
 CREATE TABLE crawl_logs (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     task_id VARCHAR(32) NOT NULL COMMENT '任务ID',
+    source_id VARCHAR(32) COMMENT '爬取源ID',
     level ENUM('INFO', 'WARNING', 'ERROR', 'DEBUG') DEFAULT 'INFO',
+    stage VARCHAR(50) COMMENT '阶段：execution/fetch/parse/validate/store/sync',
     
     -- 资源信息
     resource_url VARCHAR(500) COMMENT '爬取URL',
@@ -208,10 +214,12 @@ CREATE TABLE crawl_logs (
     error_type VARCHAR(50) COMMENT '错误类型：timeout, 404, anti_crawl, parse_error',
     error_detail TEXT COMMENT '错误详情',
     retry_count INT DEFAULT 0 COMMENT '重试次数',
+    details JSON COMMENT '详细日志信息',
     
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     
     INDEX idx_task_id (task_id),
+    INDEX idx_source_id (source_id),
     INDEX idx_level (level),
     INDEX idx_status (status),
     INDEX idx_resource_type (resource_type),

@@ -78,15 +78,19 @@ class PersonSpider(Spider):
             logger.warning("No keywords provided for PersonSpider")
             return
         
+        logger.info(f"PersonSpider starting with {len(self.keywords)} keywords, source={self.source}")
+        
         for keyword in self.keywords:
             url = self.source_config["search_url"].format(keyword=keyword)
-            logger.info(f"PersonSpider starting search: {keyword}, url: {url}")
+            logger.info(f"PersonSpider generating request: keyword={keyword}, url={url}")
             yield Request(
                 url=url,
                 callback="parse_search",
                 meta={"keyword": keyword, "source": self.source},
                 dont_filter=True,
             )
+        
+        logger.info(f"PersonSpider finished generating {len(self.keywords)} initial requests")
 
     async def parse_search(self, response: Response) -> AsyncIterator[Any]:
         """

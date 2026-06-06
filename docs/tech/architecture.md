@@ -32,9 +32,9 @@
 
 | 层级 | 技术 | 版本 | 用途 |
 |------|------|------|------|
-| Web框架 | FastAPI | 0.100+ | API服务 |
+| Web框架 | FastAPI | 0.136+ | API服务 |
 | 服务器 | Uvicorn | 0.23+ | ASGI服务器 |
-| 数据验证 | Pydantic | 2.0+ | 模型验证 |
+| 数据验证 | Pydantic | 2.13+ | 模型验证 |
 | 主数据库 | MySQL | 8.0+ | 结构化数据存储 |
 | 图数据库 | Neo4j | 5.11+ | 人物关系存储 |
 | 向量数据库 | ChromaDB | 0.4.6+ | 语义搜索 |
@@ -288,6 +288,43 @@ starmap:crawler:stats:{task_id}      # 爬取统计
 5. **敏感信息**: API密钥通过环境变量配置
 6. **SQL注入防护**: 使用SQLAlchemy ORM，参数化查询
 7. **审计日志**: 记录所有管理操作到MySQL
+
+## 爬虫优先架构补充（2026-06-06）
+
+当前爬虫能力采用“管理服务 + 独立 Scrapy 服务”的架构，不再把实际网页抓取放在 FastAPI 请求链路中同步执行。
+
+### 目标链路
+
+```text
+frontend-admin
+  -> FastAPI Admin API
+  -> MySQL crawl_tasks/crawl_sources/crawl_logs/crawl_source_stats
+  -> Redis task queue / progress channel / log channel
+  -> Scrapy Service
+  -> MySQL persons/works/person_relations
+  -> Sync Jobs
+  -> Neo4j / ChromaDB
+```
+
+### 模块职责
+
+| 模块 | 职责 |
+|------|------|
+| FastAPI Admin API | 鉴权、任务编排、源配置、调度配置、日志查询、统计查询 |
+| Scrapy Bridge | 将任务发布到 Redis，接收进度和日志状态 |
+| Scrapy Service | 消费任务、抓取网页、解析字段、验证数据、写入存储管道 |
+| MySQL | 爬虫任务、源配置、日志、统计、原始采集结果的主存储 |
+| Redis | 任务队列、进度 Pub/Sub、日志 Pub/Sub、短期状态缓存 |
+| Neo4j | 从 MySQL 同步后的图谱查询索引 |
+| ChromaDB | 从 MySQL 同步后的语义检索索引 |
+
+### 设计约束
+
+1. FastAPI 只负责发布任务和查询状态，实际抓取必须由 Scrapy Service 执行。
+2. 爬虫任务、日志、统计字段必须以 `docs/api/README.md` 和 MySQL ORM/迁移脚本为准。
+3. Scrapy Service 写入人物、作品、关系时必须保留 `crawl_task_id`、`crawl_source`、`crawl_url`、`raw_data`。
+4. 爬虫日志阶段统一为 `execution/fetch/parse/validate/store/sync`。
+5. 任何字段不一致时，遵守“发现即停止”原则，先更新契约和迁移再编码。
 
 ## 部署架构
 

@@ -128,7 +128,7 @@ class CrawlerSourceService:
         # 聚合计算
         total_requests = sum(s.total_requests for s in daily_stats)
         total_success = sum(s.success_requests for s in daily_stats)
-        total_failed = sum(s.failed_failed_requests for s in daily_stats)
+        total_failed = sum(s.failed_requests for s in daily_stats)
 
         return {
             "source_id": source_id,

@@ -21,6 +21,12 @@
 | **前端工程师** | [frontend-roadmap.md](./frontend-roadmap.md) |
 | **数据工程师** | [data-roadmap.md](./data-roadmap.md) |
 
+## 当前执行基线
+
+| 主题 | 文档 |
+|------|------|
+| **爬虫优先交付计划** | [crawler-first-delivery-plan.md](./crawler-first-delivery-plan.md) |
+
 ---
 
 ## 里程碑定义
