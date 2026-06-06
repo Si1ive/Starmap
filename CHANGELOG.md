@@ -13,6 +13,15 @@
 
 ## 2026-06-06
 
+### [会话-Backend/Frontend] 完善爬虫任务管理能力
+- **类型**：feat
+- **影响**：backend/app/api/, backend/app/services/, frontend-admin/
+- **描述**：
+  - 新增 `DELETE /crawler/tasks/{task_id}`，非运行中任务可删除并清理关联日志
+  - 管理端任务列表删除按钮接入真实 API，运行中任务列表自动轮询刷新
+  - 新建任务数据源下拉改为读取真实爬取源，避免前端固定源编码和后端源 ID 脱节
+  - API 文档补齐任务删除接口和任务管理对齐状态
+
 ### [会话-Backend/Frontend] 实现管理端实时日志渲染
 - **类型**：feat
 - **影响**：backend/app/api/, backend/app/core/, frontend-admin/

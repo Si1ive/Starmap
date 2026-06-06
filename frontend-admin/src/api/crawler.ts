@@ -35,6 +35,10 @@ export const stopCrawlerTask = (id: string): Promise<ApiResponse<CrawlerTask>> =
   return adminClient.post(`/crawler/tasks/${id}/stop`)
 }
 
+export const deleteCrawlerTask = (id: string): Promise<ApiResponse<{ id: string }>> => {
+  return adminClient.delete(`/crawler/tasks/${id}`)
+}
+
 // ===== 数据源管理 =====
 
 export interface CrawlerSourceParams {

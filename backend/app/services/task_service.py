@@ -259,6 +259,22 @@ class CrawlerTaskService:
         )
         return result.scalar_one_or_none()
 
+    async def delete_task(self, task_id: str) -> bool:
+        """删除非运行中的爬虫任务及其日志"""
+        task = await self.get_task_by_id(task_id)
+        if not task:
+            return False
+        if task.status == "running":
+            raise ValueError("Running task cannot be deleted")
+
+        await self.db.execute(
+            CrawlLog.__table__.delete().where(CrawlLog.task_id == task_id)
+        )
+        await self.db.delete(task)
+        await self.db.commit()
+        logger.info(f"Deleted crawl task: {task_id}")
+        return True
+
     async def get_tasks(
         self,
         skip: int = 0,

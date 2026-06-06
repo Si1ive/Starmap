@@ -35,8 +35,8 @@ import {
   ExclamationCircleOutlined,
 } from '@ant-design/icons'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getCrawlerTasks, createCrawlerTask, startCrawlerTask, stopCrawlerTask } from '@/api'
-import type { CrawlerTask } from '@/types'
+import { getCrawlerTasks, createCrawlerTask, startCrawlerTask, stopCrawlerTask, deleteCrawlerTask, getCrawlerSources } from '@/api'
+import type { CrawlerSource, CrawlerTask } from '@/types'
 
 // 状态配置
 const statusConfig: Record<string, { color: string; text: string; icon: React.ReactNode }> = {
@@ -58,8 +58,12 @@ const typeMap: Record<string, string> = {
 
 // 数据源映射
 const sourceMap: Record<string, { text: string; color: string }> = {
+  baike: { text: '百度百科', color: 'cyan' },
+  baidu_baike: { text: '百度百科', color: 'cyan' },
   wikipedia: { text: '维基百科', color: 'blue' },
+  wikipedia_zh: { text: '维基百科', color: 'blue' },
   douban: { text: '豆瓣', color: 'green' },
+  douban_movie: { text: '豆瓣', color: 'green' },
   other: { text: '其他', color: 'default' },
 }
 
@@ -99,10 +103,20 @@ const CrawlerList = () => {
   const { data, isLoading } = useQuery({
     queryKey: ['crawlerTasks', params],
     queryFn: () => getCrawlerTasks(params),
+    refetchInterval: (queryData) => {
+      const items = queryData?.data?.items || []
+      return items.some((task: CrawlerTask) => task.status === 'running') ? 3000 : false
+    },
+  })
+
+  const { data: sourceData } = useQuery({
+    queryKey: ['crawlerSources', 'taskCreate'],
+    queryFn: () => getCrawlerSources({ page: 1, page_size: 100, status: 'active' }),
   })
 
   const tasks = data?.data?.items || []
   const total = data?.data?.total || 0
+  const sources = (sourceData?.data?.items || []) as CrawlerSource[]
 
   // 统计数据
   const stats = {
@@ -127,6 +141,22 @@ const CrawlerList = () => {
     },
   })
 
+  const openCreateModal = () => {
+    createForm.resetFields()
+    createForm.setFieldsValue({
+      task_type: 'targeted',
+      config: {
+        spider_type: 'person',
+        source: sources[0]?.code,
+        concurrent_limit: 3,
+        delay: 1.0,
+        timeout: 30,
+      },
+      execute_now: true,
+    })
+    setCreateModalVisible(true)
+  }
+
   const startMutation = useMutation({
     mutationFn: startCrawlerTask,
     onSuccess: () => {
@@ -146,6 +176,17 @@ const CrawlerList = () => {
     },
     onError: () => {
       message.error('停止失败')
+    },
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: deleteCrawlerTask,
+    onSuccess: () => {
+      message.success('任务已删除')
+      queryClient.invalidateQueries({ queryKey: ['crawlerTasks'] })
+    },
+    onError: () => {
+      message.error('删除失败')
     },
   })
 
@@ -340,7 +381,7 @@ const CrawlerList = () => {
           <Popconfirm
             title="确认删除任务？"
             description="删除后不可恢复，是否继续？"
-            onConfirm={() => message.info('删除功能开发中')}
+            onConfirm={() => deleteMutation.mutate(record.id)}
             okText="确认"
             cancelText="取消"
           >
@@ -368,7 +409,7 @@ const CrawlerList = () => {
         <Button
           type="primary"
           icon={<PlusOutlined />}
-          onClick={() => setCreateModalVisible(true)}
+          onClick={openCreateModal}
         >
           新建任务
         </Button>
@@ -497,13 +538,12 @@ const CrawlerList = () => {
               ]}
             />
           </Form.Item>
-          <Form.Item label="数据源" name={['config', 'source']} initialValue="baike">
+          <Form.Item label="数据源" name={['config', 'source']} rules={[{ required: true, message: '请选择数据源' }]}>
             <Select
-              options={[
-                { label: '百度百科', value: 'baike' },
-                { label: '豆瓣', value: 'douban' },
-                { label: '维基百科', value: 'wikipedia' },
-              ]}
+              options={sources.map((source) => ({
+                label: source.name,
+                value: source.code,
+              }))}
             />
           </Form.Item>
           <Form.Item label="关键词" name={['config', 'keywords']}>

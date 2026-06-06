@@ -593,6 +593,26 @@ async def stop_crawler_task(
     )
 
 
+@router.delete("/crawler/tasks/{task_id}", response_model=ApiResponse)
+async def delete_crawler_task(
+    task_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """删除爬虫任务"""
+    from app.services.task_service import CrawlerTaskService
+
+    service = CrawlerTaskService(db)
+    try:
+        success = await service.delete_task(task_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    if not success:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    return ApiResponse(code=200, message="任务已删除", data={"id": task_id})
+
+
 # ========== 爬取源管理 ==========
 
 @router.get("/crawler/sources", response_model=ApiResponse)

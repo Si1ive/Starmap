@@ -340,6 +340,18 @@ HTTP 状态码必须与错误结果一致，`code` 与 HTTP 状态码保持一�
 
 响应：`ApiResponse<CrawlerTask>`
 
+### DELETE `/api/v1/admin/crawler/tasks/{task_id}`
+
+删除非运行中任务及其日志。运行中任务必须先停止。
+
+响应：
+
+```json
+{
+  "id": "task_001"
+}
+```
+
 ---
 
 ## 7. 爬虫统计 API
@@ -630,6 +642,7 @@ FastAPI 与 Scrapy Service 通过 Redis 解耦：
 - [x] `CrawlerSourceService.get_source_stats` 修复 `failed_failed_requests` 拼写。
 - [x] Scrapy 入库完成后写入 `crawl_source_stats`，统计页移除硬编码 mock。
 - [x] 管理端日志页通过 WebSocket 动态渲染实时日志并同步筛选条件。
+- [x] 管理端任务列表支持删除非运行中任务、运行中自动刷新和真实数据源选择。
 - [x] 所有 `ApiResponse` 补齐 `request_id`。
 - [ ] HTTP 错误状态码与响应体 `code` 保持一致。
 - [ ] 管理端所有爬虫页面禁止使用未标注的 mock 数据。
