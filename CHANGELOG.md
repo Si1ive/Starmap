@@ -13,6 +13,15 @@
 
 ## 2026-06-06
 
+### [会话-Backend/Frontend] 强化定时任务执行闭环
+- **类型**：feat
+- **影响**：backend/app/tasks/, backend/app/services/, frontend-admin/
+- **描述**：
+  - 调度触发后先记录 `crawl_schedule_runs(status=running)`，并关联实际创建的 `crawl_tasks`
+  - 调度器轮询爬虫任务终态，按 `completed/failed/stopped/timeout` 更新执行历史和聚合计数
+  - 定时任务表单补齐真实数据源、爬虫类型、关键词和运行配置，历史弹窗自动刷新
+  - API 文档明确执行历史必须以实际任务终态为准，禁止“发布即成功”
+
 ### [会话-Backend/Frontend] 完善爬虫任务管理能力
 - **类型**：feat
 - **影响**：backend/app/api/, backend/app/services/, frontend-admin/

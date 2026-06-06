@@ -6,8 +6,8 @@ APScheduler 定时任务调度器
 """
 
 import asyncio
-import uuid
 from datetime import datetime
+from datetime import timedelta
 from typing import Optional, Dict, Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -18,7 +18,7 @@ from sqlalchemy import select
 
 from app.core.logging import get_logger
 from app.db.mysql import mysql_client
-from app.models.mysql_models import CrawlSchedule, CrawlScheduleRun
+from app.models.mysql_models import CrawlSchedule, CrawlTask
 from app.services.schedule_service import CrawlerScheduleService
 
 logger = get_logger(__name__)
@@ -175,6 +175,8 @@ async def _execute_schedule_wrapper(schedule_id: str) -> None:
     """
     logger.info(f"开始执行定时任务: {schedule_id}")
     started_at = datetime.utcnow()
+    run_id = None
+    task_id = None
     
     try:
         # 创建数据库会话并执行任务
@@ -192,17 +194,37 @@ async def _execute_schedule_wrapper(schedule_id: str) -> None:
                 return
             
             # 执行实际任务
-            await _execute_schedule_task(session, schedule)
-            
-            # 记录成功
-            await service.record_run(
+            task = await _execute_schedule_task(session, schedule)
+            task_id = task.id
+            run = await service.start_run(
                 schedule_id=schedule_id,
-                status="success",
                 started_at=started_at,
-                completed_at=datetime.utcnow(),
+                task_id=task_id,
+            )
+            run_id = run.id
+            
+        schedule_result = await _wait_for_task_completion(
+            task_id=task_id,
+            timeout_seconds=schedule.timeout or 3600,
+        )
+        completed_at = datetime.utcnow()
+        duration = int((completed_at - started_at).total_seconds())
+
+        async with mysql_client.session() as session:
+            service = CrawlerScheduleService(session)
+            await service.finish_run(
+                run_id=run_id,
+                status=schedule_result["run_status"],
+                completed_at=completed_at,
+                duration=duration,
+                total_requests=schedule_result["total_requests"],
+                success_count=schedule_result["success_count"],
+                failed_count=schedule_result["failed_count"],
+                error_message=schedule_result.get("error_message"),
+                log_summary=schedule_result.get("log_summary"),
             )
             
-            logger.info(f"定时任务执行成功: {schedule_id}")
+        logger.info(f"定时任务执行完成: {schedule_id}, status={schedule_result['run_status']}")
             
     except Exception as e:
         logger.error(f"定时任务执行失败 {schedule_id}: {e}")
@@ -211,18 +233,30 @@ async def _execute_schedule_wrapper(schedule_id: str) -> None:
         try:
             async with mysql_client.session() as session:
                 service = CrawlerScheduleService(session)
-                await service.record_run(
-                    schedule_id=schedule_id,
-                    status="failed",
-                    started_at=started_at,
-                    completed_at=datetime.utcnow(),
-                    error_message=str(e)[:500],
-                )
+                completed_at = datetime.utcnow()
+                if run_id is not None:
+                    await service.finish_run(
+                        run_id=run_id,
+                        status="failed",
+                        completed_at=completed_at,
+                        duration=int((completed_at - started_at).total_seconds()),
+                        error_message=str(e)[:500],
+                    )
+                else:
+                    await service.record_run(
+                        schedule_id=schedule_id,
+                        status="failed",
+                        started_at=started_at,
+                        completed_at=completed_at,
+                        duration=int((completed_at - started_at).total_seconds()),
+                        error_message=str(e)[:500],
+                        task_id=task_id,
+                    )
         except Exception as record_error:
             logger.error(f"记录任务失败状态失败: {record_error}")
 
 
-async def _execute_schedule_task(session: AsyncSession, schedule: CrawlSchedule) -> None:
+async def _execute_schedule_task(session: AsyncSession, schedule: CrawlSchedule) -> CrawlTask:
     """
     执行定时任务的具体逻辑
     
@@ -249,9 +283,78 @@ async def _execute_schedule_task(session: AsyncSession, schedule: CrawlSchedule)
         
         # 执行任务
         await task_service.execute_task(task.id)
+        await session.refresh(task)
+        return task
         
     else:
-        logger.warning(f"未知的任务类型: {schedule.task_type}")
+        raise ValueError(f"未知的任务类型: {schedule.task_type}")
+
+
+async def _wait_for_task_completion(task_id: str, timeout_seconds: int) -> Dict[str, Any]:
+    """轮询爬虫任务直到终态或超时"""
+    deadline = datetime.utcnow() + timedelta(seconds=timeout_seconds)
+    poll_interval = min(5, max(timeout_seconds, 1))
+    last_task = None
+
+    while datetime.utcnow() < deadline:
+        async with mysql_client.session() as session:
+            result = await session.execute(
+                select(CrawlTask).where(CrawlTask.id == task_id)
+            )
+            last_task = result.scalar_one_or_none()
+            if not last_task:
+                raise ValueError(f"定时任务关联爬虫任务不存在: {task_id}")
+
+            if last_task.status in {"completed", "failed", "stopped"}:
+                return _build_schedule_result(last_task)
+
+        await asyncio.sleep(poll_interval)
+
+    async with mysql_client.session() as session:
+        result = await session.execute(
+            select(CrawlTask).where(CrawlTask.id == task_id)
+        )
+        last_task = result.scalar_one_or_none()
+        if last_task and last_task.status == "running":
+            last_task.status = "failed"
+            last_task.error_message = f"Schedule timeout after {timeout_seconds}s"
+            last_task.completed_at = datetime.utcnow()
+            await session.commit()
+
+    result = _build_schedule_result(last_task)
+    result["run_status"] = "timeout"
+    result["error_message"] = result.get("error_message") or f"Schedule timeout after {timeout_seconds}s"
+    return result
+
+
+def _build_schedule_result(task: Optional[CrawlTask]) -> Dict[str, Any]:
+    """构建执行历史统计结果"""
+    if not task:
+        return {
+            "run_status": "failed",
+            "total_requests": 0,
+            "success_count": 0,
+            "failed_count": 0,
+            "error_message": "Task not found",
+            "log_summary": None,
+        }
+
+    status_map = {
+        "completed": "success",
+        "failed": "failed",
+        "stopped": "cancelled",
+    }
+    return {
+        "run_status": status_map.get(task.status, "failed"),
+        "total_requests": int(task.total_requests or 0),
+        "success_count": int(task.success_count or 0),
+        "failed_count": int(task.failed_count or 0),
+        "error_message": task.error_message,
+        "log_summary": (
+            f"Task {task.id} status={task.status}, "
+            f"success={task.success_count or 0}, failed={task.failed_count or 0}"
+        ),
+    }
 
 
 def _on_job_executed(event) -> None:

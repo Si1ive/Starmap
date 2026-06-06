@@ -264,6 +264,93 @@ class CrawlerScheduleService:
         logger.info(f"Recorded schedule run: {schedule_id} - {status}")
         return run
 
+    async def start_run(
+        self,
+        schedule_id: str,
+        started_at: datetime,
+        task_id: Optional[str] = None,
+    ) -> CrawlScheduleRun:
+        """创建 running 执行记录"""
+        run = CrawlScheduleRun(
+            schedule_id=schedule_id,
+            task_id=task_id,
+            status="running",
+            started_at=started_at,
+        )
+        self.db.add(run)
+        await self.db.commit()
+        await self.db.refresh(run)
+
+        schedule = await self.get_schedule_by_id(schedule_id)
+        if schedule:
+            schedule.last_run_at = started_at
+            schedule.last_run_status = "running"
+            schedule.last_run_duration = None
+            schedule.next_run_at = self._calculate_next_run(
+                schedule.cron_expression,
+                schedule.timezone,
+            )
+            await self.db.commit()
+
+        logger.info(f"Started schedule run: {schedule_id}, task_id={task_id}")
+        return run
+
+    async def finish_run(
+        self,
+        run_id: int,
+        status: str,
+        completed_at: datetime,
+        duration: Optional[int] = None,
+        total_requests: int = 0,
+        success_count: int = 0,
+        failed_count: int = 0,
+        error_message: Optional[str] = None,
+        log_summary: Optional[str] = None,
+    ) -> Optional[CrawlScheduleRun]:
+        """完成 running 执行记录并更新定时任务聚合统计"""
+        result = await self.db.execute(
+            select(CrawlScheduleRun).where(CrawlScheduleRun.id == run_id)
+        )
+        run = result.scalar_one_or_none()
+        if not run:
+            return None
+
+        was_terminal = run.status in {"success", "failed", "timeout", "cancelled"}
+        run.status = status
+        run.completed_at = completed_at
+        run.duration = duration
+        run.total_requests = total_requests
+        run.success_count = success_count
+        run.failed_count = failed_count
+        run.error_message = error_message
+        run.log_summary = log_summary
+
+        schedule = await self.get_schedule_by_id(run.schedule_id)
+        if schedule:
+            if not was_terminal:
+                schedule.total_runs += 1
+            if status == "success":
+                schedule.success_runs += 1
+                schedule.last_run_status = "success"
+            elif status == "timeout":
+                schedule.failed_runs += 1
+                schedule.last_run_status = "timeout"
+            elif status in {"failed", "cancelled"}:
+                schedule.failed_runs += 1
+                schedule.last_run_status = "failed"
+            else:
+                schedule.last_run_status = status
+            schedule.last_run_duration = duration
+            schedule.next_run_at = self._calculate_next_run(
+                schedule.cron_expression,
+                schedule.timezone,
+            )
+
+        await self.db.commit()
+        await self.db.refresh(run)
+        logger.info(f"Finished schedule run: {run.schedule_id} - {status}")
+        return run
+
     @staticmethod
     def _calculate_next_run(cron_expression: str, timezone: str = "Asia/Shanghai") -> Optional[datetime]:
         """计算下次执行时间"""

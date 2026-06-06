@@ -124,10 +124,15 @@ export interface CrawlerSchedule {
   name: string
   description?: string
   task_type: string
+  source_ids?: string[]
+  target_config?: Record<string, unknown>
   cron_expression: string
   timezone?: string
   is_enabled: boolean
   max_retries?: number
+  retry_interval?: number
+  concurrent_limit?: number
+  timeout?: number
   total_runs?: number
   success_runs?: number
   failed_runs?: number

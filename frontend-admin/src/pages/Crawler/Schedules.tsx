@@ -11,6 +11,7 @@ import {
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   getCrawlerSchedules,
+  getCrawlerSources,
   createCrawlerSchedule,
   updateCrawlerSchedule,
   deleteCrawlerSchedule,
@@ -18,6 +19,7 @@ import {
   getScheduleRuns,
 } from '@/api'
 import type { CrawlerSchedule } from '@/types'
+import type { CrawlerSource } from '@/types'
 
 const CrawlerSchedules = () => {
   const queryClient = useQueryClient()
@@ -31,15 +33,26 @@ const CrawlerSchedules = () => {
   const { data, isLoading } = useQuery({
     queryKey: ['crawlerSchedules', params],
     queryFn: () => getCrawlerSchedules(params),
+    refetchInterval: (queryData) => {
+      const items = queryData?.data?.items || []
+      return items.some((schedule: CrawlerSchedule) => schedule.last_run_status === 'running') ? 5000 : false
+    },
+  })
+
+  const { data: sourceData } = useQuery({
+    queryKey: ['crawlerSources', 'scheduleForm'],
+    queryFn: () => getCrawlerSources({ page: 1, page_size: 100, status: 'active' }),
   })
 
   const schedules = (data?.data?.items || []) as CrawlerSchedule[]
   const total = data?.data?.total || 0
+  const sources = (sourceData?.data?.items || []) as CrawlerSource[]
 
   const { data: runsData, isLoading: runsLoading } = useQuery({
     queryKey: ['scheduleRuns', selectedScheduleId],
     queryFn: () => getScheduleRuns(selectedScheduleId, { page: 1, page_size: 20 }),
     enabled: !!selectedScheduleId,
+    refetchInterval: runsModalVisible ? 5000 : false,
   })
 
   const createMutation = useMutation({
@@ -86,6 +99,24 @@ const CrawlerSchedules = () => {
   const handleCreate = () => {
     setEditingSchedule(null)
     form.resetFields()
+    form.setFieldsValue({
+      task_type: 'targeted',
+      source_ids: sources[0]?.id ? [sources[0].id] : [],
+      target_config: {
+        spider_type: 'person',
+        keywords: [],
+        concurrent_limit: 3,
+        delay: 1.0,
+        timeout: 30,
+      },
+      cron_expression: '0 2 * * *',
+      timezone: 'Asia/Shanghai',
+      max_retries: 3,
+      retry_interval: 300,
+      concurrent_limit: 1,
+      timeout: 3600,
+      is_enabled: true,
+    })
     setModalVisible(true)
   }
 
@@ -95,9 +126,14 @@ const CrawlerSchedules = () => {
       name: schedule.name,
       description: schedule.description,
       task_type: schedule.task_type,
+      source_ids: schedule.source_ids || [],
+      target_config: schedule.target_config || {},
       cron_expression: schedule.cron_expression,
       timezone: schedule.timezone || 'Asia/Shanghai',
       max_retries: schedule.max_retries || 3,
+      retry_interval: schedule.retry_interval || 300,
+      concurrent_limit: schedule.concurrent_limit || 1,
+      timeout: schedule.timeout || 3600,
     })
     setModalVisible(true)
   }
@@ -125,7 +161,7 @@ const CrawlerSchedules = () => {
       dataIndex: 'task_type',
       width: 100,
       render: (t: string) => {
-        const map: Record<string, string> = { targeted: '定向', full: '全量', incremental: '增量' }
+        const map: Record<string, string> = { targeted: '定向', full: '全量', incremental: '增量', health_check: '健康检查', cleanup: '清理' }
         return <Tag color="blue">{map[t] || t}</Tag>
       },
     },
@@ -299,6 +335,8 @@ const CrawlerSchedules = () => {
                   { label: '定向爬取', value: 'targeted' },
                   { label: '全量爬取', value: 'full' },
                   { label: '增量更新', value: 'incremental' },
+                  { label: '健康检查', value: 'health_check' },
+                  { label: '数据清理', value: 'cleanup' },
                 ]} />
               </Form.Item>
             </Col>
@@ -316,6 +354,30 @@ const CrawlerSchedules = () => {
               </Form.Item>
             </Col>
           </Row>
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item label="数据源" name="source_ids" rules={[{ required: true, message: '请选择数据源' }]}>
+                <Select
+                  mode="multiple"
+                  options={sources.map((source) => ({
+                    label: source.name,
+                    value: source.id,
+                  }))}
+                />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item label="爬虫类型" name={['target_config', 'spider_type']} initialValue="person">
+                <Select options={[
+                  { label: '人物爬虫', value: 'person' },
+                  { label: '作品爬虫', value: 'work' },
+                ]} />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item label="关键词" name={['target_config', 'keywords']}>
+            <Select mode="tags" placeholder="输入关键词后按回车；健康检查/清理可留空" />
+          </Form.Item>
           <Row gutter={16}>
             <Col span={8}>
               <Form.Item label="最大重试" name="max_retries" initialValue={3}>

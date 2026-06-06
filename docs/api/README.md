@@ -495,6 +495,12 @@ FastAPI 与 Scrapy Service 通过 Redis 解耦：
 
 响应：`ApiResponse<CrawlerSchedule>`
 
+执行规则：
+
+- 调度触发后先创建 `crawl_tasks` 记录和 `crawl_schedule_runs(status=running)`。
+- Scrapy/健康检查/清理任务到达 `completed`、`failed`、`stopped` 或超时后，才更新执行历史终态。
+- `crawl_schedule_runs.task_id` 必须关联实际创建的爬虫任务。
+
 ### GET `/api/v1/admin/crawler/schedules/{schedule_id}`
 
 响应：`ApiResponse<CrawlerSchedule>`
@@ -643,6 +649,7 @@ FastAPI 与 Scrapy Service 通过 Redis 解耦：
 - [x] Scrapy 入库完成后写入 `crawl_source_stats`，统计页移除硬编码 mock。
 - [x] 管理端日志页通过 WebSocket 动态渲染实时日志并同步筛选条件。
 - [x] 管理端任务列表支持删除非运行中任务、运行中自动刷新和真实数据源选择。
+- [x] 定时任务执行历史从“发布即成功”改为跟踪实际爬虫任务终态。
 - [x] 所有 `ApiResponse` 补齐 `request_id`。
 - [ ] HTTP 错误状态码与响应体 `code` 保持一致。
 - [ ] 管理端所有爬虫页面禁止使用未标注的 mock 数据。
