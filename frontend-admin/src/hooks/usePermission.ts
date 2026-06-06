@@ -6,9 +6,11 @@ import { useAdminStore } from '@/store'
 export const usePermission = () => {
   const { permissions, user } = useAdminStore()
 
+  const isSuperAdmin = user?.role === 'super' || user?.role === 'super_admin'
+
   const hasPermission = (permission: string): boolean => {
     if (!user) return false
-    if (user.role === 'super') return true
+    if (isSuperAdmin) return true
     return permissions.includes(permission)
   }
 
@@ -23,8 +25,8 @@ export const usePermission = () => {
   return {
     hasPermission,
     hasRole,
-    isSuperAdmin: user?.role === 'super',
-    isAdmin: user?.role === 'admin' || user?.role === 'super',
+    isSuperAdmin,
+    isAdmin: user?.role === 'admin' || user?.role === 'data_admin' || isSuperAdmin,
     isOperator: user?.role === 'operator',
   }
 }

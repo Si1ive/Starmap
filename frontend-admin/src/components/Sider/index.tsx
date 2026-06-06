@@ -16,6 +16,7 @@ import {
   TeamOutlined,
 } from '@ant-design/icons'
 import { useAdminStore } from '@/store'
+import { usePermission } from '@/hooks/usePermission'
 
 const { Sider } = Layout
 
@@ -62,31 +63,41 @@ const menuItems = [
 const AppSider = () => {
   const navigate = useNavigate()
   const location = useLocation()
-  const { collapsed, permissions } = useAdminStore()
+  const { collapsed } = useAdminStore()
+  const { hasPermission } = usePermission()
 
   // 根据权限过滤菜单项
-  const filterByPermission = (items: any[]) => {
-    return items.filter((item) => {
-      // 配置管理子项需要 settings:manage 权限
-      if (item.key.startsWith('/admin/settings')) {
-        return permissions.includes('settings:manage')
-      }
-      // 爬虫管理子项需要 crawler:manage 权限
-      if (item.key.startsWith('/admin/crawler/')) {
-        return permissions.includes('crawler:manage')
-      }
-      // 监控管理子项需要 monitor:view 权限
-      if (item.key.startsWith('/admin/monitor/')) {
-        return permissions.includes('monitor:view')
-      }
-      // 有子菜单的项：如果子菜单全被过滤掉，则隐藏父菜单
-      if (item.children) {
-        item.children = filterByPermission(item.children)
-        return item.children.length > 0
-      }
-      return true
-    })
+  const canAccessMenuItem = (key: string) => {
+    if (key.startsWith('/admin/settings')) {
+      return hasPermission('settings:manage')
+    }
+    if (key.startsWith('/admin/crawler/')) {
+      return hasPermission('crawler:manage')
+    }
+    if (key.startsWith('/admin/monitor/')) {
+      return hasPermission('monitor:view')
+    }
+    return true
   }
+
+  const filterByPermission = (items: any[]): any[] =>
+    items.reduce<any[]>((filteredItems, item) => {
+      const nextItem = { ...item }
+
+      if (nextItem.children) {
+        nextItem.children = filterByPermission(nextItem.children)
+        if (!nextItem.children.length) {
+          return filteredItems
+        }
+      }
+
+      if (!canAccessMenuItem(String(nextItem.key))) {
+        return filteredItems
+      }
+
+      filteredItems.push(nextItem)
+      return filteredItems
+    }, [])
 
   const filteredItems = filterByPermission([...menuItems])
 

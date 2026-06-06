@@ -534,6 +534,11 @@ const CrawlerList = () => {
               style={{ marginBottom: 16 }}
               message="暂无可用数据源"
               description="系统会自动初始化默认数据源；如果仍为空，请先到数据源管理新增或刷新。"
+              action={
+                <Button size="small" onClick={() => navigate('/admin/crawler/sources')}>
+                  管理数据源
+                </Button>
+              }
             />
           )}
           <Form.Item label="任务名称" name="name" rules={[{ required: true, message: '请输入任务名称' }]}>

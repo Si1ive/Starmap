@@ -13,6 +13,14 @@
 
 ## 2026-06-07
 
+### [会话-Frontend] 修复数据源管理入口不可见
+- **类型**：fix
+- **影响**：frontend-admin/
+- **描述**：
+  - 路由守卫和侧边栏统一复用权限 Hook，超级管理员不再被旧权限数组拦截
+  - 侧边栏权限过滤改为不可变处理，避免首次渲染后永久移除数据源菜单
+  - 任务创建弹窗在暂无数据源时提供“管理数据源”跳转入口
+
 ### [会话-Backend/Frontend] 完善数据源管理能力
 - **类型**：feat
 - **影响**：backend/app/api/, backend/app/services/, frontend-admin/, docs/api/

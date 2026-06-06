@@ -23,16 +23,18 @@ import DatabaseMonitor from '@/pages/Monitor/Database'
 import MonitorErrors from '@/pages/Monitor/Errors'
 import Settings from '@/pages/Settings'
 import SettingsUsers from '@/pages/Settings/Users'
+import { usePermission } from '@/hooks/usePermission'
 
 // 路由守卫组件
 const PrivateRoute = ({ children, permission }: { children: React.ReactNode; permission?: string }) => {
-  const { token, permissions } = useAdminStore()
+  const { token } = useAdminStore()
+  const { hasPermission } = usePermission()
 
   if (!token) {
     return <Navigate to="/admin/login" replace />
   }
 
-  if (permission && !permissions.includes(permission)) {
+  if (permission && !hasPermission(permission)) {
     return <Navigate to="/admin/dashboard" replace />
   }
 

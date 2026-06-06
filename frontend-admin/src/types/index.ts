@@ -4,7 +4,7 @@ export interface AdminUser {
   username: string
   nickname: string
   avatar?: string
-  role: 'super' | 'admin' | 'operator'
+  role: 'super' | 'super_admin' | 'admin' | 'data_admin' | 'operator'
   permissions: string[]
 }
 
