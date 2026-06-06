@@ -487,18 +487,22 @@ async def create_crawler_task(
     
     # 构建任务配置
     config = data.get("config", {})
+    source_ids = data.get("source_ids") or config.get("source_ids") or []
     target_config = {
         **config,
-        "source_ids": data.get("source_ids", []),
+        "source_ids": source_ids,
     }
     
-    task = await service.create_task(
-        name=data.get("name", "手动任务"),
-        task_type=data.get("task_type", "targeted"),
-        source_ids=data.get("source_ids", []),
-        target_config=target_config,
-        created_by=data.get("created_by"),
-    )
+    try:
+        task = await service.create_task(
+            name=data.get("name", "手动任务"),
+            task_type=data.get("task_type", "targeted"),
+            source_ids=source_ids,
+            target_config=target_config,
+            created_by=data.get("created_by"),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     
     # 如果请求立即执行
     if data.get("execute_now", False):

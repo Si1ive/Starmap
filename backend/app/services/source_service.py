@@ -18,6 +18,57 @@ from app.models.mysql_models import CrawlLog, CrawlSource, CrawlSourceStats
 
 logger = get_logger(__name__)
 
+DEFAULT_CRAWL_SOURCES = [
+    {
+        "id": "src_001",
+        "name": "维基百科（中文）",
+        "code": "wikipedia_zh",
+        "type": "encyclopedia",
+        "base_url": "https://zh.wikipedia.org/wiki/",
+        "config": {
+            "selectors": {
+                "title": "h1.firstHeading",
+                "summary": "div.mw-parser-output > p:first-of-type",
+            },
+            "anti_detection": {"user_agent_rotation": True, "delay_range": [1.0, 3.0]},
+        },
+        "request_interval": 1.0,
+        "daily_limit": 1000,
+        "concurrent_limit": 3,
+    },
+    {
+        "id": "src_002",
+        "name": "豆瓣电影",
+        "code": "douban_movie",
+        "type": "social",
+        "base_url": "https://movie.douban.com/",
+        "config": {
+            "selectors": {
+                "title": "span[property=\"v:itemreviewed\"]",
+                "rating": "strong[property=\"v:average\"]",
+            },
+            "anti_detection": {"user_agent_rotation": True, "delay_range": [2.0, 5.0]},
+        },
+        "request_interval": 2.0,
+        "daily_limit": 1000,
+        "concurrent_limit": 2,
+    },
+    {
+        "id": "src_003",
+        "name": "百度百科",
+        "code": "baidu_baike",
+        "type": "encyclopedia",
+        "base_url": "https://baike.baidu.com/",
+        "config": {
+            "selectors": {"title": "h1", "summary": ".lemma-summary"},
+            "anti_detection": {"user_agent_rotation": True, "delay_range": [1.0, 3.0]},
+        },
+        "request_interval": 1.0,
+        "daily_limit": 1000,
+        "concurrent_limit": 3,
+    },
+]
+
 
 class CrawlerSourceService:
     """爬取源管理服务"""
@@ -33,6 +84,7 @@ class CrawlerSourceService:
         source_type: Optional[str] = None,
     ) -> tuple[List[CrawlSource], int]:
         """获取爬取源列表（支持分页和筛选）"""
+        await self.ensure_default_sources()
         query = select(CrawlSource)
 
         if status:
@@ -60,6 +112,7 @@ class CrawlerSourceService:
 
     async def create_source(self, data: Dict[str, Any]) -> CrawlSource:
         """创建爬取源"""
+        await self._ensure_source_tables()
         source = CrawlSource(
             id=f"src_{uuid.uuid4().hex[:8]}",
             name=data["name"],
@@ -78,6 +131,67 @@ class CrawlerSourceService:
         await self.db.refresh(source)
         logger.info(f"Created crawl source: {source.name} ({source.id})")
         return source
+
+    async def ensure_default_sources(self) -> List[CrawlSource]:
+        """确保核心默认爬取源存在"""
+        await self._ensure_source_tables()
+        result = await self.db.execute(
+            select(CrawlSource).where(
+                CrawlSource.code.in_([source["code"] for source in DEFAULT_CRAWL_SOURCES])
+            )
+        )
+        existing_sources = result.scalars().all()
+        existing_codes = {source.code for source in existing_sources}
+        existing_ids = {source.id for source in existing_sources}
+        created_sources: List[CrawlSource] = []
+
+        for default_source in DEFAULT_CRAWL_SOURCES:
+            if default_source["code"] in existing_codes:
+                continue
+            source_id = (
+                default_source["id"]
+                if default_source["id"] not in existing_ids
+                else f"src_{uuid.uuid4().hex[:8]}"
+            )
+            source = CrawlSource(
+                id=source_id,
+                name=default_source["name"],
+                code=default_source["code"],
+                type=default_source["type"],
+                base_url=default_source["base_url"],
+                config=default_source["config"],
+                request_interval=default_source["request_interval"],
+                daily_limit=default_source["daily_limit"],
+                concurrent_limit=default_source["concurrent_limit"],
+                status="active",
+                health_status="healthy",
+            )
+            self.db.add(source)
+            created_sources.append(source)
+            existing_ids.add(source_id)
+
+        if created_sources:
+            await self.db.commit()
+            for source in created_sources:
+                await self.db.refresh(source)
+            logger.info("Initialized default crawl sources", count=len(created_sources))
+
+        return [*existing_sources, *created_sources]
+
+    async def _ensure_source_tables(self) -> None:
+        """确保爬取源核心表存在"""
+        await self.db.run_sync(
+            lambda session: CrawlSource.__table__.create(
+                bind=session.get_bind(),
+                checkfirst=True,
+            )
+        )
+        await self.db.run_sync(
+            lambda session: CrawlSourceStats.__table__.create(
+                bind=session.get_bind(),
+                checkfirst=True,
+            )
+        )
 
     async def update_source(self, source_id: str, data: Dict[str, Any]) -> Optional[CrawlSource]:
         """更新爬取源"""

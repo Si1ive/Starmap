@@ -69,7 +69,7 @@ HTTP 状态码必须与错误结果一致，`code` 与 HTTP 状态码保持一�
 | `health_status` | `healthy`, `degraded`, `down` |
 | `crawler_task_type` | `full`, `incremental`, `targeted`, `health_check`, `cleanup` |
 | `crawler_task_status` | `pending`, `running`, `completed`, `failed`, `stopped` |
-| `crawler_log_level` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `crawler_log_level` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `SUCCESS`, `CRITICAL` |
 | `crawler_log_stage` | `execution`, `fetch`, `parse`, `validate`, `store`, `sync` |
 | `crawler_log_status` | `pending`, `success`, `failed`, `retry` |
 | `resource_type` | `person`, `work`, `relation`, `page` |
@@ -80,6 +80,8 @@ HTTP 状态码必须与错误结果一致，`code` 与 HTTP 状态码保持一�
 ## 4. 数据体
 
 ### 4.1 CrawlerSource
+
+系统会在读取数据源或创建爬虫任务时幂等初始化默认源：`wikipedia_zh`、`douban_movie`、`baidu_baike`。新环境没有手动迁移数据源时，管理端仍应能选择默认源创建任务。
 
 ```json
 {
@@ -321,6 +323,8 @@ HTTP 状态码必须与错误结果一致，`code` 与 HTTP 状态码保持一�
   "source_ids": ["src_001"],
   "config": {
     "spider_type": "person",
+    "source": "wikipedia_zh",
+    "source_ids": ["src_001"],
     "keywords": ["周杰伦"],
     "concurrent_limit": 3,
     "delay": 1.0,
@@ -331,6 +335,12 @@ HTTP 状态码必须与错误结果一致，`code` 与 HTTP 状态码保持一�
 ```
 
 响应：`ApiResponse<CrawlerTask>`
+
+校验规则：
+
+- `targeted`、`full`、`incremental` 任务必须传入有效 `source_ids` 或可解析的 `config.source`。
+- 当前 Scrapy `person` 支持 `baidu_baike`、`douban_movie`、`wikipedia_zh`；`work` 支持 `baidu_baike`、`douban_movie`。
+- 当前 Scrapy 入口仍以关键词驱动，创建爬取任务必须至少传入一个 `config.keywords`。
 
 ### POST `/api/v1/admin/crawler/tasks/{task_id}/start`
 

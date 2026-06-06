@@ -19,6 +19,7 @@ import {
   Col,
   Tooltip,
   Badge,
+  Alert,
 } from 'antd'
 import {
   PlayCircleOutlined,
@@ -136,15 +137,14 @@ const CrawlerList = () => {
       setCreateModalVisible(false)
       createForm.resetFields()
     },
-    onError: () => {
-      message.error('创建失败')
-    },
+    onError: () => undefined,
   })
 
   const openCreateModal = () => {
     createForm.resetFields()
     createForm.setFieldsValue({
       task_type: 'targeted',
+      source_id: sources[0]?.id,
       config: {
         spider_type: 'person',
         source: sources[0]?.code,
@@ -508,8 +508,17 @@ const CrawlerList = () => {
         }}
         onOk={() => {
           createForm.validateFields().then((values) => {
+            const selectedSource = sources.find((source) => source.id === values.source_id)
+            const sourceIds = values.source_id ? [values.source_id] : []
             createMutation.mutate({
-              ...values,
+              name: values.name,
+              task_type: values.task_type,
+              source_ids: sourceIds,
+              config: {
+                ...(values.config || {}),
+                source: selectedSource?.code,
+                source_ids: sourceIds,
+              },
               execute_now: values.execute_now ?? true,
             })
           })
@@ -518,6 +527,15 @@ const CrawlerList = () => {
         width={600}
       >
         <Form form={createForm} layout="vertical">
+          {!sources.length && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message="暂无可用数据源"
+              description="系统会自动初始化默认数据源；如果仍为空，请先到数据源管理新增或刷新。"
+            />
+          )}
           <Form.Item label="任务名称" name="name" rules={[{ required: true, message: '请输入任务名称' }]}>
             <Input placeholder="如：爬取周杰伦信息" />
           </Form.Item>
@@ -538,15 +556,16 @@ const CrawlerList = () => {
               ]}
             />
           </Form.Item>
-          <Form.Item label="数据源" name={['config', 'source']} rules={[{ required: true, message: '请选择数据源' }]}>
+          <Form.Item label="数据源" name="source_id" rules={[{ required: true, message: '请选择数据源' }]}>
             <Select
               options={sources.map((source) => ({
-                label: source.name,
-                value: source.code,
+                label: `${source.name}（${source.code}）`,
+                value: source.id,
               }))}
+              placeholder="选择要爬取的数据源"
             />
           </Form.Item>
-          <Form.Item label="关键词" name={['config', 'keywords']}>
+          <Form.Item label="关键词" name={['config', 'keywords']} rules={[{ required: true, message: '请输入至少一个关键词' }]}>
             <Select mode="tags" placeholder="输入关键词后按回车" />
           </Form.Item>
           <Row gutter={16}>

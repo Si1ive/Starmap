@@ -11,6 +11,18 @@
 
 ---
 
+## 2026-06-07
+
+### [会话-Backend/Data/Frontend] 修复爬虫核心数据源输入链路
+- **类型**：fix
+- **影响**：backend/app/services/, backend/app/api/, backend/scripts/, frontend-admin/, docs/api/
+- **描述**：
+  - 数据源列表和任务创建时自动初始化默认源，避免新环境 `crawl_sources` 为空导致无法创建有效爬虫任务
+  - 任务创建强制校验有效数据源和关键词，并将 `source_ids`、`config.source`、`config.keywords` 统一规范化
+  - 管理端新建任务表单改为显式选择数据源 ID，提交时映射为 Scrapy 支持的源编码
+  - 初始化 SQL 补齐 `crawl_sources`、`crawl_source_stats` 和默认源数据
+  - 前端错误提示显示 FastAPI `detail`，便于定位无源、无关键词等创建失败原因
+
 ## 2026-06-06
 
 ### [会话-Backend/Data/Frontend] 完成爬虫稳定性运营能力

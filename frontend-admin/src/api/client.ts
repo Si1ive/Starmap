@@ -37,7 +37,8 @@ adminClient.interceptors.response.use(
     } else if (error.response?.status === 429) {
       message.error('请求过于频繁，请稍后重试')
     } else {
-      const msg = error.response?.data?.message || '请求失败，请稍后重试'
+      const detail = error.response?.data?.detail
+      const msg = error.response?.data?.message || (typeof detail === 'string' ? detail : undefined) || '请求失败，请稍后重试'
       message.error(msg)
     }
     return Promise.reject(error)

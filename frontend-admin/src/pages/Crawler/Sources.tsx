@@ -8,7 +8,7 @@ import type { CrawlerSource } from '@/types'
 const healthColors: Record<string, string> = {
   healthy: 'green',
   degraded: 'orange',
-  unhealthy: 'red',
+  down: 'red',
   unknown: 'default',
 }
 
@@ -106,10 +106,11 @@ const CrawlerSources = () => {
       width: 100,
       render: (t: string) => {
         const map: Record<string, { text: string; color: string }> = {
-          wiki: { text: '百科', color: 'blue' },
-          movie: { text: '影视', color: 'green' },
-          music: { text: '音乐', color: 'purple' },
+          encyclopedia: { text: '百科', color: 'blue' },
           social: { text: '社交', color: 'orange' },
+          official: { text: '官方', color: 'green' },
+          news: { text: '新闻', color: 'purple' },
+          other: { text: '其他', color: 'default' },
         }
         const c = map[t] || { text: t, color: 'default' }
         return <Tag color={c.color}>{c.text}</Tag>
@@ -123,7 +124,9 @@ const CrawlerSources = () => {
       render: (s: string) => {
         const map: Record<string, { color: string; text: string }> = {
           active: { color: 'success', text: '启用' },
-          disabled: { color: 'default', text: '禁用' },
+          inactive: { color: 'default', text: '禁用' },
+          error: { color: 'error', text: '异常' },
+          deprecated: { color: 'default', text: '已废弃' },
         }
         const c = map[s] || { color: 'default', text: s }
         return <Tag color={c.color}>{c.text}</Tag>
@@ -180,7 +183,7 @@ const CrawlerSources = () => {
 
   const healthyCount = sources.filter((s) => s.health_status === 'healthy').length
   const degradedCount = sources.filter((s) => s.health_status === 'degraded').length
-  const unhealthyCount = sources.filter((s) => s.health_status === 'unhealthy').length
+  const unhealthyCount = sources.filter((s) => s.health_status === 'down').length
 
   return (
     <div>
@@ -245,10 +248,11 @@ const CrawlerSources = () => {
             <Col span={12}>
               <Form.Item label="类型" name="type" rules={[{ required: true }]}>
                 <Select options={[
-                  { label: '百科', value: 'wiki' },
-                  { label: '影视', value: 'movie' },
-                  { label: '音乐', value: 'music' },
+                  { label: '百科', value: 'encyclopedia' },
                   { label: '社交', value: 'social' },
+                  { label: '官方', value: 'official' },
+                  { label: '新闻', value: 'news' },
+                  { label: '其他', value: 'other' },
                 ]} />
               </Form.Item>
             </Col>

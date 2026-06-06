@@ -126,6 +126,59 @@ CREATE TABLE IF NOT EXISTS person_relations (
     INDEX idx_confidence (confidence)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='人物关系表';
 
+-- 爬取源配置表
+CREATE TABLE IF NOT EXISTS crawl_sources (
+    id VARCHAR(32) PRIMARY KEY COMMENT '唯一标识',
+    name VARCHAR(100) NOT NULL COMMENT '源名称',
+    code VARCHAR(50) NOT NULL UNIQUE COMMENT '源编码',
+    type VARCHAR(50) COMMENT '源类型：encyclopedia/social/official/news/other',
+    base_url VARCHAR(500) COMMENT '基础URL',
+    config JSON COMMENT '源配置',
+    request_interval DECIMAL(3,1) DEFAULT 1.0 COMMENT '请求间隔(秒)',
+    daily_limit INT DEFAULT 1000 COMMENT '每日请求上限',
+    concurrent_limit INT DEFAULT 5 COMMENT '并发数限制',
+    status ENUM('active', 'inactive', 'error', 'deprecated') DEFAULT 'active',
+    health_status ENUM('healthy', 'degraded', 'down') DEFAULT 'healthy',
+    last_health_check DATETIME COMMENT '最后健康检查时间',
+    total_requests BIGINT DEFAULT 0 COMMENT '累计请求数',
+    total_success BIGINT DEFAULT 0 COMMENT '累计成功数',
+    total_failed BIGINT DEFAULT 0 COMMENT '累计失败数',
+    avg_response_time DECIMAL(8,2) COMMENT '平均响应时间(ms)',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_cs_status (status),
+    INDEX idx_cs_type (type),
+    INDEX idx_cs_health (health_status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='爬取源配置表';
+
+-- 爬取源日统计表
+CREATE TABLE IF NOT EXISTS crawl_source_stats (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    source_id VARCHAR(32) NOT NULL COMMENT '爬取源ID',
+    stat_date DATE NOT NULL COMMENT '统计日期',
+    total_requests INT DEFAULT 0,
+    success_requests INT DEFAULT 0,
+    failed_requests INT DEFAULT 0,
+    timeout_requests INT DEFAULT 0,
+    rate_limited_requests INT DEFAULT 0,
+    persons_extracted INT DEFAULT 0,
+    works_extracted INT DEFAULT 0,
+    relations_extracted INT DEFAULT 0,
+    valid_records INT DEFAULT 0,
+    duplicate_records INT DEFAULT 0,
+    avg_response_time DECIMAL(8,2),
+    min_response_time DECIMAL(8,2),
+    max_response_time DECIMAL(8,2),
+    p95_response_time DECIMAL(8,2),
+    avg_completeness DECIMAL(5,2),
+    total_duration INT DEFAULT 0 COMMENT '总耗时(秒)',
+    data_size_mb DECIMAL(8,2),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_source_date (source_id, stat_date),
+    INDEX idx_css_stat_date (stat_date),
+    INDEX idx_css_source_id (source_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='爬取源日统计表';
+
 -- 爬虫任务表
 CREATE TABLE IF NOT EXISTS crawl_tasks (
     id VARCHAR(32) PRIMARY KEY COMMENT '任务ID',
@@ -161,7 +214,7 @@ CREATE TABLE IF NOT EXISTS crawl_logs (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     task_id VARCHAR(32) NOT NULL COMMENT '任务ID',
     source_id VARCHAR(32) COMMENT '爬取源ID',
-    level ENUM('INFO', 'WARNING', 'ERROR', 'DEBUG') DEFAULT 'INFO',
+    level ENUM('INFO', 'WARNING', 'ERROR', 'DEBUG', 'SUCCESS', 'CRITICAL') DEFAULT 'INFO',
     stage VARCHAR(50) COMMENT '阶段：execution, fetch, parse, validate, store, sync',
     
     resource_url VARCHAR(500) COMMENT '爬取URL',
@@ -188,6 +241,23 @@ CREATE TABLE IF NOT EXISTS crawl_logs (
     INDEX idx_error_type (error_type),
     INDEX idx_created_at (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='爬虫日志表';
+
+-- 默认爬取源
+INSERT INTO crawl_sources (id, name, code, type, base_url, config, status, health_status, request_interval, daily_limit, concurrent_limit) VALUES
+('src_001', '维基百科（中文）', 'wikipedia_zh', 'encyclopedia', 'https://zh.wikipedia.org/wiki/',
+ '{"selectors": {"title": "h1.firstHeading", "summary": "div.mw-parser-output > p:first-of-type"}, "anti_detection": {"user_agent_rotation": true, "delay_range": [1.0, 3.0]}}',
+ 'active', 'healthy', 1.0, 1000, 3),
+('src_002', '豆瓣电影', 'douban_movie', 'social', 'https://movie.douban.com/',
+ '{"selectors": {"title": "span[property=\\"v:itemreviewed\\"]", "rating": "strong[property=\\"v:average\\"]"}, "anti_detection": {"user_agent_rotation": true, "delay_range": [2.0, 5.0]}}',
+ 'active', 'healthy', 2.0, 1000, 2),
+('src_003', '百度百科', 'baidu_baike', 'encyclopedia', 'https://baike.baidu.com/',
+ '{"selectors": {"title": "h1", "summary": ".lemma-summary"}, "anti_detection": {"user_agent_rotation": true, "delay_range": [1.0, 3.0]}}',
+ 'active', 'healthy', 1.0, 1000, 3)
+ON DUPLICATE KEY UPDATE
+    name = VALUES(name),
+    type = VALUES(type),
+    base_url = VALUES(base_url),
+    config = VALUES(config);
 
 -- 管理员用户表
 CREATE TABLE IF NOT EXISTS admin_users (

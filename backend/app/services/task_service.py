@@ -50,7 +50,14 @@ class CrawlerTaskService:
         Returns:
             创建的 CrawlTask 实例
         """
-        config = target_config or {}
+        config = dict(target_config or {})
+        source_ids = self._normalize_source_ids(source_ids or config.get("source_ids") or [])
+        keywords = self._normalize_keywords(config.get("keywords") or config.get("targets") or [])
+        config["keywords"] = keywords
+
+        source_service = CrawlerSourceService(self.db)
+        await source_service.ensure_default_sources()
+
         source = None
         if source_ids:
             result = await self.db.execute(
@@ -66,16 +73,32 @@ class CrawlerTaskService:
             source = result.scalar_one_or_none()
             if source:
                 source_ids = [source.id]
-        keywords = config.get("keywords") or config.get("targets") or []
-        if isinstance(keywords, str):
-            keywords = [keyword.strip() for keyword in keywords.split(",") if keyword.strip()]
+
+        if not source and task_type in {"full", "incremental", "targeted"}:
+            sources, _ = await source_service.get_sources(skip=0, limit=1, status="active")
+            source = sources[0] if sources else None
+            if source:
+                source_ids = [source.id]
+
+        if task_type in {"full", "incremental", "targeted"}:
+            if not source:
+                raise ValueError("请选择有效的数据源")
+            if not self._is_supported_source(config.get("spider_type", "person"), source.code):
+                raise ValueError(f"{config.get('spider_type', 'person')} 爬虫暂不支持数据源 {source.name}")
+            if not keywords:
+                raise ValueError("请输入至少一个爬取关键词")
+
+        if source:
+            config["source"] = source.code
+            config["source_ids"] = source_ids
+
         target_count = len(keywords) or len(source_ids) or None
 
         task = CrawlTask(
             id=f"task_{uuid.uuid4().hex[:8]}",
             name=name,
             task_type=task_type,
-            source=config.get("source") or (source.code if source else None),
+            source=source.code if source else config.get("source"),
             source_id=source_ids[0] if source_ids else None,
             target_count=target_count,
             config=config,
@@ -100,6 +123,33 @@ class CrawlerTaskService:
             "baike": "baidu_baike",
         }
         return [code for code in {source_code, aliases.get(source_code)} if code]
+
+    @staticmethod
+    def _normalize_source_ids(source_ids: Any) -> List[str]:
+        """Normalize source_ids input into a list."""
+        if isinstance(source_ids, list):
+            return [str(source_id) for source_id in source_ids if str(source_id).strip()]
+        if isinstance(source_ids, str) and source_ids.strip():
+            return [source_ids.strip()]
+        return []
+
+    @staticmethod
+    def _normalize_keywords(keywords: Any) -> List[str]:
+        """Normalize keyword input into a list."""
+        if isinstance(keywords, list):
+            return [str(keyword).strip() for keyword in keywords if str(keyword).strip()]
+        if isinstance(keywords, str):
+            return [keyword.strip() for keyword in keywords.split(",") if keyword.strip()]
+        return []
+
+    @staticmethod
+    def _is_supported_source(spider_type: str, source_code: str) -> bool:
+        """Check whether a Scrapy spider supports the selected source."""
+        supported_sources = {
+            "person": {"baike", "baidu_baike", "douban", "douban_movie", "wikipedia", "wikipedia_zh"},
+            "work": {"baike", "baidu_baike", "douban", "douban_movie"},
+        }
+        return source_code in supported_sources.get(spider_type, set())
 
     async def create_task_from_schedule(
         self,
