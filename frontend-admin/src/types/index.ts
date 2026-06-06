@@ -109,13 +109,17 @@ export interface CrawlerSource {
   base_url: string
   status: string
   health_status?: string
+  config?: Record<string, unknown>
   request_interval?: number
   daily_limit?: number
+  concurrent_limit?: number
   total_requests?: number
   total_success?: number
   total_failed?: number
   avg_response_time?: number
+  last_health_check?: string
   created_at?: string
+  updated_at?: string
 }
 
 // 定时任务

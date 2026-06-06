@@ -113,17 +113,24 @@ class CrawlerSourceService:
     async def create_source(self, data: Dict[str, Any]) -> CrawlSource:
         """创建爬取源"""
         await self._ensure_source_tables()
+        code = str(data["code"]).strip()
+        result = await self.db.execute(
+            select(CrawlSource).where(CrawlSource.code == code)
+        )
+        if result.scalar_one_or_none():
+            raise ValueError(f"数据源编码已存在: {code}")
+
         source = CrawlSource(
             id=f"src_{uuid.uuid4().hex[:8]}",
-            name=data["name"],
-            code=data["code"],
+            name=str(data["name"]).strip(),
+            code=code,
             type=data.get("type"),
             base_url=data.get("base_url"),
             config=data.get("config"),
             request_interval=data.get("request_interval", 1.0),
             daily_limit=data.get("daily_limit", 1000),
             concurrent_limit=data.get("concurrent_limit", 5),
-            status="active",
+            status=data.get("status") or "active",
             health_status="healthy",
         )
         self.db.add(source)

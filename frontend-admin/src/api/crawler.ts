@@ -62,6 +62,10 @@ export const createCrawlerSource = (data: Record<string, unknown>): Promise<ApiR
   return adminClient.post('/crawler/sources', data)
 }
 
+export const initializeDefaultCrawlerSources = (): Promise<ApiResponse<{ items: CrawlerSource[]; total: number }>> => {
+  return adminClient.post('/crawler/sources/defaults')
+}
+
 export const updateCrawlerSource = (id: string, data: Record<string, unknown>): Promise<ApiResponse<{ id: string }>> => {
   return adminClient.put(`/crawler/sources/${id}`, data)
 }

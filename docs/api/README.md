@@ -242,6 +242,27 @@ HTTP 状态码必须与错误结果一致，`code` 与 HTTP 状态码保持一�
 
 响应：`ApiResponse<CrawlerSource>`
 
+### POST `/api/v1/admin/crawler/sources/defaults`
+
+幂等初始化默认数据源：`wikipedia_zh`、`douban_movie`、`baidu_baike`。
+
+响应：
+
+```json
+{
+  "items": [
+    {
+      "id": "src_003",
+      "name": "百度百科",
+      "code": "baidu_baike",
+      "status": "active",
+      "health_status": "healthy"
+    }
+  ],
+  "total": 3
+}
+```
+
 ### GET `/api/v1/admin/crawler/sources/{source_id}`
 
 响应：`ApiResponse<CrawlerSource>`

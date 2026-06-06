@@ -13,6 +13,16 @@
 
 ## 2026-06-07
 
+### [会话-Backend/Frontend] 完善数据源管理能力
+- **类型**：feat
+- **影响**：backend/app/api/, backend/app/services/, frontend-admin/, docs/api/
+- **描述**：
+  - 修复管理员权限缺少 `crawler:manage` 导致数据源入口不可见的问题
+  - 数据源列表补齐配置、并发、更新时间、健康检查时间等管理字段
+  - 新增默认数据源初始化接口，管理端可一键恢复默认源
+  - 数据源管理页补齐状态/类型筛选、详情抽屉、启停、健康检查、废弃和 JSON 配置编辑
+  - 创建数据源时校验编码唯一性，避免任务源映射冲突
+
 ### [会话-Backend/Data/Frontend] 修复爬虫核心数据源输入链路
 - **类型**：fix
 - **影响**：backend/app/services/, backend/app/api/, backend/scripts/, frontend-admin/, docs/api/

@@ -89,7 +89,7 @@ MOCK_ADMIN_USERS = {
         "permissions": [
             "person:view", "person:edit", "person:delete",
             "work:view", "work:edit",
-            "crawler:view", "crawler:control",
+            "crawler:view", "crawler:control", "crawler:manage",
             "conversation:view",
             "monitor:view",
             "settings:manage",
@@ -651,11 +651,15 @@ async def get_crawler_sources(
                 "health_status": s.health_status,
                 "request_interval": float(s.request_interval) if s.request_interval else None,
                 "daily_limit": s.daily_limit,
+                "concurrent_limit": s.concurrent_limit,
+                "config": s.config,
                 "total_requests": s.total_requests,
                 "total_success": s.total_success,
                 "total_failed": s.total_failed,
                 "avg_response_time": float(s.avg_response_time) if s.avg_response_time else None,
+                "last_health_check": s.last_health_check.isoformat() if s.last_health_check else None,
                 "created_at": s.created_at.isoformat() if s.created_at else None,
+                "updated_at": s.updated_at.isoformat() if s.updated_at else None,
             } for s in sources],
             "total": total,
             "page": page,
@@ -671,8 +675,35 @@ async def create_crawler_source(
 ):
     """创建爬取源"""
     service = CrawlerSourceService(db)
-    source = await service.create_source(data)
+    try:
+        source = await service.create_source(data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     return ApiResponse(code=200, message="创建成功", data={"id": source.id})
+
+
+@router.post("/crawler/sources/defaults", response_model=ApiResponse)
+async def initialize_default_sources(db: AsyncSession = Depends(get_db)):
+    """初始化默认爬取源"""
+    service = CrawlerSourceService(db)
+    sources = await service.ensure_default_sources()
+    return ApiResponse(
+        code=200,
+        message="默认数据源已初始化",
+        data={
+            "items": [
+                {
+                    "id": source.id,
+                    "name": source.name,
+                    "code": source.code,
+                    "status": source.status,
+                    "health_status": source.health_status,
+                }
+                for source in sources
+            ],
+            "total": len(sources),
+        },
+    )
 
 
 @router.get("/crawler/sources/{source_id}", response_model=ApiResponse)
