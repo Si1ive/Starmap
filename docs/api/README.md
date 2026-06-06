@@ -605,6 +605,17 @@ FastAPI 与 Scrapy Service 通过 Redis 解耦：
 }
 ```
 
+动态筛选确认：
+
+```json
+{
+  "type": "filter_updated",
+  "task_ids": ["task_001"],
+  "source_ids": ["src_001"],
+  "levels": ["INFO", "ERROR"]
+}
+```
+
 ---
 
 ## 10. 当前实现对齐清单
@@ -618,6 +629,7 @@ FastAPI 与 Scrapy Service 通过 Redis 解耦：
 - [x] `CrawlTask` 模型和表结构补齐任务统计和错误字段，或删除未持久化字段使用。
 - [x] `CrawlerSourceService.get_source_stats` 修复 `failed_failed_requests` 拼写。
 - [x] Scrapy 入库完成后写入 `crawl_source_stats`，统计页移除硬编码 mock。
+- [x] 管理端日志页通过 WebSocket 动态渲染实时日志并同步筛选条件。
 - [x] 所有 `ApiResponse` 补齐 `request_id`。
 - [ ] HTTP 错误状态码与响应体 `code` 保持一致。
 - [ ] 管理端所有爬虫页面禁止使用未标注的 mock 数据。

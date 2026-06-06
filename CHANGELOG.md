@@ -13,6 +13,15 @@
 
 ## 2026-06-06
 
+### [会话-Backend/Frontend] 实现管理端实时日志渲染
+- **类型**：feat
+- **影响**：backend/app/api/, backend/app/core/, frontend-admin/
+- **描述**：
+  - 管理端日志页自动连接同源 WebSocket，实时日志进入表格顶部并支持本地关键词过滤
+  - WebSocket 动态筛选与页面 `task_id`、`source_id`、`level` 筛选保持同步
+  - 后端 WebSocket 管理器提供公开筛选更新方法，进度广播补齐 `source_id`
+  - Vite 开发代理开启 WebSocket 转发，避免前端硬编码 `localhost:8000`
+
 ### [会话-Backend/Data/Frontend] 补齐爬虫统计写入闭环
 - **类型**：feat
 - **影响**：backend/app/services/, backend/scrapy_service/, frontend-admin/, docs/api/

@@ -71,6 +71,22 @@ class LogWebSocketManager:
             del self._connections[websocket]
             logger.info(f"WebSocket disconnected: {len(self._connections)} clients remaining")
 
+    def update_filters(
+        self,
+        websocket: WebSocket,
+        task_ids: Optional[Set[str]] = None,
+        source_ids: Optional[Set[str]] = None,
+        levels: Optional[Set[str]] = None,
+    ):
+        """更新连接过滤条件"""
+        if websocket not in self._connections:
+            return
+        self._connections[websocket] = {
+            "task_ids": task_ids or set(),
+            "source_ids": source_ids or set(),
+            "levels": levels or set(),
+        }
+
     async def broadcast(self, log_data: Dict):
         """
         广播日志消息到所有符合条件的客户端

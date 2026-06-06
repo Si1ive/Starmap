@@ -413,6 +413,7 @@ class ScrapyEventListener:
         if not task_id:
             return
 
+        source_id = None
         async with mysql_client.session() as session:
             result = await session.execute(
                 select(CrawlTask).where(CrawlTask.id == task_id)
@@ -442,10 +443,12 @@ class ScrapyEventListener:
                 task.completed_at = datetime.utcnow()
             elif status == "running" and not task.started_at:
                 task.started_at = datetime.utcnow()
+            source_id = task.source_id
 
         await log_websocket_manager.broadcast({
             "type": "progress",
             "task_id": task_id,
+            "source_id": source_id,
             "level": "INFO",
             "stage": "execution",
             "status": data.get("status"),

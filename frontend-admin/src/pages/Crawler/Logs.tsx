@@ -1,13 +1,14 @@
 import { useState, useEffect, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Card, Table, Tag, Select, Input, Row, Col, Statistic, Badge, Space, Button, message } from 'antd'
-import { SearchOutlined, ExclamationCircleOutlined, WarningOutlined, CheckCircleOutlined } from '@ant-design/icons'
-import { useQuery } from '@tanstack/react-query'
+import { Card, Table, Tag, Select, Input, Row, Col, Statistic, Badge, Space, Button } from 'antd'
+import { SearchOutlined, ExclamationCircleOutlined, WarningOutlined, CheckCircleOutlined, DisconnectOutlined, LinkOutlined } from '@ant-design/icons'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { getCrawlerLogs, getCrawlerLogAnalysis } from '@/api'
 import type { CrawlerLog } from '@/types'
 
 const CrawlerLogs = () => {
   const [searchParams] = useSearchParams()
+  const queryClient = useQueryClient()
   const initialTaskId = searchParams.get('task_id') || undefined
   
   const [params, setParams] = useState<Record<string, unknown>>({ 
@@ -16,6 +17,8 @@ const CrawlerLogs = () => {
     task_id: initialTaskId,
   })
   const [searchText, setSearchText] = useState('')
+  const [realtimeLogs, setRealtimeLogs] = useState<CrawlerLog[]>([])
+  const [wsStatus, setWsStatus] = useState<'connecting' | 'connected' | 'disconnected'>('disconnected')
   const wsRef = useRef<WebSocket | null>(null)
 
   const { data, isLoading } = useQuery({
@@ -28,32 +31,90 @@ const CrawlerLogs = () => {
     queryFn: () => getCrawlerLogAnalysis(7),
   })
 
-  const logs = (data?.data?.items || []) as CrawlerLog[]
+  const persistedLogs = (data?.data?.items || []) as CrawlerLog[]
+  const logs = [...realtimeLogs, ...persistedLogs]
+    .filter((log, index, items) => items.findIndex((item) => String(item.id) === String(log.id)) === index)
+    .filter((log) => {
+      const keyword = searchText.trim().toLowerCase()
+      if (!keyword) return true
+      return [
+        log.message,
+        log.resource_name,
+        log.resource_url,
+        log.task_id,
+        log.source_id,
+        log.error_type,
+        log.error_detail,
+      ]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(keyword))
+    })
   const total = data?.data?.total || 0
   const analysis = (analysisData?.data || {}) as Record<string, any>
 
-  // WebSocket 实时日志连接
+  const buildWebSocketUrl = () => {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const url = new URL(`${protocol}//${window.location.host}/api/v1/admin/crawler/logs/stream`)
+    if (params.task_id) url.searchParams.set('task_id', String(params.task_id))
+    if (params.source_id) url.searchParams.set('source_id', String(params.source_id))
+    if (params.level) url.searchParams.set('level', String(params.level))
+    return url.toString()
+  }
+
+  const syncWebSocketFilters = () => {
+    if (wsRef.current?.readyState !== WebSocket.OPEN) return
+    wsRef.current.send(JSON.stringify({
+      type: 'filter',
+      task_ids: params.task_id ? [String(params.task_id)] : [],
+      source_ids: params.source_id ? [String(params.source_id)] : [],
+      levels: params.level ? [String(params.level)] : [],
+    }))
+  }
+
   const connectWebSocket = () => {
-    const wsUrl = `ws://localhost:8000/api/v1/admin/crawler/logs/stream`
+    wsRef.current?.close()
+    setWsStatus('connecting')
     try {
-      wsRef.current = new WebSocket(wsUrl)
-      wsRef.current.onopen = () => message.success('实时日志连接已建立')
-      wsRef.current.onmessage = (event) => {
-        // 实时日志推送处理
-        console.log('WS log:', event.data)
+      wsRef.current = new WebSocket(buildWebSocketUrl())
+      wsRef.current.onopen = () => {
+        setWsStatus('connected')
+        syncWebSocketFilters()
       }
-      wsRef.current.onerror = () => message.error('WebSocket连接失败')
-      wsRef.current.onclose = () => message.info('实时日志连接已断开')
+      wsRef.current.onmessage = (event) => {
+        const messageData = JSON.parse(event.data)
+        if (messageData.type !== 'log' || !messageData.data) return
+        const log = messageData.data as CrawlerLog
+        setRealtimeLogs((current) => {
+          const logId = String(log.id || `${log.task_id}-${log.created_at}-${log.message}`)
+          const normalizedLog = { ...log, id: logId }
+          return [
+            normalizedLog,
+            ...current.filter((item) => String(item.id) !== logId),
+          ].slice(0, 200)
+        })
+        queryClient.invalidateQueries({ queryKey: ['crawlerLogAnalysis'] })
+      }
+      wsRef.current.onerror = () => setWsStatus('disconnected')
+      wsRef.current.onclose = () => setWsStatus('disconnected')
     } catch {
-      message.warning('WebSocket连接不可用')
+      setWsStatus('disconnected')
     }
   }
 
   useEffect(() => {
+    connectWebSocket()
     return () => {
       wsRef.current?.close()
     }
   }, [])
+
+  useEffect(() => {
+    syncWebSocketFilters()
+  }, [params.task_id, params.source_id, params.level])
+
+  useEffect(() => {
+    setRealtimeLogs([])
+  }, [params.task_id, params.source_id, params.level, params.status, params.resource_type])
 
   const levelColors: Record<string, string> = {
     INFO: 'blue',
@@ -143,26 +204,47 @@ const CrawlerLogs = () => {
     },
   ]
 
-  const stats = analysis.stats || { total: 0, errors: 0, warnings: 0, success_rate: 0 }
+  const levelCounts = (analysis.level_distribution || []).reduce((acc: Record<string, number>, item: any) => {
+    acc[item.level] = item.count
+    return acc
+  }, {})
+  const statusCounts = (analysis.status_distribution || []).reduce((acc: Record<string, number>, item: any) => {
+    acc[item.status] = item.count
+    return acc
+  }, {})
+  const stats = {
+    total,
+    errors: levelCounts.ERROR || 0,
+    warnings: levelCounts.WARNING || 0,
+    success_rate: total ? Math.round(((statusCounts.success || 0) / total) * 1000) / 10 : 0,
+  }
+  const wsStatusConfig = {
+    connected: { color: 'success', text: '实时已连接', icon: <LinkOutlined /> },
+    connecting: { color: 'processing', text: '连接中', icon: <LinkOutlined /> },
+    disconnected: { color: 'default', text: '实时未连接', icon: <DisconnectOutlined /> },
+  }[wsStatus]
 
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <h2 style={{ margin: 0 }}>爬虫日志</h2>
+          <Tag color={wsStatusConfig.color} icon={wsStatusConfig.icon}>
+            {wsStatusConfig.text}
+          </Tag>
           {initialTaskId && (
             <Tag color="blue">
               任务: {initialTaskId}
             </Tag>
           )}
         </div>
-        <Button onClick={connectWebSocket}>连接实时日志</Button>
+        <Button onClick={connectWebSocket} icon={<LinkOutlined />}>重连实时日志</Button>
       </div>
 
       {/* 统计 */}
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         <Col xs={6}>
-          <Card size="small"><Statistic title="总日志" value={stats.total || total} /></Card>
+          <Card size="small"><Statistic title="总日志" value={stats.total} /></Card>
         </Col>
         <Col xs={6}>
           <Card size="small">
@@ -219,7 +301,7 @@ const CrawlerLogs = () => {
             ]}
           />
           <Input
-            placeholder="搜索消息内容"
+            placeholder="搜索当前页和实时日志"
             prefix={<SearchOutlined />}
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}

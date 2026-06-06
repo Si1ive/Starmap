@@ -1098,11 +1098,12 @@ async def crawler_logs_stream(
                     new_task_ids = set(message.get("task_ids", []))
                     new_source_ids = set(message.get("source_ids", []))
                     new_levels = set(message.get("levels", []))
-                    log_websocket_manager._connections[websocket] = {
-                        "task_ids": new_task_ids if new_task_ids else set(),
-                        "source_ids": new_source_ids if new_source_ids else set(),
-                        "levels": new_levels if new_levels else set(),
-                    }
+                    log_websocket_manager.update_filters(
+                        websocket,
+                        task_ids=new_task_ids,
+                        source_ids=new_source_ids,
+                        levels=new_levels,
+                    )
                     await websocket.send_text(json.dumps({
                         "type": "filter_updated",
                         "task_ids": list(new_task_ids),
