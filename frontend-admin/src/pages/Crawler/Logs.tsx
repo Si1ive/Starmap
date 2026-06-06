@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Card, Table, Tag, Select, Input, Row, Col, Statistic, Badge, Space, Button } from 'antd'
-import { SearchOutlined, ExclamationCircleOutlined, WarningOutlined, CheckCircleOutlined, DisconnectOutlined, LinkOutlined } from '@ant-design/icons'
+import { Card, Table, Tag, Select, Input, Row, Col, Statistic, Badge, Space, Button, message } from 'antd'
+import { SearchOutlined, ExclamationCircleOutlined, WarningOutlined, CheckCircleOutlined, DisconnectOutlined, LinkOutlined, DownloadOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { getCrawlerLogs, getCrawlerLogAnalysis } from '@/api'
+import { getCrawlerLogs, getCrawlerLogAnalysis, exportCrawlerLogs } from '@/api'
 import type { CrawlerLog } from '@/types'
 
 const CrawlerLogs = () => {
@@ -19,6 +19,7 @@ const CrawlerLogs = () => {
   const [searchText, setSearchText] = useState('')
   const [realtimeLogs, setRealtimeLogs] = useState<CrawlerLog[]>([])
   const [wsStatus, setWsStatus] = useState<'connecting' | 'connected' | 'disconnected'>('disconnected')
+  const [exporting, setExporting] = useState<'csv' | 'json' | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
 
   const { data, isLoading } = useQuery({
@@ -98,6 +99,29 @@ const CrawlerLogs = () => {
       wsRef.current.onclose = () => setWsStatus('disconnected')
     } catch {
       setWsStatus('disconnected')
+    }
+  }
+
+  const handleExport = async (format: 'csv' | 'json') => {
+    setExporting(format)
+    try {
+      const exportParams = { ...(params as Record<string, unknown>) }
+      delete exportParams.page
+      delete exportParams.page_size
+      const blob = await exportCrawlerLogs(exportParams as any, format)
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `crawler_logs_${new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')}.${format}`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(url)
+      message.success('日志导出已开始')
+    } catch {
+      message.error('日志导出失败')
+    } finally {
+      setExporting(null)
     }
   }
 
@@ -238,7 +262,23 @@ const CrawlerLogs = () => {
             </Tag>
           )}
         </div>
-        <Button onClick={connectWebSocket} icon={<LinkOutlined />}>重连实时日志</Button>
+        <Space>
+          <Button
+            icon={<DownloadOutlined />}
+            loading={exporting === 'csv'}
+            onClick={() => handleExport('csv')}
+          >
+            导出 CSV
+          </Button>
+          <Button
+            icon={<DownloadOutlined />}
+            loading={exporting === 'json'}
+            onClick={() => handleExport('json')}
+          >
+            导出 JSON
+          </Button>
+          <Button onClick={connectWebSocket} icon={<LinkOutlined />}>重连实时日志</Button>
+        </Space>
       </div>
 
       {/* 统计 */}

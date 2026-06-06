@@ -13,6 +13,16 @@
 
 ## 2026-06-06
 
+### [会话-Backend/Data/Frontend] 完成爬虫稳定性运营能力
+- **类型**：feat
+- **影响**：backend/app/services/, backend/app/api/, backend/scrapy_service/, frontend-admin/, docs/api/
+- **描述**：
+  - 新增日志导出接口与管理端 CSV/JSON 导出按钮，复用日志页筛选条件
+  - 新增运营优化建议接口和统计页建议面板，覆盖健康、成功率、限流、超时、延迟、完整度和错误类型
+  - 健康检查写入 `crawl_logs`，并返回耗时、HTTP 状态、错误类型和错误详情
+  - Scrapy 落库计算人物数据质量评分，并汇总写入 `crawl_source_stats.avg_completeness`
+  - Scrapy 运行日志补齐 `source_id` 和稳定错误分类，便于前端筛选和运营追踪
+
 ### [会话-Backend/Frontend] 强化定时任务执行闭环
 - **类型**：feat
 - **影响**：backend/app/tasks/, backend/app/services/, frontend-admin/

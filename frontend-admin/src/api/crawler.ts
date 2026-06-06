@@ -96,6 +96,10 @@ export const getCrawlerStatsEfficiency = (days = 7): Promise<ApiResponse<Record<
   return adminClient.get('/crawler/stats/efficiency', { params: { days } })
 }
 
+export const getCrawlerStatsSuggestions = (days = 7): Promise<ApiResponse<Record<string, unknown>[]>> => {
+  return adminClient.get('/crawler/stats/suggestions', { params: { days } })
+}
+
 // ===== 定时任务 =====
 
 export interface CrawlerScheduleParams {
@@ -155,6 +159,16 @@ export const getCrawlerLogs = (
   params?: CrawlerLogParams
 ): Promise<ApiResponse<PaginatedResponse<CrawlerLog>>> => {
   return adminClient.get('/crawler/logs', { params })
+}
+
+export const exportCrawlerLogs = (
+  params?: CrawlerLogParams,
+  format: 'csv' | 'json' = 'csv'
+): Promise<Blob> => {
+  return adminClient.get('/crawler/logs/export', {
+    params: { ...params, format },
+    responseType: 'blob',
+  }) as unknown as Promise<Blob>
 }
 
 export const getCrawlerLogAnalysis = (days = 7): Promise<ApiResponse<Record<string, unknown>>> => {

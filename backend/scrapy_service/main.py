@@ -155,11 +155,17 @@ def start_task_consumer():
 
         if not keywords and task.get("task_type") in {"full", "incremental", "targeted"}:
             error_message = "No keywords provided"
-            _publish_log(task_id, "ERROR", error_message, status="failed")
+            _publish_log(task_id, "ERROR", error_message, status="failed", source_id=source_id)
             _publish_progress(task_id, "failed", 100, error_message=error_message)
             continue
 
-        _publish_log(task_id, "INFO", "Task received by Scrapy consumer", status="pending")
+        _publish_log(
+            task_id,
+            "INFO",
+            "Task received by Scrapy consumer",
+            status="pending",
+            source_id=source_id,
+        )
         _publish_progress(task_id, "running", 0)
 
         command = [
@@ -185,10 +191,23 @@ def start_task_consumer():
 
         completed = subprocess.run(command, cwd=str(project_root), check=False)
         if completed.returncode == 0:
-            _publish_log(task_id, "INFO", "Task subprocess completed", status="success")
+            _publish_log(
+                task_id,
+                "INFO",
+                "Task subprocess completed",
+                status="success",
+                source_id=source_id,
+            )
         else:
             error_message = f"Task subprocess failed with exit code {completed.returncode}"
-            _publish_log(task_id, "ERROR", error_message, status="failed")
+            _publish_log(
+                task_id,
+                "ERROR",
+                error_message,
+                status="failed",
+                source_id=source_id,
+                error_type="subprocess_error",
+            )
             _publish_progress(task_id, "failed", 100, error_message=error_message)
 
 

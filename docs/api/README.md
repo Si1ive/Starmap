@@ -387,7 +387,7 @@ HTTP 状态码必须与错误结果一致，`code` 与 HTTP 状态码保持一�
 
 响应：`ApiResponse<CrawlerSourceComparison[]>`
 
-响应项包含：`source_id`、`name`、`type`、`status`、`health_status`、`total_requests`、`success_requests`、`failed_requests`、`success_rate`、`avg_response_time`、`avg_completeness`。
+响应项包含：`source_id`、`name`、`type`、`status`、`health_status`、`total_requests`、`success_requests`、`failed_requests`、`timeout_requests`、`rate_limited_requests`、`valid_records`、`success_rate`、`avg_response_time`、`avg_completeness`。
 
 ### GET `/api/v1/admin/crawler/stats/trend`
 
@@ -402,6 +402,16 @@ HTTP 状态码必须与错误结果一致，`code` 与 HTTP 状态码保持一�
 查询参数：`days`，默认 `7`。
 
 响应：`ApiResponse<CrawlerEfficiencyPoint[]>`
+
+### GET `/api/v1/admin/crawler/stats/suggestions`
+
+查询参数：`days`，默认 `7`。
+
+响应：`ApiResponse<CrawlerOptimizationSuggestion[]>`
+
+响应项包含：`source_id`、`source_name`、`period_days`、`severity`、`category`、`title`、`reason`、`action`、`metric`、`current`、`threshold`。
+
+建议生成规则覆盖健康状态、成功率、限流、超时、平均响应耗时、数据完整度和高频错误类型。
 
 ### GET `/api/v1/admin/crawler/scrapy/status`
 
@@ -433,6 +443,7 @@ FastAPI 与 Scrapy Service 通过 Redis 解耦：
   "task_type": "targeted",
   "spider_type": "person",
   "source": "baike",
+  "source_id": "src_003",
   "keywords": ["周杰伦"],
   "config": {},
   "published_at": "2026-06-06T13:00:00Z"
@@ -559,6 +570,17 @@ FastAPI 与 Scrapy Service 通过 Redis 解耦：
 | `page_size` | int | 否 | 默认 `50` |
 
 响应：`ApiResponse<PaginatedResponse<CrawlerLog>>`
+
+### GET `/api/v1/admin/crawler/logs/export`
+
+查询参数同日志列表，额外支持：
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `format` | string | 否 | `csv` 或 `json`，默认 `csv` |
+| `limit` | int | 否 | 导出上限，默认 `5000`，最大 `20000` |
+
+响应：文件下载。响应头包含 `X-Total-Count` 和 `X-Exported-Count`。
 
 ### GET `/api/v1/admin/crawler/logs/analysis`
 

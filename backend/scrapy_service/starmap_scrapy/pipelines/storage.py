@@ -40,6 +40,8 @@ class DatabasePipeline:
             "relations_inserted": 0,
             "logs_inserted": 0,
             "errors": 0,
+            "quality_score_sum": 0.0,
+            "quality_score_count": 0,
         }
 
     @classmethod
@@ -107,6 +109,21 @@ class DatabasePipeline:
         """Store person item in database."""
         # Generate ID if not provided
         person_id = item.get("id") or self._generate_id("person")
+        quality_score = self._calculate_completeness(
+            item,
+            [
+                "name",
+                "gender",
+                "birth_date",
+                "birth_place",
+                "nationality",
+                "summary",
+                "biography",
+                "categories",
+                "avatar",
+                "source_url",
+            ],
+        )
         
         sql = """
             INSERT INTO persons (
@@ -155,7 +172,7 @@ class DatabasePipeline:
             item.get("biography"),
             json.dumps(item.get("categories", []), ensure_ascii=False),
             item.get("status", "pending"),
-            self._normalize_decimal(item.get("data_quality_score"), default=0.0),
+            self._normalize_decimal(round(quality_score, 2), default=0.0),
             item.get("source"),
             item.get("source_url"),
             item.get("crawl_task_id"),
@@ -167,6 +184,7 @@ class DatabasePipeline:
         self.cursor.execute(sql, params)
         self.connection.commit()
         self.stats["persons_inserted"] += 1
+        self._record_quality_score(quality_score)
         
         # Update item with generated ID
         item["id"] = person_id
@@ -175,6 +193,21 @@ class DatabasePipeline:
     def _store_work(self, item: WorkItem):
         """Store work item in database."""
         work_id = item.get("id") or self._generate_id("work")
+        quality_score = self._calculate_completeness(
+            item,
+            [
+                "title",
+                "type",
+                "release_date",
+                "genre",
+                "rating",
+                "poster",
+                "summary",
+                "director",
+                "actors",
+                "source_url",
+            ],
+        )
         
         sql = """
             INSERT INTO works (
@@ -243,6 +276,7 @@ class DatabasePipeline:
         self.cursor.execute(sql, params)
         self.connection.commit()
         self.stats["works_inserted"] += 1
+        self._record_quality_score(quality_score)
         
         item["id"] = work_id
         logger.debug(f"Stored work: {item.get('title')} ({work_id})")
@@ -412,6 +446,27 @@ class DatabasePipeline:
             return relation_type
         return mapping.get(relation_type, "COLLABORATED_WITH")
 
+    def _calculate_completeness(self, item, fields) -> float:
+        """Calculate item field completeness as 0.00-1.00."""
+        if not fields:
+            return 0.0
+        completed = 0
+        for field in fields:
+            value = item.get(field)
+            if value is None:
+                continue
+            if isinstance(value, str) and not value.strip():
+                continue
+            if isinstance(value, (list, dict, tuple, set)) and len(value) == 0:
+                continue
+            completed += 1
+        return completed / len(fields)
+
+    def _record_quality_score(self, score: float):
+        """Collect quality score for source-level daily completeness."""
+        self.stats["quality_score_sum"] += float(score)
+        self.stats["quality_score_count"] += 1
+
     def _upsert_source_stats(self, spider):
         """Persist daily crawl source statistics collected by Scrapy."""
         source_id = self._resolve_source_id(spider)
@@ -437,20 +492,38 @@ class DatabasePipeline:
             + self.stats["relations_inserted"]
         )
         duration = int(get_value("elapsed_time_seconds", 0) or 0)
+        avg_response_time = round((duration * 1000) / response_count, 2) if response_count else None
+        avg_completeness = (
+            round((self.stats["quality_score_sum"] / self.stats["quality_score_count"]) * 100, 2)
+            if self.stats["quality_score_count"]
+            else None
+        )
 
         sql = """
             INSERT INTO crawl_source_stats (
                 source_id, stat_date, total_requests, success_requests, failed_requests,
                 timeout_requests, rate_limited_requests, persons_extracted, works_extracted,
                 relations_extracted, valid_records, duplicate_records, total_duration,
-                created_at
+                avg_response_time, avg_completeness, created_at
             ) VALUES (
                 %s, %s, %s, %s, %s,
                 %s, %s, %s, %s,
                 %s, %s, %s, %s,
-                %s
+                %s, %s, %s
             )
             ON DUPLICATE KEY UPDATE
+                avg_response_time = CASE
+                    WHEN VALUES(avg_response_time) IS NULL THEN avg_response_time
+                    WHEN (total_requests + VALUES(total_requests)) > 0 THEN
+                        ROUND(((COALESCE(avg_response_time, 0) * total_requests) + (VALUES(avg_response_time) * VALUES(total_requests))) / (total_requests + VALUES(total_requests)), 2)
+                    ELSE VALUES(avg_response_time)
+                END,
+                avg_completeness = CASE
+                    WHEN VALUES(avg_completeness) IS NULL THEN avg_completeness
+                    WHEN (valid_records + VALUES(valid_records)) > 0 THEN
+                        ROUND(((COALESCE(avg_completeness, 0) * valid_records) + (VALUES(avg_completeness) * VALUES(valid_records))) / (valid_records + VALUES(valid_records)), 2)
+                    ELSE VALUES(avg_completeness)
+                END,
                 total_requests = total_requests + VALUES(total_requests),
                 success_requests = success_requests + VALUES(success_requests),
                 failed_requests = failed_requests + VALUES(failed_requests),
@@ -477,10 +550,18 @@ class DatabasePipeline:
             valid_records,
             0,
             duration,
+            avg_response_time,
+            avg_completeness,
             datetime.utcnow(),
         )
         self.cursor.execute(sql, params)
-        self._update_source_totals(source_id, total_requests, success_requests, failed_requests)
+        self._update_source_totals(
+            source_id,
+            total_requests,
+            success_requests,
+            failed_requests,
+            avg_response_time,
+        )
         logger.info("Upserted crawl_source_stats for source_id=%s", source_id)
 
     def _resolve_source_id(self, spider):
@@ -559,11 +640,24 @@ class DatabasePipeline:
         row = self.cursor.fetchone()
         return row["id"] if row else source_id
 
-    def _update_source_totals(self, source_id, total_requests, success_requests, failed_requests):
+    def _update_source_totals(
+        self,
+        source_id,
+        total_requests,
+        success_requests,
+        failed_requests,
+        avg_response_time,
+    ):
         """Update aggregate counters on crawl_sources."""
         sql = """
             UPDATE crawl_sources
-            SET total_requests = total_requests + %s,
+            SET avg_response_time = CASE
+                    WHEN %s IS NULL THEN avg_response_time
+                    WHEN (total_requests + %s) > 0 THEN
+                        ROUND(((COALESCE(avg_response_time, 0) * total_requests) + (%s * %s)) / (total_requests + %s), 2)
+                    ELSE %s
+                END,
+                total_requests = total_requests + %s,
                 total_success = total_success + %s,
                 total_failed = total_failed + %s,
                 updated_at = %s
@@ -572,6 +666,12 @@ class DatabasePipeline:
         self.cursor.execute(
             sql,
             (
+                avg_response_time,
+                total_requests,
+                avg_response_time or 0,
+                total_requests,
+                total_requests,
+                avg_response_time,
                 total_requests,
                 success_requests,
                 failed_requests,

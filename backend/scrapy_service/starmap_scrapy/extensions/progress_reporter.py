@@ -104,12 +104,14 @@ class ProgressReporterExtension:
     def spider_error(self, failure, response, spider):
         """Called when a spider error occurs."""
         self.stats["errors"] += 1
+        error_type = self._classify_error(failure)
         self._report_log(
             spider,
             level="ERROR",
             message=f"Spider error: {failure.getErrorMessage()}",
-            error_type=failure.type.__name__ if hasattr(failure, "type") else "Unknown",
+            error_type=error_type,
             error_detail=str(failure.value) if hasattr(failure, "value") else "",
+            status="failed",
         )
 
     def _calculate_progress(self, spider):
@@ -146,7 +148,7 @@ class ProgressReporterExtension:
         except Exception as e:
             logger.error(f"Failed to publish progress: {e}")
 
-    def _report_log(self, spider, level, message, error_type=None, error_detail=None):
+    def _report_log(self, spider, level, message, error_type=None, error_detail=None, status="pending"):
         """Publish log entry to Redis."""
         task_id = getattr(spider, "task_id", None)
         if not task_id:
@@ -154,8 +156,10 @@ class ProgressReporterExtension:
         
         log_entry = {
             "task_id": task_id,
+            "source_id": getattr(spider, "source_id", None),
             "level": level,
             "stage": "execution",
+            "status": status,
             "message": message,
             "error_type": error_type,
             "error_detail": error_detail,
@@ -166,3 +170,20 @@ class ProgressReporterExtension:
             self.redis_client.publish(self.log_channel, json.dumps(log_entry))
         except Exception as e:
             logger.error(f"Failed to publish log: {e}")
+
+    @staticmethod
+    def _classify_error(failure):
+        """Classify Scrapy failures into stable operation buckets."""
+        error_name = failure.type.__name__ if hasattr(failure, "type") else "Unknown"
+        lowered = error_name.lower()
+        if "timeout" in lowered:
+            return "timeout"
+        if "dns" in lowered:
+            return "dns_error"
+        if "connection" in lowered or "refused" in lowered:
+            return "connection_error"
+        if "response" in lowered or "httperror" in lowered:
+            return "http_error"
+        if "parse" in lowered or "selector" in lowered:
+            return "parse_error"
+        return error_name

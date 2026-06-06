@@ -463,9 +463,17 @@ class ScrapyEventListener:
         if not task_id:
             return
 
+        source_id = data.get("source_id")
+        if not source_id:
+            async with mysql_client.session() as session:
+                result = await session.execute(
+                    select(CrawlTask.source_id).where(CrawlTask.id == task_id)
+                )
+                source_id = result.scalar_one_or_none()
+
         log_data = {
             "task_id": task_id,
-            "source_id": data.get("source_id"),
+            "source_id": source_id,
             "level": data.get("level", "INFO"),
             "stage": data.get("stage", "execution"),
             "resource_url": data.get("resource_url"),

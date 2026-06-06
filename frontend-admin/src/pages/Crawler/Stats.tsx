@@ -1,4 +1,4 @@
-import { Row, Col, Card, Statistic, Table, Tag } from 'antd'
+import { Row, Col, Card, Statistic, Table, Tag, Alert, List, Space } from 'antd'
 import {
   BugOutlined,
   CheckCircleOutlined,
@@ -15,6 +15,7 @@ import adminClient from '@/api/client'
 const getCrawlerStats = () => adminClient.get('/crawler/stats/overview')
 const getCrawlerTrend = (days = 7) => adminClient.get('/crawler/stats/trend', { params: { days } })
 const getSourceComparison = (days = 7) => adminClient.get('/crawler/stats/sources', { params: { days } })
+const getOptimizationSuggestions = (days = 7) => adminClient.get('/crawler/stats/suggestions', { params: { days } })
 
 const CrawlerStats = () => {
   const { data: overviewData } = useQuery({
@@ -32,9 +33,15 @@ const CrawlerStats = () => {
     queryFn: () => getSourceComparison(7),
   })
 
+  const { data: suggestionsData } = useQuery({
+    queryKey: ['crawlerOptimizationSuggestions'],
+    queryFn: () => getOptimizationSuggestions(7),
+  })
+
   const overview = (overviewData?.data || {}) as Record<string, any>
   const trend = Array.isArray(trendData?.data) ? trendData.data : []
   const sources = Array.isArray(sourceData?.data) ? sourceData.data : []
+  const suggestions = Array.isArray(suggestionsData?.data) ? suggestionsData.data : []
 
   const trendChartData = trend.map((item: any) => ({
     date: item.date,
@@ -72,6 +79,11 @@ const CrawlerStats = () => {
   ]
 
   const recentData = overview.recent_records || []
+  const severityConfig: Record<string, { color: string; text: string }> = {
+    critical: { color: 'red', text: '严重' },
+    warning: { color: 'orange', text: '警告' },
+    info: { color: 'blue', text: '提示' },
+  }
 
   return (
     <div>
@@ -138,6 +150,38 @@ const CrawlerStats = () => {
           </Card>
         </Col>
       </Row>
+
+      <Card title="运营优化建议" style={{ marginBottom: 24 }}>
+        {suggestions.length ? (
+          <List
+            size="small"
+            dataSource={suggestions}
+            renderItem={(item: any) => {
+              const config = severityConfig[item.severity] || { color: 'default', text: item.severity || '-' }
+              return (
+                <List.Item>
+                  <List.Item.Meta
+                    title={(
+                      <Space>
+                        <Tag color={config.color}>{config.text}</Tag>
+                        <span>{item.title}</span>
+                      </Space>
+                    )}
+                    description={`${item.reason || '-'}；建议：${item.action || '-'}`}
+                  />
+                </List.Item>
+              )
+            }}
+          />
+        ) : (
+          <Alert
+            type="success"
+            showIcon
+            message="暂无高风险建议"
+            description="近7日爬虫源健康、成功率、限流、超时和数据完整度未触发运营阈值。"
+          />
+        )}
+      </Card>
 
       {/* 趋势图 + 数据源分布 */}
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>

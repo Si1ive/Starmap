@@ -4,6 +4,9 @@
 提供日志的查询、分析、写入等业务逻辑。
 """
 
+import csv
+import io
+import json
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 
@@ -16,10 +19,30 @@ from app.models.mysql_models import CrawlLog
 logger = get_logger(__name__)
 
 # 允许的 level 值（数据库枚举定义）
-ALLOWED_LEVELS = {"INFO", "WARNING", "ERROR", "DEBUG"}
+ALLOWED_LEVELS = {"INFO", "WARNING", "ERROR", "DEBUG", "SUCCESS", "CRITICAL"}
 
 # 允许的 status 值（数据库枚举定义）
 ALLOWED_STATUSES = {"success", "failed", "retry", "pending"}
+
+LOG_EXPORT_FIELDS = [
+    "id",
+    "task_id",
+    "source_id",
+    "level",
+    "stage",
+    "resource_url",
+    "resource_name",
+    "resource_type",
+    "action",
+    "status",
+    "duration_ms",
+    "message",
+    "error_type",
+    "error_detail",
+    "retry_count",
+    "details",
+    "created_at",
+]
 
 
 class CrawlerLogService:
@@ -69,17 +92,78 @@ class CrawlerLogService:
 
         return list(logs), total
 
+    async def export_logs(
+        self,
+        task_id: Optional[str] = None,
+        source_id: Optional[str] = None,
+        level: Optional[str] = None,
+        status: Optional[str] = None,
+        resource_type: Optional[str] = None,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+        limit: int = 5000,
+    ) -> tuple[List[Dict[str, Any]], int]:
+        """导出日志列表（复用查询筛选条件）"""
+        logs, total = await self.get_logs(
+            task_id=task_id,
+            source_id=source_id,
+            level=level,
+            status=status,
+            resource_type=resource_type,
+            start_time=start_time,
+            end_time=end_time,
+            skip=0,
+            limit=limit,
+        )
+        return [self.serialize_log(log) for log in logs], total
+
+    @staticmethod
+    def serialize_log(log: CrawlLog) -> Dict[str, Any]:
+        """序列化日志模型"""
+        return {
+            "id": log.id,
+            "task_id": log.task_id,
+            "source_id": log.source_id,
+            "level": log.level,
+            "stage": log.stage,
+            "resource_url": log.resource_url,
+            "resource_name": log.resource_name,
+            "resource_type": log.resource_type,
+            "action": log.action,
+            "status": log.status,
+            "duration_ms": log.duration_ms,
+            "message": log.message,
+            "error_type": log.error_type,
+            "error_detail": log.error_detail,
+            "retry_count": log.retry_count,
+            "details": log.details,
+            "created_at": log.created_at.isoformat() if log.created_at else None,
+        }
+
+    @staticmethod
+    def to_csv(rows: List[Dict[str, Any]]) -> str:
+        """转换日志导出行为 CSV 文本"""
+        buffer = io.StringIO()
+        writer = csv.DictWriter(buffer, fieldnames=LOG_EXPORT_FIELDS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({
+                field: (
+                    json.dumps(row.get(field), ensure_ascii=False, default=str)
+                    if isinstance(row.get(field), (dict, list))
+                    else row.get(field)
+                )
+                for field in LOG_EXPORT_FIELDS
+            })
+        return "\ufeff" + buffer.getvalue()
+
     async def create_log(self, data: Dict[str, Any]) -> Optional[CrawlLog]:
         """写入日志"""
         # 标准化 level 为大写，并映射到数据库允许的枚举值
         level = (data.get("level") or "INFO").upper()
         if level not in ALLOWED_LEVELS:
             # 映射不支持的 level 到允许的枚举
-            level_map = {
-                "SUCCESS": "INFO",
-                "CRITICAL": "ERROR",
-            }
-            level = level_map.get(level, "INFO")
+            level = "INFO"
         
         # 标准化 status 为枚举允许的值
         status = data.get("status")

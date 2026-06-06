@@ -27,7 +27,9 @@ import asyncio
 from typing import Optional, List
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, status, WebSocket, WebSocketDisconnect
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -806,6 +808,17 @@ async def get_crawler_efficiency(
     return ApiResponse(code=200, message="success", data=efficiency)
 
 
+@router.get("/crawler/stats/suggestions", response_model=ApiResponse)
+async def get_crawler_suggestions(
+    days: int = 7,
+    db: AsyncSession = Depends(get_db)
+):
+    """获取爬虫运营优化建议"""
+    service = CrawlerStatsService(db)
+    suggestions = await service.get_suggestions(days)
+    return ApiResponse(code=200, message="success", data=suggestions)
+
+
 @router.get("/crawler/scrapy/status", response_model=ApiResponse)
 async def get_scrapy_status(db: AsyncSession = Depends(get_db)):
     """
@@ -1067,6 +1080,60 @@ async def get_crawler_logs(
             "page": page,
             "page_size": page_size,
         }
+    )
+
+
+@router.get("/crawler/logs/export")
+async def export_crawler_logs(
+    task_id: Optional[str] = None,
+    source_id: Optional[str] = None,
+    level: Optional[str] = None,
+    status: Optional[str] = None,
+    resource_type: Optional[str] = None,
+    start_time: Optional[datetime] = None,
+    end_time: Optional[datetime] = None,
+    file_format: str = Query("csv", alias="format"),
+    limit: int = Query(5000, ge=1, le=20000),
+    db: AsyncSession = Depends(get_db)
+):
+    """导出爬虫日志"""
+    normalized_format = file_format.lower()
+    if normalized_format not in {"csv", "json"}:
+        raise HTTPException(status_code=400, detail="format 仅支持 csv 或 json")
+
+    service = CrawlerLogService(db)
+    rows, total = await service.export_logs(
+        task_id=task_id,
+        source_id=source_id,
+        level=level,
+        status=status,
+        resource_type=resource_type,
+        start_time=start_time,
+        end_time=end_time,
+        limit=limit,
+    )
+    exported_at = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    filename = f"crawler_logs_{exported_at}.{normalized_format}"
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "X-Total-Count": str(total),
+        "X-Exported-Count": str(len(rows)),
+    }
+
+    if normalized_format == "json":
+        return JSONResponse(
+            content=jsonable_encoder({
+                "items": rows,
+                "total": total,
+                "exported": len(rows),
+            }),
+            headers=headers,
+        )
+
+    return Response(
+        content=service.to_csv(rows),
+        media_type="text/csv; charset=utf-8",
+        headers=headers,
     )
 
 

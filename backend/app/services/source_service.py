@@ -4,6 +4,8 @@
 提供爬取源的 CRUD、健康检查、统计查询等业务逻辑。
 """
 
+import asyncio
+import time
 import uuid
 from datetime import datetime
 from typing import List, Optional, Dict, Any
@@ -12,7 +14,7 @@ from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.models.mysql_models import CrawlSource, CrawlSourceStats
+from app.models.mysql_models import CrawlLog, CrawlSource, CrawlSourceStats
 
 logger = get_logger(__name__)
 
@@ -159,20 +161,111 @@ class CrawlerSourceService:
             return {"status": "not_found", "source_id": source_id}
 
         import requests
+        checked_at = datetime.utcnow()
+        started_at = time.monotonic()
+        http_status = None
+        error_type = None
+        error_detail = None
+        health_task_id = f"health_{source_id[:25]}"
+
         try:
-            response = requests.head(source.base_url, timeout=10)
-            if response.status_code == 200:
+            if not source.base_url:
+                raise ValueError("base_url is empty")
+
+            response = await asyncio.to_thread(
+                requests.head,
+                source.base_url,
+                timeout=10,
+                allow_redirects=True,
+            )
+            http_status = response.status_code
+            if http_status < 400:
                 source.health_status = "healthy"
+                log_level = "INFO"
+                log_status = "success"
+                message = f"Health check passed: HTTP {http_status}"
+            elif http_status >= 500:
+                source.health_status = "down"
+                log_level = "ERROR"
+                log_status = "failed"
+                error_type = self._classify_http_error(http_status)
+                error_detail = response.reason
+                message = f"Health check failed: HTTP {http_status}"
             else:
                 source.health_status = "degraded"
-        except Exception:
+                log_level = "WARNING"
+                log_status = "failed"
+                error_type = self._classify_http_error(http_status)
+                error_detail = response.reason
+                message = f"Health check degraded: HTTP {http_status}"
+        except Exception as e:
             source.health_status = "down"
+            log_level = "ERROR"
+            log_status = "failed"
+            error_type = self._classify_request_error(e)
+            error_detail = str(e)
+            message = f"Health check failed: {error_detail}"
 
-        source.last_health_check = datetime.utcnow()
+        duration_ms = int((time.monotonic() - started_at) * 1000)
+        source.last_health_check = checked_at
+        source.updated_at = checked_at
+        if duration_ms > 0:
+            source.avg_response_time = duration_ms
+        self.db.add(CrawlLog(
+            task_id=health_task_id,
+            source_id=source_id,
+            level=log_level,
+            stage="health_check",
+            resource_url=source.base_url,
+            resource_name=source.name,
+            resource_type="page",
+            action="check",
+            status=log_status,
+            duration_ms=duration_ms,
+            message=message,
+            error_type=error_type,
+            error_detail=error_detail,
+            retry_count=0,
+            details={
+                "http_status": http_status,
+                "health_status": source.health_status,
+            },
+        ))
         await self.db.commit()
+        await self.db.refresh(source)
 
         return {
             "source_id": source_id,
             "status": source.health_status,
             "checked_at": source.last_health_check.isoformat(),
+            "duration_ms": duration_ms,
+            "http_status": http_status,
+            "error_type": error_type,
+            "error_detail": error_detail,
         }
+
+    @staticmethod
+    def _classify_http_error(status_code: int) -> str:
+        """按 HTTP 状态码归类健康检查错误"""
+        if status_code == 429:
+            return "rate_limited"
+        if 500 <= status_code < 600:
+            return "upstream_5xx"
+        if 400 <= status_code < 500:
+            return "client_4xx"
+        return "http_status_error"
+
+    @staticmethod
+    def _classify_request_error(error: Exception) -> str:
+        """按 requests 异常归类健康检查错误"""
+        import requests
+
+        if isinstance(error, requests.Timeout):
+            return "timeout"
+        if isinstance(error, requests.ConnectionError):
+            return "connection_error"
+        if isinstance(error, ValueError):
+            return "invalid_config"
+        if isinstance(error, requests.RequestException):
+            return "request_error"
+        return error.__class__.__name__
