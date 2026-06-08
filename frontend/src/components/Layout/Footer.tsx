@@ -6,7 +6,7 @@ const { Footer } = Layout
 const AppFooter: React.FC = () => {
   return (
     <Footer style={{ textAlign: 'center', background: '#f0f2f5' }}>
-      StarMap ©2024 - 艺人知识图谱与对话Agent
+      408考研智能学习平台 ©2026 - 基于RAG的结构化学习系统
     </Footer>
   )
 }

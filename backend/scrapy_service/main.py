@@ -153,7 +153,7 @@ def start_task_consumer():
             logger.error(f"Task payload missing task_id: {task}")
             continue
 
-        if not keywords and task.get("task_type") in {"full", "incremental", "targeted"}:
+        if not keywords and spider_type != "knowledge" and task.get("task_type") in {"full", "incremental", "targeted"}:
             error_message = "No keywords provided"
             _publish_log(task_id, "ERROR", error_message, status="failed", source_id=source_id)
             _publish_progress(task_id, "failed", 100, error_message=error_message)
@@ -168,20 +168,44 @@ def start_task_consumer():
         )
         _publish_progress(task_id, "running", 0)
 
-        command = [
-            sys.executable,
-            str(Path(__file__).resolve()),
-            "--mode",
-            "single",
-            "--task-id",
-            task_id,
-            "--spider",
-            spider_type,
-            "--source",
-            source,
-            "--keywords",
-            ",".join(keywords),
-        ]
+        if spider_type == "knowledge":
+            # Knowledge spider uses different parameters
+            pdf_path = config.get("pdf_path", "")
+            subject_id = config.get("subject_id", "")
+            chapter_id = config.get("chapter_id", "")
+            command = [
+                sys.executable,
+                str(Path(__file__).resolve()),
+                "--mode",
+                "single",
+                "--task-id",
+                task_id,
+                "--spider",
+                "knowledge",
+                "--source",
+                source or "pdf",
+                "--pdf-path",
+                pdf_path,
+                "--subject-id",
+                subject_id,
+                "--chapter-id",
+                chapter_id,
+            ]
+        else:
+            command = [
+                sys.executable,
+                str(Path(__file__).resolve()),
+                "--mode",
+                "single",
+                "--task-id",
+                task_id,
+                "--spider",
+                spider_type,
+                "--source",
+                source,
+                "--keywords",
+                ",".join(keywords),
+            ]
 
         if source_id:
             command.extend(["--source-id", str(source_id)])
@@ -211,18 +235,21 @@ def start_task_consumer():
             _publish_progress(task_id, "failed", 100, error_message=error_message)
 
 
-def run_single_task(task_id, spider_type, source, keywords, source_id=None, work_type=None):
+def run_single_task(task_id, spider_type, source, keywords, source_id=None, work_type=None, pdf_path=None, subject_id=None, chapter_id=None):
     """
     Run a single task directly.
-    
+
     Args:
         task_id: Task identifier
-        spider_type: Type of spider (person, work)
-        source: Data source (baike, douban, wikipedia)
+        spider_type: Type of spider (person, work, knowledge)
+        source: Data source (baike, douban, wikipedia, pdf)
         keywords: Comma-separated keywords
+        pdf_path: PDF file path for knowledge spider
+        subject_id: Subject ID for knowledge spider
+        chapter_id: Chapter ID for knowledge spider
     """
     logger.info(f"Running single task: {task_id}")
-    
+
     settings = get_project_settings()
     settings.set("EXTENSIONS", {
         "starmap_scrapy.extensions.progress_reporter.ProgressReporterExtension": 200,
@@ -233,13 +260,19 @@ def run_single_task(task_id, spider_type, source, keywords, source_id=None, work
         "task_id": task_id,
         "source": source,
         "source_id": source_id,
-        "keywords": keywords,
     }
-    if work_type:
-        spider_kwargs["work_type"] = work_type
+
+    if spider_type == "knowledge":
+        spider_kwargs["pdf_path"] = pdf_path or ""
+        spider_kwargs["subject_id"] = subject_id or ""
+        spider_kwargs["chapter_id"] = chapter_id or ""
+    else:
+        spider_kwargs["keywords"] = keywords
+        if work_type:
+            spider_kwargs["work_type"] = work_type
 
     process.crawl(spider_type, **spider_kwargs)
-    
+
     process.start()
 
 
@@ -254,7 +287,7 @@ def main():
     )
     parser.add_argument(
         "--spider",
-        choices=["person", "work"],
+        choices=["person", "work", "knowledge"],
         default="person",
         help="Spider type",
     )
@@ -283,9 +316,24 @@ def main():
         default=None,
         help="Work type for work spider",
     )
-    
+    parser.add_argument(
+        "--pdf-path",
+        default=None,
+        help="PDF file path for knowledge spider",
+    )
+    parser.add_argument(
+        "--subject-id",
+        default=None,
+        help="Subject ID for knowledge spider",
+    )
+    parser.add_argument(
+        "--chapter-id",
+        default=None,
+        help="Chapter ID for knowledge spider",
+    )
+
     args = parser.parse_args()
-    
+
     if args.mode == "consumer":
         start_task_consumer()
     else:
@@ -296,6 +344,9 @@ def main():
             keywords=args.keywords,
             source_id=args.source_id,
             work_type=args.work_type,
+            pdf_path=args.pdf_path,
+            subject_id=args.subject_id,
+            chapter_id=args.chapter_id,
         )
 
 

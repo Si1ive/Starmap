@@ -14,6 +14,7 @@ import {
   WarningOutlined,
   SettingOutlined,
   TeamOutlined,
+  FilePdfOutlined,
 } from '@ant-design/icons'
 import { useAdminStore } from '@/store'
 import { usePermission } from '@/hooks/usePermission'
@@ -24,6 +25,7 @@ const menuItems = [
   { key: '/admin/dashboard', icon: <DashboardOutlined />, label: '数据看板' },
   { key: '/admin/knowledge', icon: <BookOutlined />, label: '知识点管理' },
   { key: '/admin/questions', icon: <QuestionCircleOutlined />, label: '题目管理' },
+  { key: '/admin/ingest', icon: <FilePdfOutlined />, label: 'PDF入库' },
   { key: '/admin/conversations', icon: <MessageOutlined />, label: '智能问答' },
   {
     key: '/admin/crawler-group',

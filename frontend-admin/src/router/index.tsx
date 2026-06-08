@@ -3,12 +3,6 @@ import { useAdminStore } from '@/store'
 import Layout from '@/components/Layout'
 import Login from '@/pages/Login'
 import Dashboard from '@/pages/Dashboard'
-import PersonList from '@/pages/Person/List'
-import PersonDetail from '@/pages/Person/Detail'
-import PersonEdit from '@/pages/Person/Edit'
-import WorkList from '@/pages/Work/List'
-import WorkDetail from '@/pages/Work/Detail'
-import WorkEdit from '@/pages/Work/Edit'
 import CrawlerList from '@/pages/Crawler/List'
 import CrawlerStats from '@/pages/Crawler/Stats'
 import CrawlerConfig from '@/pages/Crawler/Config'
@@ -29,6 +23,7 @@ import KnowledgeEdit from '@/pages/Knowledge/Edit'
 import QuestionList from '@/pages/Question/List'
 import QuestionDetail from '@/pages/Question/Detail'
 import QuestionEdit from '@/pages/Question/Edit'
+import PdfIngest from '@/pages/Ingest'
 import { usePermission } from '@/hooks/usePermission'
 
 // 路由守卫组件
@@ -81,46 +76,37 @@ const AppRoutes = () => {
       >
         <Route index element={<Navigate to="/admin/dashboard" replace />} />
         <Route path="dashboard" element={<Dashboard />} />
-        
-        {/* 艺人管理 */}
-        <Route path="persons" element={<PersonList />} />
-        <Route path="persons/:id" element={<PersonDetail />} />
+
+        {/* 知识点管理 */}
+        <Route path="knowledge" element={<KnowledgeList />} />
+        <Route path="knowledge/:id" element={<KnowledgeDetail />} />
         <Route
-          path="persons/:id/edit"
+          path="knowledge/:id/edit"
           element={
-            <PrivateRoute permission="person:edit">
-              <PersonEdit />
-            </PrivateRoute>
-          }
-        />
-        <Route
-          path="persons/new"
-          element={
-            <PrivateRoute permission="person:edit">
-              <PersonEdit />
+            <PrivateRoute permission="knowledge:edit">
+              <KnowledgeEdit />
             </PrivateRoute>
           }
         />
 
-        {/* 作品管理 */}
-        <Route path="works" element={<WorkList />} />
-        <Route path="works/:id" element={<WorkDetail />} />
+        {/* 题目管理 */}
+        <Route path="questions" element={<QuestionList />} />
+        <Route path="questions/:id" element={<QuestionDetail />} />
         <Route
-          path="works/:id/edit"
+          path="questions/:id/edit"
           element={
-            <PrivateRoute permission="work:edit">
-              <WorkEdit />
+            <PrivateRoute permission="question:edit">
+              <QuestionEdit />
             </PrivateRoute>
           }
         />
-        <Route
-          path="works/new"
-          element={
-            <PrivateRoute permission="work:edit">
-              <WorkEdit />
-            </PrivateRoute>
-          }
-        />
+
+        {/* PDF入库 */}
+        <Route path="ingest" element={<PdfIngest />} />
+
+        {/* 对话管理 */}
+        <Route path="conversations" element={<ConversationList />} />
+        <Route path="conversations/:id" element={<ConversationDetail />} />
 
         {/* 爬虫管理 */}
         <Route path="crawler" element={<CrawlerList />} />
@@ -157,34 +143,6 @@ const AppRoutes = () => {
           }
         />
         <Route path="crawler/logs" element={<CrawlerLogs />} />
-
-        {/* 知识点管理 */}
-        <Route path="knowledge" element={<KnowledgeList />} />
-        <Route path="knowledge/:id" element={<KnowledgeDetail />} />
-        <Route
-          path="knowledge/:id/edit"
-          element={
-            <PrivateRoute permission="knowledge:edit">
-              <KnowledgeEdit />
-            </PrivateRoute>
-          }
-        />
-
-        {/* 题目管理 */}
-        <Route path="questions" element={<QuestionList />} />
-        <Route path="questions/:id" element={<QuestionDetail />} />
-        <Route
-          path="questions/:id/edit"
-          element={
-            <PrivateRoute permission="question:edit">
-              <QuestionEdit />
-            </PrivateRoute>
-          }
-        />
-
-        {/* 对话管理 */}
-        <Route path="conversations" element={<ConversationList />} />
-        <Route path="conversations/:id" element={<ConversationDetail />} />
 
         {/* 系统监控 */}
         <Route path="monitor" element={<MonitorOverview />} />

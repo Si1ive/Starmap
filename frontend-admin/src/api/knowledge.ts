@@ -54,3 +54,24 @@ export const updateKnowledgePoint = (
 ): Promise<ApiResponse<null>> => {
   return adminClient.put(`/knowledge/points/${id}`, data)
 }
+
+// ========== PDF入库 ==========
+
+export interface IngestPdfData {
+  pdf_path: string
+  subject_id: string
+  chapter_id: string
+  source?: string
+}
+
+export const ingestPdf = (
+  data: IngestPdfData
+): Promise<ApiResponse<{ task_id: string }>> => {
+  return adminClient.post('/knowledge/ingest', data)
+}
+
+export const getIngestTasks = (
+  params: { page?: number; page_size?: number } = {}
+): Promise<ApiResponse<{ items: any[]; total: number; page: number; page_size: number }>> => {
+  return adminClient.get('/knowledge/ingest/tasks', { params })
+}

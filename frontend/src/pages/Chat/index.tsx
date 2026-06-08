@@ -126,13 +126,15 @@ const ChatPage: React.FC = () => {
             }}
           >
             <RobotOutlined style={{ fontSize: 48, marginBottom: 16 }} />
-            <div style={{ fontSize: 16 }}>StarMap 智能助手</div>
+            <div style={{ fontSize: 16 }}>408考研智能助手</div>
             <Text type="secondary">
-              您可以问我关于艺人的任何问题，例如：
+              您可以问我关于408考研的任何问题，例如：
               <br />
-              "周杰伦的妻子是谁？"
+              "什么是死锁？如何避免？"
               <br />
-              "推荐几个和周杰伦风格相似的歌手"
+              "二叉树的前序遍历和中序遍历有什么区别？"
+              <br />
+              "TCP三次握手的过程是什么？"
             </Text>
           </div>
         ) : (
@@ -177,7 +179,7 @@ const ChatPage: React.FC = () => {
                         color: msg.role === 'user' ? 'rgba(255,255,255,0.85)' : '#666'
                       }}
                     >
-                      {msg.role === 'user' ? '你' : 'StarMap Agent'}
+                      {msg.role === 'user' ? '你' : '408助手'}
                     </Text>
                   </div>
                   <div style={{ lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>

@@ -544,7 +544,7 @@ class Subject(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="唯一标识")
     name: Mapped[str] = mapped_column(String(50), nullable=False, comment="学科名称")
-    code: Mapped[str] = mapped_column(String(20), unique=True, nullable=False, comment="学科编码")
+    code: Mapped[str] = mapped_column(String(30), unique=True, nullable=False, comment="学科编码")
     description: Mapped[Optional[str]] = mapped_column(Text, comment="学科描述")
     icon: Mapped[Optional[str]] = mapped_column(String(100), comment="图标标识")
     sort_order: Mapped[int] = mapped_column(default=0, comment="排序序号")

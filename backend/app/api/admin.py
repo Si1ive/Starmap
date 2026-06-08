@@ -2140,3 +2140,114 @@ async def update_question(
 
     await db.commit()
     return ApiResponse(message="更新成功")
+
+
+# ========== PDF入库 ==========
+
+class IngestPdfRequest(BaseModel):
+    """PDF入库请求"""
+    pdf_path: str = Field(..., description="PDF文件路径")
+    subject_id: str = Field(..., description="学科ID")
+    chapter_id: str = Field(..., description="章节ID")
+    source: Optional[str] = Field(default=None, description="来源说明，如 王道2025/数据结构")
+
+
+@router.post("/knowledge/ingest", response_model=ApiResponse)
+async def ingest_pdf(
+    req: IngestPdfRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """触发PDF入库任务"""
+    import uuid
+    from app.models.mysql_models import CrawlTask, Subject, Chapter
+
+    # Validate subject exists
+    subject = await db.scalar(
+        select(Subject).where(Subject.id == req.subject_id)
+    )
+    if not subject:
+        raise HTTPException(status_code=404, detail="学科不存在")
+
+    # Validate chapter exists
+    chapter = await db.scalar(
+        select(Chapter).where(Chapter.id == req.chapter_id, Chapter.subject_id == req.subject_id)
+    )
+    if not chapter:
+        raise HTTPException(status_code=404, detail="章节不存在或不属于该学科")
+
+    # Create crawl task
+    task_id = f"kp_{uuid.uuid4().hex[:12]}"
+    task = CrawlTask(
+        id=task_id,
+        name=f"PDF入库: {subject.name} - {chapter.name}",
+        task_type="targeted",
+        source="pdf",
+        status="pending",
+        config={
+            "spider_type": "knowledge",
+            "pdf_path": req.pdf_path,
+            "subject_id": req.subject_id,
+            "chapter_id": req.chapter_id,
+            "source": req.source or f"{subject.name}/{chapter.name}",
+        },
+    )
+    db.add(task)
+    await db.commit()
+    await db.refresh(task)
+
+    # Publish to Scrapy queue
+    from app.services.scrapy_bridge import ScrapyBridgeService
+    bridge = ScrapyBridgeService(db)
+    published = await bridge.publish_task(task)
+    await bridge.close()
+
+    if not published:
+        raise HTTPException(status_code=500, detail="任务发布失败")
+
+    return ApiResponse(
+        message="PDF入库任务已创建",
+        data={"task_id": task_id}
+    )
+
+
+@router.get("/knowledge/ingest/tasks", response_model=ApiResponse)
+async def get_ingest_tasks(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db)
+):
+    """获取PDF入库任务列表"""
+    from app.models.mysql_models import CrawlTask
+
+    query = select(CrawlTask).where(
+        CrawlTask.source == "pdf"
+    ).order_by(CrawlTask.created_at.desc())
+
+    total = await db.scalar(
+        select(func.count()).select_from(query.subquery())
+    )
+
+    query = query.offset((page - 1) * page_size).limit(page_size)
+    result = await db.execute(query)
+    tasks = result.scalars().all()
+
+    return ApiResponse(data={
+        "items": [
+            {
+                "id": t.id,
+                "name": t.name,
+                "status": t.status,
+                "progress": float(t.progress) if t.progress else 0,
+                "success_count": t.success_count,
+                "failed_count": t.failed_count,
+                "config": t.config,
+                "error_message": t.error_message,
+                "created_at": t.created_at.isoformat() if t.created_at else None,
+                "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+            }
+            for t in tasks
+        ],
+        "total": total or 0,
+        "page": page,
+        "page_size": page_size,
+    })

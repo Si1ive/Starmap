@@ -7,7 +7,7 @@ USE starmap;
 CREATE TABLE IF NOT EXISTS subjects (
     id VARCHAR(32) PRIMARY KEY COMMENT '唯一标识',
     name VARCHAR(50) NOT NULL COMMENT '学科名称',
-    code VARCHAR(20) NOT NULL UNIQUE COMMENT '学科编码',
+    code VARCHAR(30) NOT NULL UNIQUE COMMENT '学科编码',
     description TEXT COMMENT '学科描述',
     icon VARCHAR(100) COMMENT '图标标识',
     sort_order INT DEFAULT 0 COMMENT '排序序号',
