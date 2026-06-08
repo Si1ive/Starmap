@@ -140,7 +140,7 @@ const CrawlerSources = () => {
   })
 
   const normalizePayload = (values: Record<string, any>) => {
-    let config = {}
+    let config: Record<string, any> = {}
     if (values.config_text?.trim()) {
       try {
         config = JSON.parse(values.config_text)
@@ -148,6 +148,8 @@ const CrawlerSources = () => {
         throw new Error('配置 JSON 格式不正确')
       }
     }
+
+    config.spider_key = values.spider_key
 
     return {
       name: values.name?.trim(),
@@ -170,6 +172,7 @@ const CrawlerSources = () => {
       request_interval: 1.0,
       daily_limit: 1000,
       concurrent_limit: 3,
+      spider_key: 'baike',
       config_text: '{}',
     })
     setModalVisible(true)
@@ -186,6 +189,7 @@ const CrawlerSources = () => {
       request_interval: source.request_interval,
       daily_limit: source.daily_limit,
       concurrent_limit: source.concurrent_limit,
+      spider_key: (source.config as any)?.spider_key || 'baike',
       config_text: JSON.stringify(source.config || {}, null, 2),
     })
     setModalVisible(true)
@@ -230,6 +234,15 @@ const CrawlerSources = () => {
       render: (type: string) => {
         const config = typeConfig[type] || { color: 'default', text: type || '-' }
         return <Tag color={config.color}>{config.text}</Tag>
+      },
+    },
+    {
+      title: '爬虫类型',
+      width: 100,
+      render: (_: unknown, record: CrawlerSource) => {
+        const key = (record.config as any)?.spider_key
+        const label = { baike: '百度百科', douban: '豆瓣', wikipedia: '维基百科' }[key] || key || '-'
+        return <Tag>{label}</Tag>
       },
     },
     {
@@ -429,7 +442,7 @@ const CrawlerSources = () => {
             </Col>
           </Row>
           <Row gutter={16}>
-            <Col span={8}>
+            <Col span={6}>
               <Form.Item label="类型" name="type" rules={[{ required: true }]}>
                 <Select options={[
                   { label: '百科', value: 'encyclopedia' },
@@ -440,7 +453,17 @@ const CrawlerSources = () => {
                 ]} />
               </Form.Item>
             </Col>
-            <Col span={8}>
+            <Col span={6}>
+              <Form.Item label="爬虫类型" name="spider_key" rules={[{ required: true, message: '请选择爬虫类型' }]}
+                tooltip="决定使用哪个爬虫来抓取该数据源">
+                <Select options={[
+                  { label: '百度百科', value: 'baike' },
+                  { label: '豆瓣', value: 'douban' },
+                  { label: '维基百科', value: 'wikipedia' },
+                ]} />
+              </Form.Item>
+            </Col>
+            <Col span={6}>
               <Form.Item label="状态" name="status" rules={[{ required: true }]}>
                 <Select options={[
                   { label: '启用', value: 'active' },
@@ -450,7 +473,7 @@ const CrawlerSources = () => {
                 ]} />
               </Form.Item>
             </Col>
-            <Col span={8}>
+            <Col span={6}>
               <Form.Item label="请求间隔(秒)" name="request_interval">
                 <InputNumber min={0} max={60} step={0.5} style={{ width: '100%' }} />
               </Form.Item>

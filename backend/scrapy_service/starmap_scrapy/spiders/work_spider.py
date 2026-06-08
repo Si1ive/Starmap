@@ -34,6 +34,10 @@ class WorkSpider(scrapy.Spider):
             "base_url": "https://baike.baidu.com",
             "search_url": "https://baike.baidu.com/search/word?word={keyword}",
         },
+        "wikipedia": {
+            "base_url": "https://zh.wikipedia.org",
+            "search_url": "https://zh.wikipedia.org/w/index.php?search={keyword}&title=Special:Search",
+        },
     }
     
     # Task context
@@ -82,11 +86,13 @@ class WorkSpider(scrapy.Spider):
     def parse_search(self, response):
         """Parse search results."""
         source = response.meta.get("source", "douban")
-        
+
         if source == "douban":
             yield from self._parse_douban_search(response)
         elif source == "baike":
             yield from self._parse_baike_search(response)
+        elif source == "wikipedia":
+            yield from self._parse_wikipedia_search(response)
     
     def _parse_douban_search(self, response):
         """Parse Douban search results."""
@@ -107,9 +113,9 @@ class WorkSpider(scrapy.Spider):
     def _parse_baike_search(self, response):
         """Parse Baidu Baike search results."""
         soup = BeautifulSoup(response.text, "html.parser")
-        
+
         results = soup.select(".search-list dd a")
-        
+
         for result in results[:3]:
             href = result.get("href", "")
             if href:
@@ -119,15 +125,98 @@ class WorkSpider(scrapy.Spider):
                     callback=self.parse_work,
                     meta=response.meta,
                 )
+
+    def _parse_wikipedia_search(self, response):
+        """Parse Wikipedia search results."""
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        # Wikipedia search results
+        results = soup.select(".mw-search-result-heading a")
+        if not results:
+            # Might be on the article page directly (exact match redirect)
+            title = soup.select_one("h1.firstHeading")
+            if title:
+                yield scrapy.Request(
+                    url=response.url,
+                    callback=self.parse_work,
+                    meta=response.meta,
+                    dont_filter=True,
+                )
+            return
+
+        for result in results[:3]:
+            href = result.get("href", "")
+            if href and "/wiki/" in href:
+                url = urljoin("https://zh.wikipedia.org", href)
+                yield scrapy.Request(
+                    url=url,
+                    callback=self.parse_work,
+                    meta=response.meta,
+                )
+
+    def _parse_wikipedia_work(self, response):
+        """Parse Wikipedia article as a work (album, film, etc.)."""
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        title_elem = soup.select_one("h1.firstHeading")
+        title = title_elem.get_text(strip=True) if title_elem else ""
+
+        # Extract infobox
+        info_dict = {}
+        infobox = soup.select_one(".infobox")
+        if infobox:
+            rows = infobox.select("tr")
+            for row in rows:
+                th = row.select_one("th")
+                td = row.select_one("td")
+                if th and td:
+                    key = th.get_text(strip=True)
+                    value = td.get_text(strip=True)
+                    if key and value:
+                        info_dict[key] = value
+
+        # Extract summary
+        summary = ""
+        content = soup.select_one(".mw-parser-output")
+        if content:
+            for p in content.select("p"):
+                text = p.get_text(strip=True)
+                if text and len(text) > 20:
+                    summary = text
+                    break
+
+        # Extract categories as genre hints
+        categories = [cat.get_text(strip=True) for cat in soup.select("#mw-normal-catlinks li a")]
+
+        work = WorkItem(
+            title=title,
+            type=self.work_type,
+            release_date=info_dict.get("发行日期") or info_dict.get("上映日期") or info_dict.get("首播日期"),
+            genre=info_dict.get("类型") or info_dict.get("片长"),
+            summary=summary[:2000] if summary else None,
+            director=self._parse_list(info_dict.get("导演", "")),
+            actors=self._parse_list(info_dict.get("主演", "")),
+            source="wikipedia",
+            source_url=response.url,
+            crawl_task_id=self.task_id,
+            raw_data={
+                "infobox": info_dict,
+                "categories": categories[:20],
+            },
+        )
+
+        yield work
     
     def parse_work(self, response):
         """Parse work detail page."""
         source = response.meta.get("source", "douban")
-        
+
         if source == "douban":
             yield from self._parse_douban_work(response)
         elif source == "baike":
             yield from self._parse_baike_work(response)
+        elif source == "wikipedia":
+            yield from self._parse_wikipedia_work(response)
     
     def _parse_douban_work(self, response):
         """Parse Douban movie/TV page."""

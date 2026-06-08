@@ -39,6 +39,7 @@ class ChromaClient:
     COLLECTION_PERSONS = "persons"
     COLLECTION_RELATIONS = "relations"
     COLLECTION_KNOWLEDGE = "knowledge"
+    COLLECTION_KNOWLEDGE_POINTS = "knowledge_points"
     
     def __init__(self):
         self._client: Optional[chromadb.Client] = None
@@ -76,7 +77,8 @@ class ChromaClient:
         for name in [
             self.COLLECTION_PERSONS,
             self.COLLECTION_RELATIONS,
-            self.COLLECTION_KNOWLEDGE
+            self.COLLECTION_KNOWLEDGE,
+            self.COLLECTION_KNOWLEDGE_POINTS
         ]:
             try:
                 self._collections[name] = self._client.get_or_create_collection(
@@ -398,6 +400,79 @@ class ChromaClient:
             query=query,
             n_results=n_results,
             collection_name=self.COLLECTION_KNOWLEDGE,
+            filter_metadata=filter_meta
+        )
+
+    # ========== 知识点操作 ==========
+
+    def add_knowledge_point(
+        self,
+        point_id: str,
+        title: str,
+        content: str,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        添加知识点向量
+
+        Args:
+            point_id: 知识点ID
+            title: 知识点标题
+            content: 知识点内容
+            metadata: 额外元数据（subject_id, chapter_id, difficulty, exam_frequency）
+
+        Returns:
+            str: 文档ID
+        """
+        doc_text = f"{title}。{content}"
+        meta = {
+            "point_id": point_id,
+            "title": title,
+            "type": "knowledge_point"
+        }
+        if metadata:
+            meta.update(metadata)
+
+        return self.add_documents(
+            documents=[doc_text],
+            metadatas=[meta],
+            ids=[point_id],
+            collection_name=self.COLLECTION_KNOWLEDGE_POINTS
+        )[0]
+
+    def search_knowledge_points(
+        self,
+        query: str,
+        n_results: int = 5,
+        subject_id: Optional[str] = None,
+        chapter_id: Optional[str] = None,
+        difficulty: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        搜索相关知识点
+
+        Args:
+            query: 查询问题
+            n_results: 返回数量
+            subject_id: 学科过滤
+            chapter_id: 章节过滤
+            difficulty: 难度过滤
+
+        Returns:
+            List[Dict]: 相关知识点列表
+        """
+        filter_meta = {"type": "knowledge_point"}
+        if subject_id:
+            filter_meta["subject_id"] = subject_id
+        if chapter_id:
+            filter_meta["chapter_id"] = chapter_id
+        if difficulty:
+            filter_meta["difficulty"] = difficulty
+
+        return self.search(
+            query=query,
+            n_results=n_results,
+            collection_name=self.COLLECTION_KNOWLEDGE_POINTS,
             filter_metadata=filter_meta
         )
 

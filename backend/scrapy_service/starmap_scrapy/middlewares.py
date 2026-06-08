@@ -26,16 +26,13 @@ class StarMapSpiderMiddleware:
         return middleware
 
     def process_spider_input(self, response, spider):
-        """Called for each response that goes through the spider middleware and into the spider."""
         return None
 
-    async def process_spider_output_async(self, response, result, spider):
-        """Called with the results returned from the Spider, after it has processed the response."""
-        async for item in result:
+    def process_spider_output(self, response, result, spider):
+        for item in result:
             yield item
 
     def process_spider_exception(self, response, exception, spider):
-        """Called when a spider or process_spider_input() method raises an exception."""
         logger.error(f"Spider exception: {exception}", extra={"spider": spider.name})
 
     def spider_opened(self, spider):

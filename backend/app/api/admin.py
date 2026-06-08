@@ -31,6 +31,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status, WebSocket,
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger, get_request_id
@@ -197,72 +198,97 @@ class DashboardStats(BaseModel):
 
 
 @router.get("/dashboard/stats", response_model=ApiResponse)
-async def get_dashboard_stats():
-    """
-    获取看板统计数据
-    
-    返回系统核心运营指标。
-    """
+async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
+    """获取看板统计数据（408考研平台）"""
+    from app.models.mysql_models import Subject, Chapter, KnowledgePoint, Question
+    from sqlalchemy import func
+
+    subject_count = await db.scalar(
+        select(func.count()).select_from(Subject).where(Subject.status == "active")
+    ) or 0
+
+    chapter_count = await db.scalar(
+        select(func.count()).select_from(Chapter).where(Chapter.status == "active")
+    ) or 0
+
+    knowledge_point_count = await db.scalar(
+        select(func.count()).select_from(KnowledgePoint).where(KnowledgePoint.status != "deleted")
+    ) or 0
+
+    question_count = await db.scalar(
+        select(func.count()).select_from(Question).where(Question.status != "deleted")
+    ) or 0
+
     return ApiResponse(
         code=200,
         message="success",
         data={
-            "person_count": 1256,
-            "work_count": 3421,
-            "relation_count": 8923,
-            "today_chat_count": 156,
-            "data_completeness": 87.5,
-            "api_avg_response": 45.2
+            "subject_count": subject_count,
+            "chapter_count": chapter_count,
+            "knowledge_point_count": knowledge_point_count,
+            "question_count": question_count,
+            "today_chat_count": 0
         }
     )
 
 
 @router.get("/dashboard/charts", response_model=ApiResponse)
-async def get_dashboard_charts():
-    """
-    获取看板图表数据
-    
-    返回趋势图、分布图等图表所需数据。
-    """
+async def get_dashboard_charts(db: AsyncSession = Depends(get_db)):
+    """获取看板图表数据（408考研平台）"""
+    from app.models.mysql_models import Subject, KnowledgePoint, Question
+    from sqlalchemy import func
+
+    # 各学科知识点分布
+    subject_rows = await db.execute(
+        select(Subject.name, func.count(KnowledgePoint.id))
+        .outerjoin(KnowledgePoint, Subject.id == KnowledgePoint.subject_id)
+        .where(Subject.status == "active")
+        .group_by(Subject.id, Subject.name)
+        .order_by(Subject.sort_order)
+    )
+    subject_distribution = [
+        {"name": row[0], "value": row[1] or 0}
+        for row in subject_rows
+    ]
+
+    # 知识点难度分布
+    difficulty_rows = await db.execute(
+        select(KnowledgePoint.difficulty, func.count())
+        .where(KnowledgePoint.status != "deleted")
+        .group_by(KnowledgePoint.difficulty)
+    )
+    difficulty_name_map = {"easy": "简单", "medium": "中等", "hard": "困难"}
+    difficulty_distribution = [
+        {"name": difficulty_name_map.get(d, d), "value": c}
+        for d, c in difficulty_rows
+    ]
+
+    # 题目类型分布
+    type_rows = await db.execute(
+        select(Question.type, func.count())
+        .where(Question.status != "deleted")
+        .group_by(Question.type)
+    )
+    type_name_map = {
+        "choice": "选择题",
+        "fill": "填空题",
+        "judge": "判断题",
+        "short_answer": "简答题",
+        "design": "设计题",
+        "analysis": "分析题"
+    }
+    question_type_distribution = [
+        {"name": type_name_map.get(t, t), "value": c}
+        for t, c in type_rows
+    ]
+
     return ApiResponse(
         code=200,
         message="success",
         data={
-            "chat_trend": [
-                {"date": "2024-01-01", "count": 120},
-                {"date": "2024-01-02", "count": 145},
-                {"date": "2024-01-03", "count": 132},
-                {"date": "2024-01-04", "count": 156},
-                {"date": "2024-01-05", "count": 178},
-                {"date": "2024-01-06", "count": 165},
-                {"date": "2024-01-07", "count": 190}
-            ],
-            "category_distribution": [
-                {"name": "演员", "value": 456},
-                {"name": "歌手", "value": 342},
-                {"name": "导演", "value": 198},
-                {"name": "制片人", "value": 87},
-                {"name": "编剧", "value": 173}
-            ],
-            "hot_search": [
-                {"name": "周杰伦", "value": 1250},
-                {"name": "刘德华", "value": 980},
-                {"name": "成龙", "value": 876},
-                {"name": "周星驰", "value": 754},
-                {"name": "张艺谋", "value": 621},
-                {"name": "巩俐", "value": 543},
-                {"name": "周润发", "value": 498},
-                {"name": "梁朝伟", "value": 432},
-                {"name": "张曼玉", "value": 387},
-                {"name": "王家卫", "value": 321}
-            ],
-            "crawler_status": [
-                {"name": "运行中", "value": 3},
-                {"name": "已完成", "value": 12},
-                {"name": "失败", "value": 2},
-                {"name": "已停止", "value": 1},
-                {"name": "待启动", "value": 5}
-            ]
+            "subject_distribution": subject_distribution,
+            "difficulty_distribution": difficulty_distribution,
+            "question_type_distribution": question_type_distribution
         }
     )
 
@@ -296,39 +322,47 @@ async def get_person_list(
     page_size: int = 20,
     q: Optional[str] = None,
     category: Optional[str] = None,
-    status: Optional[str] = None
+    status: Optional[str] = None,
+    db: AsyncSession = Depends(get_db)
 ):
-    """
-    获取艺人列表
-    
-    支持搜索、筛选、分页。从 Neo4j 查询真实数据。
-    """
-    from app.services.person_service import PersonService
-    from app.models.person import PersonListItem, PersonSearchResult
-    
-    service = PersonService()
-    
-    # 如果有搜索关键词，使用搜索接口
+    """获取艺人列表（从 MySQL 查询真实数据）"""
+    from app.models.mysql_models import Person as PersonModel
+    from sqlalchemy import func
+
+    query = select(PersonModel).where(PersonModel.status != "deleted")
+
     if q:
-        result = await service.search_persons(
-            keyword=q,
-            category=category,
-            page=page,
-            page_size=page_size
-        )
-        items = [item.model_dump() for item in result.items]
-        total = result.total
-    else:
-        # 使用搜索接口获取所有人物（空关键词）
-        result = await service.search_persons(
-            keyword="*",
-            category=category,
-            page=page,
-            page_size=page_size
-        )
-        items = [item.model_dump() for item in result.items]
-        total = result.total
-    
+        query = query.where(PersonModel.name.contains(q))
+    if category:
+        query = query.where(PersonModel.categories.contains(category))
+    if status:
+        query = query.where(PersonModel.status == status)
+
+    count_query = select(func.count()).select_from(query.subquery())
+    total = await db.scalar(count_query) or 0
+
+    query = query.offset((page - 1) * page_size).limit(page_size).order_by(PersonModel.updated_at.desc())
+    result = await db.execute(query)
+    persons = result.scalars().all()
+
+    items = []
+    for p in persons:
+        items.append({
+            "id": p.id,
+            "name": p.name,
+            "name_en": p.name_en,
+            "avatar": p.avatar,
+            "gender": p.gender,
+            "birth_date": p.birth_date.isoformat() if p.birth_date else None,
+            "birth_place": p.birth_place,
+            "nationality": p.nationality,
+            "categories": p.categories or [],
+            "summary": p.summary,
+            "popularity_score": float(p.popularity_score) if p.popularity_score else 0,
+            "status": p.status,
+            "created_at": p.created_at.isoformat() if p.created_at else None,
+        })
+
     return ApiResponse(
         code=200,
         message="success",
@@ -343,24 +377,42 @@ async def get_person_list(
 
 
 @router.get("/persons/{person_id}", response_model=ApiResponse)
-async def get_person_detail(person_id: str):
-    """
-    获取艺人详情
-    
-    返回指定艺人的完整信息。从 Neo4j 查询真实数据。
-    """
-    from app.services.person_service import PersonService
-    
-    service = PersonService()
-    person = await service.get_person_by_id(person_id)
-    
+async def get_person_detail(person_id: str, db: AsyncSession = Depends(get_db)):
+    """获取艺人详情（从 MySQL 查询真实数据）"""
+    from app.models.mysql_models import Person as PersonModel
+
+    result = await db.execute(
+        select(PersonModel).where(PersonModel.id == person_id)
+    )
+    person = result.scalar_one_or_none()
+
     if not person:
         raise HTTPException(status_code=404, detail="艺人不存在")
-    
+
     return ApiResponse(
         code=200,
         message="success",
-        data=person.model_dump()
+        data={
+            "id": person.id,
+            "name": person.name,
+            "name_en": person.name_en,
+            "avatar": person.avatar,
+            "gender": person.gender,
+            "birth_date": person.birth_date.isoformat() if person.birth_date else None,
+            "birth_place": person.birth_place,
+            "nationality": person.nationality,
+            "height": float(person.height) if person.height else None,
+            "summary": person.summary,
+            "biography": person.biography,
+            "popularity_score": float(person.popularity_score) if person.popularity_score else 0,
+            "categories": person.categories or [],
+            "status": person.status,
+            "data_quality_score": float(person.data_quality_score) if person.data_quality_score else None,
+            "crawl_source": person.crawl_source,
+            "crawl_url": person.crawl_url,
+            "created_at": person.created_at.isoformat() if person.created_at else None,
+            "updated_at": person.updated_at.isoformat() if person.updated_at else None,
+        }
     )
 
 
@@ -1768,3 +1820,323 @@ async def delete_user(user_id: str):
             MOCK_USERS.pop(i)
             return ApiResponse(code=200, message="删除成功")
     raise HTTPException(status_code=404, detail="用户不存在")
+
+
+# ========== 学科管理 ==========
+
+@router.get("/subjects", response_model=ApiResponse)
+async def get_subjects(db: AsyncSession = Depends(get_db)):
+    """获取学科列表"""
+    from app.models.mysql_models import Subject
+    result = await db.execute(
+        select(Subject).where(Subject.status == "active").order_by(Subject.sort_order)
+    )
+    subjects = result.scalars().all()
+    return ApiResponse(data={
+        "items": [
+            {
+                "id": s.id,
+                "name": s.name,
+                "code": s.code,
+                "description": s.description,
+                "icon": s.icon,
+                "sort_order": s.sort_order
+            }
+            for s in subjects
+        ],
+        "total": len(subjects)
+    })
+
+
+@router.get("/subjects/{subject_id}/chapters", response_model=ApiResponse)
+async def get_chapters(subject_id: str, db: AsyncSession = Depends(get_db)):
+    """获取学科下的章节列表"""
+    from app.models.mysql_models import Chapter
+    result = await db.execute(
+        select(Chapter)
+        .where(Chapter.subject_id == subject_id, Chapter.status == "active")
+        .order_by(Chapter.sort_order)
+    )
+    chapters = result.scalars().all()
+    return ApiResponse(data={
+        "items": [
+            {
+                "id": c.id,
+                "name": c.name,
+                "description": c.description,
+                "sort_order": c.sort_order
+            }
+            for c in chapters
+        ],
+        "total": len(chapters)
+    })
+
+
+# ========== 知识点管理 ==========
+
+@router.get("/knowledge/points", response_model=ApiResponse)
+async def get_knowledge_points(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    subject_id: Optional[str] = None,
+    chapter_id: Optional[str] = None,
+    difficulty: Optional[str] = None,
+    keyword: Optional[str] = None,
+    db: AsyncSession = Depends(get_db)
+):
+    """获取知识点列表"""
+    from app.models.mysql_models import KnowledgePoint
+
+    query = select(KnowledgePoint).where(KnowledgePoint.status != "deleted")
+
+    if subject_id:
+        query = query.where(KnowledgePoint.subject_id == subject_id)
+    if chapter_id:
+        query = query.where(KnowledgePoint.chapter_id == chapter_id)
+    if difficulty:
+        query = query.where(KnowledgePoint.difficulty == difficulty)
+    if keyword:
+        query = query.where(KnowledgePoint.title.contains(keyword))
+
+    # Count total
+    count_query = select(func.count()).select_from(query.subquery())
+    total_result = await db.execute(count_query)
+    total = total_result.scalar()
+
+    # Paginate
+    query = query.order_by(KnowledgePoint.created_at.desc())
+    query = query.offset((page - 1) * page_size).limit(page_size)
+    result = await db.execute(query)
+    points = result.scalars().all()
+
+    return ApiResponse(data={
+        "items": [
+            {
+                "id": p.id,
+                "chapter_id": p.chapter_id,
+                "subject_id": p.subject_id,
+                "title": p.title,
+                "content": p.content[:200] if p.content else "",
+                "difficulty": p.difficulty,
+                "exam_frequency": p.exam_frequency,
+                "tags": p.tags,
+                "source": p.source,
+                "status": p.status,
+                "created_at": p.created_at.isoformat() if p.created_at else None
+            }
+            for p in points
+        ],
+        "total": total,
+        "page": page,
+        "page_size": page_size
+    })
+
+
+@router.get("/knowledge/points/{point_id}", response_model=ApiResponse)
+async def get_knowledge_point_detail(point_id: str, db: AsyncSession = Depends(get_db)):
+    """获取知识点详情"""
+    from app.models.mysql_models import KnowledgePoint
+    result = await db.execute(
+        select(KnowledgePoint).where(KnowledgePoint.id == point_id)
+    )
+    point = result.scalar_one_or_none()
+    if not point:
+        raise HTTPException(status_code=404, detail="知识点不存在")
+
+    return ApiResponse(data={
+        "id": point.id,
+        "chapter_id": point.chapter_id,
+        "subject_id": point.subject_id,
+        "title": point.title,
+        "content": point.content,
+        "difficulty": point.difficulty,
+        "exam_frequency": point.exam_frequency,
+        "tags": point.tags,
+        "key_points": point.key_points,
+        "related_point_ids": point.related_point_ids,
+        "source": point.source,
+        "source_page": point.source_page,
+        "status": point.status,
+        "created_at": point.created_at.isoformat() if point.created_at else None,
+        "updated_at": point.updated_at.isoformat() if point.updated_at else None
+    })
+
+
+class UpdateKnowledgePointRequest(BaseModel):
+    """更新知识点请求"""
+    title: Optional[str] = None
+    content: Optional[str] = None
+    difficulty: Optional[str] = None
+    exam_frequency: Optional[str] = None
+    tags: Optional[List[str]] = None
+    key_points: Optional[List[str]] = None
+    status: Optional[str] = None
+
+
+@router.put("/knowledge/points/{point_id}", response_model=ApiResponse)
+async def update_knowledge_point(
+    point_id: str,
+    req: UpdateKnowledgePointRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """更新知识点"""
+    from app.models.mysql_models import KnowledgePoint
+    result = await db.execute(
+        select(KnowledgePoint).where(KnowledgePoint.id == point_id)
+    )
+    point = result.scalar_one_or_none()
+    if not point:
+        raise HTTPException(status_code=404, detail="知识点不存在")
+
+    if req.title is not None:
+        point.title = req.title
+    if req.content is not None:
+        point.content = req.content
+    if req.difficulty is not None:
+        point.difficulty = req.difficulty
+    if req.exam_frequency is not None:
+        point.exam_frequency = req.exam_frequency
+    if req.tags is not None:
+        point.tags = req.tags
+    if req.key_points is not None:
+        point.key_points = req.key_points
+    if req.status is not None:
+        point.status = req.status
+
+    await db.commit()
+    return ApiResponse(message="更新成功")
+
+
+# ========== 题目管理 ==========
+
+@router.get("/questions", response_model=ApiResponse)
+async def get_questions(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    subject_id: Optional[str] = None,
+    chapter_id: Optional[str] = None,
+    type: Optional[str] = None,
+    difficulty: Optional[str] = None,
+    db: AsyncSession = Depends(get_db)
+):
+    """获取题目列表"""
+    from app.models.mysql_models import Question
+
+    query = select(Question).where(Question.status != "deleted")
+
+    if subject_id:
+        query = query.where(Question.subject_id == subject_id)
+    if chapter_id:
+        query = query.where(Question.chapter_id == chapter_id)
+    if type:
+        query = query.where(Question.type == type)
+    if difficulty:
+        query = query.where(Question.difficulty == difficulty)
+
+    # Count total
+    count_query = select(func.count()).select_from(query.subquery())
+    total_result = await db.execute(count_query)
+    total = total_result.scalar()
+
+    # Paginate
+    query = query.order_by(Question.created_at.desc())
+    query = query.offset((page - 1) * page_size).limit(page_size)
+    result = await db.execute(query)
+    questions = result.scalars().all()
+
+    return ApiResponse(data={
+        "items": [
+            {
+                "id": q.id,
+                "subject_id": q.subject_id,
+                "chapter_id": q.chapter_id,
+                "type": q.type,
+                "content": q.content[:200] if q.content else "",
+                "difficulty": q.difficulty,
+                "source": q.source,
+                "exam_year": q.exam_year,
+                "status": q.status,
+                "created_at": q.created_at.isoformat() if q.created_at else None
+            }
+            for q in questions
+        ],
+        "total": total,
+        "page": page,
+        "page_size": page_size
+    })
+
+
+@router.get("/questions/{question_id}", response_model=ApiResponse)
+async def get_question_detail(question_id: str, db: AsyncSession = Depends(get_db)):
+    """获取题目详情"""
+    from app.models.mysql_models import Question
+    result = await db.execute(
+        select(Question).where(Question.id == question_id)
+    )
+    question = result.scalar_one_or_none()
+    if not question:
+        raise HTTPException(status_code=404, detail="题目不存在")
+
+    return ApiResponse(data={
+        "id": question.id,
+        "subject_id": question.subject_id,
+        "chapter_id": question.chapter_id,
+        "type": question.type,
+        "content": question.content,
+        "options": question.options,
+        "answer": question.answer,
+        "explanation": question.explanation,
+        "difficulty": question.difficulty,
+        "source": question.source,
+        "exam_year": question.exam_year,
+        "knowledge_point_ids": question.knowledge_point_ids,
+        "tags": question.tags,
+        "status": question.status,
+        "created_at": question.created_at.isoformat() if question.created_at else None,
+        "updated_at": question.updated_at.isoformat() if question.updated_at else None
+    })
+
+
+class UpdateQuestionRequest(BaseModel):
+    """更新题目请求"""
+    content: Optional[str] = None
+    options: Optional[List[dict]] = None
+    answer: Optional[str] = None
+    explanation: Optional[str] = None
+    difficulty: Optional[str] = None
+    tags: Optional[List[str]] = None
+    status: Optional[str] = None
+
+
+@router.put("/questions/{question_id}", response_model=ApiResponse)
+async def update_question(
+    question_id: str,
+    req: UpdateQuestionRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """更新题目"""
+    from app.models.mysql_models import Question
+    result = await db.execute(
+        select(Question).where(Question.id == question_id)
+    )
+    question = result.scalar_one_or_none()
+    if not question:
+        raise HTTPException(status_code=404, detail="题目不存在")
+
+    if req.content is not None:
+        question.content = req.content
+    if req.options is not None:
+        question.options = req.options
+    if req.answer is not None:
+        question.answer = req.answer
+    if req.explanation is not None:
+        question.explanation = req.explanation
+    if req.difficulty is not None:
+        question.difficulty = req.difficulty
+    if req.tags is not None:
+        question.tags = req.tags
+    if req.status is not None:
+        question.status = req.status
+
+    await db.commit()
+    return ApiResponse(message="更新成功")

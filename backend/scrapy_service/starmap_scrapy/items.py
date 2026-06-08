@@ -175,3 +175,77 @@ class CrawlLogItem(scrapy.Item):
         self.setdefault("status", "pending")
         self.setdefault("retry_count", 0)
         self.setdefault("created_at", datetime.utcnow().isoformat())
+
+
+class KnowledgePointItem(scrapy.Item):
+    """Knowledge point item parsed from PDF or web sources."""
+
+    id = scrapy.Field()
+    chapter_id = scrapy.Field()
+    subject_id = scrapy.Field()
+    title = scrapy.Field()
+    content = scrapy.Field()
+    difficulty = scrapy.Field()  # easy, medium, hard
+    exam_frequency = scrapy.Field()  # high, medium, low, never
+    tags = scrapy.Field()
+    key_points = scrapy.Field()
+    related_point_ids = scrapy.Field()
+    source = scrapy.Field()
+    source_page = scrapy.Field()
+    crawl_task_id = scrapy.Field()
+
+    # Status
+    status = scrapy.Field()
+
+    # Timestamps
+    created_at = scrapy.Field()
+    updated_at = scrapy.Field()
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setdefault("id", None)
+        self.setdefault("status", "pending")
+        self.setdefault("difficulty", "medium")
+        self.setdefault("exam_frequency", "medium")
+        self.setdefault("tags", [])
+        self.setdefault("key_points", [])
+        self.setdefault("related_point_ids", [])
+        self.setdefault("created_at", datetime.utcnow().isoformat())
+        self.setdefault("updated_at", datetime.utcnow().isoformat())
+
+
+class QuestionItem(scrapy.Item):
+    """Question item parsed from exam papers or exercise sources."""
+
+    id = scrapy.Field()
+    subject_id = scrapy.Field()
+    chapter_id = scrapy.Field()
+    type = scrapy.Field()  # choice, fill, judge, short_answer, design, analysis
+    content = scrapy.Field()
+    options = scrapy.Field()
+    answer = scrapy.Field()
+    explanation = scrapy.Field()
+    difficulty = scrapy.Field()  # easy, medium, hard
+    source = scrapy.Field()
+    exam_year = scrapy.Field()
+    knowledge_point_ids = scrapy.Field()
+    tags = scrapy.Field()
+
+    # Status
+    status = scrapy.Field()
+
+    # Timestamps
+    created_at = scrapy.Field()
+    updated_at = scrapy.Field()
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setdefault("id", None)
+        self.setdefault("status", "pending")
+        self.setdefault("difficulty", "medium")
+        self.setdefault("exam_year", 0)
+        self.setdefault("options", [])
+        self.setdefault("knowledge_point_ids", [])
+        self.setdefault("tags", [])
+        self.setdefault("created_at", datetime.utcnow().isoformat())
+        self.setdefault("updated_at", datetime.utcnow().isoformat())

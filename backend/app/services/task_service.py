@@ -147,7 +147,7 @@ class CrawlerTaskService:
         """Check whether a Scrapy spider supports the selected source."""
         supported_sources = {
             "person": {"baike", "baidu_baike", "douban", "douban_movie", "wikipedia", "wikipedia_zh"},
-            "work": {"baike", "baidu_baike", "douban", "douban_movie"},
+            "work": {"baike", "baidu_baike", "douban", "douban_movie", "wikipedia", "wikipedia_zh"},
         }
         return source_code in supported_sources.get(spider_type, set())
 

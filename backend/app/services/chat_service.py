@@ -11,6 +11,7 @@
 import uuid
 from typing import List, Optional
 
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.redis import RedisClient, get_redis_client
 from app.models.transaction import (
@@ -22,6 +23,19 @@ from app.models.transaction import (
 )
 
 logger = get_logger(__name__)
+
+# RAG 系统提示词
+RAG_SYSTEM_PROMPT = """你是一个408计算机考研学习助手。你的任务是基于提供的知识库内容，准确回答用户关于数据结构、计算机组成原理、操作系统、计算机网络的问题。
+
+规则：
+1. 只基于提供的知识库内容回答，不要编造信息
+2. 如果知识库中没有相关内容，明确告知用户
+3. 回答要简洁清晰，适合考研复习
+4. 如果涉及算法或公式，用简洁的方式呈现
+5. 可以适当举例帮助理解
+
+知识库内容：
+{context}"""
 
 
 class ChatService:
@@ -157,49 +171,134 @@ class ChatService:
             logger.warning("消息保存失败", error=str(e), session_id=session_id)
     
     # ========== 对话处理 ==========
-    
+
     async def process_chat(self, request: ChatRequest) -> ChatResponse:
         """
-        处理对话请求
-        
-        完整的对话处理流程：
+        处理对话请求（RAG模式）
+
+        流程：
         1. 获取/创建会话
         2. 保存用户消息
-        3. 意图识别
-        4. 执行查询
-        5. 生成回答
+        3. 从ChromaDB检索相关知识点
+        4. 构建带上下文的prompt
+        5. 调用LLM生成回答
         6. 保存助手消息
-        
+
         Args:
             request: 对话请求
-            
+
         Returns:
             ChatResponse: 对话响应
         """
         # 获取会话
         session_id = await self.get_or_create_session(request.session_id)
-        
+
         # 保存用户消息
         await self.save_message(session_id, "user", request.message)
-        
-        # TODO: 实现完整的Agent流程
-        # 1. 意图识别
-        # 2. 工具调用
-        # 3. 回答生成
-        
-        # 临时：简单回显
-        response_message = f"收到消息：{request.message}"
-        
+
+        # 检索相关知识点
+        sources = []
+        context_parts = []
+
+        try:
+            from app.db.chroma import get_chroma_client
+            chroma = get_chroma_client()
+            results = chroma.search_knowledge_points(
+                query=request.message,
+                n_results=5
+            )
+
+            for r in results:
+                title = r.get("metadata", {}).get("title", "未知")
+                content = r.get("document", "")
+                # 截取前500字作为上下文
+                context_parts.append(f"【{title}】\n{content[:500]}")
+                sources.append(SourceItem(
+                    type="knowledge_base",
+                    title=title,
+                    content=content[:200]
+                ))
+        except Exception as e:
+            logger.warning("ChromaDB检索失败，降级为直接回答", error=str(e))
+
+        # 生成回答
+        if context_parts:
+            # RAG模式：基于知识库回答
+            context = "\n\n---\n\n".join(context_parts)
+            response_message = await self._generate_rag_answer(
+                request.message, context
+            )
+        else:
+            # 降级模式：直接调用LLM
+            response_message = await self._generate_direct_answer(
+                request.message
+            )
+
+        # 生成建议问题
+        suggestions = await self.generate_suggestions(
+            request.message,
+            context={"has_knowledge": bool(context_parts)}
+        )
+
         # 保存助手消息
         await self.save_message(session_id, "assistant", response_message)
-        
+
         return ChatResponse(
             session_id=session_id,
             message=response_message,
             type="answer",
-            sources=[],
-            suggestions=[]
+            sources=sources,
+            suggestions=suggestions
         )
+
+    async def _generate_rag_answer(self, question: str, context: str) -> str:
+        """基于检索到的知识库内容生成回答"""
+        try:
+            import openai
+            openai.api_key = settings.OPENAI_API_KEY
+
+            messages = [
+                {"role": "system", "content": RAG_SYSTEM_PROMPT.format(context=context)},
+                {"role": "user", "content": question}
+            ]
+
+            response = openai.ChatCompletion.create(
+                model=settings.OPENAI_MODEL,
+                messages=messages,
+                max_tokens=1500,
+                temperature=0.3
+            )
+
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            logger.error("LLM调用失败", error=str(e))
+            # 降级：返回检索到的内容摘要
+            if context:
+                return f"根据知识库找到以下相关内容：\n\n{context[:1000]}\n\n（注意：AI生成服务暂时不可用，以上为原始知识库内容）"
+            return "抱歉，暂时无法回答您的问题。请稍后再试。"
+
+    async def _generate_direct_answer(self, question: str) -> str:
+        """直接调用LLM回答（无知识库上下文）"""
+        try:
+            import openai
+            openai.api_key = settings.OPENAI_API_KEY
+
+            messages = [
+                {"role": "system", "content": "你是一个408计算机考研学习助手。请简洁准确地回答用户的问题。"},
+                {"role": "user", "content": question}
+            ]
+
+            response = openai.ChatCompletion.create(
+                model=settings.OPENAI_MODEL,
+                messages=messages,
+                max_tokens=1000,
+                temperature=0.5
+            )
+
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            logger.error("LLM调用失败", error=str(e))
+            return "抱歉，AI服务暂时不可用。请稍后再试。"
     
     async def generate_suggestions(
         self,
@@ -208,22 +307,47 @@ class ChatService:
     ) -> List[str]:
         """
         生成建议问题
-        
+
         基于当前查询生成相关的后续问题建议。
-        
+
         Args:
             query: 当前查询
             context: 上下文信息
-            
+
         Returns:
             List[str]: 建议问题列表
         """
-        # TODO: 基于LLM生成建议
-        return [
-            "能告诉我更多细节吗？",
-            "还有其他相关信息吗？",
-            "他们之间的关系如何？"
+        # 基于408考研场景的建议
+        suggestions = [
+            "这个知识点常考的题型有哪些？",
+            "能举一个具体的例子吗？",
+            "和这个知识点相关的其他概念是什么？"
         ]
+
+        # 如果有知识库上下文，生成更具体的建议
+        if context and context.get("has_knowledge"):
+            try:
+                import openai
+                openai.api_key = settings.OPENAI_API_KEY
+
+                response = openai.ChatCompletion.create(
+                    model=settings.OPENAI_MODEL,
+                    messages=[
+                        {"role": "system", "content": "基于用户的问题，生成3个相关的后续学习问题。只返回问题列表，每行一个。"},
+                        {"role": "user", "content": query}
+                    ],
+                    max_tokens=200,
+                    temperature=0.7
+                )
+
+                content = response.choices[0].message.content.strip()
+                llm_suggestions = [s.strip() for s in content.split("\n") if s.strip()]
+                if len(llm_suggestions) >= 2:
+                    return llm_suggestions[:3]
+            except Exception:
+                pass
+
+        return suggestions
     
     # ========== 会话清理 ==========
     

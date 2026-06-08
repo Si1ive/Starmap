@@ -260,9 +260,8 @@ def main():
     )
     parser.add_argument(
         "--source",
-        choices=["baike", "douban", "wikipedia"],
         default="baike",
-        help="Data source",
+        help="Data source (baike, douban, wikipedia, etc.)",
     )
     parser.add_argument(
         "--keywords",

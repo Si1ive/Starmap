@@ -15,7 +15,7 @@ from decimal import Decimal, InvalidOperation
 import pymysql
 from pymysql.cursors import DictCursor
 
-from starmap_scrapy.items import PersonItem, WorkItem, RelationItem, CrawlLogItem
+from starmap_scrapy.items import PersonItem, WorkItem, RelationItem, CrawlLogItem, KnowledgePointItem, QuestionItem
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +39,8 @@ class DatabasePipeline:
             "works_inserted": 0,
             "relations_inserted": 0,
             "logs_inserted": 0,
+            "knowledge_points_inserted": 0,
+            "questions_inserted": 0,
             "errors": 0,
             "quality_score_sum": 0.0,
             "quality_score_count": 0,
@@ -94,11 +96,15 @@ class DatabasePipeline:
                 self._store_relation(item)
             elif isinstance(item, CrawlLogItem):
                 self._store_log(item)
+            elif isinstance(item, KnowledgePointItem):
+                self._store_knowledge_point(item)
+            elif isinstance(item, QuestionItem):
+                self._store_question(item)
             else:
                 logger.warning(f"Unknown item type: {type(item).__name__}")
-            
+
             return item
-            
+
         except Exception as e:
             logger.error(f"Failed to store item: {e}")
             self.stats["errors"] += 1
@@ -805,3 +811,119 @@ class Neo4jPipeline:
                 "role": item.get("role"),
                 "source": item.get("source"),
             })
+
+    # ========== 408 知识点存储 ==========
+
+    def _store_knowledge_point(self, item: KnowledgePointItem):
+        """Store knowledge point item in database."""
+        point_id = item.get("id") or self._generate_id("kp")
+
+        sql = """
+            INSERT INTO knowledge_points (
+                id, chapter_id, subject_id, title, content,
+                difficulty, exam_frequency, tags, key_points,
+                related_point_ids, source, source_page,
+                crawl_task_id, status, created_at, updated_at
+            ) VALUES (
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s,
+                %s, %s, %s,
+                %s, %s, %s, %s
+            )
+            ON DUPLICATE KEY UPDATE
+                chapter_id = VALUES(chapter_id),
+                subject_id = VALUES(subject_id),
+                title = VALUES(title),
+                content = VALUES(content),
+                difficulty = VALUES(difficulty),
+                exam_frequency = VALUES(exam_frequency),
+                tags = VALUES(tags),
+                key_points = VALUES(key_points),
+                related_point_ids = VALUES(related_point_ids),
+                source = VALUES(source),
+                source_page = VALUES(source_page),
+                crawl_task_id = VALUES(crawl_task_id),
+                status = VALUES(status),
+                updated_at = VALUES(updated_at)
+        """
+
+        params = (
+            point_id,
+            item.get("chapter_id"),
+            item.get("subject_id"),
+            item.get("title"),
+            item.get("content"),
+            item.get("difficulty", "medium"),
+            item.get("exam_frequency", "medium"),
+            json.dumps(item.get("tags", []), ensure_ascii=False),
+            json.dumps(item.get("key_points", []), ensure_ascii=False),
+            json.dumps(item.get("related_point_ids", []), ensure_ascii=False),
+            item.get("source"),
+            item.get("source_page"),
+            item.get("crawl_task_id"),
+            item.get("status", "active"),
+            self._normalize_datetime(item.get("created_at")),
+            self._normalize_datetime(item.get("updated_at")),
+        )
+
+        self.cursor.execute(sql, params)
+        self.connection.commit()
+        self.stats["knowledge_points_inserted"] += 1
+        logger.debug(f"Knowledge point stored: {point_id}")
+
+    def _store_question(self, item: QuestionItem):
+        """Store question item in database."""
+        question_id = item.get("id") or self._generate_id("q")
+
+        sql = """
+            INSERT INTO questions (
+                id, subject_id, chapter_id, type, content,
+                options, answer, explanation, difficulty,
+                source, exam_year, knowledge_point_ids,
+                tags, status, created_at, updated_at
+            ) VALUES (
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s,
+                %s, %s, %s,
+                %s, %s, %s, %s
+            )
+            ON DUPLICATE KEY UPDATE
+                subject_id = VALUES(subject_id),
+                chapter_id = VALUES(chapter_id),
+                type = VALUES(type),
+                content = VALUES(content),
+                options = VALUES(options),
+                answer = VALUES(answer),
+                explanation = VALUES(explanation),
+                difficulty = VALUES(difficulty),
+                source = VALUES(source),
+                exam_year = VALUES(exam_year),
+                knowledge_point_ids = VALUES(knowledge_point_ids),
+                tags = VALUES(tags),
+                status = VALUES(status),
+                updated_at = VALUES(updated_at)
+        """
+
+        params = (
+            question_id,
+            item.get("subject_id"),
+            item.get("chapter_id"),
+            item.get("type"),
+            item.get("content"),
+            json.dumps(item.get("options", []), ensure_ascii=False),
+            item.get("answer"),
+            item.get("explanation"),
+            item.get("difficulty", "medium"),
+            item.get("source"),
+            item.get("exam_year", 0),
+            json.dumps(item.get("knowledge_point_ids", []), ensure_ascii=False),
+            json.dumps(item.get("tags", []), ensure_ascii=False),
+            item.get("status", "active"),
+            self._normalize_datetime(item.get("created_at")),
+            self._normalize_datetime(item.get("updated_at")),
+        )
+
+        self.cursor.execute(sql, params)
+        self.connection.commit()
+        self.stats["questions_inserted"] += 1
+        logger.debug(f"Question stored: {question_id}")

@@ -1,15 +1,14 @@
 import { Row, Col, Card, Statistic, Spin } from 'antd'
 import {
-  UserOutlined,
-  VideoCameraOutlined,
-  ShareAltOutlined,
+  BookOutlined,
+  FileTextOutlined,
+  QuestionCircleOutlined,
   MessageOutlined,
-  CheckCircleOutlined,
-  ThunderboltOutlined,
+  ReadOutlined,
 } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { getDashboardStats, getDashboardCharts } from '@/api'
-import { LineChart, PieChart, BarChart } from '@/components/Chart'
+import { PieChart, BarChart } from '@/components/Chart'
 import type { DashboardStats } from '@/types'
 
 const StatCard = ({
@@ -17,19 +16,16 @@ const StatCard = ({
   value,
   icon,
   color,
-  suffix,
 }: {
   title: string
   value: number
   icon: React.ReactNode
   color: string
-  suffix?: string
 }) => (
   <Card bordered={false} style={{ borderRadius: 8 }}>
     <Statistic
       title={title}
       value={value}
-      suffix={suffix}
       valueStyle={{ color, fontSize: 28, fontWeight: 'bold' }}
       prefix={<span style={{ marginRight: 12, fontSize: 24 }}>{icon}</span>}
     />
@@ -48,12 +44,11 @@ const Dashboard = () => {
   })
 
   const stats: DashboardStats = statsData?.data || {
-    person_count: 0,
-    work_count: 0,
-    relation_count: 0,
+    subject_count: 0,
+    chapter_count: 0,
+    knowledge_point_count: 0,
+    question_count: 0,
     today_chat_count: 0,
-    data_completeness: 0,
-    api_avg_response: 0,
   }
 
   const charts = chartsData?.data || {}
@@ -68,58 +63,48 @@ const Dashboard = () => {
 
   return (
     <div>
-      <h2 style={{ marginBottom: 24 }}>数据看板</h2>
+      <h2 style={{ marginBottom: 24 }}>408考研学习平台 - 数据看板</h2>
 
       {/* 统计卡片 */}
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         <Col xs={24} sm={12} lg={8} xl={4}>
           <StatCard
-            title="艺人总数"
-            value={stats.person_count}
-            icon={<UserOutlined />}
+            title="学科数量"
+            value={stats.subject_count || 4}
+            icon={<ReadOutlined />}
             color="#1890ff"
           />
         </Col>
         <Col xs={24} sm={12} lg={8} xl={4}>
           <StatCard
-            title="作品总数"
-            value={stats.work_count}
-            icon={<VideoCameraOutlined />}
+            title="章节数量"
+            value={stats.chapter_count || 0}
+            icon={<BookOutlined />}
             color="#52c41a"
           />
         </Col>
         <Col xs={24} sm={12} lg={8} xl={4}>
           <StatCard
-            title="关系总数"
-            value={stats.relation_count}
-            icon={<ShareAltOutlined />}
+            title="知识点数量"
+            value={stats.knowledge_point_count || 0}
+            icon={<FileTextOutlined />}
             color="#722ed1"
           />
         </Col>
         <Col xs={24} sm={12} lg={8} xl={4}>
           <StatCard
-            title="今日对话"
-            value={stats.today_chat_count}
-            icon={<MessageOutlined />}
+            title="题目数量"
+            value={stats.question_count || 0}
+            icon={<QuestionCircleOutlined />}
             color="#fa8c16"
           />
         </Col>
         <Col xs={24} sm={12} lg={8} xl={4}>
           <StatCard
-            title="数据完整率"
-            value={stats.data_completeness}
-            icon={<CheckCircleOutlined />}
+            title="今日问答"
+            value={stats.today_chat_count || 0}
+            icon={<MessageOutlined />}
             color="#13c2c2"
-            suffix="%"
-          />
-        </Col>
-        <Col xs={24} sm={12} lg={8} xl={4}>
-          <StatCard
-            title="API响应"
-            value={stats.api_avg_response}
-            icon={<ThunderboltOutlined />}
-            color="#eb2f96"
-            suffix="ms"
           />
         </Col>
       </Row>
@@ -127,31 +112,31 @@ const Dashboard = () => {
       {/* 图表区域 */}
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={12}>
-          <Card title="近7日对话趋势" bordered={false} style={{ borderRadius: 8 }}>
-            {chartsLoading ? (
-              <div style={{ height: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999' }}>
-                图表数据加载中...
-              </div>
-            ) : (
-              <LineChart
-                data={(charts.chat_trend || []) as { date: string; count: number }[]}
-                title=""
-                color="#1890ff"
-                height={300}
-              />
-            )}
-          </Card>
-        </Col>
-        <Col xs={24} lg={12}>
-          <Card title="艺人分类分布" bordered={false} style={{ borderRadius: 8 }}>
+          <Card title="各学科知识点分布" bordered={false} style={{ borderRadius: 8 }}>
             {chartsLoading ? (
               <div style={{ height: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999' }}>
                 图表数据加载中...
               </div>
             ) : (
               <PieChart
-                data={(charts.category_distribution || []) as { name: string; value: number }[]}
+                data={(charts.subject_distribution || []) as { name: string; value: number }[]}
                 title=""
+                height={300}
+              />
+            )}
+          </Card>
+        </Col>
+        <Col xs={24} lg={12}>
+          <Card title="知识点难度分布" bordered={false} style={{ borderRadius: 8 }}>
+            {chartsLoading ? (
+              <div style={{ height: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999' }}>
+                图表数据加载中...
+              </div>
+            ) : (
+              <BarChart
+                data={(charts.difficulty_distribution || []) as { name: string; value: number }[]}
+                title=""
+                color="#722ed1"
                 height={300}
               />
             )}
@@ -161,35 +146,66 @@ const Dashboard = () => {
 
       <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
         <Col xs={24} lg={12}>
-          <Card title="热门搜索词Top10" bordered={false} style={{ borderRadius: 8 }}>
+          <Card title="题目类型分布" bordered={false} style={{ borderRadius: 8 }}>
             {chartsLoading ? (
               <div style={{ height: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999' }}>
                 图表数据加载中...
               </div>
             ) : (
-              <BarChart
-                data={(charts.hot_search || []) as { name: string; value: number }[]}
+              <PieChart
+                data={(charts.question_type_distribution || []) as { name: string; value: number }[]}
                 title=""
-                color="#52c41a"
                 height={300}
               />
             )}
           </Card>
         </Col>
         <Col xs={24} lg={12}>
-          <Card title="爬虫任务状态" bordered={false} style={{ borderRadius: 8 }}>
-            {chartsLoading ? (
-              <div style={{ height: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999' }}>
-                数据加载中...
-              </div>
-            ) : (
-              <BarChart
-                data={(charts.crawler_status || []) as { name: string; value: number }[]}
-                title=""
-                color="#fa8c16"
-                height={300}
-              />
-            )}
+          <Card title="快速入口" bordered={false} style={{ borderRadius: 8 }}>
+            <div style={{ padding: 20 }}>
+              <Row gutter={[16, 16]}>
+                <Col span={12}>
+                  <Card
+                    hoverable
+                    style={{ textAlign: 'center' }}
+                    onClick={() => window.location.href = '/admin/knowledge'}
+                  >
+                    <BookOutlined style={{ fontSize: 32, color: '#1890ff', marginBottom: 8 }} />
+                    <div>知识点管理</div>
+                  </Card>
+                </Col>
+                <Col span={12}>
+                  <Card
+                    hoverable
+                    style={{ textAlign: 'center' }}
+                    onClick={() => window.location.href = '/admin/questions'}
+                  >
+                    <QuestionCircleOutlined style={{ fontSize: 32, color: '#52c41a', marginBottom: 8 }} />
+                    <div>题目管理</div>
+                  </Card>
+                </Col>
+                <Col span={12}>
+                  <Card
+                    hoverable
+                    style={{ textAlign: 'center' }}
+                    onClick={() => window.location.href = '/admin/conversations'}
+                  >
+                    <MessageOutlined style={{ fontSize: 32, color: '#722ed1', marginBottom: 8 }} />
+                    <div>智能问答</div>
+                  </Card>
+                </Col>
+                <Col span={12}>
+                  <Card
+                    hoverable
+                    style={{ textAlign: 'center' }}
+                    onClick={() => window.location.href = '/admin/crawler'}
+                  >
+                    <FileTextOutlined style={{ fontSize: 32, color: '#fa8c16', marginBottom: 8 }} />
+                    <div>PDF入库</div>
+                  </Card>
+                </Col>
+              </Row>
+            </div>
           </Card>
         </Col>
       </Row>

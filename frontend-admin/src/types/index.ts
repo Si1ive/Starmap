@@ -186,6 +186,73 @@ export interface DashboardStats {
   today_chat_count: number
   data_completeness: number
   api_avg_response: number
+  // 408平台
+  subject_count?: number
+  chapter_count?: number
+  knowledge_point_count?: number
+  question_count?: number
+}
+
+// ========== 408考研平台 ==========
+
+// 学科
+export interface Subject {
+  id: string
+  name: string
+  code: string
+  description?: string
+  icon?: string
+  sort_order: number
+  status: 'active' | 'inactive'
+}
+
+// 章节
+export interface Chapter {
+  id: string
+  subject_id: string
+  name: string
+  description?: string
+  sort_order: number
+  status: 'active' | 'inactive'
+}
+
+// 知识点
+export interface KnowledgePoint {
+  id: string
+  chapter_id: string
+  subject_id: string
+  title: string
+  content: string
+  difficulty: 'easy' | 'medium' | 'hard'
+  exam_frequency: 'high' | 'medium' | 'low' | 'never'
+  tags?: string[]
+  key_points?: string[]
+  related_point_ids?: string[]
+  source?: string
+  source_page?: string
+  status: 'active' | 'pending' | 'deleted'
+  created_at?: string
+  updated_at?: string
+}
+
+// 题目
+export interface Question {
+  id: string
+  subject_id: string
+  chapter_id: string
+  type: 'choice' | 'fill' | 'judge' | 'short_answer' | 'design' | 'analysis'
+  content: string
+  options?: { key: string; text: string }[]
+  answer: string
+  explanation?: string
+  difficulty: 'easy' | 'medium' | 'hard'
+  source?: string
+  exam_year?: number
+  knowledge_point_ids?: string[]
+  tags?: string[]
+  status: 'active' | 'pending' | 'deleted'
+  created_at?: string
+  updated_at?: string
 }
 
 // 通用分页响应

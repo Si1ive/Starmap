@@ -23,6 +23,12 @@ import DatabaseMonitor from '@/pages/Monitor/Database'
 import MonitorErrors from '@/pages/Monitor/Errors'
 import Settings from '@/pages/Settings'
 import SettingsUsers from '@/pages/Settings/Users'
+import KnowledgeList from '@/pages/Knowledge/List'
+import KnowledgeDetail from '@/pages/Knowledge/Detail'
+import KnowledgeEdit from '@/pages/Knowledge/Edit'
+import QuestionList from '@/pages/Question/List'
+import QuestionDetail from '@/pages/Question/Detail'
+import QuestionEdit from '@/pages/Question/Edit'
 import { usePermission } from '@/hooks/usePermission'
 
 // 路由守卫组件
@@ -151,6 +157,30 @@ const AppRoutes = () => {
           }
         />
         <Route path="crawler/logs" element={<CrawlerLogs />} />
+
+        {/* 知识点管理 */}
+        <Route path="knowledge" element={<KnowledgeList />} />
+        <Route path="knowledge/:id" element={<KnowledgeDetail />} />
+        <Route
+          path="knowledge/:id/edit"
+          element={
+            <PrivateRoute permission="knowledge:edit">
+              <KnowledgeEdit />
+            </PrivateRoute>
+          }
+        />
+
+        {/* 题目管理 */}
+        <Route path="questions" element={<QuestionList />} />
+        <Route path="questions/:id" element={<QuestionDetail />} />
+        <Route
+          path="questions/:id/edit"
+          element={
+            <PrivateRoute permission="question:edit">
+              <QuestionEdit />
+            </PrivateRoute>
+          }
+        />
 
         {/* 对话管理 */}
         <Route path="conversations" element={<ConversationList />} />

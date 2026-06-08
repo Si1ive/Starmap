@@ -533,3 +533,196 @@ class AuditLog(Base):
         Index("idx_al_created_at", "created_at"),
         {"comment": "审计日志表"}
     )
+
+
+# ========== 408 考研平台模型 ==========
+
+
+class Subject(Base):
+    """学科表：数据结构/计组/操作系统/计网"""
+    __tablename__ = "subjects"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="唯一标识")
+    name: Mapped[str] = mapped_column(String(50), nullable=False, comment="学科名称")
+    code: Mapped[str] = mapped_column(String(20), unique=True, nullable=False, comment="学科编码")
+    description: Mapped[Optional[str]] = mapped_column(Text, comment="学科描述")
+    icon: Mapped[Optional[str]] = mapped_column(String(100), comment="图标标识")
+    sort_order: Mapped[int] = mapped_column(default=0, comment="排序序号")
+    status: Mapped[str] = mapped_column(
+        Enum("active", "inactive"),
+        default="active",
+        comment="状态"
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    chapters: Mapped[List["Chapter"]] = relationship(back_populates="subject")
+
+    __table_args__ = (
+        Index("idx_subject_code", "code"),
+        Index("idx_subject_status", "status"),
+        Index("idx_subject_sort", "sort_order"),
+        {"comment": "学科表"}
+    )
+
+
+class Chapter(Base):
+    """章节表"""
+    __tablename__ = "chapters"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="唯一标识")
+    subject_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("subjects.id", ondelete="CASCADE"),
+        nullable=False, comment="所属学科ID"
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False, comment="章节名称")
+    description: Mapped[Optional[str]] = mapped_column(Text, comment="章节描述")
+    sort_order: Mapped[int] = mapped_column(default=0, comment="排序序号")
+    status: Mapped[str] = mapped_column(
+        Enum("active", "inactive"),
+        default="active",
+        comment="状态"
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    subject: Mapped["Subject"] = relationship(back_populates="chapters")
+
+    __table_args__ = (
+        Index("idx_chapter_subject", "subject_id"),
+        Index("idx_chapter_sort", "subject_id", "sort_order"),
+        {"comment": "章节表"}
+    )
+
+
+class KnowledgePoint(Base):
+    """知识点表"""
+    __tablename__ = "knowledge_points"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="唯一标识")
+    chapter_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("chapters.id", ondelete="CASCADE"),
+        nullable=False, comment="所属章节ID"
+    )
+    subject_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("subjects.id", ondelete="CASCADE"),
+        nullable=False, comment="所属学科ID（冗余，方便查询）"
+    )
+    title: Mapped[str] = mapped_column(String(200), nullable=False, comment="知识点标题")
+    content: Mapped[str] = mapped_column(Text, nullable=False, comment="知识点正文（Markdown）")
+    difficulty: Mapped[str] = mapped_column(
+        Enum("easy", "medium", "hard"),
+        default="medium",
+        comment="难度"
+    )
+    exam_frequency: Mapped[str] = mapped_column(
+        Enum("high", "medium", "low", "never"),
+        default="medium",
+        comment="考试频率"
+    )
+    tags: Mapped[Optional[List[str]]] = mapped_column(JSON, comment="标签列表")
+    key_points: Mapped[Optional[List[str]]] = mapped_column(JSON, comment="要点列表")
+    related_point_ids: Mapped[Optional[List[str]]] = mapped_column(JSON, comment="关联知识点ID")
+    source: Mapped[Optional[str]] = mapped_column(String(100), comment="来源，如 王道2025/第3章")
+    source_page: Mapped[Optional[str]] = mapped_column(String(20), comment="来源页码")
+    crawl_task_id: Mapped[Optional[str]] = mapped_column(String(32), comment="关联爬取任务ID")
+    status: Mapped[str] = mapped_column(
+        Enum("active", "pending", "deleted"),
+        default="pending",
+        comment="状态"
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    __table_args__ = (
+        Index("idx_kp_chapter", "chapter_id"),
+        Index("idx_kp_subject", "subject_id"),
+        Index("idx_kp_difficulty", "difficulty"),
+        Index("idx_kp_exam_freq", "exam_frequency"),
+        Index("idx_kp_status", "status"),
+        Index("idx_kp_title", "title"),
+        {"comment": "知识点表"}
+    )
+
+
+class Question(Base):
+    """题目表"""
+    __tablename__ = "questions"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="唯一标识")
+    subject_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("subjects.id", ondelete="CASCADE"),
+        nullable=False, comment="所属学科ID"
+    )
+    chapter_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("chapters.id", ondelete="CASCADE"),
+        nullable=False, comment="所属章节ID"
+    )
+    type: Mapped[str] = mapped_column(
+        Enum("choice", "fill", "judge", "short_answer", "design", "analysis"),
+        nullable=False,
+        comment="题型"
+    )
+    content: Mapped[str] = mapped_column(Text, nullable=False, comment="题目正文")
+    options: Mapped[Optional[List[dict]]] = mapped_column(
+        JSON, comment="选择题选项，格式: [{\"key\":\"A\",\"text\":\"...\"}]"
+    )
+    answer: Mapped[str] = mapped_column(Text, nullable=False, comment="标准答案")
+    explanation: Mapped[Optional[str]] = mapped_column(Text, comment="解析")
+    difficulty: Mapped[str] = mapped_column(
+        Enum("easy", "medium", "hard"),
+        default="medium",
+        comment="难度"
+    )
+    source: Mapped[Optional[str]] = mapped_column(String(100), comment="来源，如 2024年408真题")
+    exam_year: Mapped[int] = mapped_column(default=0, comment="真题年份，练习题为0")
+    knowledge_point_ids: Mapped[Optional[List[str]]] = mapped_column(JSON, comment="关联知识点ID")
+    tags: Mapped[Optional[List[str]]] = mapped_column(JSON, comment="标签")
+    status: Mapped[str] = mapped_column(
+        Enum("active", "pending", "deleted"),
+        default="pending",
+        comment="状态"
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    __table_args__ = (
+        Index("idx_q_subject", "subject_id"),
+        Index("idx_q_chapter", "chapter_id"),
+        Index("idx_q_type", "type"),
+        Index("idx_q_difficulty", "difficulty"),
+        Index("idx_q_exam_year", "exam_year"),
+        Index("idx_q_status", "status"),
+        {"comment": "题目表"}
+    )
+
+
+class UserQuestionRecord(Base):
+    """用户做题记录表"""
+    __tablename__ = "user_question_records"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(String(50), nullable=False, comment="用户会话ID")
+    question_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("questions.id", ondelete="CASCADE"),
+        nullable=False, comment="题目ID"
+    )
+    user_answer: Mapped[Optional[str]] = mapped_column(Text, comment="用户答案")
+    is_correct: Mapped[Optional[bool]] = mapped_column(Boolean, comment="是否正确")
+    time_spent: Mapped[Optional[int]] = mapped_column(comment="用时（秒）")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_uqr_session", "session_id"),
+        Index("idx_uqr_question", "question_id"),
+        Index("idx_uqr_created", "created_at"),
+        {"comment": "用户做题记录表"}
+    )

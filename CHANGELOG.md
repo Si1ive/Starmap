@@ -1,13 +1,73 @@
-# StarMap 项目变更日志
+# 408考研智能学习平台 - 变更日志
 
 ## 格式说明
 
 每条记录包含：
 - **日期**：变更时间
-- **会话**：哪个会话（角色）做的变更
 - **类型**：feat/fix/docs/refactor/test
 - **影响**：影响范围
 - **详细描述**：具体变更内容
+
+---
+
+## 2026-06-08
+
+### [docs] 项目定位转型 - 从艺人知识图谱到408考研学习平台
+- **类型**：refactor
+- **影响**：全项目
+- **描述**：
+  - 项目定位从"艺人知识图谱"转为"408考研智能学习平台"
+  - 原因：艺人信息缺乏壁垒，通用大模型即可查询；408考研有明确受众和真实痛点
+  - 差异化：结构化知识库 + 难度/考频标签 + RAG精准问答
+
+### [backend] 新增408数据模型
+- **类型**：feat
+- **影响**：backend/app/models/mysql_models.py
+- **描述**：
+  - 新增 Subject（学科）、Chapter（章节）、KnowledgePoint（知识点）、Question（题目）、UserQuestionRecord（做题记录）模型
+  - 创建 init_408_tables.sql 建表脚本 + 种子数据（4门学科 + 26个章节）
+
+### [backend] ChromaDB知识点向量支持
+- **类型**：feat
+- **影响**：backend/app/db/chroma.py
+- **描述**：
+  - 新增 knowledge_points collection
+  - 新增 add_knowledge_point() 和 search_knowledge_points() 方法
+
+### [backend] PDF解析爬虫
+- **类型**：feat
+- **影响**：backend/scrapy_service/
+- **描述**：
+  - 新增 KnowledgePointItem 和 QuestionItem
+  - 新增 knowledge_spider.py - 解析PDF为结构化知识点
+  - 更新 storage.py 支持新Item类型存储
+
+### [backend] RAG智能问答实现
+- **类型**：feat
+- **影响**：backend/app/services/chat_service.py
+- **描述**：
+  - 实现完整RAG流程：ChromaDB检索 → 构建prompt → OpenAI生成回答
+  - 替换原有的echo模式
+
+### [backend] 知识点/题目管理API
+- **类型**：feat
+- **影响**：backend/app/api/admin.py
+- **描述**：
+  - 新增 /admin/subjects - 学科列表
+  - 新增 /admin/subjects/{id}/chapters - 章节列表
+  - 新增 /admin/knowledge/points - 知识点CRUD
+  - 新增 /admin/questions - 题目CRUD
+  - 更新 /admin/dashboard/stats - 真实统计数据
+
+### [docs] 文档全面更新
+- **类型**：docs
+- **影响**：README.md, docs/
+- **描述**：
+  - 重写 README.md 为408考研平台文档
+  - 更新 data-model.md - 新数据模型
+  - 更新 architecture.md - 新架构设计
+  - 更新 PRD.md - 新产品需求
+  - 更新 project-board.md - 新项目看板
 
 ---
 

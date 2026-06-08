@@ -2,8 +2,8 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { Layout, Menu } from 'antd'
 import {
   DashboardOutlined,
-  UserOutlined,
-  VideoCameraOutlined,
+  BookOutlined,
+  QuestionCircleOutlined,
   BugOutlined,
   BarChartOutlined,
   ToolOutlined,
@@ -22,12 +22,13 @@ const { Sider } = Layout
 
 const menuItems = [
   { key: '/admin/dashboard', icon: <DashboardOutlined />, label: '数据看板' },
-  { key: '/admin/persons', icon: <UserOutlined />, label: '艺人管理' },
-  { key: '/admin/works', icon: <VideoCameraOutlined />, label: '作品管理' },
+  { key: '/admin/knowledge', icon: <BookOutlined />, label: '知识点管理' },
+  { key: '/admin/questions', icon: <QuestionCircleOutlined />, label: '题目管理' },
+  { key: '/admin/conversations', icon: <MessageOutlined />, label: '智能问答' },
   {
     key: '/admin/crawler-group',
     icon: <BugOutlined />,
-    label: '爬虫管理',
+    label: '数据采集',
     children: [
       { key: '/admin/crawler', label: '任务列表' },
       { key: '/admin/crawler/sources', label: '数据源' },
@@ -37,7 +38,6 @@ const menuItems = [
       { key: '/admin/crawler/config', icon: <ToolOutlined />, label: '爬虫配置' },
     ],
   },
-  { key: '/admin/conversations', icon: <MessageOutlined />, label: '对话管理' },
   {
     key: '/admin/monitor-group',
     icon: <MonitorOutlined />,
@@ -134,7 +134,7 @@ const AppSider = () => {
           borderBottom: '1px solid rgba(255,255,255,0.1)',
         }}
       >
-        {collapsed ? 'SM' : 'StarMap Admin'}
+        {collapsed ? '408' : '408考研学习平台'}
       </div>
       <Menu
         theme="dark"

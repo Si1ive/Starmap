@@ -18,6 +18,8 @@ from app.models.mysql_models import CrawlLog, CrawlSource, CrawlSourceStats
 
 logger = get_logger(__name__)
 
+VALID_SPIDER_KEYS = {"baike", "douban", "wikipedia"}
+
 DEFAULT_CRAWL_SOURCES = [
     {
         "id": "src_001",
@@ -26,6 +28,7 @@ DEFAULT_CRAWL_SOURCES = [
         "type": "encyclopedia",
         "base_url": "https://zh.wikipedia.org/wiki/",
         "config": {
+            "spider_key": "wikipedia",
             "selectors": {
                 "title": "h1.firstHeading",
                 "summary": "div.mw-parser-output > p:first-of-type",
@@ -43,6 +46,7 @@ DEFAULT_CRAWL_SOURCES = [
         "type": "social",
         "base_url": "https://movie.douban.com/",
         "config": {
+            "spider_key": "douban",
             "selectors": {
                 "title": "span[property=\"v:itemreviewed\"]",
                 "rating": "strong[property=\"v:average\"]",
@@ -60,6 +64,7 @@ DEFAULT_CRAWL_SOURCES = [
         "type": "encyclopedia",
         "base_url": "https://baike.baidu.com/",
         "config": {
+            "spider_key": "baike",
             "selectors": {"title": "h1", "summary": ".lemma-summary"},
             "anti_detection": {"user_agent_rotation": True, "delay_range": [1.0, 3.0]},
         },
@@ -120,13 +125,20 @@ class CrawlerSourceService:
         if result.scalar_one_or_none():
             raise ValueError(f"数据源编码已存在: {code}")
 
+        config = data.get("config") or {}
+        spider_key = config.get("spider_key")
+        if not spider_key:
+            raise ValueError("请选择爬虫类型（spider_key）")
+        if spider_key not in VALID_SPIDER_KEYS:
+            raise ValueError(f"不支持的爬虫类型: {spider_key}，可选: {', '.join(sorted(VALID_SPIDER_KEYS))}")
+
         source = CrawlSource(
             id=f"src_{uuid.uuid4().hex[:8]}",
             name=str(data["name"]).strip(),
             code=code,
             type=data.get("type"),
             base_url=data.get("base_url"),
-            config=data.get("config"),
+            config=config,
             request_interval=data.get("request_interval", 1.0),
             daily_limit=data.get("daily_limit", 1000),
             concurrent_limit=data.get("concurrent_limit", 5),

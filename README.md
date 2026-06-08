@@ -1,36 +1,49 @@
-# StarMap - 艺人知识图谱与对话Agent
+# 408考研智能学习平台
 
 ## 项目简介
 
-StarMap是一个基于知识图谱的艺人信息探索系统，支持通过自然语言对话查询艺人信息、关系网络、作品等，并提供可视化关系图谱展示。
+408考研智能学习平台是一个基于 RAG（检索增强生成）的结构化学习系统，专为计算机考研 408 学科打造。系统将教材 PDF 解析入库，按大纲结构化组织知识点，提供智能问答、刷题练习等功能。
+
+**核心差异化：** 不是简单的 PDF + ChatGPT，而是按 408 大纲结构化组织的知识库，带难度/考频标签、关联知识点、练习题。
+
+## 覆盖学科
+
+| 学科 | 408分值 | 内容 |
+|------|---------|------|
+| 数据结构 | ~45分 | 线性表、树与二叉树、图、查找、排序等 |
+| 计算机组成原理 | ~45分 | 数据表示、存储器、指令系统、CPU、总线、I/O |
+| 操作系统 | ~35分 | 进程管理、内存管理、文件管理、I/O管理 |
+| 计算机网络 | ~25分 | 物理层、数据链路层、网络层、传输层、应用层 |
 
 ## 核心功能
 
-- **知识图谱**：构建艺人、作品、公司等实体关系网络
-- **智能对话**：通过自然语言与Agent交互，查询艺人信息
-- **关系探索**：可视化展示人物关系、合作网络
-- **领域浏览**：按演员、歌手、导演等分类浏览
+- **结构化知识库**：按大纲章节组织，带难度、考频标签
+- **RAG 智能问答**：基于向量检索的精准回答，附带来源引用
+- **刷题系统**：真题 + 练习题，支持选择/填空/判断/简答/设计/分析题型
+- **PDF 自动入库**：将王道/天勤教材 PDF 自动解析为结构化知识点
+- **管理后台**：知识点/题目管理、数据质量校正
 
 ## 技术栈
 
 | 层级 | 技术 |
 |------|------|
-| 前端 | React 18 + TypeScript + Vite + Ant Design + D3.js |
+| 前端 | React 18 + TypeScript + Vite + Ant Design + ECharts |
 | 后端 | FastAPI (Python 3.11) |
-| Agent | LangChain + OpenAI GPT-4 |
-| 主数据库 | **MySQL 8.0** - 结构化数据存储 |
-| 图数据库 | Neo4j 5.x - 人物关系网络 |
+| RAG | LangChain + OpenAI GPT-4 + ChromaDB 向量检索 |
+| 主数据库 | MySQL 8.0 - 学科/章节/知识点/题目 |
+| 图数据库 | Neo4j 5.x - 知识点关联关系 |
 | 向量数据库 | ChromaDB - 语义搜索 |
 | 缓存 | Redis - 会话与热点数据 |
-| 部署 | **Podman** + Podman Compose |
+| 爬虫服务 | Scrapy 2.x - PDF 解析 + 网页爬取 |
+| 部署 | Podman + Podman Compose |
 
 ## 数据库架构
 
 本项目采用 **MySQL + Neo4j + ChromaDB + Redis** 多数据库架构：
 
-- **MySQL** (主存储): 人物属性、作品信息、爬虫任务/日志、管理员用户、审计日志
-- **Neo4j** (图数据库): 人物关系网络、图遍历查询
-- **ChromaDB** (向量数据库): 语义搜索、向量嵌入
+- **MySQL** (主存储): 学科、章节、知识点、题目、做题记录、管理员用户
+- **Neo4j** (图数据库): 知识点关联关系（前置依赖、相似、对比）
+- **ChromaDB** (向量数据库): 知识点向量嵌入，支持语义搜索
 - **Redis** (缓存): 会话状态、搜索结果缓存
 
 ## 快速开始
@@ -39,71 +52,51 @@ StarMap是一个基于知识图谱的艺人信息探索系统，支持通过自�
 
 - Python 3.11+
 - Node.js 18+
-- **Podman** + podman-compose
+- Podman + podman-compose
 
 ### 1. 克隆项目
 
 ```bash
 git clone <repo-url>
-cd starmap
+cd my-agent
 ```
 
 ### 2. 安装 Podman（macOS）
 
 ```bash
-# 安装 Podman 和 podman-compose
 brew install podman podman-compose
-
-# 初始化 Podman 虚拟机（首次）
 podman machine init
-
-# 启动虚拟机
 podman machine start
 ```
 
-### 3. 启动数据库服务（Podman）
+### 3. 启动基础设施（Podman）
 
 ```bash
-# 启动 MySQL + Neo4j + Redis + ChromaDB
+# 启动 MySQL + Neo4j + Redis + ChromaDB + Scrapy Service
 podman-compose -f docker-compose.podman.yml up -d
 
 # 查看服务状态
 podman-compose -f docker-compose.podman.yml ps
-
-# 查看服务日志
-podman-compose -f docker-compose.podman.yml logs -f mysql
-podman-compose -f docker-compose.podman.yml logs -f neo4j
-podman-compose -f docker-compose.podman.yml logs -f redis
-podman-compose -f docker-compose.podman.yml logs -f chromadb
 ```
 
-服务启动后访问：
-- Neo4j Browser: http://localhost:7474 (用户名: neo4j, 密码: starmap123)
-- ChromaDB API: http://localhost:8001
+### 4. 初始化数据库
 
-### 4. 初始化 MySQL 数据库
+```bash
+# 执行 408 平台建表 + 种子数据
+podman exec -i starmap-mysql mysql -u starmap -p starmap < backend/scripts/init_408_tables.sql
+# 密码: starmap123
+```
+
+### 5. 启动后端服务
 
 ```bash
 cd backend
-
-# 自动创建表结构和默认管理员账号
-python scripts/init_database.py --all
-```
-
-### 5. 启动后端服务（本地开发模式）
-
-```bash
-cd backend
-
-# 创建虚拟环境（首次）
 python3 -m venv venv
-
-# 激活虚拟环境
-source venv/bin/activate  # macOS/Linux
-# 或: venv\Scripts\activate  # Windows
-
-# 安装依赖（首次）
+source venv/bin/activate
 pip install -r requirements.txt
+
+# 配置 OpenAI API Key
+echo "OPENAI_API_KEY=your-api-key" >> .env
 
 # 启动服务
 python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
@@ -112,389 +105,171 @@ python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 后端服务：
 - API 地址: http://localhost:8000
 - API 文档: http://localhost:8000/docs
-- 健康检查: http://localhost:8000/health
 
-### 6. 启动前端服务
+### 6. 启动前端管理端
 
 ```bash
-cd frontend
-
-# 安装依赖（首次）
+cd frontend-admin
 npm install
-
-# 启动开发服务器
 npm run dev
 ```
 
-前端服务：
-- 开发服务器: http://localhost:5173
+管理端地址: http://localhost:5174
 
-### 7. 验证服务状态
+## PDF 数据入库
 
-```bash
-# 检查所有服务健康状态
-curl http://localhost:8000/health
-
-# 预期响应
-{
-    "status": "healthy",
-    "version": "1.0.0",
-    "services": {
-        "mysql": "up",
-        "neo4j": "up",
-        "redis": "up",
-        "chromadb": "up"
-    }
-}
-```
-
-## MySQL 数据同步
-
-将 MySQL 数据同步到 Neo4j：
+将王道/天勤教材 PDF 解析为结构化知识点：
 
 ```bash
-# 全量同步
-python scripts/sync_to_neo4j.py --full
-
-# 增量同步
-python scripts/sync_to_neo4j.py --incremental --since 2024-01-01T00:00:00
+# 通过管理后台触发 PDF 解析任务
+# 或直接运行 Scrapy spider
+cd backend/scrapy_service
+scrapy crawl knowledge \
+    -a pdf_path=/path/to/book.pdf \
+    -a subject_id=subj_ds \
+    -a chapter_id=ch_ds_01 \
+    -a source="王道2025/数据结构"
 ```
-
-## 默认管理员账号
-
-- 用户名: `admin`
-- 密码: `admin123`
-- 角色: 超级管理员
-
-> 请在首次登录后修改默认密码。
 
 ## 项目结构
 
 ```
-starmap/
-├── docs/                    # 项目文档
-│   ├── team/               # 团队角色与职责
-│   ├── roadmap/            # 开发路线
-│   ├── tech/               # 技术文档
-│   └── api/                # 接口文档
-├── backend/                 # 后端服务
-│   ├── app/                # 应用代码
-│   │   ├── db/             # 数据库连接
-│   │   │   ├── mysql.py          # MySQL 连接封装
-│   │   │   ├── neo4j.py          # Neo4j 连接封装
-│   │   │   ├── chroma.py         # ChromaDB 连接封装
-│   │   │   └── redis.py          # Redis 连接封装
-│   │   ├── models/         # 数据模型
-│   │   │   └── mysql_models.py   # SQLAlchemy ORM 模型
-│   │   └── ...
-│   ├── crawler/            # 数据采集
-│   ├── scripts/            # 脚本工具
-│   │   ├── init_mysql.sql        # MySQL 初始化脚本
-│   │   ├── sync_to_neo4j.py      # MySQL → Neo4j 同步脚本
-│   │   └── init_database.py      # 数据库初始化工具
-│   └── tests/              # 测试
-├── frontend/                # 前端应用
-│   ├── src/                # 源代码
-│   └── public/             # 静态资源
-├── frontend-admin/          # 管理端 (React)
-├── docker-compose.podman.yml  # Podman 编排配置
-└── README.md               # 项目说明
+my-agent/
+├── docs/                         # 项目文档
+│   ├── tech/                    # 技术文档
+│   ├── admin/                   # 管理端文档
+│   ├── api/                     # 接口文档
+│   └── roadmap/                 # 开发路线
+├── backend/                      # 后端服务
+│   ├── app/                     # FastAPI 应用
+│   │   ├── api/admin.py         # 管理端 API
+│   │   ├── api/chat.py          # 对话 API
+│   │   ├── db/chroma.py         # ChromaDB 客户端
+│   │   ├── models/mysql_models.py  # SQLAlchemy 模型
+│   │   └── services/chat_service.py  # RAG 对话服务
+│   ├── scrapy_service/          # Scrapy 爬虫服务
+│   │   ├── starmap_scrapy/
+│   │   │   ├── spiders/
+│   │   │   │   └── knowledge_spider.py  # PDF 解析 spider
+│   │   │   ├── items.py         # Scrapy Item 定义
+│   │   │   └── pipelines/storage.py   # 数据存储 pipeline
+│   │   └── requirements.txt
+│   └── scripts/
+│       └── init_408_tables.sql  # 408 平台建表脚本
+├── frontend-admin/               # 管理端前端
+│   └── src/
+│       ├── pages/
+│       │   ├── Dashboard/       # 看板
+│       │   ├── Knowledge/       # 知识点管理
+│       │   ├── Question/        # 题目管理
+│       │   └── Conversation/    # 问答对话
+│       └── api/
+├── docker-compose.podman.yml     # Podman 编排配置
+└── README.md
 ```
 
-## 常见问题排查
+## 默认账号
 
-### Podman 服务启动失败
+| 服务 | 地址 | 账号 | 密码 |
+|------|------|------|------|
+| MySQL | localhost:3306 | `starmap` | `starmap123` |
+| Neo4j | http://localhost:7474 | `neo4j` | `starmap123` |
+| Redis | localhost:6379 | - | - |
+| ChromaDB | http://localhost:8001 | - | - |
+| 管理端 | http://localhost:5174 | `admin` | `admin123` |
 
-**问题**: `podman-compose up` 报错或容器无法启动
-
-**解决方案**:
-```bash
-# 1. 检查 Podman 虚拟机是否运行
-podman machine list
-
-# 2. 如果未运行，启动虚拟机
-podman machine start
-
-# 3. 清理并重新启动
-podman-compose -f docker-compose.podman.yml down
-podman system prune -f  # 清理未使用的镜像和缓存
-podman-compose -f docker-compose.podman.yml up -d
-
-# 4. 查看具体错误日志
-podman-compose -f docker-compose.podman.yml logs mysql
-podman-compose -f docker-compose.podman.yml logs neo4j
-```
-
-### 后端启动报错：模块未找到
-
-```bash
-cd backend
-source venv/bin/activate
-
-# 重新安装依赖
-pip install -r requirements.txt
-
-# 如果 chroma-hnswlib 编译失败，安装编译工具
-# macOS:
-brew install cmake gcc
-
-# 然后重新安装
-pip install --no-cache-dir chromadb
-```
-
-### 端口被占用
-
-```bash
-# 查找占用端口的进程
-lsof -i :8000  # 后端端口
-lsof -i :5173  # 前端端口
-lsof -i :3306  # MySQL 端口
-lsof -i :7474  # Neo4j 端口
-lsof -i :6379  # Redis 端口
-lsof -i :8001  # ChromaDB 端口
-
-# 终止进程
-kill -9 <PID>
-```
-
-### 数据库连接失败
-
-**检查服务是否运行**:
-```bash
-podman-compose -f docker-compose.podman.yml ps
-# 应该看到 mysql、neo4j、redis、chromadb 都是 healthy 状态
-```
-
-**检查环境变量**:
-```bash
-# 后端默认连接本地数据库，确认以下配置
-cat backend/.env
-# 应该包含:
-# MYSQL_HOST=localhost
-# MYSQL_PORT=3306
-# MYSQL_USER=starmap
-# MYSQL_PASSWORD=starmap123
-# MYSQL_DATABASE=starmap
-# NEO4J_URI=bolt://localhost:7687
-# NEO4J_USER=neo4j
-# NEO4J_PASSWORD=starmap123
-# REDIS_URL=redis://localhost:6379
-# CHROMA_HOST=localhost
-# CHROMA_PORT=8001
-```
-
-### 构建缓存过大
-
-```bash
-# 查看磁盘使用
-podman system df
-
-# 清理构建缓存（可释放数GB空间）
-podman builder prune -f
-
-# 清理所有未使用资源
-podman system prune -a -f
-```
-
-## 数据库监控与访问
-
-### 服务状态监控
-
-```bash
-# 查看所有容器资源占用
-podman stats --no-stream
-
-# 查看容器日志
-podman-compose -f docker-compose.podman.yml logs -f mysql
-podman-compose -f docker-compose.podman.yml logs -f neo4j
-podman-compose -f docker-compose.podman.yml logs -f redis
-podman-compose -f docker-compose.podman.yml logs -f chromadb
-
-# 检查服务健康状态
-curl http://localhost:8000/health
-```
-
-### MySQL 数据库
-
-**命令行访问**:
-```bash
-# 进入 MySQL 容器
-podman exec -it starmap-mysql mysql -u starmap -p starmap
-# 密码: starmap123
-
-# 常用查询
-SHOW TABLES;
-SELECT COUNT(*) FROM persons;
-SELECT * FROM persons LIMIT 10;
-```
-
-### Neo4j 图数据库
-
-**可视化界面**：
-```bash
-# 浏览器访问
-open http://localhost:7474
-```
-- 用户名：`neo4j`
-- 密码：`starmap123`
-
-**命令行查询**：
-```bash
-# 进入 Neo4j 容器执行 Cypher 查询
-podman exec -it starmap-neo4j cypher-shell -u neo4j -p starmap123
-
-# 常用查询
-MATCH (n) RETURN count(n) as nodes;                    # 统计节点数
-MATCH ()-[r]->() RETURN count(r) as relations;         # 统计关系数
-MATCH (n) RETURN n LIMIT 10;                           # 查看前10个节点
-```
-
-### Redis 缓存
-
-**使用 RedisInsight（推荐）**：
-```bash
-# 安装可视化工具
-brew install --cask redisinsight
-
-# 启动后添加连接
-# Host: localhost, Port: 6379, Name: starmap-redis
-```
-
-**命令行操作**：
-```bash
-# 进入 Redis 容器
-podman exec -it starmap-redis redis-cli
-
-# 常用命令
-KEYS *                    # 查看所有键
-INFO memory               # 查看内存使用
-DBSIZE                    # 查看键数量
-```
-
-### ChromaDB 向量数据库
-
-**HTTP API 查询**：
-```bash
-# 查看集合列表
-curl http://localhost:8001/api/v2/tenants/default_tenant/databases/default_database/collections
-
-# 查看集合中的数据
-curl http://localhost:8001/api/v2/tenants/default_tenant/databases/default_database/collections/persons
-
-# 向量相似度搜索
-curl -X POST http://localhost:8001/api/v2/tenants/default_tenant/databases/default_database/collections/persons/query \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query_embeddings": [[0.1, 0.2, ...]],
-    "n_results": 5
-  }'
-```
-
-**Python 客户端**：
-```python
-import chromadb
-
-client = chromadb.HttpClient(host="localhost", port=8001)
-
-# 列出所有集合
-print(client.list_collections())
-
-# 获取集合并查询
-collection = client.get_collection("persons")
-results = collection.query(
-    query_texts=["周杰伦风格的中国风歌手"],
-    n_results=5
-)
-print(results)
-```
-
-**注意**：ChromaDB 没有官方可视化界面，建议使用 Python 客户端或 HTTP API 进行查询。
-
-## 数据库初始化
-
-**当前状态**：数据库服务已启动，但**数据为空**（未初始化）。
-
-### 初始化步骤
-
-```bash
-# 1. 确保数据库服务运行
-podman-compose -f docker-compose.podman.yml up -d
-
-# 2. 启动后端服务（会自动创建 ChromaDB 集合）
-cd backend
-source venv/bin/activate
-python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-
-# 3. 导入测试数据（新终端）
-cd backend
-source venv/bin/activate
-python scripts/init_database.py --all
-
-# 或分别初始化
-python scripts/init_database.py --mysql       # 仅 MySQL
-python scripts/init_database.py --neo4j      # 仅 Neo4j
-python scripts/init_database.py --chromadb   # 仅 ChromaDB
-python scripts/init_database.py --all --clear # 清空后重新导入
-```
-
-### 验证初始化
-
-```bash
-# MySQL 表数量（应显示 8 张表 + 2 个视图）
-podman exec starmap-mysql mysql -u starmap -p starmap -e "SHOW TABLES;"
-
-# Neo4j 节点数（应显示 13 个节点）
-podman exec starmap-neo4j cypher-shell -u neo4j -p starmap123 "MATCH (n) RETURN count(n) as nodes;"
-
-# Redis 键数量（应为 0 或少量缓存）
-podman exec starmap-redis redis-cli dbsize
-
-# ChromaDB 集合（应显示 persons 集合有 8 条向量）
-curl http://localhost:8001/api/v2/tenants/default_tenant/databases/default_database/collections
-```
-
-### 后台账号密码
-
-| 服务 | 地址 | 账号 | 密码 | 说明 |
-|------|------|------|------|------|
-| **MySQL** | localhost:3306 | `starmap` | `starmap123` | 数据库连接 |
-| **Neo4j** | http://localhost:7474 | `neo4j` | `starmap123` | 图数据库管理界面 |
-| **Redis** | localhost:6379 | - | - | 本地开发无密码 |
-| **ChromaDB** | http://localhost:8001 | - | - | 本地开发无认证 |
-| **后端 API** | http://localhost:8000 | - | - | 开发环境无认证 |
-| **前端（用户端）** | http://localhost:5173 | - | - | 无需登录 |
-| **前端（管理端）** | http://localhost:5174 | `admin` | `admin123` | 演示账号 |
-
-### 服务端口一览
+## 服务端口
 
 | 服务 | 端口 | 用途 |
 |------|------|------|
 | MySQL | 3306 | 关系型数据库 |
-| 后端 API | 8000 | FastAPI 服务 |
 | Neo4j HTTP | 7474 | 图数据库浏览器 |
 | Neo4j Bolt | 7687 | 图数据库驱动连接 |
 | Redis | 6379 | 缓存服务 |
 | ChromaDB | 8001 | 向量数据库 API |
-| 前端（用户端） | 5173 | Vite 开发服务器 |
-| 前端（管理端） | 5174 | Vite 开发服务器 |
+| Scrapy Service | - | 爬虫消费进程（无对外端口） |
+| 后端 API | 8000 | FastAPI 服务 |
+| 管理端前端 | 5174 | Vite 开发服务器 |
 
-## 开发团队
+## API 接口
 
-详见 [docs/team/README.md](docs/team/README.md)
+### 知识点管理
 
-## 开发路线
+```
+GET    /api/v1/admin/knowledge/points       # 知识点列表
+GET    /api/v1/admin/knowledge/points/{id}  # 知识点详情
+PUT    /api/v1/admin/knowledge/points/{id}  # 编辑知识点
+```
 
-详见 [docs/roadmap/README.md](docs/roadmap/README.md)
+### 题目管理
+
+```
+GET    /api/v1/admin/questions              # 题目列表
+GET    /api/v1/admin/questions/{id}         # 题目详情
+PUT    /api/v1/admin/questions/{id}         # 编辑题目
+```
+
+### 学科/章节
+
+```
+GET    /api/v1/admin/subjects               # 学科列表
+GET    /api/v1/admin/subjects/{id}/chapters # 章节列表
+```
+
+### 智能问答
+
+```
+POST   /api/v1/chat                         # RAG 问答
+GET    /api/v1/chat/history/{session_id}    # 对话历史
+DELETE /api/v1/chat/session/{session_id}    # 清除会话
+```
+
+### 看板统计
+
+```
+GET    /api/v1/admin/dashboard/stats        # 统计数据
+GET    /api/v1/admin/dashboard/charts       # 图表数据
+```
 
 ## 技术文档
 
 - [架构设计](docs/tech/architecture.md)
 - [数据模型](docs/tech/data-model.md)
-- [MySQL 实施总结](docs/mysql-integration-summary.md)
+- [部署指南](docs/tech/deployment.md)
+- [API 接口文档](docs/api/README.md)
 
-## 项目看板
+## 常见问题
 
-详见 [docs/project-board.md](docs/project-board.md)
+### 爬虫任务无响应
+
+```bash
+# 检查 scrapy-service 是否运行
+podman-compose -f docker-compose.podman.yml ps scrapy-service
+
+# 查看日志
+podman-compose -f docker-compose.podman.yml logs scrapy-service
+```
+
+### RAG 问答无回答
+
+```bash
+# 1. 检查 OPENAI_API_KEY 是否配置
+cat backend/.env | grep OPENAI
+
+# 2. 检查 ChromaDB 是否有数据
+curl http://localhost:8001/api/v1/collections
+
+# 3. 检查后端日志
+podman-compose -f docker-compose.podman.yml logs backend
+```
+
+### 端口被占用
+
+```bash
+lsof -i :8000  # 后端
+lsof -i :5174  # 管理端
+kill -9 <PID>
+```
 
 ## 决策记录
 

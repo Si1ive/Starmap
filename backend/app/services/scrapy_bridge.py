@@ -95,9 +95,8 @@ class ScrapyBridgeService:
                 )
                 source = result.scalar_one_or_none()
             if source:
-                source_code = self._normalize_source_code(source.code or source_code)
                 source_id = source.id
-            source_code = self._normalize_source_code(source_code or "baike")
+            source_code = self._get_spider_key(source, source_code)
 
             # Build task message
             task_message = {
@@ -140,14 +139,18 @@ class ScrapyBridgeService:
             return False
 
     @staticmethod
-    def _normalize_source_code(source_code: str) -> str:
-        """Map configured source codes to Scrapy spider source keys."""
-        mapping = {
+    def _get_spider_key(source: Optional[CrawlSource], fallback_code: Optional[str] = None) -> str:
+        """Get scrapy spider key from source config, with legacy fallback."""
+        if source and isinstance(source.config, dict) and source.config.get("spider_key"):
+            return source.config["spider_key"]
+        # Legacy fallback for sources without spider_key in config
+        legacy = {
             "wikipedia_zh": "wikipedia",
             "douban_movie": "douban",
             "baidu_baike": "baike",
         }
-        return mapping.get(source_code, source_code)
+        code = (source.code if source else None) or fallback_code or "baike"
+        return legacy.get(code, code)
 
     @staticmethod
     def _source_code_candidates(source_code: Optional[str]) -> list[str]:
