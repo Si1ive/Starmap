@@ -5,6 +5,10 @@
 > 负责人：Backend 维护，PM 审核  
 > 适用范围：前端、管理端、后端、爬虫服务、数据库模型
 
+专项接口设计：
+
+- [多模态语料入库与检索 API 契约](./multimodal-retrieval-contract.md)
+
 ---
 
 ## 1. 契约原则

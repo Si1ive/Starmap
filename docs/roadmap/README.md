@@ -26,6 +26,9 @@
 | 主题 | 文档 |
 |------|------|
 | **爬虫优先交付计划** | [crawler-first-delivery-plan.md](./crawler-first-delivery-plan.md) |
+| **多模态语料入库与检索 - 后端任务单** | [multimodal-backend-delivery-plan.md](./multimodal-backend-delivery-plan.md) |
+| **多模态语料入库与检索 - 前端任务单** | [multimodal-frontend-delivery-plan.md](./multimodal-frontend-delivery-plan.md) |
+| **多模态语料入库与检索 - 数据任务单** | [multimodal-data-delivery-plan.md](./multimodal-data-delivery-plan.md) |
 
 ---
 

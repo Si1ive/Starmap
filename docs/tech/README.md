@@ -5,6 +5,8 @@
 - [技术选型](./tech-stack.md) - 完整技术栈说明
 - [数据模型](./data-model.md) - 知识图谱数据模型
 - [架构设计](./architecture.md) - 系统架构详细设计
+- [多模态入库与检索设计](./multimodal-ingestion-retrieval-design.md) - 语料入库、结构化抽取、混合检索、Qdrant 目标方案
+- [多模态数据结构与迁移清单](./multimodal-schema-migration-plan.md) - MySQL 新表、Qdrant collection、Alembic 迁移与回填计划
 - [部署指南](./deployment.md) - 部署与运维
 
 ---
