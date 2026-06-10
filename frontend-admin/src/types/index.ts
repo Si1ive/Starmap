@@ -167,6 +167,24 @@ export interface CrawlerLog {
   created_at?: string
 }
 
+// 已下载文件
+export interface DownloadedFile {
+  id: string
+  task_id?: string
+  repo_name?: string
+  repo_url?: string
+  file_path: string
+  file_name: string
+  file_type?: string
+  file_size?: number
+  download_url?: string
+  local_path?: string
+  status: string
+  error_detail?: string
+  created_at?: string
+  updated_at?: string
+}
+
 // 对话记录
 export interface Conversation {
   id: string

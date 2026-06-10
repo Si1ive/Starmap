@@ -1,8 +1,7 @@
 """
-StarMap Scrapy Service Entry Point.
+Scrapy Service Entry Point for 408考研学习平台.
 
-This script starts the Scrapy service and connects to Redis for task consumption.
-Can be run standalone or inside a container.
+Connects to Redis for task consumption. Can be run standalone or inside a container.
 """
 
 import argparse
@@ -16,51 +15,39 @@ from typing import Any, List
 
 import redis
 
-# Add project to path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
 from scrapy.crawler import CrawlerProcess
 from scrapy.utils.project import get_project_settings
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
 
-TASK_QUEUE = os.getenv("REDIS_TASK_QUEUE", "starmap:crawl:tasks")
-PROGRESS_CHANNEL = os.getenv("REDIS_PROGRESS_CHANNEL", "starmap:crawl:progress")
-LOG_CHANNEL = os.getenv("REDIS_LOG_CHANNEL", "starmap:crawl:logs")
+TASK_QUEUE = os.getenv("REDIS_TASK_QUEUE", "crawler:tasks")
+PROGRESS_CHANNEL = os.getenv("REDIS_PROGRESS_CHANNEL", "crawler:progress")
+LOG_CHANNEL = os.getenv("REDIS_LOG_CHANNEL", "crawler:logs")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
+SUPPORTED_SPIDERS = {"github", "knowledge"}
 
 
 def _publish_progress(task_id: str, status: str, progress: float, **extra: Any) -> None:
-    """Publish task progress to Redis."""
     if not task_id:
         return
-
-    message = {
-        "task_id": task_id,
-        "status": status,
-        "progress": progress,
-        **extra,
-    }
+    message = {"task_id": task_id, "status": status, "progress": progress, **extra}
     try:
-        redis.from_url(REDIS_URL).publish(
-            PROGRESS_CHANNEL,
-            json.dumps(message, ensure_ascii=False),
-        )
+        redis.from_url(REDIS_URL).publish(PROGRESS_CHANNEL, json.dumps(message, ensure_ascii=False))
     except Exception as e:
         logger.warning(f"Failed to publish progress for task {task_id}: {e}")
 
 
 def _publish_log(task_id: str, level: str, message: str, **extra: Any) -> None:
-    """Publish task log to Redis."""
     if not task_id:
         return
-
     log_entry = {
         "task_id": task_id,
         "level": level,
@@ -70,60 +57,22 @@ def _publish_log(task_id: str, level: str, message: str, **extra: Any) -> None:
         **extra,
     }
     try:
-        redis.from_url(REDIS_URL).publish(
-            LOG_CHANNEL,
-            json.dumps(log_entry, ensure_ascii=False, default=str),
-        )
+        redis.from_url(REDIS_URL).publish(LOG_CHANNEL, json.dumps(log_entry, ensure_ascii=False, default=str))
     except Exception as e:
         logger.warning(f"Failed to publish log for task {task_id}: {e}")
 
 
 def _normalize_keywords(keywords: Any) -> List[str]:
-    """Normalize Redis task keywords into a list."""
     if isinstance(keywords, list):
-        return [str(keyword).strip() for keyword in keywords if str(keyword).strip()]
+        return [str(k).strip() for k in keywords if str(k).strip()]
     if isinstance(keywords, str):
-        return [keyword.strip() for keyword in keywords.split(",") if keyword.strip()]
+        return [k.strip() for k in keywords.split(",") if k.strip()]
     return []
 
 
-def start_service(spider_name="person", **kwargs):
-    """
-    Start the Scrapy service.
-    
-    Args:
-        spider_name: Name of the spider to run (person, work)
-        **kwargs: Additional arguments passed to spider
-    """
-    logger.info(f"Starting StarMap Scrapy service with spider: {spider_name}")
-    
-    # Get project settings
-    settings = get_project_settings()
-    
-    # Override settings from environment
-    if os.getenv("LOG_LEVEL"):
-        settings.set("LOG_LEVEL", os.getenv("LOG_LEVEL"))
-    
-    # Create crawler process
-    process = CrawlerProcess(settings)
-    
-    # Schedule spider
-    process.crawl(spider_name, **kwargs)
-    
-    # Start the reactor
-    logger.info("Starting crawler reactor...")
-    process.start()
-    
-    logger.info("Scrapy service stopped")
-
-
 def start_task_consumer():
-    """
-    Start the task consumer mode.
-    
-    This mode continuously listens for tasks from Redis queue.
-    """
-    logger.info("Starting StarMap Scrapy service in task consumer mode")
+    """Continuously listen for tasks from Redis queue."""
+    logger.info("Starting crawler service in task consumer mode")
 
     redis_client = redis.from_url(REDIS_URL, decode_responses=True)
     redis_client.ping()
@@ -138,117 +87,64 @@ def start_task_consumer():
             continue
 
         task_id = task.get("task_id")
-        spider_type = task.get("spider_type", "person")
-        source = task.get("source", "baike")
+        spider_type = task.get("spider_type", "github")
+        source = task.get("source", "github")
         source_id = task.get("source_id")
-        keywords = _normalize_keywords(task.get("keywords"))
         config = task.get("config") or {}
 
-        logger.info(
-            f"Received task: {task_id}, spider={spider_type}, "
-            f"source={source}, keywords={keywords}"
-        )
+        logger.info(f"Received task: {task_id}, spider={spider_type}, source={source}")
 
         if not task_id:
             logger.error(f"Task payload missing task_id: {task}")
             continue
 
-        if not keywords and spider_type != "knowledge" and task.get("task_type") in {"full", "incremental", "targeted"}:
-            error_message = "No keywords provided"
+        if spider_type not in SUPPORTED_SPIDERS:
+            error_message = f"Unsupported spider type: {spider_type}"
             _publish_log(task_id, "ERROR", error_message, status="failed", source_id=source_id)
             _publish_progress(task_id, "failed", 100, error_message=error_message)
             continue
 
-        _publish_log(
-            task_id,
-            "INFO",
-            "Task received by Scrapy consumer",
-            status="pending",
-            source_id=source_id,
-        )
+        _publish_log(task_id, "INFO", "Task received by crawler service", status="pending", source_id=source_id)
         _publish_progress(task_id, "running", 0)
 
-        if spider_type == "knowledge":
-            # Knowledge spider uses different parameters
-            pdf_path = config.get("pdf_path", "")
-            subject_id = config.get("subject_id", "")
-            chapter_id = config.get("chapter_id", "")
-            command = [
-                sys.executable,
-                str(Path(__file__).resolve()),
-                "--mode",
-                "single",
-                "--task-id",
-                task_id,
-                "--spider",
-                "knowledge",
-                "--source",
-                source or "pdf",
-                "--pdf-path",
-                pdf_path,
-                "--subject-id",
-                subject_id,
-                "--chapter-id",
-                chapter_id,
-            ]
-        else:
-            command = [
-                sys.executable,
-                str(Path(__file__).resolve()),
-                "--mode",
-                "single",
-                "--task-id",
-                task_id,
-                "--spider",
-                spider_type,
-                "--source",
-                source,
-                "--keywords",
-                ",".join(keywords),
-            ]
+        command = [sys.executable, str(Path(__file__).resolve()), "--mode", "single", "--task-id", task_id, "--spider", spider_type, "--source", source]
 
         if source_id:
             command.extend(["--source-id", str(source_id)])
 
-        if config.get("work_type"):
-            command.extend(["--work-type", str(config["work_type"])])
+        # GitHub spider parameters
+        if spider_type == "github":
+            if config.get("repo_url"):
+                command.extend(["--repo-url", config["repo_url"]])
+            if config.get("search_query"):
+                command.extend(["--search-query", config["search_query"]])
+            if config.get("file_types"):
+                ft = config["file_types"]
+                command.extend(["--file-types", ",".join(ft) if isinstance(ft, list) else str(ft)])
+            if config.get("max_depth"):
+                command.extend(["--max-depth", str(config["max_depth"])])
+
+        # Knowledge spider parameters
+        if spider_type == "knowledge":
+            if config.get("pdf_path"):
+                command.extend(["--pdf-path", config["pdf_path"]])
+            if config.get("subject_id"):
+                command.extend(["--subject-id", config["subject_id"]])
+            if config.get("chapter_id"):
+                command.extend(["--chapter-id", config["chapter_id"]])
 
         completed = subprocess.run(command, cwd=str(project_root), check=False)
         if completed.returncode == 0:
-            _publish_log(
-                task_id,
-                "INFO",
-                "Task subprocess completed",
-                status="success",
-                source_id=source_id,
-            )
+            _publish_log(task_id, "INFO", "Task subprocess completed", status="success", source_id=source_id)
         else:
             error_message = f"Task subprocess failed with exit code {completed.returncode}"
-            _publish_log(
-                task_id,
-                "ERROR",
-                error_message,
-                status="failed",
-                source_id=source_id,
-                error_type="subprocess_error",
-            )
+            _publish_log(task_id, "ERROR", error_message, status="failed", source_id=source_id, error_type="subprocess_error")
             _publish_progress(task_id, "failed", 100, error_message=error_message)
 
 
-def run_single_task(task_id, spider_type, source, keywords, source_id=None, work_type=None, pdf_path=None, subject_id=None, chapter_id=None):
-    """
-    Run a single task directly.
-
-    Args:
-        task_id: Task identifier
-        spider_type: Type of spider (person, work, knowledge)
-        source: Data source (baike, douban, wikipedia, pdf)
-        keywords: Comma-separated keywords
-        pdf_path: PDF file path for knowledge spider
-        subject_id: Subject ID for knowledge spider
-        chapter_id: Chapter ID for knowledge spider
-    """
-    logger.info(f"Running single task: {task_id}")
+def run_single_task(task_id, spider_type, source, source_id=None, repo_url=None, search_query=None, file_types="pdf", max_depth=5, pdf_path=None, subject_id=None, chapter_id=None):
+    """Run a single task directly."""
+    logger.info(f"Running single task: {task_id}, spider={spider_type}")
 
     settings = get_project_settings()
     settings.set("EXTENSIONS", {
@@ -256,81 +152,38 @@ def run_single_task(task_id, spider_type, source, keywords, source_id=None, work
     }, priority="cmdline")
     process = CrawlerProcess(settings)
 
-    spider_kwargs = {
-        "task_id": task_id,
-        "source": source,
-        "source_id": source_id,
-    }
+    spider_kwargs = {"task_id": task_id, "source": source, "source_id": source_id}
 
-    if spider_type == "knowledge":
+    if spider_type == "github":
+        if repo_url:
+            spider_kwargs["repo_url"] = repo_url
+        if search_query:
+            spider_kwargs["search_query"] = search_query
+        spider_kwargs["file_types"] = file_types
+        spider_kwargs["max_depth"] = max_depth
+    elif spider_type == "knowledge":
         spider_kwargs["pdf_path"] = pdf_path or ""
         spider_kwargs["subject_id"] = subject_id or ""
         spider_kwargs["chapter_id"] = chapter_id or ""
-    else:
-        spider_kwargs["keywords"] = keywords
-        if work_type:
-            spider_kwargs["work_type"] = work_type
 
     process.crawl(spider_type, **spider_kwargs)
-
     process.start()
 
 
 def main():
-    """Main entry point."""
-    parser = argparse.ArgumentParser(description="StarMap Scrapy Service")
-    parser.add_argument(
-        "--mode",
-        choices=["consumer", "single"],
-        default="consumer",
-        help="Run mode: consumer (wait for Redis tasks) or single (run one task)",
-    )
-    parser.add_argument(
-        "--spider",
-        choices=["person", "work", "knowledge"],
-        default="person",
-        help="Spider type",
-    )
-    parser.add_argument(
-        "--source",
-        default="baike",
-        help="Data source (baike, douban, wikipedia, etc.)",
-    )
-    parser.add_argument(
-        "--keywords",
-        default="周杰伦",
-        help="Comma-separated keywords",
-    )
-    parser.add_argument(
-        "--task-id",
-        default="manual_task",
-        help="Task identifier",
-    )
-    parser.add_argument(
-        "--source-id",
-        default=None,
-        help="Crawl source identifier",
-    )
-    parser.add_argument(
-        "--work-type",
-        default=None,
-        help="Work type for work spider",
-    )
-    parser.add_argument(
-        "--pdf-path",
-        default=None,
-        help="PDF file path for knowledge spider",
-    )
-    parser.add_argument(
-        "--subject-id",
-        default=None,
-        help="Subject ID for knowledge spider",
-    )
-    parser.add_argument(
-        "--chapter-id",
-        default=None,
-        help="Chapter ID for knowledge spider",
-    )
+    parser = argparse.ArgumentParser(description="408考研学习平台 Scrapy Service")
+    parser.add_argument("--mode", choices=["consumer", "single"], default="consumer")
+    parser.add_argument("--spider", choices=list(SUPPORTED_SPIDERS), default="github")
+    parser.add_argument("--source", default="github")
+    parser.add_argument("--task-id", default="manual_task")
+    parser.add_argument("--source-id", default=None)
+    parser.add_argument("--repo-url", default=None, help="GitHub repo URL")
+    parser.add_argument("--search-query", default=None, help="GitHub search query")
+    parser.add_argument("--file-types", default="pdf", help="Comma-separated file types")
+    parser.add_argument("--max-depth", type=int, default=5, help="Max directory depth")
+    parser.add_argument("--pdf-path", default=None)
+    parser.add_argument("--subject-id", default=None)
+    parser.add_argument("--chapter-id", default=None)
 
     args = parser.parse_args()
 
@@ -341,9 +194,11 @@ def main():
             task_id=args.task_id,
             spider_type=args.spider,
             source=args.source,
-            keywords=args.keywords,
             source_id=args.source_id,
-            work_type=args.work_type,
+            repo_url=args.repo_url,
+            search_query=args.search_query,
+            file_types=args.file_types,
+            max_depth=args.max_depth,
             pdf_path=args.pdf_path,
             subject_id=args.subject_id,
             chapter_id=args.chapter_id,

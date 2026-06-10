@@ -57,7 +57,7 @@ class ChatRequest(BaseModel):
 class SourceItem(BaseModel):
     """回答来源"""
     
-    type: str = Field(..., description="来源类型", examples=["neo4j", "vector_db", "llm"])
+    type: str = Field(..., description="来源类型", examples=["vector_db", "chromadb", "llm"])
     title: Optional[str] = Field(default=None, description="来源标题")
     content: Optional[str] = Field(default=None, description="来源内容摘要")
     url: Optional[str] = Field(default=None, description="来源链接")
@@ -90,7 +90,7 @@ class ChatResponse(BaseModel):
                 "type": "answer",
                 "sources": [
                     {
-                        "type": "neo4j",
+                        "type": "chromadb",
                         "title": "周杰伦",
                         "content": "配偶：昆凌"
                     }

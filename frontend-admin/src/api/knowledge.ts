@@ -24,14 +24,16 @@ export interface UpdateKnowledgePointData {
 
 // ========== 学科 ==========
 
-export const getSubjects = (): Promise<ApiResponse<Subject[]>> => {
-  return adminClient.get('/subjects')
+export const getSubjects = async (): Promise<ApiResponse<Subject[]>> => {
+  const res: any = await adminClient.get('/subjects')
+  return { ...res, data: res.data?.items || [] }
 }
 
 // ========== 章节 ==========
 
-export const getChapters = (subjectId: string): Promise<ApiResponse<Chapter[]>> => {
-  return adminClient.get(`/subjects/${subjectId}/chapters`)
+export const getChapters = async (subjectId: string): Promise<ApiResponse<Chapter[]>> => {
+  const res: any = await adminClient.get(`/subjects/${subjectId}/chapters`)
+  return { ...res, data: res.data?.items || [] }
 }
 
 // ========== 知识点 ==========

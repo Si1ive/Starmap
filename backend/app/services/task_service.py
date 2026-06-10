@@ -83,9 +83,10 @@ class CrawlerTaskService:
         if task_type in {"full", "incremental", "targeted"}:
             if not source:
                 raise ValueError("请选择有效的数据源")
-            if not self._is_supported_source(config.get("spider_type", "person"), source.code):
-                raise ValueError(f"{config.get('spider_type', 'person')} 爬虫暂不支持数据源 {source.name}")
-            if not keywords:
+            if not self._is_supported_source(config.get("spider_type", "github"), source.code):
+                raise ValueError(f"{config.get('spider_type', 'github')} 爬虫暂不支持数据源 {source.name}")
+            spider_type = config.get("spider_type", "github")
+            if spider_type not in ("github", "knowledge") and not keywords:
                 raise ValueError("请输入至少一个爬取关键词")
 
         if source:
@@ -146,10 +147,10 @@ class CrawlerTaskService:
     def _is_supported_source(spider_type: str, source_code: str) -> bool:
         """Check whether a Scrapy spider supports the selected source."""
         supported_sources = {
-            "person": {"baike", "baidu_baike", "douban", "douban_movie", "wikipedia", "wikipedia_zh"},
-            "work": {"baike", "baidu_baike", "douban", "douban_movie", "wikipedia", "wikipedia_zh"},
+            "github": {"github"},
+            "knowledge": {"github", "pdf"},
         }
-        return source_code in supported_sources.get(spider_type, set())
+        return source_code in supported_sources.get(spider_type, {source_code})
 
     async def create_task_from_schedule(
         self,
@@ -405,218 +406,6 @@ class CrawlerTaskService:
         return task
 
     # ========== 私有方法：任务执行逻辑 ==========
-
-    async def _execute_full_update(self, task: CrawlTask) -> None:
-        """执行全量更新任务"""
-        logger.info(f"Executing full update task: {task.id}")
-        
-        # 获取任务配置
-        config = task.config or {}
-        source_ids = config.get("source_ids", [])
-        keywords = config.get("keywords", [])
-        spider_type = config.get("spider_type", "person")
-        
-        logger.info(f"Task config: keywords={keywords}, spider_type={spider_type}, source={config.get('source', 'baike')}")
-        
-        if not keywords:
-            logger.warning(f"No keywords provided for task: {task.id}")
-            await self.log_service.create_log({
-                "task_id": task.id,
-                "level": "WARNING",
-                "stage": "execution",
-                "status": "pending",
-                "message": "No keywords provided, task skipped",
-            })
-            return
-        
-        # 记录任务开始日志
-        await self.log_service.create_log({
-            "task_id": task.id,
-            "level": "INFO",
-            "stage": "execution",
-            "status": "pending",
-            "message": f"Starting crawl with {len(keywords)} keywords: {keywords}",
-        })
-        
-        # 创建爬虫引擎
-        from crawler.engine import CrawlerEngine, Scheduler, Downloader
-        from crawler.pipelines import (
-            DataCleaningPipeline,
-            DataValidationPipeline,
-            DatabaseStoragePipeline,
-            Neo4jStoragePipeline,
-            LogPipeline,
-        )
-        
-        # 根据 spider_type 选择爬虫
-        if spider_type == "person":
-            from crawler.spiders.person_spider import PersonSpider
-            spider = PersonSpider(
-                source=config.get("source", "baike"),
-                keywords=keywords,
-            )
-        elif spider_type == "work":
-            from crawler.spiders.work_spider import WorkSpider
-            spider = WorkSpider(
-                source=config.get("source", "douban"),
-                keywords=keywords,
-            )
-        else:
-            raise ValueError(f"Unknown spider type: {spider_type}")
-        
-        # 创建管道
-        pipelines = [
-            DataCleaningPipeline(),
-            DataValidationPipeline(),
-            DatabaseStoragePipeline(),
-            Neo4jStoragePipeline(),
-            LogPipeline(),
-        ]
-        
-        # 创建引擎
-        engine = CrawlerEngine(
-            spider=spider,
-            scheduler=Scheduler(),
-            downloader=Downloader(
-                concurrent_limit=config.get("concurrent_limit", 3),
-                delay=config.get("delay", 1.0),
-                timeout=config.get("timeout", 30),
-            ),
-            pipelines=pipelines,
-            max_concurrent=config.get("concurrent_limit", 3),
-        )
-        
-        # 启动引擎
-        logger.info(f"Starting crawler engine for task: {task.id}")
-        
-        # 在后台运行引擎，同时更新进度
-        engine_task = asyncio.create_task(engine.start())
-        
-        # 定期更新任务进度
-        progress_loop_count = 0
-        while not engine_task.done():
-            await asyncio.sleep(2)
-            progress_loop_count += 1
-            stats = engine.get_stats()
-            progress = min(95, stats["responses_received"] * 10)  # 粗略估算
-            
-            logger.info(f"[Progress {progress_loop_count}] Task {task.id}: scheduled={stats['requests_scheduled']}, "
-                       f"received={stats['responses_received']}, items={stats['items_scraped']}, progress={progress}%")
-            
-            # 更新进度（使用当前session，因为后台任务持有独立session）
-            try:
-                task.progress = progress
-                if stats["requests_scheduled"]:
-                    task.total_requests = stats["requests_scheduled"]
-                if stats["items_scraped"]:
-                    task.success_count = stats["items_scraped"]
-                await self.db.commit()
-            except Exception as e:
-                logger.warning(f"Failed to update progress: {e}")
-                await self.db.rollback()
-        
-        # 获取最终结果
-        try:
-            final_stats = await engine_task
-            
-            # 更新最终结果
-            task.progress = 100
-            if final_stats["requests_scheduled"]:
-                task.total_requests = final_stats["requests_scheduled"]
-            if final_stats["items_scraped"]:
-                task.success_count = final_stats["items_scraped"]
-            await self.db.commit()
-            
-            # 记录完成日志
-            await self.log_service.create_log({
-                "task_id": task.id,
-                "level": "INFO",
-                "stage": "execution",
-                "status": "success",
-                "message": f"Crawl completed. Requests: {final_stats['requests_scheduled']}, "
-                           f"Responses: {final_stats['responses_received']}, Items: {final_stats['items_scraped']}",
-            })
-            
-            logger.info(f"Crawler engine finished for task: {task.id}, stats: {final_stats}")
-        except Exception as e:
-            logger.error(f"Crawler engine failed for task: {task.id}, error: {e}")
-            await self.log_service.create_log({
-                "task_id": task.id,
-                "level": "ERROR",
-                "stage": "execution",
-                "status": "failed",
-                "message": f"Crawl failed: {str(e)}",
-            })
-            raise
-
-    async def _execute_incremental_update(self, task: CrawlTask) -> None:
-        """执行增量更新任务"""
-        logger.info(f"Executing incremental update task: {task.id}")
-        
-        config = task.config or {}
-        source_ids = config.get("source_ids", [])
-        keywords = config.get("keywords", [])
-        spider_type = config.get("spider_type", "person")
-        
-        # 获取上次更新时间（从任务配置或数据库中查找）
-        last_update_time = config.get("last_update_time")
-        if not last_update_time:
-            # 查找该来源最近成功完成的任务
-            from sqlalchemy import select
-            from app.models.mysql_models import CrawlTask as CrawlTaskModel
-            
-            result = await self.db.execute(
-                select(CrawlTaskModel)
-                .where(
-                    CrawlTaskModel.task_type == "incremental",
-                    CrawlTaskModel.status == "completed",
-                    CrawlTaskModel.id != task.id,
-                )
-                .order_by(CrawlTaskModel.completed_at.desc())
-                .limit(1)
-            )
-            last_task = result.scalar_one_or_none()
-            if last_task and last_task.completed_at:
-                last_update_time = last_task.completed_at.isoformat()
-                logger.info(f"Using last completed task time: {last_update_time}")
-        
-        # 更新进度
-        await self.update_task_progress(task.id, 10)
-        
-        # 增量更新复用全量更新的爬虫逻辑，但只处理更新的内容
-        # 这里通过 config 标记为增量模式，Spider 可根据此标记调整行为
-        config["incremental_mode"] = True
-        config["last_update_time"] = last_update_time
-        task.config = config
-        await self.db.commit()
-        
-        # 调用全量更新逻辑（Spider 内部根据 incremental_mode 做增量判断）
-        await self._execute_full_update(task)
-        
-        # 更新最后更新时间到配置
-        config["last_update_time"] = datetime.utcnow().isoformat()
-        task.config = config
-        await self.db.commit()
-        
-        logger.info(f"Incremental update completed: {task.id}")
-
-    async def _execute_targeted_crawl(self, task: CrawlTask) -> None:
-        """执行定向爬取任务"""
-        logger.info(f"Executing targeted crawl task: {task.id}")
-        
-        config = task.config or {}
-        
-        # 定向爬取：优先使用 keywords，兼容 targets 字段
-        keywords = config.get("keywords", [])
-        targets = config.get("targets", [])
-        if not keywords and not targets:
-            logger.warning(f"No keywords or targets provided for targeted crawl: {task.id}")
-            return
-        
-        # 合并 keywords 和 targets
-        all_keywords = list(set(keywords + targets))
-        config["keywords"] = all_keywords
-        await self._execute_full_update(task)
 
     async def _execute_health_check(self, task: CrawlTask) -> None:
         """执行健康检查任务"""

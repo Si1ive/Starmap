@@ -36,6 +36,7 @@ class ProgressReporterExtension:
         self.start_time = None
         self.stats = {
             "items_scraped": 0,
+            "items_failed": 0,
             "requests_made": 0,
             "responses_received": 0,
             "errors": 0,
@@ -88,6 +89,9 @@ class ProgressReporterExtension:
     def item_scraped(self, item, spider):
         """Called when an item is scraped."""
         self.stats["items_scraped"] += 1
+        # Track failed items
+        if hasattr(item, "get") and item.get("status") == "failed":
+            self.stats["items_failed"] += 1
         # Report progress every 5 items
         if self.stats["items_scraped"] % 5 == 0:
             progress = self._calculate_progress(spider)
@@ -116,11 +120,20 @@ class ProgressReporterExtension:
 
     def _calculate_progress(self, spider):
         """Calculate progress percentage."""
-        # Simple heuristic: assume 10 requests per keyword
+        # For GitHub spider: use files_found as expected count
+        files_found = getattr(spider, "_files_found", 0)
+        if files_found > 0:
+            progress = min(95, (self.stats["items_scraped"] / files_found) * 100)
+            return round(progress, 2)
+
+        # Fallback: heuristic based on keywords
         keywords_count = len(getattr(spider, "keywords", []))
         if keywords_count == 0:
+            # No keywords and no files_found yet — use response count heuristic
+            if self.stats["responses_received"] > 0:
+                return min(50, self.stats["responses_received"] * 2)
             return 0
-        
+
         expected_requests = keywords_count * 10
         progress = min(95, (self.stats["responses_received"] / expected_requests) * 100)
         return round(progress, 2)
@@ -130,12 +143,23 @@ class ProgressReporterExtension:
         task_id = getattr(spider, "task_id", None)
         if not task_id:
             return
-        
+
+        # Use pipeline stats if available (more accurate), otherwise use extension stats
+        pipeline_stats = getattr(spider, "pipeline_stats", None)
+        if pipeline_stats:
+            success_count = pipeline_stats.get("files_succeeded", 0)
+            failure_count = pipeline_stats.get("files_failed", 0)
+        else:
+            success_count = self.stats["items_scraped"] - self.stats["items_failed"]
+            failure_count = self.stats["items_failed"]
+
         message = {
             "task_id": task_id,
             "status": status,
             "progress": progress if progress is not None else self._calculate_progress(spider),
             "items_scraped": self.stats["items_scraped"],
+            "success_count": success_count,
+            "failure_count": failure_count,
             "requests_made": self.stats["requests_made"],
             "responses_received": self.stats["responses_received"],
             "errors": self.stats["errors"],

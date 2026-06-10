@@ -24,9 +24,8 @@ class TestHealthAPI:
         assert data["status"] in ["healthy", "degraded"]
         assert data["version"] == "1.0.0"
         assert "services" in data
-        assert "neo4j" in data["services"]
+        assert "mysql" in data["services"]
         assert "redis" in data["services"]
-        assert "chromadb" in data["services"]
     
     def test_root_endpoint(self):
         """测试根路径"""

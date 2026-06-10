@@ -23,15 +23,17 @@
 """
 
 import json
+import os
 import asyncio
-from typing import Optional, List
+from pathlib import Path
+from typing import Optional, List, Any
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, FileResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger, get_request_id
@@ -41,6 +43,7 @@ from app.services.source_service import CrawlerSourceService
 from app.services.stats_service import CrawlerStatsService
 from app.services.schedule_service import CrawlerScheduleService
 from app.services.log_service import CrawlerLogService
+from app.models.mysql_models import DownloadedFile, CorpusFile, ParseRun, Document
 
 logger = get_logger(__name__)
 
@@ -75,7 +78,7 @@ class ApiResponse(BaseModel):
     """通用 API 响应"""
     code: int = 200
     message: str = "success"
-    data: Optional[dict] = None
+    data: Optional[Any] = None
     request_id: str = Field(default_factory=get_request_id)
 
 
@@ -291,158 +294,6 @@ async def get_dashboard_charts(db: AsyncSession = Depends(get_db)):
             "question_type_distribution": question_type_distribution
         }
     )
-
-
-# ========== 艺人管理相关 ==========
-
-class PersonListItem(BaseModel):
-    """艺人列表项"""
-    id: str
-    name: str
-    name_en: Optional[str] = None
-    avatar: Optional[str] = None
-    categories: List[str] = []
-    nationality: Optional[str] = None
-    status: str
-    created_at: str
-
-
-class PaginatedResponse(BaseModel):
-    """分页响应"""
-    items: List[dict]
-    total: int
-    page: int
-    page_size: int
-    total_pages: int
-
-
-@router.get("/persons", response_model=ApiResponse)
-async def get_person_list(
-    page: int = 1,
-    page_size: int = 20,
-    q: Optional[str] = None,
-    category: Optional[str] = None,
-    status: Optional[str] = None,
-    db: AsyncSession = Depends(get_db)
-):
-    """获取艺人列表（从 MySQL 查询真实数据）"""
-    from app.models.mysql_models import Person as PersonModel
-    from sqlalchemy import func
-
-    query = select(PersonModel).where(PersonModel.status != "deleted")
-
-    if q:
-        query = query.where(PersonModel.name.contains(q))
-    if category:
-        query = query.where(PersonModel.categories.contains(category))
-    if status:
-        query = query.where(PersonModel.status == status)
-
-    count_query = select(func.count()).select_from(query.subquery())
-    total = await db.scalar(count_query) or 0
-
-    query = query.offset((page - 1) * page_size).limit(page_size).order_by(PersonModel.updated_at.desc())
-    result = await db.execute(query)
-    persons = result.scalars().all()
-
-    items = []
-    for p in persons:
-        items.append({
-            "id": p.id,
-            "name": p.name,
-            "name_en": p.name_en,
-            "avatar": p.avatar,
-            "gender": p.gender,
-            "birth_date": p.birth_date.isoformat() if p.birth_date else None,
-            "birth_place": p.birth_place,
-            "nationality": p.nationality,
-            "categories": p.categories or [],
-            "summary": p.summary,
-            "popularity_score": float(p.popularity_score) if p.popularity_score else 0,
-            "status": p.status,
-            "created_at": p.created_at.isoformat() if p.created_at else None,
-        })
-
-    return ApiResponse(
-        code=200,
-        message="success",
-        data={
-            "items": items,
-            "total": total,
-            "page": page,
-            "page_size": page_size,
-            "total_pages": (total + page_size - 1) // page_size if total else 0
-        }
-    )
-
-
-@router.get("/persons/{person_id}", response_model=ApiResponse)
-async def get_person_detail(person_id: str, db: AsyncSession = Depends(get_db)):
-    """获取艺人详情（从 MySQL 查询真实数据）"""
-    from app.models.mysql_models import Person as PersonModel
-
-    result = await db.execute(
-        select(PersonModel).where(PersonModel.id == person_id)
-    )
-    person = result.scalar_one_or_none()
-
-    if not person:
-        raise HTTPException(status_code=404, detail="艺人不存在")
-
-    return ApiResponse(
-        code=200,
-        message="success",
-        data={
-            "id": person.id,
-            "name": person.name,
-            "name_en": person.name_en,
-            "avatar": person.avatar,
-            "gender": person.gender,
-            "birth_date": person.birth_date.isoformat() if person.birth_date else None,
-            "birth_place": person.birth_place,
-            "nationality": person.nationality,
-            "height": float(person.height) if person.height else None,
-            "summary": person.summary,
-            "biography": person.biography,
-            "popularity_score": float(person.popularity_score) if person.popularity_score else 0,
-            "categories": person.categories or [],
-            "status": person.status,
-            "data_quality_score": float(person.data_quality_score) if person.data_quality_score else None,
-            "crawl_source": person.crawl_source,
-            "crawl_url": person.crawl_url,
-            "created_at": person.created_at.isoformat() if person.created_at else None,
-            "updated_at": person.updated_at.isoformat() if person.updated_at else None,
-        }
-    )
-
-
-@router.post("/persons", response_model=ApiResponse)
-async def create_person(data: dict):
-    """创建艺人"""
-    # TODO: 实现艺人创建逻辑
-    return ApiResponse(
-        code=200,
-        message="创建成功",
-        data={"id": "new_person_id", "name": data.get("name", "")}
-    )
-
-
-@router.put("/persons/{person_id}", response_model=ApiResponse)
-async def update_person(person_id: str, data: dict):
-    """更新艺人"""
-    # TODO: 实现艺人更新逻辑
-    return ApiResponse(
-        code=200,
-        message="更新成功",
-        data={"id": person_id, **data}
-    )
-
-
-@router.delete("/persons/{person_id}", response_model=ApiResponse)
-async def delete_person(person_id: str):
-    """删除艺人"""
-    # TODO: 实现艺人删除逻辑
-    return ApiResponse(code=200, message="删除成功")
 
 
 # ========== 爬虫管理相关 ==========
@@ -884,15 +735,12 @@ async def get_crawler_trend(
     return ApiResponse(code=200, message="success", data=trend)
 
 
-@router.get("/crawler/stats/efficiency", response_model=ApiResponse)
-async def get_crawler_efficiency(
-    days: int = 7,
-    db: AsyncSession = Depends(get_db)
-):
-    """获取效率分析"""
+@router.get("/crawler/stats/file-types", response_model=ApiResponse)
+async def get_file_type_distribution(db: AsyncSession = Depends(get_db)):
+    """获取文件类型分布"""
     service = CrawlerStatsService(db)
-    efficiency = await service.get_efficiency(days)
-    return ApiResponse(code=200, message="success", data=efficiency)
+    distribution = await service.get_file_type_distribution()
+    return ApiResponse(code=200, message="success", data=distribution)
 
 
 @router.get("/crawler/stats/suggestions", response_model=ApiResponse)
@@ -1224,6 +1072,103 @@ async def export_crawler_logs(
     )
 
 
+@router.get("/crawler/file-logs", response_model=ApiResponse)
+async def get_crawler_file_logs(
+    task_id: Optional[str] = None,
+    repo_name: Optional[str] = None,
+    status: Optional[str] = None,
+    file_type: Optional[str] = None,
+    keyword: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 50,
+    db: AsyncSession = Depends(get_db)
+):
+    """获取文件爬取日志（以文件为单位）"""
+    query = select(DownloadedFile)
+    count_query = select(func.count()).select_from(DownloadedFile)
+
+    filters = []
+    if task_id:
+        filters.append(DownloadedFile.task_id == task_id)
+    if repo_name:
+        filters.append(DownloadedFile.repo_name == repo_name)
+    if status:
+        filters.append(DownloadedFile.status == status)
+    if file_type:
+        filters.append(DownloadedFile.file_type == file_type)
+    if keyword:
+        kw = f"%{keyword}%"
+        filters.append(
+            or_(
+                DownloadedFile.file_name.ilike(kw),
+                DownloadedFile.repo_name.ilike(kw),
+                DownloadedFile.file_path.ilike(kw),
+                DownloadedFile.error_detail.ilike(kw),
+            )
+        )
+
+    for f in filters:
+        query = query.where(f)
+        count_query = count_query.where(f)
+
+    total = await db.scalar(count_query) or 0
+
+    # 成功/失败统计（同筛选条件下的全局统计）
+    success_query = select(func.count()).select_from(DownloadedFile).where(DownloadedFile.status != "failed")
+    failed_query = select(func.count()).select_from(DownloadedFile).where(DownloadedFile.status == "failed")
+    for flt in filters:
+        success_query = success_query.where(flt)
+        failed_query = failed_query.where(flt)
+    success_count = await db.scalar(success_query) or 0
+    failed_count = await db.scalar(failed_query) or 0
+
+    query = query.order_by(DownloadedFile.created_at.desc())
+    query = query.offset((page - 1) * page_size).limit(page_size)
+
+    result = await db.execute(query)
+    files = result.scalars().all()
+
+    return ApiResponse(
+        code=200,
+        message="success",
+        data={
+            "items": [{
+                "id": f.id,
+                "task_id": f.task_id,
+                "repo_name": f.repo_name,
+                "repo_url": f.repo_url,
+                "file_path": f.file_path,
+                "file_name": f.file_name,
+                "file_type": f.file_type,
+                "file_size": f.file_size,
+                "download_url": f.download_url,
+                "local_path": f.local_path,
+                "status": f.status,
+                "error_detail": f.error_detail,
+                "created_at": f.created_at.isoformat() if f.created_at else None,
+            } for f in files],
+            "total": total,
+            "success_count": success_count,
+            "failed_count": failed_count,
+            "page": page,
+            "page_size": page_size,
+        }
+    )
+
+
+@router.get("/crawler/file-logs/repos", response_model=ApiResponse)
+async def get_file_log_repos(db: AsyncSession = Depends(get_db)):
+    """获取所有仓库名列表（用于筛选）"""
+    result = await db.execute(
+        select(DownloadedFile.repo_name)
+        .where(DownloadedFile.repo_name.isnot(None))
+        .distinct()
+        .order_by(DownloadedFile.repo_name)
+    )
+    repos = [row[0] for row in result.all()]
+    return ApiResponse(code=200, message="success", data=repos)
+
+
 @router.get("/crawler/logs/analysis", response_model=ApiResponse)
 async def get_log_analysis(
     days: int = 7,
@@ -1472,175 +1417,6 @@ async def update_settings(data: dict):
     return ApiResponse(code=200, message="保存成功", data=data)
 
 
-# ========== 作品管理相关 ==========
-
-@router.get("/works", response_model=ApiResponse)
-async def get_work_list(
-    page: int = 1,
-    page_size: int = 20,
-    q: Optional[str] = None,
-    type: Optional[str] = None,
-    year: Optional[int] = None,
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    获取作品列表
-    
-    支持搜索、筛选、分页。
-    """
-    from app.services.work_service import WorkService
-    
-    service = WorkService(db)
-    works, total = await service.get_works(
-        skip=(page - 1) * page_size,
-        limit=page_size,
-        keyword=q,
-        work_type=type,
-        year=year,
-    )
-    
-    return ApiResponse(
-        code=200,
-        message="success",
-        data={
-            "items": [{
-                "id": w.id,
-                "title": w.title,
-                "title_en": w.title_en,
-                "type": w.type,
-                "release_date": w.release_date.isoformat() if w.release_date else None,
-                "poster": w.poster,
-                "rating": float(w.rating) if w.rating else None,
-                "status": w.status,
-                "genre": w.genre,
-                "summary": w.summary,
-                "created_at": w.created_at.isoformat() if w.created_at else None,
-                "updated_at": w.updated_at.isoformat() if w.updated_at else None,
-            } for w in works],
-            "total": total,
-            "page": page,
-            "page_size": page_size,
-            "total_pages": (total + page_size - 1) // page_size if total else 0,
-        }
-    )
-
-
-@router.get("/works/{work_id}", response_model=ApiResponse)
-async def get_work_detail(
-    work_id: str,
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    获取作品详情
-    """
-    from app.services.work_service import WorkService
-    
-    service = WorkService(db)
-    work = await service.get_work_by_id(work_id)
-    
-    if not work:
-        raise HTTPException(status_code=404, detail="作品不存在")
-    
-    return ApiResponse(
-        code=200,
-        message="success",
-        data={
-            "id": work.id,
-            "title": work.title,
-            "title_en": work.title_en,
-            "type": work.type,
-            "release_date": work.release_date.isoformat() if work.release_date else None,
-            "poster": work.poster,
-            "summary": work.summary,
-            "cover": work.cover,
-            "rating": float(work.rating) if work.rating else None,
-            "status": work.status,
-            "source": work.source,
-            "genres": work.genres,
-            "tags": work.tags,
-            "director": work.director,
-            "actors": work.actors,
-            "box_office": work.box_office,
-            "episodes": work.episodes,
-            "platform": work.platform,
-            "artist": work.artist,
-            "record_company": work.record_company,
-            "track_list": work.track_list,
-            "author": work.author,
-            "publisher": work.publisher,
-            "isbn": work.isbn,
-            "related_persons": [{
-                "id": p.id,
-                "name": p.name,
-                "role": p.role,
-            } for p in (work.related_persons or [])],
-            "created_at": work.created_at.isoformat() if work.created_at else None,
-            "updated_at": work.updated_at.isoformat() if work.updated_at else None,
-        }
-    )
-
-
-@router.post("/works", response_model=ApiResponse)
-async def create_work(
-    data: dict,
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    创建作品
-    """
-    from app.services.work_service import WorkService
-    
-    service = WorkService(db)
-    work = await service.create_work(data)
-    
-    return ApiResponse(
-        code=200,
-        message="创建成功",
-        data={"id": work.id, "title": work.title}
-    )
-
-
-@router.put("/works/{work_id}", response_model=ApiResponse)
-async def update_work(
-    work_id: str,
-    data: dict,
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    更新作品
-    """
-    from app.services.work_service import WorkService
-    
-    service = WorkService(db)
-    work = await service.update_work(work_id, data)
-    
-    if not work:
-        raise HTTPException(status_code=404, detail="作品不存在")
-    
-    return ApiResponse(
-        code=200,
-        message="更新成功",
-        data={"id": work.id, "title": work.title}
-    )
-
-
-@router.delete("/works/{work_id}", response_model=ApiResponse)
-async def delete_work(
-    work_id: str,
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    删除作品
-    """
-    from app.services.work_service import WorkService
-    
-    service = WorkService(db)
-    success = await service.delete_work(work_id)
-    
-    if not success:
-        raise HTTPException(status_code=404, detail="作品不存在")
-    
-    return ApiResponse(code=200, message="删除成功")
 
 
 # ========== 对话详情相关 ==========
@@ -2251,3 +2027,364 @@ async def get_ingest_tasks(
         "page": page,
         "page_size": page_size,
     })
+
+
+# ========== 已下载文件 ==========
+
+DOWNLOAD_STORE = os.getenv("DOWNLOAD_STORE", str(Path(__file__).parent.parent.parent / "downloads"))
+
+
+@router.get("/files/downloaded", response_model=ApiResponse)
+async def get_downloaded_files(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    file_type: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    task_id: Optional[str] = Query(None),
+    keyword: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db)
+):
+    """获取已下载文件列表"""
+    from app.models.mysql_models import DownloadedFile
+
+    query = select(DownloadedFile)
+
+    if file_type:
+        query = query.where(DownloadedFile.file_type == file_type)
+    if status:
+        query = query.where(DownloadedFile.status == status)
+    if task_id:
+        query = query.where(DownloadedFile.task_id == task_id)
+    if keyword:
+        like_pattern = f"%{keyword}%"
+        query = query.where(
+            (DownloadedFile.file_name.like(like_pattern)) |
+            (DownloadedFile.repo_name.like(like_pattern))
+        )
+
+    count_query = select(func.count()).select_from(query.subquery())
+    total = await db.scalar(count_query) or 0
+
+    query = query.order_by(DownloadedFile.created_at.desc())
+    query = query.offset((page - 1) * page_size).limit(page_size)
+    result = await db.execute(query)
+    files = result.scalars().all()
+
+    return ApiResponse(data={
+        "items": [
+            {
+                "id": f.id,
+                "task_id": f.task_id,
+                "repo_name": f.repo_name,
+                "repo_url": f.repo_url,
+                "file_path": f.file_path,
+                "file_name": f.file_name,
+                "file_type": f.file_type,
+                "file_size": f.file_size,
+                "download_url": f.download_url,
+                "local_path": f.local_path,
+                "status": f.status,
+                "error_detail": f.error_detail,
+                "created_at": f.created_at.isoformat() if f.created_at else None,
+                "updated_at": f.updated_at.isoformat() if f.updated_at else None,
+            }
+            for f in files
+        ],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    })
+
+
+@router.get("/files/downloaded/{file_id}", response_model=ApiResponse)
+async def get_downloaded_file_detail(
+    file_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """获取已下载文件详情"""
+    from app.models.mysql_models import DownloadedFile
+
+    result = await db.execute(
+        select(DownloadedFile).where(DownloadedFile.id == file_id)
+    )
+    f = result.scalar_one_or_none()
+    if not f:
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    return ApiResponse(data={
+        "id": f.id,
+        "task_id": f.task_id,
+        "repo_name": f.repo_name,
+        "repo_url": f.repo_url,
+        "file_path": f.file_path,
+        "file_name": f.file_name,
+        "file_type": f.file_type,
+        "file_size": f.file_size,
+        "download_url": f.download_url,
+        "local_path": f.local_path,
+        "status": f.status,
+        "error_detail": f.error_detail,
+        "created_at": f.created_at.isoformat() if f.created_at else None,
+        "updated_at": f.updated_at.isoformat() if f.updated_at else None,
+    })
+
+
+@router.get("/files/downloaded/{file_id}/preview")
+async def preview_downloaded_file(
+    file_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """预览/下载已下载的文件"""
+    from app.models.mysql_models import DownloadedFile
+
+    result = await db.execute(
+        select(DownloadedFile).where(DownloadedFile.id == file_id)
+    )
+    f = result.scalar_one_or_none()
+    if not f:
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    if not f.local_path:
+        raise HTTPException(status_code=404, detail="文件路径不存在")
+
+    local_path = Path(f.local_path).resolve()
+    download_store = Path(DOWNLOAD_STORE).resolve()
+
+    # 路径安全校验：确保文件在下载目录内
+    if not str(local_path).startswith(str(download_store)):
+        raise HTTPException(status_code=403, detail="文件路径不允许访问")
+
+    if not local_path.exists():
+        raise HTTPException(status_code=404, detail="文件不存在于磁盘")
+
+    media_type = {
+        "pdf": "application/pdf",
+        "doc": "application/msword",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "ppt": "application/vnd.ms-powerpoint",
+        "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    }.get(f.file_type or "", "application/octet-stream")
+
+    return FileResponse(
+        path=str(local_path),
+        media_type=media_type,
+        filename=f.file_name,
+    )
+
+
+@router.post("/crawler/file-logs/retry", response_model=ApiResponse)
+async def retry_file_downloads(
+    file_ids: List[str],
+    db: AsyncSession = Depends(get_db),
+):
+    """重试下载指定文件"""
+    import httpx
+
+    if not file_ids:
+        raise HTTPException(status_code=400, detail="请提供至少一个文件ID")
+    if len(file_ids) > 50:
+        raise HTTPException(status_code=400, detail="单次最多重试50个文件")
+
+    from app.models.mysql_models import DownloadedFile
+
+    result = await db.execute(
+        select(DownloadedFile).where(DownloadedFile.id.in_(file_ids))
+    )
+    files = result.scalars().all()
+
+    if not files:
+        raise HTTPException(status_code=404, detail="未找到指定文件")
+
+    download_store = Path(DOWNLOAD_STORE).resolve()
+    success_count = 0
+    fail_count = 0
+    results = []
+
+    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+        for f in files:
+            file_result = {"id": f.id, "file_name": f.file_name}
+            try:
+                if not f.download_url:
+                    raise ValueError("文件无下载链接")
+
+                # 标记为处理中
+                await db.execute(
+                    update(DownloadedFile)
+                    .where(DownloadedFile.id == f.id)
+                    .values(status="processing", error_detail=None)
+                )
+                await db.commit()
+
+                # 下载文件
+                resp = await client.get(f.download_url)
+                resp.raise_for_status()
+
+                # 确定保存路径（与 Scrapy 爬虫保持一致：DOWNLOAD_STORE/<task_id>/<safe_repo>/<file_path>）
+                if f.local_path and Path(f.local_path).resolve().parent.exists():
+                    save_path = Path(f.local_path)
+                else:
+                    safe_repo = (f.repo_name or "unknown").replace("/", "_")
+                    task_dir = f.task_id or "manual"
+                    repo_file_path = f.file_path or f.file_name
+                    save_path = download_store / task_dir / safe_repo / repo_file_path
+
+                save_path.parent.mkdir(parents=True, exist_ok=True)
+                save_path.write_bytes(resp.content)
+
+                # 更新状态
+                await db.execute(
+                    update(DownloadedFile)
+                    .where(DownloadedFile.id == f.id)
+                    .values(
+                        status="downloaded",
+                        file_size=len(resp.content),
+                        local_path=str(save_path),
+                        error_detail=None,
+                    )
+                )
+                await db.commit()
+
+                file_result["status"] = "downloaded"
+                success_count += 1
+
+            except Exception as e:
+                error_msg = str(e)[:500]
+                try:
+                    await db.execute(
+                        update(DownloadedFile)
+                        .where(DownloadedFile.id == f.id)
+                        .values(status="failed", error_detail=error_msg)
+                    )
+                    await db.commit()
+                except Exception:
+                    await db.rollback()
+
+                file_result["status"] = "failed"
+                file_result["error"] = error_msg
+                fail_count += 1
+
+            results.append(file_result)
+
+    return ApiResponse(data={
+        "total": len(files),
+        "success_count": success_count,
+        "fail_count": fail_count,
+        "results": results,
+    })
+
+
+# ========== 语料库管理 ==========
+
+
+class ScanRequest(BaseModel):
+    """目录扫描请求"""
+    root_path: str = Field(..., description="扫描根目录")
+    file_types: Optional[List[str]] = Field(default=None, description="文件类型列表，如 pdf/docx/pptx")
+    batch_label: Optional[str] = Field(default=None, description="批次标签")
+
+
+@router.post("/corpus/files/scan", response_model=ApiResponse)
+async def scan_corpus_files(
+    req: ScanRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """扫描目录并注册语料文件"""
+    from app.services.corpus_service import CorpusService
+
+    service = CorpusService(db)
+    try:
+        result = service.scan_and_register(
+            root_path=req.root_path,
+            file_types=req.file_types,
+            batch_label=req.batch_label,
+        )
+        # scan_and_register 是 async，需要 await
+        result = await result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return ApiResponse(data=result)
+
+
+@router.get("/corpus/files", response_model=ApiResponse)
+async def list_corpus_files(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    status: Optional[str] = None,
+    source_type: Optional[str] = None,
+    file_ext: Optional[str] = None,
+    keyword: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """语料文件列表"""
+    from app.services.corpus_service import CorpusService
+
+    service = CorpusService(db)
+    result = await service.get_corpus_files(
+        page=page,
+        page_size=page_size,
+        status=status,
+        source_type=source_type,
+        file_ext=file_ext,
+        keyword=keyword,
+    )
+    return ApiResponse(data=result)
+
+
+@router.get("/corpus/documents/{document_id}", response_model=ApiResponse)
+async def get_document_detail(
+    document_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """文档详情（含 pages、blocks、assets）"""
+    from app.services.document_parse_service import DocumentParseService
+
+    service = DocumentParseService(db)
+    result = await service.get_document_detail(document_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="文档不存在")
+
+    return ApiResponse(data=result)
+
+
+@router.get("/corpus/files/{file_id}", response_model=ApiResponse)
+async def get_corpus_file_detail(
+    file_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """语料文件详情"""
+    from app.services.corpus_service import CorpusService
+
+    service = CorpusService(db)
+    result = await service.get_corpus_file_detail(file_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="语料文件不存在")
+
+    # 同时返回解析记录
+    from app.services.document_parse_service import DocumentParseService
+    parse_service = DocumentParseService(db)
+    parse_runs = await parse_service.get_parse_runs(file_id)
+    result["parse_runs"] = parse_runs
+
+    return ApiResponse(data=result)
+
+
+@router.post("/corpus/files/{file_id}/parse", response_model=ApiResponse)
+async def parse_corpus_file(
+    file_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """触发文档解析"""
+    from app.services.document_parse_service import DocumentParseService
+
+    service = DocumentParseService(db)
+    try:
+        result = await service.parse_document(file_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"解析失败: {str(e)[:200]}")
+
+    return ApiResponse(data=result)

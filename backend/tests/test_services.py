@@ -53,17 +53,17 @@ class TestPersonService:
         mock_redis.get_json = AsyncMock(return_value=None)
         mock_redis.set_json = AsyncMock(return_value=True)
         
-        mock_neo4j = AsyncMock()
-        mock_neo4j.get_person_by_id = AsyncMock(return_value=mock_person.model_dump())
-        
+        mock_db = AsyncMock()
+        mock_db.get_person_by_id = AsyncMock(return_value=mock_person.model_dump())
+
         service._redis = mock_redis
-        service._neo4j = mock_neo4j
-        
+        service._db = mock_db
+
         result = await service.get_person_by_id("jay-chou")
-        
+
         assert result is not None
         assert result.name == "周杰伦"
-        mock_neo4j.get_person_by_id.assert_called_once_with("jay-chou")
+        mock_db.get_person_by_id.assert_called_once_with("jay-chou")
         mock_redis.set_json.assert_called_once()
     
     @pytest.mark.asyncio
@@ -72,11 +72,11 @@ class TestPersonService:
         mock_redis = AsyncMock()
         mock_redis.get_json = AsyncMock(return_value=None)
         
-        mock_neo4j = AsyncMock()
-        mock_neo4j.get_person_by_id = AsyncMock(return_value=None)
-        
+        mock_db = AsyncMock()
+        mock_db.get_person_by_id = AsyncMock(return_value=None)
+
         service._redis = mock_redis
-        service._neo4j = mock_neo4j
+        service._db = mock_db
         
         result = await service.get_person_by_id("not-exist")
         
@@ -112,18 +112,18 @@ class TestPersonService:
         mock_redis.get_json = AsyncMock(return_value=None)
         mock_redis.set_json = AsyncMock(return_value=True)
         
-        mock_neo4j = AsyncMock()
-        mock_neo4j.search_persons = AsyncMock(return_value=[
+        mock_db = AsyncMock()
+        mock_db.search_persons = AsyncMock(return_value=[
             {"id": "jay", "name": "周杰伦", "category": "singer", "avatar_url": None, "description": None}
         ])
-        
+
         service._redis = mock_redis
-        service._neo4j = mock_neo4j
-        
+        service._db = mock_db
+
         result = await service.search_persons("周杰伦")
-        
+
         assert len(result.items) == 1
-        mock_neo4j.search_persons.assert_called_once()
+        mock_db.search_persons.assert_called_once()
     
     @pytest.mark.asyncio
     async def test_get_person_relations(self, service):
@@ -132,8 +132,8 @@ class TestPersonService:
         mock_redis.get_json = AsyncMock(return_value=None)
         mock_redis.set_json = AsyncMock(return_value=True)
         
-        mock_neo4j = AsyncMock()
-        mock_neo4j.get_person_relations = AsyncMock(return_value={
+        mock_db = AsyncMock()
+        mock_db.get_person_relations = AsyncMock(return_value={
             "center": {"id": "jay-chou", "name": "周杰伦"},
             "nodes": [
                 {"id": "jay-chou", "name": "周杰伦", "category": "singer"},
@@ -143,9 +143,9 @@ class TestPersonService:
                 {"source": "jay-chou", "target": "hannah", "type": "spouse", "properties": {}}
             ]
         })
-        
+
         service._redis = mock_redis
-        service._neo4j = mock_neo4j
+        service._db = mock_db
         
         result = await service.get_person_relations("jay-chou", depth=1)
         

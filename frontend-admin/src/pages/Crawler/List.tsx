@@ -34,10 +34,11 @@ import {
   CloseCircleOutlined,
   MinusCircleOutlined,
   ExclamationCircleOutlined,
+  DownloadOutlined,
 } from '@ant-design/icons'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getCrawlerTasks, createCrawlerTask, startCrawlerTask, stopCrawlerTask, deleteCrawlerTask, getCrawlerSources } from '@/api'
-import type { CrawlerSource, CrawlerTask } from '@/types'
+import { getCrawlerTasks, createCrawlerTask, startCrawlerTask, stopCrawlerTask, deleteCrawlerTask, getCrawlerSources, getDownloadedFiles } from '@/api'
+import type { CrawlerSource, CrawlerTask, DownloadedFile } from '@/types'
 
 // 状态配置
 const statusConfig: Record<string, { color: string; text: string; icon: React.ReactNode }> = {
@@ -59,12 +60,7 @@ const typeMap: Record<string, string> = {
 
 // 数据源映射
 const sourceMap: Record<string, { text: string; color: string }> = {
-  baike: { text: '百度百科', color: 'cyan' },
-  baidu_baike: { text: '百度百科', color: 'cyan' },
-  wikipedia: { text: '维基百科', color: 'blue' },
-  wikipedia_zh: { text: '维基百科', color: 'blue' },
-  douban: { text: '豆瓣', color: 'green' },
-  douban_movie: { text: '豆瓣', color: 'green' },
+  github: { text: 'GitHub', color: 'purple' },
   other: { text: '其他', color: 'default' },
 }
 
@@ -79,6 +75,23 @@ const formatDate = (dateStr?: string) => {
     hour: '2-digit',
     minute: '2-digit',
   })
+}
+
+// 格式化文件大小
+const formatFileSize = (bytes?: number) => {
+  if (!bytes) return '-'
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+// 文件状态配置
+const fileStatusConfig: Record<string, { color: string; text: string }> = {
+  downloaded: { color: 'green', text: '已下载' },
+  processing: { color: 'blue', text: '处理中' },
+  processed: { color: 'purple', text: '已处理' },
+  failed: { color: 'red', text: '失败' },
+  skipped: { color: 'default', text: '跳过' },
 }
 
 // 格式化持续时间
@@ -100,6 +113,9 @@ const CrawlerList = () => {
   const [params, setParams] = useState({ page: 1, page_size: 20 })
   const [createModalVisible, setCreateModalVisible] = useState(false)
   const [createForm] = Form.useForm()
+  const [filesModalVisible, setFilesModalVisible] = useState(false)
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
+  const [filePage, setFilePage] = useState({ page: 1, page_size: 20 })
 
   const { data, isLoading } = useQuery({
     queryKey: ['crawlerTasks', params],
@@ -118,6 +134,14 @@ const CrawlerList = () => {
   const tasks = data?.data?.items || []
   const total = data?.data?.total || 0
   const sources = (sourceData?.data?.items || []) as CrawlerSource[]
+
+  const { data: filesData, isLoading: filesLoading } = useQuery({
+    queryKey: ['taskFiles', selectedTaskId, filePage],
+    queryFn: () => getDownloadedFiles({ task_id: selectedTaskId!, ...filePage }),
+    enabled: !!selectedTaskId && filesModalVisible,
+  })
+  const taskFiles = (filesData?.data?.items || []) as DownloadedFile[]
+  const filesTotal = filesData?.data?.total || 0
 
   // 统计数据
   const stats = {
@@ -142,15 +166,17 @@ const CrawlerList = () => {
 
   const openCreateModal = () => {
     createForm.resetFields()
+    const githubSource = sources.find((s) => s.code === 'github')
     createForm.setFieldsValue({
       task_type: 'targeted',
-      source_id: sources[0]?.id,
+      source_id: githubSource?.id || sources[0]?.id,
       config: {
-        spider_type: 'person',
-        source: sources[0]?.code,
+        spider_type: 'github',
+        source: 'github',
+        file_types: ['pdf'],
         concurrent_limit: 3,
         delay: 1.0,
-        timeout: 30,
+        timeout: 60,
       },
       execute_now: true,
     })
@@ -378,6 +404,18 @@ const CrawlerList = () => {
           >
             日志
           </Button>
+          <Button
+            type="text"
+            size="small"
+            icon={<DownloadOutlined />}
+            onClick={() => {
+              setSelectedTaskId(record.id)
+              setFilePage({ page: 1, page_size: 20 })
+              setFilesModalVisible(true)
+            }}
+          >
+            文件
+          </Button>
           <Popconfirm
             title="确认删除任务？"
             description="删除后不可恢复，是否继续？"
@@ -527,51 +565,46 @@ const CrawlerList = () => {
         width={600}
       >
         <Form form={createForm} layout="vertical">
-          {!sources.length && (
-            <Alert
-              type="warning"
-              showIcon
-              style={{ marginBottom: 16 }}
-              message="暂无可用数据源"
-              description="系统会自动初始化默认数据源；如果仍为空，请先到数据源管理新增或刷新。"
-              action={
-                <Button size="small" onClick={() => navigate('/admin/crawler/sources')}>
-                  管理数据源
-                </Button>
-              }
-            />
-          )}
           <Form.Item label="任务名称" name="name" rules={[{ required: true, message: '请输入任务名称' }]}>
-            <Input placeholder="如：爬取周杰伦信息" />
+            <Input placeholder="如：下载408考研数据结构PDF资料" />
           </Form.Item>
           <Form.Item label="任务类型" name="task_type" rules={[{ required: true }]} initialValue="targeted">
             <Select
               options={[
                 { label: '定向爬取', value: 'targeted' },
                 { label: '全量爬取', value: 'full' },
-                { label: '增量更新', value: 'incremental' },
               ]}
             />
           </Form.Item>
-          <Form.Item label="爬虫类型" name={['config', 'spider_type']} initialValue="person">
+          <Form.Item label="爬虫类型" name={['config', 'spider_type']} initialValue="github">
             <Select
               options={[
-                { label: '人物爬虫', value: 'person' },
-                { label: '作品爬虫', value: 'work' },
+                { label: 'GitHub 仓库爬虫', value: 'github' },
               ]}
             />
           </Form.Item>
-          <Form.Item label="数据源" name="source_id" rules={[{ required: true, message: '请选择数据源' }]}>
-            <Select
-              options={sources.map((source) => ({
-                label: `${source.name}（${source.code}）`,
-                value: source.id,
-              }))}
-              placeholder="选择要爬取的数据源"
-            />
+          <Form.Item label="仓库地址" name={['config', 'repo_url']}>
+            <Input placeholder="https://github.com/user/repo（直接指定仓库）" />
           </Form.Item>
-          <Form.Item label="关键词" name={['config', 'keywords']} rules={[{ required: true, message: '请输入至少一个关键词' }]}>
-            <Select mode="tags" placeholder="输入关键词后按回车" />
+          <Form.Item label="搜索关键词" name={['config', 'search_query']}>
+            <Input placeholder="408考研 数据结构（在 GitHub 搜索仓库）" />
+          </Form.Item>
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="仓库地址和搜索关键词二选一。填写仓库地址则直接爬取该仓库，填写关键词则搜索 GitHub 仓库。"
+          />
+          <Form.Item label="文件类型" name={['config', 'file_types']} initialValue={['pdf']}>
+            <Select
+              mode="multiple"
+              options={[
+                { label: 'PDF', value: 'pdf' },
+                { label: 'Word (doc/docx)', value: 'doc' },
+                { label: 'PPT (ppt/pptx)', value: 'ppt' },
+              ]}
+              placeholder="选择要下载的文件类型"
+            />
           </Form.Item>
           <Row gutter={16}>
             <Col span={8}>
@@ -585,8 +618,8 @@ const CrawlerList = () => {
               </Form.Item>
             </Col>
             <Col span={8}>
-              <Form.Item label="超时(秒)" name={['config', 'timeout']} initialValue={30}>
-                <InputNumber min={5} max={120} style={{ width: '100%' }} />
+              <Form.Item label="超时(秒)" name={['config', 'timeout']} initialValue={60}>
+                <InputNumber min={5} max={300} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
           </Row>
@@ -599,6 +632,82 @@ const CrawlerList = () => {
             />
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* 文件列表弹窗 */}
+      <Modal
+        title={`任务文件 (Task: ${selectedTaskId || ''})`}
+        open={filesModalVisible}
+        onCancel={() => {
+          setFilesModalVisible(false)
+          setSelectedTaskId(null)
+        }}
+        footer={null}
+        width={900}
+      >
+        <Table
+          dataSource={taskFiles}
+          rowKey="id"
+          loading={filesLoading}
+          size="small"
+          pagination={{
+            current: filePage.page,
+            pageSize: filePage.page_size,
+            total: filesTotal,
+            showSizeChanger: true,
+            showTotal: (count) => `共 ${count} 个文件`,
+            onChange: (page, pageSize) => setFilePage({ page, page_size: pageSize }),
+          }}
+          columns={[
+            {
+              title: '文件名',
+              dataIndex: 'file_name',
+              ellipsis: true,
+              render: (name: string, record: DownloadedFile) => (
+                <Tooltip title={record.file_path}>
+                  <span>{name}</span>
+                </Tooltip>
+              ),
+            },
+            {
+              title: '仓库',
+              dataIndex: 'repo_name',
+              width: 160,
+              ellipsis: true,
+            },
+            {
+              title: '类型',
+              dataIndex: 'file_type',
+              width: 60,
+              render: (t: string) => <Tag>{t?.toUpperCase() || '-'}</Tag>,
+            },
+            {
+              title: '大小',
+              dataIndex: 'file_size',
+              width: 80,
+              render: formatFileSize,
+            },
+            {
+              title: '状态',
+              dataIndex: 'status',
+              width: 70,
+              render: (s: string) => {
+                const config = fileStatusConfig[s] || { color: 'default', text: s }
+                return <Tag color={config.color}>{config.text}</Tag>
+              },
+            },
+            {
+              title: '失败原因',
+              dataIndex: 'error_detail',
+              ellipsis: true,
+              render: (err: string) => err ? (
+                <Tooltip title={err}>
+                  <span style={{ color: '#ff4d4f' }}>{err}</span>
+                </Tooltip>
+              ) : '-',
+            },
+          ]}
+        />
       </Modal>
     </div>
   )

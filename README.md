@@ -33,22 +33,20 @@
 |------|------|
 | 前端 | React 18 + TypeScript + Vite + Ant Design + ECharts |
 | 后端 | FastAPI (Python 3.11) |
-| RAG | LangChain + OpenAI GPT-4 + ChromaDB 向量检索 |
+| RAG | LangChain + OpenAI GPT-4 |
 | 主数据库 | MySQL 8.0 - 学科/章节/知识点/题目 |
-| 图数据库 | Neo4j 5.x - 知识点关联关系 |
-| 向量数据库 | ChromaDB - 语义搜索 |
+| 向量数据库 | Qdrant - 多模态语料检索（Phase 3 接入） |
 | 缓存 | Redis - 会话与热点数据 |
 | 爬虫服务 | Scrapy 2.x - PDF 解析 + 网页爬取 |
 | 部署 | Podman + Podman Compose |
 
 ## 数据库架构
 
-本项目采用 **MySQL + Neo4j + ChromaDB + Redis** 多数据库架构：
+本项目采用 **MySQL + Qdrant + Redis** 多数据库架构：
 
-- **MySQL** (主存储): 学科、章节、知识点、题目、做题记录、管理员用户
-- **Neo4j** (图数据库): 知识点关联关系（前置依赖、相似、对比）
-- **ChromaDB** (向量数据库): 知识点向量嵌入，支持语义搜索
-- **Redis** (缓存): 会话状态、搜索结果缓存
+- **MySQL** (主存储): 学科、章节、知识点、题目、做题记录、管理员用户、语料文件注册
+- **Qdrant** (向量数据库): 多模态语料检索，支持 dense/sparse hybrid 检索（Phase 3 接入）
+- **Redis** (缓存): 会话状态、搜索结果缓存、Scrapy 任务队列
 
 ## 快速开始
 
@@ -76,11 +74,18 @@ podman machine start
 ### 3. 启动基础设施（Podman）
 
 ```bash
-# 启动 MySQL + Neo4j + Redis + ChromaDB + Scrapy Service
+# 启动 MySQL + Redis + Scrapy Service
 podman-compose -f docker-compose.podman.yml up -d
 
+# 启动 Qdrant（独立容器）
+podman run -d --name starmap-qdrant \
+  -p 6333:6333 -p 6334:6334 \
+  -v qdrant_data:/qdrant/storage \
+  --memory=512m \
+  qdrant/qdrant:latest
+
 # 查看服务状态
-podman-compose -f docker-compose.podman.yml ps
+podman ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 ```
 
 ### 4. 初始化数据库
@@ -148,7 +153,7 @@ my-agent/
 │   ├── app/                     # FastAPI 应用
 │   │   ├── api/admin.py         # 管理端 API
 │   │   ├── api/chat.py          # 对话 API
-│   │   ├── db/chroma.py         # ChromaDB 客户端
+│   │   ├── db/qdrant.py         # Qdrant 客户端
 │   │   ├── models/mysql_models.py  # SQLAlchemy 模型
 │   │   └── services/chat_service.py  # RAG 对话服务
 │   ├── scrapy_service/          # Scrapy 爬虫服务
@@ -177,9 +182,8 @@ my-agent/
 | 服务 | 地址 | 账号 | 密码 |
 |------|------|------|------|
 | MySQL | localhost:3306 | `starmap` | `starmap123` |
-| Neo4j | http://localhost:7474 | `neo4j` | `starmap123` |
 | Redis | localhost:6379 | - | - |
-| ChromaDB | http://localhost:8001 | - | - |
+| Qdrant | http://localhost:6333 | - | - |
 | 管理端 | http://localhost:5174 | `admin` | `admin123` |
 
 ## 服务端口
@@ -187,10 +191,9 @@ my-agent/
 | 服务 | 端口 | 用途 |
 |------|------|------|
 | MySQL | 3306 | 关系型数据库 |
-| Neo4j HTTP | 7474 | 图数据库浏览器 |
-| Neo4j Bolt | 7687 | 图数据库驱动连接 |
 | Redis | 6379 | 缓存服务 |
-| ChromaDB | 8001 | 向量数据库 API |
+| Qdrant | 6333 | 向量数据库 API（多模态检索） |
+| Qdrant gRPC | 6334 | 向量数据库 gRPC |
 | Scrapy Service | - | 爬虫消费进程（无对外端口） |
 | 后端 API | 8000 | FastAPI 服务 |
 | 管理端前端 | 5174 | Vite 开发服务器 |
@@ -260,10 +263,7 @@ podman-compose -f docker-compose.podman.yml logs scrapy-service
 # 1. 检查 OPENAI_API_KEY 是否配置
 cat backend/.env | grep OPENAI
 
-# 2. 检查 ChromaDB 是否有数据
-curl http://localhost:8001/api/v1/collections
-
-# 3. 检查后端日志
+# 2. 检查后端日志
 podman-compose -f docker-compose.podman.yml logs backend
 ```
 

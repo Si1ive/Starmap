@@ -1,159 +1,66 @@
-import { useState, useEffect, useRef } from 'react'
-import { useSearchParams } from 'react-router-dom'
-import { Card, Table, Tag, Select, Input, Row, Col, Statistic, Badge, Space, Button, message } from 'antd'
-import { SearchOutlined, ExclamationCircleOutlined, WarningOutlined, CheckCircleOutlined, DisconnectOutlined, LinkOutlined, DownloadOutlined } from '@ant-design/icons'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { getCrawlerLogs, getCrawlerLogAnalysis, exportCrawlerLogs } from '@/api'
-import type { CrawlerLog } from '@/types'
+import { useState } from 'react'
+import { Card, Table, Tag, Select, Input, Row, Col, Statistic, Space, Button, Tooltip, Modal, message } from 'antd'
+import { SearchOutlined, ReloadOutlined, FileOutlined, CheckCircleOutlined, CloseCircleOutlined, RedoOutlined } from '@ant-design/icons'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import adminClient from '@/api/client'
+
+const getFileLogs = (params: Record<string, unknown>) =>
+  adminClient.get('/crawler/file-logs', { params })
+
+const getFileLogRepos = () =>
+  adminClient.get('/crawler/file-logs/repos')
+
+const retryFileDownloads = (fileIds: string[]) =>
+  adminClient.post('/crawler/file-logs/retry', fileIds)
+
+const formatFileSize = (bytes?: number) => {
+  if (!bytes) return '-'
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+const statusConfig: Record<string, { color: string; text: string }> = {
+  downloaded: { color: 'green', text: '已下载' },
+  processing: { color: 'blue', text: '处理中' },
+  processed: { color: 'purple', text: '已处理' },
+  failed: { color: 'red', text: '失败' },
+  skipped: { color: 'default', text: '跳过' },
+}
 
 const CrawlerLogs = () => {
-  const [searchParams] = useSearchParams()
   const queryClient = useQueryClient()
-  const initialTaskId = searchParams.get('task_id') || undefined
-  
-  const [params, setParams] = useState<Record<string, unknown>>({ 
-    page: 1, 
+  const [params, setParams] = useState<Record<string, unknown>>({
+    page: 1,
     page_size: 50,
-    task_id: initialTaskId,
   })
   const [searchText, setSearchText] = useState('')
-  const [realtimeLogs, setRealtimeLogs] = useState<CrawlerLog[]>([])
-  const [wsStatus, setWsStatus] = useState<'connecting' | 'connected' | 'disconnected'>('disconnected')
-  const [exporting, setExporting] = useState<'csv' | 'json' | null>(null)
-  const wsRef = useRef<WebSocket | null>(null)
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['crawlerLogs', params],
-    queryFn: () => getCrawlerLogs(params as any),
+  const retryMutation = useMutation({
+    mutationFn: retryFileDownloads,
+    onSuccess: (res: any) => {
+      const d = res?.data
+      message.success(`重试完成：成功 ${d?.success_count ?? 0} 个，失败 ${d?.fail_count ?? 0} 个`)
+      setSelectedRowKeys([])
+      queryClient.invalidateQueries({ queryKey: ['fileLogs'] })
+    },
+    onError: () => message.error('重试请求失败'),
   })
 
-  const { data: analysisData } = useQuery({
-    queryKey: ['crawlerLogAnalysis'],
-    queryFn: () => getCrawlerLogAnalysis(7),
+  const { data, isLoading, refetch } = useQuery({
+    queryKey: ['fileLogs', params],
+    queryFn: () => getFileLogs(params),
   })
 
-  const persistedLogs = (data?.data?.items || []) as CrawlerLog[]
-  const logs = [...realtimeLogs, ...persistedLogs]
-    .filter((log, index, items) => items.findIndex((item) => String(item.id) === String(log.id)) === index)
-    .filter((log) => {
-      const keyword = searchText.trim().toLowerCase()
-      if (!keyword) return true
-      return [
-        log.message,
-        log.resource_name,
-        log.resource_url,
-        log.task_id,
-        log.source_id,
-        log.error_type,
-        log.error_detail,
-      ]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(keyword))
-    })
+  const { data: reposData } = useQuery({
+    queryKey: ['fileLogRepos'],
+    queryFn: getFileLogRepos,
+  })
+
+  const logs = (data?.data?.items || []) as any[]
   const total = data?.data?.total || 0
-  const analysis = (analysisData?.data || {}) as Record<string, any>
-
-  const buildWebSocketUrl = () => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const url = new URL(`${protocol}//${window.location.host}/api/v1/admin/crawler/logs/stream`)
-    if (params.task_id) url.searchParams.set('task_id', String(params.task_id))
-    if (params.source_id) url.searchParams.set('source_id', String(params.source_id))
-    if (params.level) url.searchParams.set('level', String(params.level))
-    return url.toString()
-  }
-
-  const syncWebSocketFilters = () => {
-    if (wsRef.current?.readyState !== WebSocket.OPEN) return
-    wsRef.current.send(JSON.stringify({
-      type: 'filter',
-      task_ids: params.task_id ? [String(params.task_id)] : [],
-      source_ids: params.source_id ? [String(params.source_id)] : [],
-      levels: params.level ? [String(params.level)] : [],
-    }))
-  }
-
-  const connectWebSocket = () => {
-    wsRef.current?.close()
-    setWsStatus('connecting')
-    try {
-      wsRef.current = new WebSocket(buildWebSocketUrl())
-      wsRef.current.onopen = () => {
-        setWsStatus('connected')
-        syncWebSocketFilters()
-      }
-      wsRef.current.onmessage = (event) => {
-        const messageData = JSON.parse(event.data)
-        if (messageData.type !== 'log' || !messageData.data) return
-        const log = messageData.data as CrawlerLog
-        setRealtimeLogs((current) => {
-          const logId = String(log.id || `${log.task_id}-${log.created_at}-${log.message}`)
-          const normalizedLog = { ...log, id: logId }
-          return [
-            normalizedLog,
-            ...current.filter((item) => String(item.id) !== logId),
-          ].slice(0, 200)
-        })
-        queryClient.invalidateQueries({ queryKey: ['crawlerLogAnalysis'] })
-      }
-      wsRef.current.onerror = () => setWsStatus('disconnected')
-      wsRef.current.onclose = () => setWsStatus('disconnected')
-    } catch {
-      setWsStatus('disconnected')
-    }
-  }
-
-  const handleExport = async (format: 'csv' | 'json') => {
-    setExporting(format)
-    try {
-      const exportParams = { ...(params as Record<string, unknown>) }
-      delete exportParams.page
-      delete exportParams.page_size
-      const blob = await exportCrawlerLogs(exportParams as any, format)
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = `crawler_logs_${new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')}.${format}`
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      URL.revokeObjectURL(url)
-      message.success('日志导出已开始')
-    } catch {
-      message.error('日志导出失败')
-    } finally {
-      setExporting(null)
-    }
-  }
-
-  useEffect(() => {
-    connectWebSocket()
-    return () => {
-      wsRef.current?.close()
-    }
-  }, [])
-
-  useEffect(() => {
-    syncWebSocketFilters()
-  }, [params.task_id, params.source_id, params.level])
-
-  useEffect(() => {
-    setRealtimeLogs([])
-  }, [params.task_id, params.source_id, params.level, params.status, params.resource_type])
-
-  const levelColors: Record<string, string> = {
-    INFO: 'blue',
-    WARNING: 'orange',
-    ERROR: 'red',
-    CRITICAL: '#cf1322',
-    DEBUG: 'default',
-  }
-
-  const statusColors: Record<string, string> = {
-    success: 'success',
-    failed: 'error',
-    skipped: 'warning',
-    pending: 'default',
-  }
+  const repos = (reposData?.data || []) as string[]
 
   const columns = [
     {
@@ -163,142 +70,137 @@ const CrawlerLogs = () => {
       render: (v: string) => v ? new Date(v).toLocaleString('zh-CN') : '-',
     },
     {
-      title: '级别',
-      dataIndex: 'level',
-      width: 80,
-      render: (l: string) => <Tag color={levelColors[l] || 'default'}>{l}</Tag>,
-    },
-    {
-      title: '阶段',
-      dataIndex: 'stage',
-      width: 80,
-      render: (s: string) => s || '-',
-    },
-    {
-      title: '资源名称',
-      dataIndex: 'resource_name',
-      width: 180,
+      title: '任务ID',
+      dataIndex: 'task_id',
+      width: 140,
       ellipsis: true,
-      render: (n: string, r: CrawlerLog) => (
-        <a href={r.resource_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12 }}>
-          {n || r.resource_url || '-'}
-        </a>
+      render: (v: string) => v ? (
+        <Tooltip title={v}>
+          <Tag color="blue">{v}</Tag>
+        </Tooltip>
+      ) : '-',
+    },
+    {
+      title: '文件名',
+      dataIndex: 'file_name',
+      width: 250,
+      ellipsis: true,
+      render: (name: string, record: any) => (
+        <Tooltip title={record.file_path}>
+          <span>
+            <FileOutlined style={{ marginRight: 4, color: '#1890ff' }} />
+            {name}
+          </span>
+        </Tooltip>
       ),
     },
     {
-      title: '类型',
-      dataIndex: 'resource_type',
-      width: 80,
-      render: (t: string) => {
-        const map: Record<string, string> = { person: '人物', work: '作品', page: '页面' }
-        return <Tag>{map[t] || t || '-'}</Tag>
-      },
+      title: '仓库',
+      dataIndex: 'repo_name',
+      width: 180,
+      ellipsis: true,
     },
     {
-      title: '操作',
-      dataIndex: 'action',
-      width: 80,
-      render: (a: string) => a || '-',
+      title: '类型',
+      dataIndex: 'file_type',
+      width: 70,
+      render: (t: string) => <Tag>{t?.toUpperCase() || '-'}</Tag>,
+    },
+    {
+      title: '大小',
+      dataIndex: 'file_size',
+      width: 90,
+      render: formatFileSize,
     },
     {
       title: '状态',
       dataIndex: 'status',
-      width: 80,
-      render: (s: string) => <Tag color={statusColors[s] || 'default'}>{s || '-'}</Tag>,
+      width: 90,
+      render: (s: string) => {
+        const config = statusConfig[s] || { color: 'default', text: s }
+        return <Tag color={config.color}>{config.text}</Tag>
+      },
     },
     {
-      title: '耗时',
-      dataIndex: 'duration_ms',
-      width: 80,
-      render: (v: number) => v ? (
-        <span style={{ color: v > 5000 ? '#ff4d4f' : v > 2000 ? '#fa8c16' : '#52c41a' }}>{v}ms</span>
+      title: '失败原因',
+      dataIndex: 'error_detail',
+      ellipsis: true,
+      render: (err: string) => err ? (
+        <Tooltip title={err}>
+          <span style={{ color: '#ff4d4f', fontSize: 12 }}>{err}</span>
+        </Tooltip>
       ) : '-',
     },
     {
-      title: '消息',
-      dataIndex: 'message',
-      ellipsis: true,
-      render: (m: string) => m || '-',
-    },
-    {
-      title: '重试',
-      dataIndex: 'retry_count',
-      width: 60,
-      render: (v: number) => v ? <Badge count={v} style={{ backgroundColor: '#fa8c16' }} /> : '-',
+      title: '下载链接',
+      dataIndex: 'download_url',
+      width: 80,
+      render: (url: string) => url ? (
+        <a href={url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12 }}>
+          查看
+        </a>
+      ) : '-',
     },
   ]
 
-  const levelCounts = (analysis.level_distribution || []).reduce((acc: Record<string, number>, item: any) => {
-    acc[item.level] = item.count
-    return acc
-  }, {})
-  const statusCounts = (analysis.status_distribution || []).reduce((acc: Record<string, number>, item: any) => {
-    acc[item.status] = item.count
-    return acc
-  }, {})
-  const stats = {
-    total,
-    errors: levelCounts.ERROR || 0,
-    warnings: levelCounts.WARNING || 0,
-    success_rate: total ? Math.round(((statusCounts.success || 0) / total) * 1000) / 10 : 0,
-  }
-  const wsStatusConfig = {
-    connected: { color: 'success', text: '实时已连接', icon: <LinkOutlined /> },
-    connecting: { color: 'processing', text: '连接中', icon: <LinkOutlined /> },
-    disconnected: { color: 'default', text: '实时未连接', icon: <DisconnectOutlined /> },
-  }[wsStatus]
+  // 本地搜索过滤
+  const filteredLogs = searchText.trim()
+    ? logs.filter((log) => {
+        const kw = searchText.trim().toLowerCase()
+        return [
+          log.file_name,
+          log.repo_name,
+          log.file_path,
+          log.task_id,
+          log.error_detail,
+        ]
+          .filter(Boolean)
+          .some((v) => String(v).toLowerCase().includes(kw))
+      })
+    : logs
 
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <h2 style={{ margin: 0 }}>爬虫日志</h2>
-          <Tag color={wsStatusConfig.color} icon={wsStatusConfig.icon}>
-            {wsStatusConfig.text}
-          </Tag>
-          {initialTaskId && (
-            <Tag color="blue">
-              任务: {initialTaskId}
-            </Tag>
-          )}
-        </div>
+        <h2 style={{ margin: 0 }}>文件爬取日志</h2>
         <Space>
-          <Button
-            icon={<DownloadOutlined />}
-            loading={exporting === 'csv'}
-            onClick={() => handleExport('csv')}
-          >
-            导出 CSV
+          {selectedRowKeys.length > 0 && (
+            <Button
+              type="primary"
+              icon={<RedoOutlined />}
+              loading={retryMutation.isPending}
+              onClick={() => {
+                Modal.confirm({
+                  title: '确认重试下载',
+                  content: `即将重试下载 ${selectedRowKeys.length} 个文件，确定继续？`,
+                  onOk: () => retryMutation.mutate(selectedRowKeys as string[]),
+                })
+              }}
+            >
+              重试下载 ({selectedRowKeys.length})
+            </Button>
+          )}
+          <Button icon={<ReloadOutlined />} onClick={() => refetch()}>
+            刷新
           </Button>
-          <Button
-            icon={<DownloadOutlined />}
-            loading={exporting === 'json'}
-            onClick={() => handleExport('json')}
-          >
-            导出 JSON
-          </Button>
-          <Button onClick={connectWebSocket} icon={<LinkOutlined />}>重连实时日志</Button>
         </Space>
       </div>
 
       {/* 统计 */}
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        <Col xs={6}>
-          <Card size="small"><Statistic title="总日志" value={stats.total} /></Card>
-        </Col>
-        <Col xs={6}>
+        <Col xs={8}>
           <Card size="small">
-            <Statistic title="错误" value={stats.errors || 0} valueStyle={{ color: '#ff4d4f' }} prefix={<ExclamationCircleOutlined />} />
+            <Statistic title="总文件数" value={total} prefix={<FileOutlined style={{ color: '#1890ff' }} />} />
           </Card>
         </Col>
-        <Col xs={6}>
+        <Col xs={8}>
           <Card size="small">
-            <Statistic title="警告" value={stats.warnings || 0} valueStyle={{ color: '#fa8c16' }} prefix={<WarningOutlined />} />
+            <Statistic title="成功" value={data?.data?.success_count ?? 0} valueStyle={{ color: '#52c41a' }} prefix={<CheckCircleOutlined />} />
           </Card>
         </Col>
-        <Col xs={6}>
+        <Col xs={8}>
           <Card size="small">
-            <Statistic title="成功率" value={stats.success_rate || 0} suffix="%" valueStyle={{ color: '#52c41a' }} prefix={<CheckCircleOutlined />} />
+            <Statistic title="失败" value={data?.data?.failed_count ?? 0} valueStyle={{ color: '#ff4d4f' }} prefix={<CloseCircleOutlined />} />
           </Card>
         </Col>
       </Row>
@@ -307,45 +209,45 @@ const CrawlerLogs = () => {
       <Card style={{ marginBottom: 16 }}>
         <Space wrap>
           <Select
-            value={params.level as string || 'all'}
-            onChange={(v) => setParams((p) => ({ ...p, level: v === 'all' ? undefined : v }))}
-            style={{ width: 120 }}
-            options={[
-              { label: '全部级别', value: 'all' },
-              { label: 'INFO', value: 'INFO' },
-              { label: 'WARNING', value: 'WARNING' },
-              { label: 'ERROR', value: 'ERROR' },
-              { label: 'CRITICAL', value: 'CRITICAL' },
-            ]}
-          />
-          <Select
             value={params.status as string || 'all'}
-            onChange={(v) => setParams((p) => ({ ...p, status: v === 'all' ? undefined : v }))}
+            onChange={(v) => setParams((p) => ({ ...p, page: 1, status: v === 'all' ? undefined : v }))}
             style={{ width: 120 }}
             options={[
               { label: '全部状态', value: 'all' },
-              { label: '成功', value: 'success' },
+              { label: '已下载', value: 'downloaded' },
+              { label: '处理中', value: 'processing' },
+              { label: '已处理', value: 'processed' },
               { label: '失败', value: 'failed' },
               { label: '跳过', value: 'skipped' },
             ]}
           />
           <Select
-            value={params.resource_type as string || 'all'}
-            onChange={(v) => setParams((p) => ({ ...p, resource_type: v === 'all' ? undefined : v }))}
+            value={params.repo_name as string || 'all'}
+            onChange={(v) => setParams((p) => ({ ...p, page: 1, repo_name: v === 'all' ? undefined : v }))}
+            style={{ width: 200 }}
+            options={[
+              { label: '全部仓库', value: 'all' },
+              ...repos.map((r) => ({ label: r, value: r })),
+            ]}
+          />
+          <Select
+            value={params.file_type as string || 'all'}
+            onChange={(v) => setParams((p) => ({ ...p, page: 1, file_type: v === 'all' ? undefined : v }))}
             style={{ width: 120 }}
             options={[
               { label: '全部类型', value: 'all' },
-              { label: '人物', value: 'person' },
-              { label: '作品', value: 'work' },
-              { label: '页面', value: 'page' },
+              { label: 'PDF', value: 'pdf' },
+              { label: 'Word', value: 'doc' },
+              { label: 'PPT', value: 'ppt' },
+              { label: 'Markdown', value: 'md' },
             ]}
           />
           <Input
-            placeholder="搜索当前页和实时日志"
+            placeholder="搜索文件名、仓库、路径、错误信息"
             prefix={<SearchOutlined />}
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
-            style={{ width: 200 }}
+            style={{ width: 300 }}
             allowClear
           />
         </Space>
@@ -355,11 +257,18 @@ const CrawlerLogs = () => {
       <Card>
         <Table
           columns={columns}
-          dataSource={logs as any[]}
+          dataSource={filteredLogs as any[]}
           rowKey="id"
           loading={isLoading}
           size="small"
           scroll={{ x: 1200 }}
+          rowSelection={{
+            selectedRowKeys,
+            onChange: setSelectedRowKeys,
+            getCheckboxProps: (record: any) => ({
+              disabled: !record.download_url,
+            }),
+          }}
           pagination={{
             current: params.page as number || 1,
             pageSize: params.page_size as number || 50,
@@ -367,7 +276,13 @@ const CrawlerLogs = () => {
             showSizeChanger: true,
             showTotal: (t) => `共 ${t} 条`,
           }}
-          onChange={(pagination) => setParams((p) => ({ ...p, page: pagination.current || 1, page_size: pagination.pageSize || 50 }))}
+          onChange={(pagination) =>
+            setParams((p) => ({
+              ...p,
+              page: pagination.current || 1,
+              page_size: pagination.pageSize || 50,
+            }))
+          }
         />
       </Card>
     </div>

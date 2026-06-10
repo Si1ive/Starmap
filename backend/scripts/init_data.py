@@ -182,7 +182,7 @@ def main():
     )
     parser.add_argument(
         "--format",
-        choices=["json", "neo4j"],
+        choices=["json"],
         default="json",
         help="Output format",
     )
@@ -201,27 +201,6 @@ def main():
         print(f"Works: {len(data['works'])}")
         print(f"Relations: {len(data['relations'])}")
 
-    elif args.format == "neo4j":
-        # 导入到Neo4j
-        try:
-            from scripts.import_neo4j import Neo4jImporter
-
-            uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-            user = os.getenv("NEO4J_USER", "neo4j")
-            password = os.getenv("NEO4J_PASSWORD", "password")
-
-            persons = [Person.from_dict(p) for p in data["persons"]]
-            works = [Work.from_dict(w) for w in data["works"]]
-            relations = [Relation.from_dict(r) for r in data["relations"]]
-
-            with Neo4jImporter(uri, user, password) as importer:
-                report = importer.import_dataset(persons, works, relations)
-                print("\nNeo4j Import Report:")
-                print(json.dumps(report, indent=2, ensure_ascii=False))
-
-        except ImportError:
-            logger.error("neo4j package not installed")
-            sys.exit(1)
 
 
 if __name__ == "__main__":

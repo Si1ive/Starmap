@@ -1,11 +1,8 @@
 """
-Scrapy Bridge Service for StarMap.
+Scrapy Bridge Service
 
-This service bridges the FastAPI application with the Scrapy service via Redis.
-It handles:
-1. Publishing crawl tasks to Redis queue
-2. Subscribing to progress updates from Scrapy
-3. Managing task status synchronization
+Bridges FastAPI with the Scrapy service via Redis.
+Handles task publishing, progress subscription, and status synchronization.
 """
 
 import asyncio
@@ -27,9 +24,9 @@ from app.services.log_service import CrawlerLogService
 logger = get_logger(__name__)
 
 
-TASK_QUEUE = "starmap:crawl:tasks"
-PROGRESS_CHANNEL = "starmap:crawl:progress"
-LOG_CHANNEL = "starmap:crawl:logs"
+TASK_QUEUE = "crawler:tasks"
+PROGRESS_CHANNEL = "crawler:progress"
+LOG_CHANNEL = "crawler:logs"
 
 
 class ScrapyBridgeService:
@@ -140,29 +137,18 @@ class ScrapyBridgeService:
 
     @staticmethod
     def _get_spider_key(source: Optional[CrawlSource], fallback_code: Optional[str] = None) -> str:
-        """Get scrapy spider key from source config, with legacy fallback."""
+        """Get scrapy spider key from source config."""
         if source and isinstance(source.config, dict) and source.config.get("spider_key"):
             return source.config["spider_key"]
-        # Legacy fallback for sources without spider_key in config
-        legacy = {
-            "wikipedia_zh": "wikipedia",
-            "douban_movie": "douban",
-            "baidu_baike": "baike",
-        }
-        code = (source.code if source else None) or fallback_code or "baike"
-        return legacy.get(code, code)
+        code = (source.code if source else None) or fallback_code or "github"
+        return code
 
     @staticmethod
     def _source_code_candidates(source_code: Optional[str]) -> list[str]:
         """Return database source code candidates for a Scrapy source key."""
         if not source_code:
             return []
-        aliases = {
-            "wikipedia": "wikipedia_zh",
-            "douban": "douban_movie",
-            "baike": "baidu_baike",
-        }
-        return [code for code in {source_code, aliases.get(source_code)} if code]
+        return [source_code]
     
     async def subscribe_progress(self, task_id: str, callback: Optional[Callable] = None):
         """
@@ -243,13 +229,17 @@ class ScrapyBridgeService:
             task.status = status
             task.progress = min(progress, 100)
             
-            if "items_scraped" in data:
+            if "success_count" in data:
+                task.success_count = data["success_count"]
+            elif "items_scraped" in data:
                 task.success_count = data["items_scraped"]
-                task.completed_count = data["items_scraped"] + data.get("errors", task.failed_count or 0)
+            if "failure_count" in data:
+                task.failed_count = data["failure_count"]
+            elif "errors" in data:
+                task.failed_count = data["errors"]
+            task.completed_count = (task.success_count or 0) + (task.failed_count or 0)
             if "requests_made" in data:
                 task.total_requests = data["requests_made"]
-            if "errors" in data:
-                task.failed_count = data["errors"]
             if "error_message" in data:
                 task.error_message = str(data["error_message"])[:500]
             
@@ -428,15 +418,21 @@ class ScrapyEventListener:
 
             status = data.get("status") or task.status
             progress = data.get("progress")
-            items_scraped = int(data.get("items_scraped") or 0)
-            errors = int(data.get("errors") or 0)
 
             task.status = status
             if progress is not None:
                 task.progress = min(max(float(progress), 0), 100)
-            task.success_count = items_scraped
-            task.failed_count = errors
-            task.completed_count = items_scraped + errors
+
+            # Use explicit success/failure counts if available
+            if "success_count" in data:
+                task.success_count = int(data.get("success_count") or 0)
+            else:
+                task.success_count = int(data.get("items_scraped") or 0)
+            if "failure_count" in data:
+                task.failed_count = int(data.get("failure_count") or 0)
+            else:
+                task.failed_count = int(data.get("errors") or 0)
+            task.completed_count = (task.success_count or 0) + (task.failed_count or 0)
 
             if "requests_made" in data:
                 task.total_requests = int(data.get("requests_made") or 0)

@@ -85,7 +85,6 @@ def configure_logging() -> None:
     
     # 抑制第三方库日志
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
-    logging.getLogger("neo4j").setLevel(logging.WARNING)
 
 
 def set_request_id(request_id: str) -> None:

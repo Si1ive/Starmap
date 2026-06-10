@@ -37,20 +37,16 @@ class RedisClient:
     
     # 键前缀配置
     KEY_PREFIXES = {
-        "person": "starmap:person",
-        "search": "starmap:search",
-        "relation": "starmap:relation",
-        "session": "starmap:session",
-        "llm": "starmap:llm"
+        "session": "crawler:session",
+        "llm": "crawler:llm",
+        "task": "crawler:task",
     }
-    
+
     # 默认TTL配置（秒）
     DEFAULT_TTL = {
-        "person": 3600,      # 1小时
-        "search": 300,       # 5分钟
-        "relation": 600,     # 10分钟
         "session": 3600,     # 1小时
-        "llm": 1800          # 30分钟
+        "llm": 1800,         # 30分钟
+        "task": 7200,        # 2小时
     }
     
     def __init__(self):
@@ -113,7 +109,7 @@ class RedisClient:
         Returns:
             str: 带前缀的键
         """
-        prefix = self.KEY_PREFIXES.get(key_type, "starmap:default")
+        prefix = self.KEY_PREFIXES.get(key_type, "crawler:default")
         return f"{prefix}:{key}"
     
     # ========== 基础操作 ==========
@@ -399,9 +395,9 @@ class RedisClient:
             int: 删除的键数量
         """
         if key_type:
-            pattern = f"{self.KEY_PREFIXES.get(key_type, 'starmap')}:*"
+            pattern = f"{self.KEY_PREFIXES.get(key_type, 'crawler')}:*"
         else:
-            pattern = "starmap:*"
+            pattern = "crawler:*"
         
         return await self.delete_pattern(pattern)
 

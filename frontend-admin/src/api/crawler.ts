@@ -1,5 +1,5 @@
 import adminClient from './client'
-import type { ApiResponse, PaginatedResponse, CrawlerTask, CrawlerSource, CrawlerSchedule, CrawlerLog } from '@/types'
+import type { ApiResponse, PaginatedResponse, CrawlerTask, CrawlerSource, CrawlerSchedule, CrawlerLog, DownloadedFile } from '@/types'
 
 // ===== 爬虫任务 =====
 
@@ -187,4 +187,29 @@ export const getCrawlerConfig = (): Promise<ApiResponse<Record<string, unknown>>
 
 export const updateCrawlerConfig = (data: Record<string, unknown>): Promise<ApiResponse<null>> => {
   return adminClient.put('/crawler/config', data)
+}
+
+// ===== 已下载文件 =====
+
+export interface DownloadedFileParams {
+  page?: number
+  page_size?: number
+  file_type?: string
+  status?: string
+  task_id?: string
+  keyword?: string
+}
+
+export const getDownloadedFiles = (
+  params?: DownloadedFileParams
+): Promise<ApiResponse<PaginatedResponse<DownloadedFile>>> => {
+  return adminClient.get('/files/downloaded', { params })
+}
+
+export const getDownloadedFileDetail = (id: string): Promise<ApiResponse<DownloadedFile>> => {
+  return adminClient.get(`/files/downloaded/${id}`)
+}
+
+export const getDownloadedFilePreviewUrl = (id: string): string => {
+  return `/api/v1/admin/files/downloaded/${id}/preview`
 }

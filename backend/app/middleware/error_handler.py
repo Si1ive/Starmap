@@ -18,9 +18,7 @@ from fastapi.exceptions import RequestValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.logging import get_logger, set_request_id, clear_request_id
-from app.db.neo4j import Neo4jConnectionError, Neo4jQueryError
 from app.db.redis import RedisConnectionError
-from app.db.chroma import ChromaConnectionError
 
 logger = get_logger(__name__)
 
@@ -142,23 +140,11 @@ class ErrorHandlerMiddleware(BaseHTTPMiddleware):
                 errors=exc.errors()
             )
             return self._build_error_response(validation_error, request_id)
-            
-        except (Neo4jConnectionError, Neo4jQueryError) as exc:
-            # Neo4j异常
-            db_error = DatabaseException(message="图数据库服务暂时不可用")
-            logger.error("Neo4j异常", error=str(exc))
-            return self._build_error_response(db_error, request_id)
-            
+
         except RedisConnectionError as exc:
             # Redis异常
             db_error = DatabaseException(message="缓存服务暂时不可用")
             logger.error("Redis异常", error=str(exc))
-            return self._build_error_response(db_error, request_id)
-            
-        except ChromaConnectionError as exc:
-            # ChromaDB异常
-            db_error = DatabaseException(message="向量数据库服务暂时不可用")
-            logger.error("ChromaDB异常", error=str(exc))
             return self._build_error_response(db_error, request_id)
             
         except Exception as exc:

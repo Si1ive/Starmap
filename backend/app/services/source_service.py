@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import List, Optional, Dict, Any
 
 from sqlalchemy import select, func, and_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
@@ -18,58 +19,21 @@ from app.models.mysql_models import CrawlLog, CrawlSource, CrawlSourceStats
 
 logger = get_logger(__name__)
 
-VALID_SPIDER_KEYS = {"baike", "douban", "wikipedia"}
+VALID_SPIDER_KEYS = {"github", "knowledge"}
 
 DEFAULT_CRAWL_SOURCES = [
     {
         "id": "src_001",
-        "name": "维基百科（中文）",
-        "code": "wikipedia_zh",
-        "type": "encyclopedia",
-        "base_url": "https://zh.wikipedia.org/wiki/",
+        "name": "GitHub",
+        "code": "github",
+        "type": "code_hosting",
+        "base_url": "https://github.com",
         "config": {
-            "spider_key": "wikipedia",
-            "selectors": {
-                "title": "h1.firstHeading",
-                "summary": "div.mw-parser-output > p:first-of-type",
-            },
-            "anti_detection": {"user_agent_rotation": True, "delay_range": [1.0, 3.0]},
+            "spider_key": "github",
+            "default_file_types": ["pdf"],
         },
         "request_interval": 1.0,
-        "daily_limit": 1000,
-        "concurrent_limit": 3,
-    },
-    {
-        "id": "src_002",
-        "name": "豆瓣电影",
-        "code": "douban_movie",
-        "type": "social",
-        "base_url": "https://movie.douban.com/",
-        "config": {
-            "spider_key": "douban",
-            "selectors": {
-                "title": "span[property=\"v:itemreviewed\"]",
-                "rating": "strong[property=\"v:average\"]",
-            },
-            "anti_detection": {"user_agent_rotation": True, "delay_range": [2.0, 5.0]},
-        },
-        "request_interval": 2.0,
-        "daily_limit": 1000,
-        "concurrent_limit": 2,
-    },
-    {
-        "id": "src_003",
-        "name": "百度百科",
-        "code": "baidu_baike",
-        "type": "encyclopedia",
-        "base_url": "https://baike.baidu.com/",
-        "config": {
-            "spider_key": "baike",
-            "selectors": {"title": "h1", "summary": ".lemma-summary"},
-            "anti_detection": {"user_agent_rotation": True, "delay_range": [1.0, 3.0]},
-        },
-        "request_interval": 1.0,
-        "daily_limit": 1000,
+        "daily_limit": 5000,
         "concurrent_limit": 3,
     },
 ]
@@ -161,17 +125,18 @@ class CrawlerSourceService:
         )
         existing_sources = result.scalars().all()
         existing_codes = {source.code for source in existing_sources}
-        existing_ids = {source.id for source in existing_sources}
+        # Query all existing IDs to avoid conflicts with old sources
+        all_ids_result = await self.db.execute(select(CrawlSource.id))
+        existing_ids = {row[0] for row in all_ids_result.fetchall()}
         created_sources: List[CrawlSource] = []
 
         for default_source in DEFAULT_CRAWL_SOURCES:
             if default_source["code"] in existing_codes:
                 continue
-            source_id = (
-                default_source["id"]
-                if default_source["id"] not in existing_ids
-                else f"src_{uuid.uuid4().hex[:8]}"
-            )
+            # Generate unique ID: use preferred ID if available, otherwise random
+            source_id = default_source["id"]
+            if source_id in existing_ids:
+                source_id = f"src_{uuid.uuid4().hex[:8]}"
             source = CrawlSource(
                 id=source_id,
                 name=default_source["name"],
@@ -190,10 +155,14 @@ class CrawlerSourceService:
             existing_ids.add(source_id)
 
         if created_sources:
-            await self.db.commit()
-            for source in created_sources:
-                await self.db.refresh(source)
-            logger.info("Initialized default crawl sources", count=len(created_sources))
+            try:
+                await self.db.commit()
+                for source in created_sources:
+                    await self.db.refresh(source)
+                logger.info("Initialized default crawl sources", count=len(created_sources))
+            except IntegrityError:
+                await self.db.rollback()
+                logger.warning("Some default sources already exist, skipping duplicates")
 
         return [*existing_sources, *created_sources]
 

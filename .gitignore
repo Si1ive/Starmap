@@ -67,3 +67,4 @@ htmlcov/
 # Misc
 *.bak
 *.tmp
+downloads/

@@ -16,205 +16,6 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.mysql import Base
 
 
-class Person(Base):
-    """人物表"""
-    __tablename__ = "persons"
-    
-    id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="唯一标识")
-    name: Mapped[str] = mapped_column(String(100), nullable=False, comment="中文名")
-    name_en: Mapped[Optional[str]] = mapped_column(String(100), comment="英文名")
-    avatar: Mapped[Optional[str]] = mapped_column(String(500), comment="头像URL")
-    gender: Mapped[Optional[str]] = mapped_column(Enum("male", "female", "unknown"), comment="性别")
-    birth_date: Mapped[Optional[datetime]] = mapped_column(Date, comment="出生日期")
-    birth_place: Mapped[Optional[str]] = mapped_column(String(200), comment="出生地")
-    nationality: Mapped[Optional[str]] = mapped_column(String(50), comment="国籍")
-    height: Mapped[Optional[float]] = mapped_column(DECIMAL(5, 2), comment="身高(cm)")
-    summary: Mapped[Optional[str]] = mapped_column(Text, comment="简介")
-    biography: Mapped[Optional[str]] = mapped_column(Text, comment="详细传记")
-    popularity_score: Mapped[Optional[float]] = mapped_column(DECIMAL(5, 2), comment="知名度评分")
-    categories: Mapped[Optional[List[str]]] = mapped_column(JSON, comment="分类标签")
-    
-    # 数据状态
-    status: Mapped[str] = mapped_column(
-        Enum("active", "pending", "deleted"), 
-        default="pending", 
-        comment="数据状态"
-    )
-    data_quality_score: Mapped[Optional[float]] = mapped_column(DECIMAL(3, 2), comment="数据质量评分")
-    
-    # 爬取信息
-    crawl_source: Mapped[Optional[str]] = mapped_column(String(50), comment="数据来源")
-    crawl_url: Mapped[Optional[str]] = mapped_column(String(500), comment="原始爬取URL")
-    crawl_task_id: Mapped[Optional[str]] = mapped_column(String(32), comment="关联的爬取任务ID")
-    raw_data: Mapped[Optional[dict]] = mapped_column(JSON, comment="保留原始爬取数据")
-    
-    # 时间戳
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, 
-        default=datetime.utcnow, 
-        onupdate=datetime.utcnow
-    )
-    
-    # 关系
-    works: Mapped[List["PersonWork"]] = relationship(back_populates="person")
-    relations_as_source: Mapped[List["PersonRelation"]] = relationship(
-        foreign_keys="PersonRelation.source_id",
-        back_populates="source_person"
-    )
-    relations_as_target: Mapped[List["PersonRelation"]] = relationship(
-        foreign_keys="PersonRelation.target_id",
-        back_populates="target_person"
-    )
-    
-    __table_args__ = (
-        Index("idx_name", "name"),
-        Index("idx_name_en", "name_en"),
-        Index("idx_nationality", "nationality"),
-        Index("idx_status", "status"),
-        Index("idx_birth_date", "birth_date"),
-        Index("idx_crawl_source", "crawl_source"),
-        Index("idx_created_at", "created_at"),
-        {"comment": "人物表"}
-    )
-
-
-class Work(Base):
-    """作品表"""
-    __tablename__ = "works"
-    
-    id: Mapped[str] = mapped_column(String(32), primary_key=True)
-    title: Mapped[str] = mapped_column(String(200), nullable=False)
-    title_en: Mapped[Optional[str]] = mapped_column(String(200))
-    type: Mapped[Optional[str]] = mapped_column(
-        Enum("album", "movie", "tv", "drama", "book", "single", "ep")
-    )
-    release_date: Mapped[Optional[datetime]] = mapped_column(Date)
-    genre: Mapped[Optional[str]] = mapped_column(String(100))
-    rating: Mapped[Optional[float]] = mapped_column(DECIMAL(3, 1))
-    poster: Mapped[Optional[str]] = mapped_column(String(500))
-    summary: Mapped[Optional[str]] = mapped_column(Text)
-    
-    status: Mapped[str] = mapped_column(
-        Enum("active", "pending", "deleted"), 
-        default="pending"
-    )
-    
-    crawl_source: Mapped[Optional[str]] = mapped_column(String(50))
-    crawl_url: Mapped[Optional[str]] = mapped_column(String(500))
-    crawl_task_id: Mapped[Optional[str]] = mapped_column(String(32))
-    raw_data: Mapped[Optional[dict]] = mapped_column(JSON)
-    
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, 
-        default=datetime.utcnow, 
-        onupdate=datetime.utcnow
-    )
-    
-    # 关系
-    persons: Mapped[List["PersonWork"]] = relationship(back_populates="work")
-    
-    __table_args__ = (
-        Index("idx_work_title", "title"),
-        Index("idx_work_type", "type"),
-        Index("idx_work_release_date", "release_date"),
-        Index("idx_work_status", "status"),
-        {"comment": "作品表"}
-    )
-
-
-class PersonWork(Base):
-    """人物-作品关联表"""
-    __tablename__ = "person_works"
-    
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    person_id: Mapped[str] = mapped_column(String(32), ForeignKey("persons.id", ondelete="CASCADE"))
-    work_id: Mapped[str] = mapped_column(String(32), ForeignKey("works.id", ondelete="CASCADE"))
-    role: Mapped[Optional[str]] = mapped_column(String(100), comment="饰演角色/职位")
-    role_type: Mapped[Optional[str]] = mapped_column(
-        Enum("actor", "director", "singer", "composer", "producer", "writer")
-    )
-    is_lead: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否主演")
-    
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, 
-        default=datetime.utcnow, 
-        onupdate=datetime.utcnow
-    )
-    
-    # 关系
-    person: Mapped["Person"] = relationship(back_populates="works")
-    work: Mapped["Work"] = relationship(back_populates="persons")
-    
-    __table_args__ = (
-        UniqueConstraint("person_id", "work_id", "role_type", name="uk_person_work_role"),
-        Index("idx_pw_person_id", "person_id"),
-        Index("idx_pw_work_id", "work_id"),
-        {"comment": "人物作品关联表"}
-    )
-
-
-class PersonRelation(Base):
-    """人物关系表"""
-    __tablename__ = "person_relations"
-    
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    source_id: Mapped[str] = mapped_column(
-        String(32), 
-        ForeignKey("persons.id", ondelete="CASCADE"),
-        comment="源人物ID"
-    )
-    target_id: Mapped[str] = mapped_column(
-        String(32), 
-        ForeignKey("persons.id", ondelete="CASCADE"),
-        comment="目标人物ID"
-    )
-    relation_type: Mapped[str] = mapped_column(
-        Enum("MARRIED_TO", "COLLABORATED_WITH", "MENTOR_OF", "RELATIVE", "FRIEND"),
-        comment="关系类型"
-    )
-    properties: Mapped[Optional[dict]] = mapped_column(JSON, comment="关系属性")
-    confidence: Mapped[float] = mapped_column(
-        DECIMAL(3, 2), 
-        default=1.0, 
-        comment="关系可信度"
-    )
-    source: Mapped[Optional[str]] = mapped_column(String(50), comment="数据来源")
-    
-    # 验证状态
-    is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
-    verified_by: Mapped[Optional[str]] = mapped_column(String(32))
-    verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, 
-        default=datetime.utcnow, 
-        onupdate=datetime.utcnow
-    )
-    
-    # 关系
-    source_person: Mapped["Person"] = relationship(
-        foreign_keys=[source_id],
-        back_populates="relations_as_source"
-    )
-    target_person: Mapped["Person"] = relationship(
-        foreign_keys=[target_id],
-        back_populates="relations_as_target"
-    )
-    
-    __table_args__ = (
-        UniqueConstraint("source_id", "target_id", "relation_type", name="uk_relation"),
-        Index("idx_rel_source_id", "source_id"),
-        Index("idx_rel_target_id", "target_id"),
-        Index("idx_rel_type", "relation_type"),
-        Index("idx_rel_confidence", "confidence"),
-        {"comment": "人物关系表"}
-    )
-
-
 class CrawlTask(Base):
     """爬虫任务表"""
     __tablename__ = "crawl_tasks"
@@ -277,7 +78,7 @@ class CrawlLog(Base):
     resource_url: Mapped[Optional[str]] = mapped_column(String(500))
     resource_name: Mapped[Optional[str]] = mapped_column(String(200))
     resource_type: Mapped[Optional[str]] = mapped_column(
-        Enum("person", "work", "page")
+        Enum("file", "page", "pdf")
     )
     
     action: Mapped[Optional[str]] = mapped_column(String(50))
@@ -398,9 +199,7 @@ class CrawlSourceStats(Base):
     rate_limited_requests: Mapped[int] = mapped_column(default=0)
     
     # 数据产出
-    persons_extracted: Mapped[int] = mapped_column(default=0)
-    works_extracted: Mapped[int] = mapped_column(default=0)
-    relations_extracted: Mapped[int] = mapped_column(default=0)
+    files_extracted: Mapped[int] = mapped_column(default=0, comment="下载文件数")
     valid_records: Mapped[int] = mapped_column(default=0)
     duplicate_records: Mapped[int] = mapped_column(default=0)
     
@@ -725,4 +524,263 @@ class UserQuestionRecord(Base):
         Index("idx_uqr_question", "question_id"),
         Index("idx_uqr_created", "created_at"),
         {"comment": "用户做题记录表"}
+    )
+
+
+class DownloadedFile(Base):
+    """已下载文件记录表"""
+    __tablename__ = "downloaded_files"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="唯一标识")
+    task_id: Mapped[Optional[str]] = mapped_column(String(32), comment="关联任务ID")
+    repo_name: Mapped[Optional[str]] = mapped_column(String(200), comment="仓库名称，如 user/repo")
+    repo_url: Mapped[Optional[str]] = mapped_column(String(500), comment="仓库URL")
+    file_path: Mapped[str] = mapped_column(String(500), nullable=False, comment="仓库内文件路径")
+    file_name: Mapped[str] = mapped_column(String(200), nullable=False, comment="文件名")
+    file_type: Mapped[Optional[str]] = mapped_column(String(20), comment="文件类型: pdf/doc/ppt")
+    file_size: Mapped[Optional[int]] = mapped_column(BigInteger, comment="文件大小(bytes)")
+    download_url: Mapped[Optional[str]] = mapped_column(String(500), comment="下载URL")
+    local_path: Mapped[Optional[str]] = mapped_column(String(500), comment="本地存储路径")
+    status: Mapped[str] = mapped_column(
+        Enum("downloaded", "skipped", "failed", "processing", "processed"),
+        default="downloaded",
+        comment="状态"
+    )
+    error_detail: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="失败原因")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    __table_args__ = (
+        Index("idx_df_task_id", "task_id"),
+        Index("idx_df_repo", "repo_name"),
+        Index("idx_df_status", "status"),
+        Index("idx_df_file_type", "file_type"),
+        {"comment": "已下载文件记录表"}
+    )
+
+
+# ========== 多模态语料库模型 ==========
+
+
+class CorpusFile(Base):
+    """语料文件注册表"""
+    __tablename__ = "corpus_files"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="语料文件ID")
+    source_type: Mapped[str] = mapped_column(
+        Enum("crawler", "manual", "upload", "import"),
+        nullable=False, comment="来源类型"
+    )
+    source_ref: Mapped[Optional[str]] = mapped_column(String(255), comment="来源引用，如 task_id 或 batch_id")
+    file_name: Mapped[str] = mapped_column(String(255), nullable=False, comment="文件名")
+    file_ext: Mapped[str] = mapped_column(String(20), nullable=False, comment="扩展名")
+    local_path: Mapped[str] = mapped_column(String(500), nullable=False, comment="本地路径")
+    storage_uri: Mapped[Optional[str]] = mapped_column(String(500), comment="对象存储URI")
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False, comment="文件哈希")
+    file_size: Mapped[Optional[int]] = mapped_column(BigInteger, comment="文件大小")
+    mime_type: Mapped[Optional[str]] = mapped_column(String(100), comment="MIME类型")
+    language: Mapped[Optional[str]] = mapped_column(String(20), comment="文档主语言")
+    doc_type: Mapped[str] = mapped_column(
+        Enum("textbook", "past_exam", "mock_exam", "notes", "other"),
+        default="other", comment="文档业务类型"
+    )
+    version: Mapped[int] = mapped_column(default=1, comment="同源版本号")
+    status: Mapped[str] = mapped_column(
+        Enum("pending", "parsing", "parsed", "extracting", "indexed", "failed", "archived"),
+        default="pending", comment="处理状态"
+    )
+    error_detail: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="失败原因")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    __table_args__ = (
+        UniqueConstraint("sha256", name="uk_corpus_files_sha256"),
+        Index("idx_corpus_files_status", "status"),
+        Index("idx_corpus_files_source_type", "source_type"),
+        Index("idx_corpus_files_doc_type", "doc_type"),
+        {"comment": "统一语料文件注册表"}
+    )
+
+
+class ParseRun(Base):
+    """文档解析执行记录"""
+    __tablename__ = "parse_runs"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="解析任务ID")
+    corpus_file_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("corpus_files.id", ondelete="CASCADE"),
+        nullable=False, comment="语料文件ID"
+    )
+    parser_name: Mapped[str] = mapped_column(String(50), nullable=False, comment="解析器名称")
+    parser_version: Mapped[str] = mapped_column(String(50), nullable=False, comment="解析器版本")
+    parse_mode: Mapped[str] = mapped_column(
+        Enum("primary", "fallback", "retry", "manual_fix"),
+        default="primary", comment="解析模式"
+    )
+    status: Mapped[str] = mapped_column(
+        Enum("running", "success", "failed", "partial"),
+        default="running", comment="执行状态"
+    )
+    page_count: Mapped[Optional[int]] = mapped_column(comment="识别页数")
+    block_count: Mapped[Optional[int]] = mapped_column(comment="识别块数")
+    asset_count: Mapped[Optional[int]] = mapped_column(comment="识别资产数")
+    confidence: Mapped[Optional[float]] = mapped_column(DECIMAL(5, 4), comment="整体置信度")
+    error_detail: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="错误信息")
+    metrics_json: Mapped[Optional[dict]] = mapped_column(JSON, comment="耗时与质量指标")
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    __table_args__ = (
+        Index("idx_parse_runs_corpus_file_id", "corpus_file_id"),
+        Index("idx_parse_runs_status", "status"),
+        {"comment": "文档解析执行记录"}
+    )
+
+
+class Document(Base):
+    """正规化文档主表"""
+    __tablename__ = "documents"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="文档ID")
+    corpus_file_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("corpus_files.id", ondelete="CASCADE"),
+        nullable=False, comment="文件ID"
+    )
+    latest_parse_run_id: Mapped[Optional[str]] = mapped_column(String(32), comment="最新成功解析ID")
+    title: Mapped[Optional[str]] = mapped_column(String(255), comment="文档标题")
+    doc_type: Mapped[str] = mapped_column(
+        Enum("textbook", "past_exam", "mock_exam", "notes", "other"),
+        default="other", comment="文档类型"
+    )
+    subject_id: Mapped[Optional[str]] = mapped_column(String(32), comment="主学科ID")
+    source_label: Mapped[Optional[str]] = mapped_column(String(255), comment="展示来源")
+    exam_scope: Mapped[Optional[str]] = mapped_column(String(50), comment="例如408")
+    exam_year: Mapped[Optional[int]] = mapped_column(comment="真题年份")
+    paper_name: Mapped[Optional[str]] = mapped_column(String(255), comment="试卷名")
+    language: Mapped[Optional[str]] = mapped_column(String(20), comment="文档语言")
+    page_count: Mapped[Optional[int]] = mapped_column(comment="页数")
+    document_markdown: Mapped[Optional[str]] = mapped_column(Text, comment="展示Markdown")
+    document_json: Mapped[Optional[dict]] = mapped_column(JSON, comment="结构化文档对象")
+    status: Mapped[str] = mapped_column(
+        Enum("active", "pending", "deleted"),
+        default="pending", comment="业务状态"
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    __table_args__ = (
+        Index("idx_documents_corpus_file_id", "corpus_file_id"),
+        Index("idx_documents_subject_id", "subject_id"),
+        Index("idx_documents_exam_year", "exam_year"),
+        Index("idx_documents_doc_type", "doc_type"),
+        Index("idx_documents_status", "status"),
+        {"comment": "正规化文档主表"}
+    )
+
+
+class DocumentPage(Base):
+    """文档页表"""
+    __tablename__ = "document_pages"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="页ID")
+    document_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("documents.id", ondelete="CASCADE"),
+        nullable=False, comment="文档ID"
+    )
+    page_no: Mapped[int] = mapped_column(nullable=False, comment="页码，从1开始")
+    page_image_path: Mapped[Optional[str]] = mapped_column(String(500), comment="页截图路径")
+    width: Mapped[Optional[int]] = mapped_column(comment="宽度")
+    height: Mapped[Optional[int]] = mapped_column(comment="高度")
+    rotation: Mapped[Optional[int]] = mapped_column(comment="旋转角度")
+    ocr_text: Mapped[Optional[str]] = mapped_column(Text, comment="页级OCR文本")
+    layout_json: Mapped[Optional[dict]] = mapped_column(JSON, comment="布局信息")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    __table_args__ = (
+        UniqueConstraint("document_id", "page_no", name="uk_document_pages_doc_page"),
+        Index("idx_document_pages_document_id", "document_id"),
+        {"comment": "文档页表"}
+    )
+
+
+class DocumentBlock(Base):
+    """文档块表"""
+    __tablename__ = "document_blocks"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="块ID")
+    document_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("documents.id", ondelete="CASCADE"),
+        nullable=False, comment="文档ID"
+    )
+    page_id: Mapped[Optional[str]] = mapped_column(String(32), comment="页ID")
+    page_no: Mapped[int] = mapped_column(nullable=False, comment="页码")
+    block_type: Mapped[str] = mapped_column(String(50), nullable=False, comment="块类型")
+    order_no: Mapped[int] = mapped_column(nullable=False, comment="页内顺序")
+    bbox: Mapped[Optional[dict]] = mapped_column(JSON, comment="坐标")
+    content_text: Mapped[Optional[str]] = mapped_column(Text, comment="纯文本")
+    content_md: Mapped[Optional[str]] = mapped_column(Text, comment="Markdown表示")
+    content_json: Mapped[Optional[dict]] = mapped_column(JSON, comment="结构化表示")
+    latex: Mapped[Optional[str]] = mapped_column(Text, comment="公式LaTeX")
+    html_table: Mapped[Optional[str]] = mapped_column(Text, comment="表格HTML")
+    asset_id: Mapped[Optional[str]] = mapped_column(String(32), comment="关联资产ID")
+    confidence: Mapped[Optional[float]] = mapped_column(DECIMAL(5, 4), comment="识别置信度")
+    review_status: Mapped[str] = mapped_column(
+        Enum("pending", "approved", "rejected"),
+        default="pending", comment="审核状态"
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    __table_args__ = (
+        Index("idx_document_blocks_document_page", "document_id", "page_no"),
+        Index("idx_document_blocks_type", "block_type"),
+        Index("idx_document_blocks_review_status", "review_status"),
+        {"comment": "文档块表"}
+    )
+
+
+class DocumentAsset(Base):
+    """文档图表公式资产表"""
+    __tablename__ = "document_assets"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="资产ID")
+    document_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("documents.id", ondelete="CASCADE"),
+        nullable=False, comment="文档ID"
+    )
+    page_no: Mapped[int] = mapped_column(nullable=False, comment="页码")
+    asset_type: Mapped[str] = mapped_column(
+        Enum("figure", "table", "formula", "page_crop", "other"),
+        nullable=False, comment="资产类型"
+    )
+    file_path: Mapped[str] = mapped_column(String(500), nullable=False, comment="资产文件路径")
+    thumbnail_path: Mapped[Optional[str]] = mapped_column(String(500), comment="缩略图路径")
+    bbox: Mapped[Optional[dict]] = mapped_column(JSON, comment="坐标")
+    caption_text: Mapped[Optional[str]] = mapped_column(Text, comment="图表标题")
+    ocr_text: Mapped[Optional[str]] = mapped_column(Text, comment="图内OCR结果")
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, comment="扩展元数据")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    __table_args__ = (
+        Index("idx_document_assets_document_page", "document_id", "page_no"),
+        Index("idx_document_assets_type", "asset_type"),
+        {"comment": "文档图表公式资产表"}
     )

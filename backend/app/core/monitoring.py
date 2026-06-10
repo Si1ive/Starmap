@@ -9,7 +9,6 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 
 from app.core.logging import get_logger
-from app.db.neo4j import neo4j_client
 from app.db.redis import redis_client
 from app.db.mysql import mysql_client
 
@@ -72,28 +71,10 @@ async def get_database_status() -> Dict[str, Any]:
     """
     status = {
         "status": "connected",
-        "neo4j": {"status": "unknown"},
         "redis": {"status": "unknown"},
         "mysql": {"status": "unknown"},
     }
-    
-    # Neo4j 状态
-    try:
-        # 尝试执行简单查询
-        from app.db.neo4j import neo4j_client
-        result = await neo4j_client.run_query("MATCH (n) RETURN count(n) as count")
-        node_count = result[0]["count"] if result else 0
-        status["neo4j"] = {
-            "status": "up",
-            "nodes": node_count,
-        }
-    except Exception as e:
-        status["neo4j"] = {
-            "status": "down",
-            "error": str(e),
-        }
-        status["status"] = "degraded"
-    
+
     # Redis 状态
     try:
         from app.db.redis import redis_client

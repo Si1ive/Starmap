@@ -167,12 +167,12 @@ const CrawlerSources = () => {
   const handleCreate = () => {
     setEditingSource(null)
     form.setFieldsValue({
-      type: 'encyclopedia',
+      type: 'code_hosting',
       status: 'active',
       request_interval: 1.0,
-      daily_limit: 1000,
+      daily_limit: 5000,
       concurrent_limit: 3,
-      spider_key: 'baike',
+      spider_key: 'github',
       config_text: '{}',
     })
     setModalVisible(true)
@@ -189,7 +189,7 @@ const CrawlerSources = () => {
       request_interval: source.request_interval,
       daily_limit: source.daily_limit,
       concurrent_limit: source.concurrent_limit,
-      spider_key: (source.config as any)?.spider_key || 'baike',
+      spider_key: (source.config as any)?.spider_key || 'github',
       config_text: JSON.stringify(source.config || {}, null, 2),
     })
     setModalVisible(true)
@@ -241,7 +241,7 @@ const CrawlerSources = () => {
       width: 100,
       render: (_: unknown, record: CrawlerSource) => {
         const key = (record.config as any)?.spider_key
-        const label = { baike: '百度百科', douban: '豆瓣', wikipedia: '维基百科' }[key] || key || '-'
+        const label = { github: 'GitHub' }[key] || key || '-'
         return <Tag>{label}</Tag>
       },
     },
@@ -457,9 +457,7 @@ const CrawlerSources = () => {
               <Form.Item label="爬虫类型" name="spider_key" rules={[{ required: true, message: '请选择爬虫类型' }]}
                 tooltip="决定使用哪个爬虫来抓取该数据源">
                 <Select options={[
-                  { label: '百度百科', value: 'baike' },
-                  { label: '豆瓣', value: 'douban' },
-                  { label: '维基百科', value: 'wikipedia' },
+                  { label: 'GitHub', value: 'github' },
                 ]} />
               </Form.Item>
             </Col>
@@ -480,7 +478,7 @@ const CrawlerSources = () => {
             </Col>
           </Row>
           <Form.Item label="基础URL" name="base_url" rules={[{ required: true, message: '请输入基础 URL' }]}>
-            <Input placeholder="https://baike.baidu.com/" />
+            <Input placeholder="https://github.com" />
           </Form.Item>
           <Row gutter={16}>
             <Col span={12}>

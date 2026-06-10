@@ -196,30 +196,9 @@ class ChatService:
         # 保存用户消息
         await self.save_message(session_id, "user", request.message)
 
-        # 检索相关知识点
+        # 检索相关知识点（向量数据库待接入，当前降级为直接回答）
         sources = []
         context_parts = []
-
-        try:
-            from app.db.chroma import get_chroma_client
-            chroma = get_chroma_client()
-            results = chroma.search_knowledge_points(
-                query=request.message,
-                n_results=5
-            )
-
-            for r in results:
-                title = r.get("metadata", {}).get("title", "未知")
-                content = r.get("document", "")
-                # 截取前500字作为上下文
-                context_parts.append(f"【{title}】\n{content[:500]}")
-                sources.append(SourceItem(
-                    type="knowledge_base",
-                    title=title,
-                    content=content[:200]
-                ))
-        except Exception as e:
-            logger.warning("ChromaDB检索失败，降级为直接回答", error=str(e))
 
         # 生成回答
         if context_parts:
