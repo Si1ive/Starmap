@@ -24,10 +24,10 @@
 
 | 场景 | 示例 | 提交信息 |
 |------|------|---------|
-| 完成一个API接口 | 实现搜索接口 | `feat(backend): 添加人物搜索API` |
+| 完成一个API接口 | 实现搜索接口 | `feat(backend): 添加知识点搜索API` |
 | 完成一个组件 | 实现搜索框 | `feat(frontend): 添加搜索框组件` |
 | 修复一个Bug | 修复连接超时 | `fix(backend): 修复Neo4j连接超时` |
-| 重构代码 | 优化查询逻辑 | `refactor(db): 优化人物查询` |
+| 重构代码 | 优化查询逻辑 | `refactor(search): 优化检索链路` |
 | 更新文档 | 更新API文档 | `docs(api): 更新搜索接口文档` |
 | 添加测试 | 添加单元测试 | `test(backend): 添加搜索接口测试` |
 
@@ -58,9 +58,9 @@ $ git add backend/app/api/search.py
 $ git add backend/app/services/search_service.py
 
 # 4. 提交（写有意义的提交信息）
-$ git commit -m "feat(backend): 添加人物搜索API
+$ git commit -m "feat(backend): 添加知识点搜索API
 
-- 实现 GET /api/v1/persons/search
+- 实现知识点检索接口
 - 支持关键词搜索
 - 支持分页
 - 添加缓存"
@@ -83,12 +83,12 @@ $ git push origin feature/backend-search
 
 ```bash
 # 简单提交
-$ git commit -m "feat(backend): 添加人物搜索API"
+$ git commit -m "feat(backend): 添加知识点搜索API"
 
 # 详细提交
-$ git commit -m "feat(backend): 添加人物搜索API
+$ git commit -m "feat(backend): 添加知识点搜索API
 
-- 实现 GET /api/v1/persons/search
+- 实现知识点检索接口
 - 支持关键词搜索和分页
 - 添加Redis缓存
 - 添加单元测试
@@ -244,7 +244,7 @@ $ git checkout -b feature/backend-search
 
 # 实现模型
 $ git add backend/app/models/person.py
-$ git commit -m "feat(backend): 添加人物数据模型"
+$ git commit -m "feat(backend): 添加知识点数据模型"
 
 # 实现服务
 $ git add backend/app/services/search_service.py

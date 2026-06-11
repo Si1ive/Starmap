@@ -1,182 +1,110 @@
 # 部署指南
 
-## 开发环境部署
+## 当前部署基线
+
+当前 408 平台文档以仓库内现有运行方式为准：
+
+- 基础设施优先使用 `Podman + podman-compose`
+- 向量数据库使用 `Qdrant`
+- 管理端目录为 `frontend-admin`
+- 后端目录为 `backend`
+
+## 本地开发部署
 
 ### 1. 克隆项目
 
 ```bash
 git clone <repo-url>
-cd starmap
+cd my-agent
 ```
 
-### 2. 配置环境变量
+### 2. 启动基础设施
 
 ```bash
-cp .env.example .env
-# 编辑 .env 文件，填入你的配置
+podman-compose -f docker-compose.podman.yml up -d
+
+podman run -d --name starmap-qdrant \
+  -p 6333:6333 -p 6334:6334 \
+  -v qdrant_data:/qdrant/storage \
+  qdrant/qdrant:latest
 ```
 
-### 3. 启动基础设施
+### 3. 初始化 MySQL
 
 ```bash
-docker-compose up -d neo4j redis chromadb
+podman exec -i starmap-mysql mysql -u starmap -p starmap < backend/scripts/init_408_tables.sql
 ```
 
-### 4. 安装后端依赖
+### 4. 启动后端
 
 ```bash
 cd backend
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# 或 venv\Scripts\activate  # Windows
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
+python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### 5. 运行后端
+### 5. 启动管理端
 
 ```bash
-uvicorn app.main:app --reload --port 8000
-```
-
-### 6. 安装前端依赖
-
-```bash
-cd ../frontend
+cd frontend-admin
 npm install
-```
-
-### 7. 运行前端
-
-```bash
 npm run dev
 ```
 
-### 8. 验证部署
+## 本地验证
 
-- 前端：http://localhost:5173
-- 后端API：http://localhost:8000
-- API文档：http://localhost:8000/docs
-- Neo4j浏览器：http://localhost:7474
+| 服务 | 地址 |
+|------|------|
+| 后端 API | `http://localhost:8000` |
+| Swagger | `http://localhost:8000/docs` |
+| 管理端 | `http://localhost:5174` |
+| Qdrant | `http://localhost:6333` |
 
-## 生产环境部署
-
-### Docker Compose 生产配置
-
-```yaml
-# docker-compose.prod.yml
-version: '3.8'
-
-services:
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    ports:
-      - "80:80"
-    depends_on:
-      - backend
-
-  backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    environment:
-      - NEO4J_URI=bolt://neo4j:7687
-      - REDIS_URL=redis://redis:6379
-      - CHROMA_HOST=chromadb
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-    depends_on:
-      - neo4j
-      - redis
-      - chromadb
-
-  neo4j:
-    image: neo4j:5-community
-    environment:
-      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD}
-      - NEO4J_PLUGINS=["apoc"]
-    volumes:
-      - neo4j_data:/data
-      - neo4j_logs:/logs
-
-  redis:
-    image: redis:7-alpine
-    volumes:
-      - redis_data:/data
-
-  chromadb:
-    image: chromadb/chroma:latest
-    volumes:
-      - chroma_data:/chroma/chroma
-
-volumes:
-  neo4j_data:
-  neo4j_logs:
-  redis_data:
-  chroma_data:
-```
-
-### 部署步骤
+## 关键环境变量
 
 ```bash
-# 1. 服务器准备
-# 安装 Docker 和 Docker Compose
-
-# 2. 拉取代码
-git clone <repo-url>
-cd starmap
-
-# 3. 配置环境变量
-export OPENAI_API_KEY=sk-...
-export NEO4J_PASSWORD=your-password
-
-# 4. 启动服务
-docker-compose -f docker-compose.prod.yml up -d
-
-# 5. 验证
-curl http://localhost/api/v1/health
+OPENAI_API_KEY=sk-...
+OPENAI_MODEL=gpt-4
+MYSQL_HOST=localhost
+MYSQL_PORT=3306
+MYSQL_USER=starmap
+MYSQL_PASSWORD=starmap123
+MYSQL_DATABASE=starmap
+REDIS_URL=redis://localhost:6379
+QDRANT_HOST=localhost
+QDRANT_PORT=6333
 ```
 
-## 监控与日志
+## 运维说明
 
-### 日志收集
+### 查看容器状态
 
 ```bash
-# 查看所有服务日志
-docker-compose logs -f
-
-# 查看特定服务日志
-docker-compose logs -f backend
+podman ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 ```
 
-### 健康检查
+### 查看日志
 
 ```bash
-# API健康检查
-curl http://localhost:8000/health
-
-# Neo4j健康检查
-curl http://localhost:7474/db/manage/server/jmx/domain/org.neo4j/instance%3Dkernel%230%2Cname%3DDiagnostics
+podman logs starmap-backend
+podman logs starmap-mysql
+podman logs starmap-qdrant
 ```
 
-## 备份与恢复
-
-### Neo4j备份
+### Qdrant 健康检查
 
 ```bash
-# 备份
-docker exec starmap_neo4j_1 neo4j-admin backup --from=localhost --backup-dir=/backups
-
-# 恢复
-docker exec starmap_neo4j_1 neo4j-admin restore --from=/backups --database=neo4j --force
+curl http://localhost:6333/collections
 ```
 
-### Redis备份
+### Redis 健康检查
 
 ```bash
-# 手动备份
-redis-cli SAVE
-
-# 复制备份文件
-cp /var/lib/redis/dump.rdb /backups/redis/dump.rdb
+redis-cli ping
 ```
+
+## 说明
+
+本文件描述当前仓库的本地开发部署基线。若后续新增其他部署方式，应单独补充并明确适用范围。

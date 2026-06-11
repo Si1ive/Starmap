@@ -202,7 +202,7 @@
 - `BE-E2` 按 target 路由检索
 - `BE-E3` 聚合 citations
 - `BE-E4` 更新 `ChatService`
-- `BE-E5` 保留 Chroma fallback
+- `BE-E5` 完成 `ChatService` 到 Qdrant 检索链的切换
 
 产出：
 

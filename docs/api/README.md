@@ -1,32 +1,25 @@
-# StarMap API 契约
+# 408 平台 API 契约
 
-> 版本：v1.0  
-> 日期：2026-06-06  
-> 负责人：Backend 维护，PM 审核  
-> 适用范围：前端、管理端、后端、爬虫服务、数据库模型
+> 版本：v2.0  
+> 日期：2026-06-11  
+> 适用范围：管理端、后端、Scrapy Service、数据库模型
 
 专项接口设计：
 
 - [多模态语料入库与检索 API 契约](./multimodal-retrieval-contract.md)
 
----
-
 ## 1. 契约原则
 
-1. 本文件是前后端和数据库字段对齐的真相源。
+1. 当前项目为 408 考研学习平台，接口语义必须围绕学科、章节、知识点、题目、语料和检索。
 2. 所有字段使用 `snake_case`。
 3. 管理端接口统一挂载在 `/api/v1/admin/*`。
 4. 分页统一使用 `page`、`page_size`、`total`、`total_pages`。
-5. 时间统一返回 ISO 8601 字符串，例如 `2026-06-06T13:00:00Z`。
-6. 任务类型字段统一使用 `task_type`，禁止在响应中用 `type` 表示任务类型。
-7. 失败数字段统一使用 `failed_count`，禁止使用 `fail_count`。
-8. 修改接口、字段、枚举、数据结构时，必须同步更新本文件、前端类型、后端模型、迁移脚本和 `CHANGELOG.md`。
-
----
+5. 时间统一返回 ISO 8601 字符串。
+6. 文档必须与 `backend/app/api/admin.py`、`backend/app/api/chat.py` 和 `frontend-admin/src/api/*` 保持一致。
 
 ## 2. 通用响应
 
-### 2.1 成功响应
+### 成功响应
 
 ```json
 {
@@ -37,20 +30,7 @@
 }
 ```
 
-### 2.2 错误响应
-
-HTTP 状态码必须与错误结果一致，`code` 与 HTTP 状态码保持一致。
-
-```json
-{
-  "code": 404,
-  "message": "爬取源不存在",
-  "data": null,
-  "request_id": "req_abc123"
-}
-```
-
-### 2.3 分页响应
+### 分页响应
 
 ```json
 {
@@ -62,651 +42,179 @@ HTTP 状态码必须与错误结果一致，`code` 与 HTTP 状态码保持一�
 }
 ```
 
----
+## 3. 主要资源
 
-## 3. 枚举
+### 认证
 
-| 名称 | 值 |
-|------|----|
-| `crawler_source_type` | `encyclopedia`, `social`, `official`, `news`, `other` |
-| `crawler_source_status` | `active`, `inactive`, `error`, `deprecated` |
-| `health_status` | `healthy`, `degraded`, `down` |
-| `crawler_task_type` | `full`, `incremental`, `targeted`, `health_check`, `cleanup` |
-| `crawler_task_status` | `pending`, `running`, `completed`, `failed`, `stopped` |
-| `crawler_log_level` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `SUCCESS`, `CRITICAL` |
-| `crawler_log_stage` | `execution`, `fetch`, `parse`, `validate`, `store`, `sync` |
-| `crawler_log_status` | `pending`, `success`, `failed`, `retry` |
-| `resource_type` | `person`, `work`, `relation`, `page` |
-| `schedule_run_status` | `running`, `success`, `failed`, `timeout`, `cancelled` |
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/v1/admin/auth/login` | 登录 |
+| POST | `/api/v1/admin/auth/logout` | 登出 |
+| GET | `/api/v1/admin/auth/me` | 当前用户 |
 
----
+### 看板
 
-## 4. 数据体
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/admin/dashboard/stats` | 统计总览 |
+| GET | `/api/v1/admin/dashboard/charts` | 图表数据 |
 
-### 4.1 CrawlerSource
+### 学科与章节
 
-系统会在读取数据源或创建爬虫任务时幂等初始化默认源：`wikipedia_zh`、`douban_movie`、`baidu_baike`。新环境没有手动迁移数据源时，管理端仍应能选择默认源创建任务。
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/admin/subjects` | 学科列表 |
+| GET | `/api/v1/admin/subjects/{subject_id}/chapters` | 章节列表 |
+
+### 知识点
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/admin/knowledge/points` | 知识点列表 |
+| GET | `/api/v1/admin/knowledge/points/{point_id}` | 知识点详情 |
+| PUT | `/api/v1/admin/knowledge/points/{point_id}` | 编辑知识点 |
+| POST | `/api/v1/admin/knowledge/ingest` | 触发 PDF 入库任务 |
+| GET | `/api/v1/admin/knowledge/ingest/tasks` | 入库任务列表 |
+
+### 题目
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/admin/questions` | 题目列表 |
+| GET | `/api/v1/admin/questions/{question_id}` | 题目详情 |
+| PUT | `/api/v1/admin/questions/{question_id}` | 编辑题目 |
+
+### 爬虫 / 采集
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/admin/crawler/tasks` | 任务列表 |
+| POST | `/api/v1/admin/crawler/tasks` | 创建任务 |
+| POST | `/api/v1/admin/crawler/tasks/{task_id}/start` | 启动任务 |
+| POST | `/api/v1/admin/crawler/tasks/{task_id}/stop` | 停止任务 |
+| DELETE | `/api/v1/admin/crawler/tasks/{task_id}` | 删除任务 |
+| GET | `/api/v1/admin/crawler/sources` | 数据源列表 |
+| POST | `/api/v1/admin/crawler/sources` | 创建数据源 |
+| POST | `/api/v1/admin/crawler/sources/defaults` | 初始化默认数据源 |
+| GET | `/api/v1/admin/crawler/schedules` | 定时任务列表 |
+| GET | `/api/v1/admin/crawler/logs` | 爬虫日志 |
+
+### 语料与解析
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/v1/admin/corpus/files/scan` | 扫描语料文件 |
+| GET | `/api/v1/admin/corpus/files` | 文件列表 |
+| GET | `/api/v1/admin/corpus/files/{file_id}` | 文件详情 |
+| POST | `/api/v1/admin/corpus/files/{file_id}/parse` | 触发解析 |
+| GET | `/api/v1/admin/corpus/parse-runs` | 解析记录 |
+| GET | `/api/v1/admin/corpus/documents/{document_id}` | 文档详情 |
+| GET | `/api/v1/admin/corpus/documents/{document_id}/blocks` | 文档块 |
+| GET | `/api/v1/admin/corpus/documents/{document_id}/sections` | 原生标题树 |
+| POST | `/api/v1/admin/corpus/documents/{document_id}/extract-sections` | 抽取原生章节 |
+| POST | `/api/v1/admin/corpus/documents/{document_id}/map-chapters` | 标准章节映射 |
+| POST | `/api/v1/admin/corpus/documents/{document_id}/extract-entities` | 抽取知识点与题目 |
+
+### 审核与检索
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/admin/review/sections` | 章节映射审核列表 |
+| GET | `/api/v1/admin/review/knowledge` | 知识点审核列表 |
+| GET | `/api/v1/admin/review/questions` | 题目审核列表 |
+| GET | `/api/v1/admin/review/relations` | 知识关系审核列表 |
+| GET | `/api/v1/admin/review/stats` | 审核统计 |
+| POST | `/api/v1/admin/segments/build` | 构建全部 segment |
+| POST | `/api/v1/admin/segments/build/knowledge` | 构建知识点 segment |
+| POST | `/api/v1/admin/segments/build/questions` | 构建题目 segment |
+| POST | `/api/v1/admin/search` | 搜索 |
+| POST | `/api/v1/admin/search/with-relations` | 带关系扩展搜索 |
+
+### 对话
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/v1/chat` | RAG 问答 |
+| GET | `/api/v1/chat/{session_id}/history` | 会话历史 |
+
+## 4. 关键数据体示例
+
+### `CrawlerSource`
+
+当前代码中的默认源以 `GitHub` 为主：
 
 ```json
 {
   "id": "src_001",
-  "name": "维基百科中文",
-  "code": "wikipedia_zh",
-  "type": "encyclopedia",
-  "base_url": "https://zh.wikipedia.org/wiki/",
+  "name": "GitHub",
+  "code": "github",
+  "type": "code_hosting",
+  "base_url": "https://github.com",
   "config": {
-    "spider_type": "person",
-    "selectors": {},
-    "field_mapping": {},
-    "anti_detection": {
-      "user_agent_rotation": true,
-      "delay_range": [1.0, 3.0]
-    }
+    "spider_key": "github",
+    "default_file_types": ["pdf"]
   },
   "request_interval": 1.0,
-  "daily_limit": 1000,
-  "concurrent_limit": 5,
-  "status": "active",
-  "health_status": "healthy",
-  "last_health_check": null,
-  "total_requests": 0,
-  "total_success": 0,
-  "total_failed": 0,
-  "avg_response_time": null,
-  "created_at": "2026-06-06T13:00:00Z",
-  "updated_at": "2026-06-06T13:00:00Z"
+  "daily_limit": 5000,
+  "concurrent_limit": 3,
+  "status": "active"
 }
 ```
 
-### 4.2 CrawlerTask
+### `CrawlerTask`
 
 ```json
 {
-  "id": "task_001",
-  "name": "爬取周杰伦信息",
+  "id": "task_xxx",
+  "name": "导入 408 PDF 语料",
   "task_type": "targeted",
   "source_id": "src_001",
-  "source_code": "wikipedia_zh",
-  "target_count": 1,
-  "completed_count": 0,
-  "success_count": 0,
-  "failed_count": 0,
-  "success_rate": 0,
-  "progress": 0,
   "status": "pending",
   "config": {
-    "spider_type": "person",
-    "keywords": ["周杰伦"],
-    "concurrent_limit": 3,
-    "delay": 1.0,
-    "timeout": 30
-  },
-  "started_at": null,
-  "completed_at": null,
-  "created_by": "admin_001",
-  "created_at": "2026-06-06T13:00:00Z",
-  "updated_at": "2026-06-06T13:00:00Z",
-  "error_message": null
-}
-```
-
-### 4.3 CrawlerSchedule
-
-```json
-{
-  "id": "sch_001",
-  "name": "每日增量更新",
-  "description": "每天凌晨更新活跃源",
-  "task_type": "incremental",
-  "source_ids": ["src_001"],
-  "target_config": {
-    "spider_type": "person",
-    "keywords": []
-  },
-  "cron_expression": "0 2 * * *",
-  "timezone": "Asia/Shanghai",
-  "is_enabled": true,
-  "max_retries": 3,
-  "retry_interval": 300,
-  "concurrent_limit": 1,
-  "timeout": 3600,
-  "total_runs": 0,
-  "success_runs": 0,
-  "failed_runs": 0,
-  "last_run_at": null,
-  "last_run_status": null,
-  "next_run_at": "2026-06-07T02:00:00+08:00",
-  "created_by": "admin_001",
-  "created_at": "2026-06-06T13:00:00Z",
-  "updated_at": "2026-06-06T13:00:00Z"
-}
-```
-
-### 4.4 CrawlerLog
-
-```json
-{
-  "id": 1,
-  "task_id": "task_001",
-  "source_id": "src_001",
-  "level": "INFO",
-  "stage": "fetch",
-  "resource_url": "https://zh.wikipedia.org/wiki/周杰伦",
-  "resource_name": "周杰伦",
-  "resource_type": "person",
-  "action": "download",
-  "status": "success",
-  "duration_ms": 320,
-  "message": "Fetched person page",
-  "error_type": null,
-  "error_detail": null,
-  "retry_count": 0,
-  "details": {},
-  "created_at": "2026-06-06T13:00:00Z"
-}
-```
-
----
-
-## 5. 爬取源 API
-
-### GET `/api/v1/admin/crawler/sources`
-
-查询参数：
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `page` | int | 否 | 默认 `1` |
-| `page_size` | int | 否 | 默认 `20` |
-| `status` | string | 否 | 见 `crawler_source_status` |
-| `source_type` | string | 否 | 见 `crawler_source_type` |
-
-响应：`ApiResponse<PaginatedResponse<CrawlerSource>>`
-
-### POST `/api/v1/admin/crawler/sources`
-
-请求：
-
-```json
-{
-  "name": "维基百科中文",
-  "code": "wikipedia_zh",
-  "type": "encyclopedia",
-  "base_url": "https://zh.wikipedia.org/wiki/",
-  "config": {
-    "spider_type": "person",
-    "selectors": {},
-    "field_mapping": {}
-  },
-  "request_interval": 1.0,
-  "daily_limit": 1000,
-  "concurrent_limit": 5
-}
-```
-
-响应：`ApiResponse<CrawlerSource>`
-
-### POST `/api/v1/admin/crawler/sources/defaults`
-
-幂等初始化默认数据源：`wikipedia_zh`、`douban_movie`、`baidu_baike`。
-
-响应：
-
-```json
-{
-  "items": [
-    {
-      "id": "src_003",
-      "name": "百度百科",
-      "code": "baidu_baike",
-      "status": "active",
-      "health_status": "healthy"
-    }
-  ],
-  "total": 3
-}
-```
-
-### GET `/api/v1/admin/crawler/sources/{source_id}`
-
-响应：`ApiResponse<CrawlerSource>`
-
-### PUT `/api/v1/admin/crawler/sources/{source_id}`
-
-请求：`Partial<CrawlerSource>`，禁止修改 `id`、`created_at`、`updated_at`。
-
-响应：`ApiResponse<CrawlerSource>`
-
-### DELETE `/api/v1/admin/crawler/sources/{source_id}`
-
-软删除，将 `status` 更新为 `deprecated`。
-
-响应：`ApiResponse<null>`
-
-### POST `/api/v1/admin/crawler/sources/{source_id}/health`
-
-响应：
-
-```json
-{
-  "source_id": "src_001",
-  "status": "healthy",
-  "checked_at": "2026-06-06T13:00:00Z",
-  "response_time_ms": 120,
-  "status_code": 200
-}
-```
-
-### GET `/api/v1/admin/crawler/sources/{source_id}/stats`
-
-查询参数：
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `days` | int | 否 | 默认 `30` |
-
-响应：
-
-```json
-{
-  "source_id": "src_001",
-  "source_name": "维基百科中文",
-  "total_requests": 100,
-  "total_success": 90,
-  "total_failed": 10,
-  "success_rate": 90.0,
-  "daily_stats": []
-}
-```
-
----
-
-## 6. 爬虫任务 API
-
-### GET `/api/v1/admin/crawler/tasks`
-
-查询参数：
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `page` | int | 否 | 默认 `1` |
-| `page_size` | int | 否 | 默认 `20` |
-| `status` | string | 否 | 见 `crawler_task_status` |
-| `task_type` | string | 否 | 见 `crawler_task_type` |
-| `source_id` | string | 否 | 爬取源 ID |
-
-响应：`ApiResponse<PaginatedResponse<CrawlerTask>>`
-
-### POST `/api/v1/admin/crawler/tasks`
-
-请求：
-
-```json
-{
-  "name": "爬取周杰伦信息",
-  "task_type": "targeted",
-  "source_ids": ["src_001"],
-  "config": {
-    "spider_type": "person",
-    "source": "wikipedia_zh",
-    "source_ids": ["src_001"],
-    "keywords": ["周杰伦"],
-    "concurrent_limit": 3,
-    "delay": 1.0,
-    "timeout": 30
-  },
-  "execute_now": true
-}
-```
-
-响应：`ApiResponse<CrawlerTask>`
-
-校验规则：
-
-- `targeted`、`full`、`incremental` 任务必须传入有效 `source_ids` 或可解析的 `config.source`。
-- 当前 Scrapy `person` 支持 `baidu_baike`、`douban_movie`、`wikipedia_zh`；`work` 支持 `baidu_baike`、`douban_movie`。
-- 当前 Scrapy 入口仍以关键词驱动，创建爬取任务必须至少传入一个 `config.keywords`。
-
-### POST `/api/v1/admin/crawler/tasks/{task_id}/start`
-
-响应：`ApiResponse<CrawlerTask>`
-
-### POST `/api/v1/admin/crawler/tasks/{task_id}/stop`
-
-响应：`ApiResponse<CrawlerTask>`
-
-### DELETE `/api/v1/admin/crawler/tasks/{task_id}`
-
-删除非运行中任务及其日志。运行中任务必须先停止。
-
-响应：
-
-```json
-{
-  "id": "task_001"
-}
-```
-
----
-
-## 7. 爬虫统计 API
-
-### GET `/api/v1/admin/crawler/stats/overview`
-
-响应：
-
-```json
-{
-  "active_sources": 2,
-  "total_tasks": 12,
-  "today_requests": 100,
-  "today_success": 90,
-  "today_success_rate": 90.0,
-  "total_requests": 1000,
-  "total_success": 860,
-  "total_failed": 140,
-  "overall_success_rate": 86.0,
-  "recent_records": [],
-  "category_distribution": [],
-  "scrapy_status": {
-    "status": "connected",
-    "queue_length": 0,
-    "redis_connected": true
+    "spider_type": "knowledge",
+    "source": "github",
+    "keywords": ["408", "pdf"],
+    "subject_id": "subj_ds",
+    "chapter_id": "ch_ds_01"
   }
 }
 ```
 
-### GET `/api/v1/admin/crawler/stats/sources`
-
-查询参数：`days`，默认 `7`。
-
-响应：`ApiResponse<CrawlerSourceComparison[]>`
-
-响应项包含：`source_id`、`name`、`type`、`status`、`health_status`、`total_requests`、`success_requests`、`failed_requests`、`timeout_requests`、`rate_limited_requests`、`valid_records`、`success_rate`、`avg_response_time`、`avg_completeness`。
-
-### GET `/api/v1/admin/crawler/stats/trend`
-
-查询参数：`days`，默认 `30`。
-
-响应：`ApiResponse<CrawlerTrendPoint[]>`
-
-响应项包含：`date`、`requests`、`successes`、`failures`、`success_rate`。
-
-### GET `/api/v1/admin/crawler/stats/efficiency`
-
-查询参数：`days`，默认 `7`。
-
-响应：`ApiResponse<CrawlerEfficiencyPoint[]>`
-
-### GET `/api/v1/admin/crawler/stats/suggestions`
-
-查询参数：`days`，默认 `7`。
-
-响应：`ApiResponse<CrawlerOptimizationSuggestion[]>`
-
-响应项包含：`source_id`、`source_name`、`period_days`、`severity`、`category`、`title`、`reason`、`action`、`metric`、`current`、`threshold`。
-
-建议生成规则覆盖健康状态、成功率、限流、超时、平均响应耗时、数据完整度和高频错误类型。
-
-### GET `/api/v1/admin/crawler/scrapy/status`
-
-响应：
+### `KnowledgePoint`
 
 ```json
 {
-  "status": "connected",
-  "queue_length": 0,
-  "redis_connected": true
+  "id": "kp_xxx",
+  "subject_id": "subj_ds",
+  "chapter_id": "ch_ds_01",
+  "primary_chapter_id": "cc_ds_01",
+  "title": "线性表的定义",
+  "content": "线性表是具有相同数据类型的 n 个数据元素的有限序列。",
+  "difficulty": "easy",
+  "exam_frequency": "high",
+  "review_status": "approved",
+  "source_document_id": "doc_xxx"
 }
 ```
 
-### Redis 队列与事件
-
-FastAPI 与 Scrapy Service 通过 Redis 解耦：
-
-| 类型 | Key/Channel | 方向 | 用途 |
-|------|-------------|------|------|
-| 任务队列 | `starmap:crawl:tasks` | FastAPI -> Scrapy | 发布待执行爬虫任务 |
-| 进度事件 | `starmap:crawl:progress` | Scrapy -> FastAPI | 更新 `crawl_tasks` 状态、进度和计数 |
-| 日志事件 | `starmap:crawl:logs` | Scrapy -> FastAPI | 写入 `crawl_logs` 并广播 WebSocket |
-
-任务消息：
+### `Question`
 
 ```json
 {
-  "task_id": "task_001",
-  "task_type": "targeted",
-  "spider_type": "person",
-  "source": "baike",
-  "source_id": "src_003",
-  "keywords": ["周杰伦"],
-  "config": {},
-  "published_at": "2026-06-06T13:00:00Z"
+  "id": "q_xxx",
+  "subject_id": "subj_os",
+  "chapter_id": "ch_os_03",
+  "primary_chapter_id": "cc_os_03",
+  "type": "choice",
+  "content": "下列关于进程与线程的说法，正确的是？",
+  "difficulty": "medium",
+  "exam_scope": "408",
+  "exam_year": 2024,
+  "review_status": "approved"
 }
 ```
 
-进度事件：
+## 5. 文档边界
 
-```json
-{
-  "task_id": "task_001",
-  "status": "running",
-  "progress": 50,
-  "items_scraped": 1,
-  "requests_made": 2,
-  "responses_received": 2,
-  "errors": 0
-}
-```
-
----
-
-## 8. 定时任务 API
-
-### GET `/api/v1/admin/crawler/schedules`
-
-查询参数：
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `page` | int | 否 | 默认 `1` |
-| `page_size` | int | 否 | 默认 `20` |
-| `is_enabled` | bool | 否 | 启用状态 |
-
-响应：`ApiResponse<PaginatedResponse<CrawlerSchedule>>`
-
-### POST `/api/v1/admin/crawler/schedules`
-
-请求：
-
-```json
-{
-  "name": "每日增量更新",
-  "description": "每天凌晨更新活跃源",
-  "task_type": "incremental",
-  "source_ids": ["src_001"],
-  "target_config": {
-    "spider_type": "person",
-    "keywords": []
-  },
-  "cron_expression": "0 2 * * *",
-  "timezone": "Asia/Shanghai",
-  "is_enabled": true,
-  "max_retries": 3,
-  "retry_interval": 300,
-  "concurrent_limit": 1,
-  "timeout": 3600
-}
-```
-
-响应：`ApiResponse<CrawlerSchedule>`
-
-执行规则：
-
-- 调度触发后先创建 `crawl_tasks` 记录和 `crawl_schedule_runs(status=running)`。
-- Scrapy/健康检查/清理任务到达 `completed`、`failed`、`stopped` 或超时后，才更新执行历史终态。
-- `crawl_schedule_runs.task_id` 必须关联实际创建的爬虫任务。
-
-### GET `/api/v1/admin/crawler/schedules/{schedule_id}`
-
-响应：`ApiResponse<CrawlerSchedule>`
-
-### PUT `/api/v1/admin/crawler/schedules/{schedule_id}`
-
-请求：`Partial<CrawlerSchedule>`，禁止修改 `id`、`created_at`、`updated_at`。
-
-响应：`ApiResponse<CrawlerSchedule>`
-
-### DELETE `/api/v1/admin/crawler/schedules/{schedule_id}`
-
-响应：`ApiResponse<null>`
-
-### POST `/api/v1/admin/crawler/schedules/{schedule_id}/toggle`
-
-查询参数：
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `enabled` | bool | 是 | `true` 启用，`false` 禁用 |
-
-响应：
-
-```json
-{
-  "id": "sch_001",
-  "is_enabled": true
-}
-```
-
-### GET `/api/v1/admin/crawler/schedules/{schedule_id}/runs`
-
-查询参数：`page`、`page_size`、`status`。
-
-响应：`ApiResponse<PaginatedResponse<CrawlerScheduleRun>>`
-
----
-
-## 9. 日志 API
-
-### GET `/api/v1/admin/crawler/logs`
-
-查询参数：
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `task_id` | string | 否 | 任务 ID |
-| `source_id` | string | 否 | 爬取源 ID |
-| `level` | string | 否 | 见 `crawler_log_level` |
-| `status` | string | 否 | 见 `crawler_log_status` |
-| `resource_type` | string | 否 | 见 `resource_type` |
-| `start_time` | string | 否 | ISO 8601 |
-| `end_time` | string | 否 | ISO 8601 |
-| `page` | int | 否 | 默认 `1` |
-| `page_size` | int | 否 | 默认 `50` |
-
-响应：`ApiResponse<PaginatedResponse<CrawlerLog>>`
-
-### GET `/api/v1/admin/crawler/logs/export`
-
-查询参数同日志列表，额外支持：
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `format` | string | 否 | `csv` 或 `json`，默认 `csv` |
-| `limit` | int | 否 | 导出上限，默认 `5000`，最大 `20000` |
-
-响应：文件下载。响应头包含 `X-Total-Count` 和 `X-Exported-Count`。
-
-### GET `/api/v1/admin/crawler/logs/analysis`
-
-查询参数：`days`，默认 `7`。
-
-响应：
-
-```json
-{
-  "period_days": 7,
-  "level_distribution": [],
-  "status_distribution": [],
-  "error_distribution": [],
-  "source_distribution": [],
-  "daily_trend": []
-}
-```
-
-### WebSocket `/api/v1/admin/crawler/logs/stream`
-
-连接参数：`task_id`、`source_id`、`level`。
-
-客户端心跳：
-
-```json
-{
-  "type": "ping"
-}
-```
-
-服务端心跳响应：
-
-```json
-{
-  "type": "pong"
-}
-```
-
-客户端动态筛选：
-
-```json
-{
-  "type": "filter",
-  "task_ids": ["task_001"],
-  "source_ids": ["src_001"],
-  "levels": ["INFO", "ERROR"]
-}
-```
-
-服务端日志消息：
-
-```json
-{
-  "type": "log",
-  "data": {
-    "id": 1,
-    "task_id": "task_001",
-    "level": "INFO",
-    "message": "Fetched person page",
-    "created_at": "2026-06-06T13:00:00Z"
-  }
-}
-```
-
-动态筛选确认：
-
-```json
-{
-  "type": "filter_updated",
-  "task_ids": ["task_001"],
-  "source_ids": ["src_001"],
-  "levels": ["INFO", "ERROR"]
-}
-```
-
----
-
-## 10. 当前实现对齐清单
-
-以下条目是当前开发必须修复或确认的对齐项：
-
-- [x] 后端任务列表响应字段从 `type` 改为 `task_type`。
-- [x] 后端任务列表响应字段从 `fail_count` 改为 `failed_count`。
-- [x] 前端 `CrawlerTask` 类型同步使用 `task_type` 和 `failed_count`。
-- [x] `CrawlTask.task_type` 枚举扩展到 `health_check`、`cleanup`。
-- [x] `CrawlTask` 模型和表结构补齐任务统计和错误字段，或删除未持久化字段使用。
-- [x] `CrawlerSourceService.get_source_stats` 修复 `failed_failed_requests` 拼写。
-- [x] Scrapy 入库完成后写入 `crawl_source_stats`，统计页移除硬编码 mock。
-- [x] 管理端日志页通过 WebSocket 动态渲染实时日志并同步筛选条件。
-- [x] 管理端任务列表支持删除非运行中任务、运行中自动刷新和真实数据源选择。
-- [x] 定时任务执行历史从“发布即成功”改为跟踪实际爬虫任务终态。
-- [x] 所有 `ApiResponse` 补齐 `request_id`。
-- [ ] HTTP 错误状态码与响应体 `code` 保持一致。
-- [ ] 管理端所有爬虫页面禁止使用未标注的 mock 数据。
+- 本文件描述当前管理端与问答主链接口
+- 多模态字段定义与更完整示例，统一参考 `docs/api/multimodal-retrieval-contract.md`

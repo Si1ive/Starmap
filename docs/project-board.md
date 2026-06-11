@@ -10,11 +10,11 @@
 |------|------|------|
 | 数据模型设计 | ✅ | Subject/Chapter/KnowledgePoint/Question/UserQuestionRecord |
 | MySQL建表脚本 | ✅ | init_408_tables.sql + 种子数据 |
-| ChromaDB集成 | ✅ | knowledge_points collection + 搜索方法 |
+| Qdrant集成 | ✅ | knowledge/question segments collection + 搜索方法 |
 | KnowledgePointItem/QuestionItem | ✅ | Scrapy Item定义 |
 | KnowledgeSpider | ✅ | PDF解析spider |
 | Storage Pipeline | ✅ | 知识点/题目存储路由 |
-| RAG ChatService | ✅ | ChromaDB检索 + OpenAI生成 |
+| RAG ChatService | ✅ | Qdrant检索 + OpenAI生成 |
 | 知识点管理API | ✅ | CRUD接口 |
 | 题目管理API | ✅ | CRUD接口 |
 | Dashboard API | ✅ | 真实统计数据 |
@@ -71,4 +71,4 @@
 |------|------|------|
 | 2026-06-08 | 项目定位转为"408考研学习平台" | 408考研有明确受众和痛点 |
 | 2026-06-08 | 采用RAG架构而非简单搜索 | 需要基于知识库的精准回答，而非通用大模型 |
-| 2026-06-08 | 保留MySQL+Neo4j+ChromaDB+Redis多数据库架构 | 各数据库职责明确，无需精简 |
+| 2026-06-08 | 采用 MySQL+Qdrant+Redis 主数据架构 | 结构化存储、检索索引与缓存职责清晰 |

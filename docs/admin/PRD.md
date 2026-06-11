@@ -48,7 +48,7 @@
 | **智能问答** | RAG问答 | 基于知识库的智能回答 |
 | | 对话历史 | 查看历史问答记录 |
 | | 来源引用 | 显示回答的知识点来源 |
-| **系统监控** | 服务状态 | MySQL/Neo4j/Redis/ChromaDB |
+| **系统监控** | 服务状态 | MySQL/Redis/Qdrant |
 | | 爬虫状态 | 任务进度、日志 |
 | **系统配置** | 用户管理 | 管理员账号 |
 | | LLM配置 | OpenAI模型参数 |
@@ -171,7 +171,7 @@
 - Storage pipeline
 
 ### Phase 3: RAG问答（已完成）
-- ChromaDB向量检索
+- Qdrant 向量检索
 - OpenAI API集成
 - ChatService实现
 

@@ -150,15 +150,15 @@ AI应告知：
 
 ### 4. 数据库相关问题
 
-#### 问题：Neo4j连接失败
+#### 问题：Qdrant连接失败
 ```
-症状：Failed to establish connection to Neo4j
+症状：Failed to establish connection to Qdrant
 AI应告知：
-- 问题：无法连接Neo4j
+- 问题：无法连接Qdrant
 - 需要你：
-  1. 检查Neo4j是否运行（docker ps）
-  2. 检查端口是否正确（7474/7687）
-  3. 检查认证信息（用户名/密码）
+  1. 检查Qdrant是否运行
+  2. 检查端口是否正确（6333/6334）
+  3. 检查 QDRANT_HOST / QDRANT_PORT 配置
 - 我可以：检查配置并修复
 ```
 

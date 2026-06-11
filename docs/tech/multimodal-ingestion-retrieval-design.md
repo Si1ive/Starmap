@@ -46,7 +46,7 @@
 - 知识点关系事实源：`MySQL`
 - 图谱查询加速与可视化：`Neo4j`，作为关系读模型与增强层，不是唯一事实源
 - 目标向量库：`Qdrant`
-- 现有 `ChromaDB`：保留为过渡方案，不作为终局检索底座
+- 向量检索底座统一使用 `Qdrant`
 - 文档解析主路线：`Docling`
 - 复杂页 fallback：`MinerU` 或云端文档理解服务
 
@@ -1195,7 +1195,7 @@ fallback 方案：
 
 - 锁定数据结构
 - 跑通解析器 PoC
-- 确认 Qdrant 与 Chroma 过渡方案
+- 确认 Qdrant collection、payload 与检索链设计
 
 任务：
 
@@ -1383,14 +1383,14 @@ fallback 方案：
 
 ## 15.2 逐步替换
 
-- `ChromaDB` 从主检索库降级为过渡或兼容方案
+- `Qdrant` 作为统一主检索库
 - 现有 `ingest_pdf` 从单 PDF 入口升级为文件注册与批处理入口
 - 现有 `ChatService` 从单路知识点检索升级为多路检索编排
 
 现有相关代码位置：
 
 - [backend/app/api/admin.py](/Users/golfzhang/Documents/project/my-agent/backend/app/api/admin.py:1932)
-- [backend/app/db/chroma.py](/Users/golfzhang/Documents/project/my-agent/backend/app/db/chroma.py:408)
+- [backend/app/db/qdrant.py](/Users/golfzhang/Documents/project/my-agent/backend/app/db/qdrant.py:1)
 - [backend/app/services/chat_service.py](/Users/golfzhang/Documents/project/my-agent/backend/app/services/chat_service.py:147)
 
 ---

@@ -253,13 +253,13 @@ npm ERR! peer react@"^17.0.0" from some-package@1.0.0
 **准备执行复杂命令：**
 
 ```bash
-docker-compose up -d neo4j redis chromadb
+podman-compose -f docker-compose.podman.yml up -d
 ```
 
 **说明：**
 - `docker-compose up`：启动Docker Compose定义的服务
 - `-d`：后台运行（detached模式）
-- `neo4j redis chromadb`：只启动这三个服务，不启动后端和前端
+- 启动基础设施服务，不启动后端和前端
 
 **目的：** 先启动基础设施服务，验证数据库连接后再启动应用
 
@@ -271,7 +271,7 @@ docker-compose up -d neo4j redis chromadb
  ⠿ Network starmap_default      Created
  ⠿ Container starmap-neo4j-1     Started
  ⠿ Container starmap-redis-1     Started
- ⠿ Container starmap-chromadb-1  Started
+ ⠿ Container starmap-redis-1     Started
 ```
 
 **结论：** ✅ 所有服务启动成功

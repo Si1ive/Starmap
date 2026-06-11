@@ -759,18 +759,17 @@ Qdrant payload 索引优先建立：
 2. 内部转为调用 `corpus file register + parse pipeline`
 3. 新增批量入库接口，不替换旧接口时先标记 deprecated
 
-## 9.3 现有 Chroma 兼容
+## 9.3 现有检索链兼容
 
 当前向量入口：
 
-- [backend/app/db/chroma.py](/Users/golfzhang/Documents/project/my-agent/backend/app/db/chroma.py:408)
+- [backend/app/db/qdrant.py](/Users/golfzhang/Documents/project/my-agent/backend/app/db/qdrant.py:1)
 
-兼容策略：
+接入策略：
 
-1. 新增 `qdrant.py`
-2. 新检索链优先走 `Qdrant`
-3. `ChatService` 在过渡期允许保留 `ChromaDB` fallback
-4. 完成评测后，再逐步下线 `ChromaDB` 主链
+1. 统一由 `Qdrant` 承担主检索链
+2. `ChatService`、`RetrievalService`、`SegmentService` 以 `Qdrant` 为准
+3. 旧文档与旧实现描述不再作为当前架构依据
 
 ---
 
@@ -779,7 +778,7 @@ Qdrant payload 索引优先建立：
 ## 10.1 开发环境
 
 - 全量启用新表
-- Qdrant 与 Chroma 并存
+- 全量启用 Qdrant collection
 - 允许数据重建
 
 ## 10.2 测试环境
@@ -806,7 +805,7 @@ Qdrant payload 索引优先建立：
 
 1. 数据表新增类迁移优先保证可回滚
 2. 不在首期删除旧表或旧字段
-3. 新检索链上线前，保留 `ChromaDB` 原逻辑
+3. 新检索链上线前，优先保证 `Qdrant` 数据可重建、可回放
 4. 任何回滚都不删除 `corpus_files`、`documents`、`document_blocks` 数据
 
 ---
