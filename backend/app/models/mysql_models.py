@@ -405,12 +405,22 @@ class KnowledgePoint(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="唯一标识")
     chapter_id: Mapped[str] = mapped_column(
         String(32), ForeignKey("chapters.id", ondelete="CASCADE"),
-        nullable=False, comment="所属章节ID"
+        nullable=False, comment="所属章节ID（兼容旧接口）"
     )
     subject_id: Mapped[str] = mapped_column(
         String(32), ForeignKey("subjects.id", ondelete="CASCADE"),
-        nullable=False, comment="所属学科ID（冗余，方便查询）"
+        nullable=False, comment="所属学科ID"
     )
+    # 新增字段 - 多模态扩展
+    primary_chapter_id: Mapped[Optional[str]] = mapped_column(
+        String(32), ForeignKey("canonical_chapters.id", ondelete="SET NULL"),
+        comment="主标准章节ID"
+    )
+    source_document_id: Mapped[Optional[str]] = mapped_column(
+        String(32), ForeignKey("documents.id", ondelete="SET NULL"),
+        comment="来源文档ID"
+    )
+    canonical_title: Mapped[Optional[str]] = mapped_column(String(200), comment="标准化标题")
     title: Mapped[str] = mapped_column(String(200), nullable=False, comment="知识点标题")
     content: Mapped[str] = mapped_column(Text, nullable=False, comment="知识点正文（Markdown）")
     difficulty: Mapped[str] = mapped_column(
@@ -423,12 +433,19 @@ class KnowledgePoint(Base):
         default="medium",
         comment="考试频率"
     )
+    topic_terms: Mapped[Optional[List[str]]] = mapped_column(JSON, comment="主题术语列表")
+    aliases: Mapped[Optional[List[str]]] = mapped_column(JSON, comment="别名列表")
     tags: Mapped[Optional[List[str]]] = mapped_column(JSON, comment="标签列表")
     key_points: Mapped[Optional[List[str]]] = mapped_column(JSON, comment="要点列表")
     related_point_ids: Mapped[Optional[List[str]]] = mapped_column(JSON, comment="关联知识点ID")
     source: Mapped[Optional[str]] = mapped_column(String(100), comment="来源，如 王道2025/第3章")
     source_page: Mapped[Optional[str]] = mapped_column(String(20), comment="来源页码")
     crawl_task_id: Mapped[Optional[str]] = mapped_column(String(32), comment="关联爬取任务ID")
+    review_status: Mapped[str] = mapped_column(
+        Enum("pending", "approved", "rejected"),
+        default="pending", comment="审核状态"
+    )
+    review_notes: Mapped[Optional[str]] = mapped_column(Text, comment="审核备注")
     status: Mapped[str] = mapped_column(
         Enum("active", "pending", "deleted"),
         default="pending",
@@ -439,12 +456,24 @@ class KnowledgePoint(Base):
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
 
+    # relationships
+    primary_chapter: Mapped[Optional["CanonicalChapter"]] = relationship()
+    source_document: Mapped[Optional["Document"]] = relationship()
+    chapter_links: Mapped[List["KnowledgePointChapterLink"]] = relationship(back_populates="knowledge_point")
+    source_links: Mapped[List["EntitySourceLink"]] = relationship(
+        primaryjoin="and_(EntitySourceLink.entity_type=='knowledge_point', "
+                    "foreign(EntitySourceLink.entity_id)==KnowledgePoint.id)",
+        viewonly=True
+    )
+
     __table_args__ = (
         Index("idx_kp_chapter", "chapter_id"),
+        Index("idx_kp_primary_chapter", "primary_chapter_id"),
         Index("idx_kp_subject", "subject_id"),
         Index("idx_kp_difficulty", "difficulty"),
         Index("idx_kp_exam_freq", "exam_frequency"),
         Index("idx_kp_status", "status"),
+        Index("idx_kp_review_status", "review_status"),
         Index("idx_kp_title", "title"),
         {"comment": "知识点表"}
     )
@@ -461,7 +490,16 @@ class Question(Base):
     )
     chapter_id: Mapped[str] = mapped_column(
         String(32), ForeignKey("chapters.id", ondelete="CASCADE"),
-        nullable=False, comment="所属章节ID"
+        nullable=False, comment="所属章节ID（兼容旧接口）"
+    )
+    # 新增字段 - 多模态扩展
+    primary_chapter_id: Mapped[Optional[str]] = mapped_column(
+        String(32), ForeignKey("canonical_chapters.id", ondelete="SET NULL"),
+        comment="主标准章节ID"
+    )
+    source_document_id: Mapped[Optional[str]] = mapped_column(
+        String(32), ForeignKey("documents.id", ondelete="SET NULL"),
+        comment="来源文档ID"
     )
     type: Mapped[str] = mapped_column(
         Enum("choice", "fill", "judge", "short_answer", "design", "analysis"),
@@ -480,9 +518,18 @@ class Question(Base):
         comment="难度"
     )
     source: Mapped[Optional[str]] = mapped_column(String(100), comment="来源，如 2024年408真题")
+    exam_scope: Mapped[Optional[str]] = mapped_column(String(50), comment="考试范围，如 408")
     exam_year: Mapped[int] = mapped_column(default=0, comment="真题年份，练习题为0")
+    paper_name: Mapped[Optional[str]] = mapped_column(String(255), comment="试卷名称")
+    question_no: Mapped[Optional[str]] = mapped_column(String(20), comment="题号")
+    topic_terms: Mapped[Optional[List[str]]] = mapped_column(JSON, comment="主题术语列表")
     knowledge_point_ids: Mapped[Optional[List[str]]] = mapped_column(JSON, comment="关联知识点ID")
     tags: Mapped[Optional[List[str]]] = mapped_column(JSON, comment="标签")
+    review_status: Mapped[str] = mapped_column(
+        Enum("pending", "approved", "rejected"),
+        default="pending", comment="审核状态"
+    )
+    review_notes: Mapped[Optional[str]] = mapped_column(Text, comment="审核备注")
     status: Mapped[str] = mapped_column(
         Enum("active", "pending", "deleted"),
         default="pending",
@@ -493,13 +540,26 @@ class Question(Base):
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
 
+    # relationships
+    primary_chapter: Mapped[Optional["CanonicalChapter"]] = relationship()
+    source_document: Mapped[Optional["Document"]] = relationship()
+    chapter_links: Mapped[List["QuestionChapterLink"]] = relationship(back_populates="question")
+    source_links: Mapped[List["EntitySourceLink"]] = relationship(
+        primaryjoin="and_(EntitySourceLink.entity_type=='question', "
+                    "foreign(EntitySourceLink.entity_id)==Question.id)",
+        viewonly=True
+    )
+
     __table_args__ = (
         Index("idx_q_subject", "subject_id"),
         Index("idx_q_chapter", "chapter_id"),
+        Index("idx_q_primary_chapter", "primary_chapter_id"),
         Index("idx_q_type", "type"),
         Index("idx_q_difficulty", "difficulty"),
         Index("idx_q_exam_year", "exam_year"),
+        Index("idx_q_exam_scope", "exam_scope"),
         Index("idx_q_status", "status"),
+        Index("idx_q_review_status", "review_status"),
         {"comment": "题目表"}
     )
 
@@ -783,4 +843,304 @@ class DocumentAsset(Base):
         Index("idx_document_assets_document_page", "document_id", "page_no"),
         Index("idx_document_assets_type", "asset_type"),
         {"comment": "文档图表公式资产表"}
+    )
+
+
+# ========== 多模态语料库扩展模型 ==========
+
+
+class CanonicalChapter(Base):
+    """标准章节表 - 学科的标准章节体系"""
+    __tablename__ = "canonical_chapters"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="章节ID")
+    subject_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("subjects.id", ondelete="CASCADE"),
+        nullable=False, comment="所属学科ID"
+    )
+    parent_id: Mapped[Optional[str]] = mapped_column(
+        String(32), ForeignKey("canonical_chapters.id", ondelete="CASCADE"),
+        comment="父章节ID，顶级章节为NULL"
+    )
+    level: Mapped[int] = mapped_column(default=1, comment="层级：1=一级章节，2=二级章节")
+    name: Mapped[str] = mapped_column(String(200), nullable=False, comment="标准章节名称")
+    code: Mapped[Optional[str]] = mapped_column(String(50), comment="章节编码，如 CH1.2")
+    aliases: Mapped[Optional[List[str]]] = mapped_column(JSON, comment="别名列表")
+    description: Mapped[Optional[str]] = mapped_column(Text, comment="章节描述")
+    sort_order: Mapped[int] = mapped_column(default=0, comment="排序序号")
+    status: Mapped[str] = mapped_column(
+        Enum("active", "inactive"),
+        default="active", comment="状态"
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    # relationships
+    subject: Mapped["Subject"] = relationship()
+    parent: Mapped[Optional["CanonicalChapter"]] = relationship(remote_side="CanonicalChapter.id")
+    children: Mapped[List["CanonicalChapter"]] = relationship(back_populates="parent")
+
+    __table_args__ = (
+        Index("idx_canonical_chapters_subject", "subject_id"),
+        Index("idx_canonical_chapters_parent", "parent_id"),
+        Index("idx_canonical_chapters_level", "level"),
+        {"comment": "标准章节表"}
+    )
+
+
+class DocumentSection(Base):
+    """文档原生标题树 - 从文档解析出的章节结构"""
+    __tablename__ = "document_sections"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="section ID")
+    document_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("documents.id", ondelete="CASCADE"),
+        nullable=False, comment="文档ID"
+    )
+    parent_id: Mapped[Optional[str]] = mapped_column(
+        String(32), ForeignKey("document_sections.id", ondelete="CASCADE"),
+        comment="父section ID"
+    )
+    level: Mapped[int] = mapped_column(nullable=False, comment="层级深度")
+    title: Mapped[str] = mapped_column(String(500), nullable=False, comment="原生标题文本")
+    section_path: Mapped[str] = mapped_column(String(1000), nullable=False, comment="完整路径，如 第1章>1.1>1.1.1")
+    page_start: Mapped[Optional[int]] = mapped_column(comment="起始页码")
+    page_end: Mapped[Optional[int]] = mapped_column(comment="结束页码")
+    block_start_id: Mapped[Optional[str]] = mapped_column(String(32), comment="起始block ID")
+    block_end_id: Mapped[Optional[str]] = mapped_column(String(32), comment="结束block ID")
+    confidence: Mapped[Optional[float]] = mapped_column(DECIMAL(5, 4), comment="识别置信度")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # relationships
+    document: Mapped["Document"] = relationship()
+    parent: Mapped[Optional["DocumentSection"]] = relationship(remote_side="DocumentSection.id")
+    children: Mapped[List["DocumentSection"]] = relationship(back_populates="parent")
+    mappings: Mapped[List["DocumentSectionMapping"]] = relationship(back_populates="section")
+
+    __table_args__ = (
+        Index("idx_document_sections_document", "document_id"),
+        Index("idx_document_sections_parent", "parent_id"),
+        Index("idx_document_sections_level", "level"),
+        {"comment": "文档原生标题树"}
+    )
+
+
+class DocumentSectionMapping(Base):
+    """文档section到标准章节的映射"""
+    __tablename__ = "document_section_mappings"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="映射ID")
+    document_section_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("document_sections.id", ondelete="CASCADE"),
+        nullable=False, comment="文档section ID"
+    )
+    canonical_chapter_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("canonical_chapters.id", ondelete="CASCADE"),
+        nullable=False, comment="标准章节ID"
+    )
+    mapping_type: Mapped[str] = mapped_column(
+        Enum("exact", "partial", "related"),
+        default="exact", comment="映射类型"
+    )
+    confidence: Mapped[float] = mapped_column(DECIMAL(5, 4), nullable=False, comment="映射置信度")
+    review_status: Mapped[str] = mapped_column(
+        Enum("pending", "approved", "rejected"),
+        default="pending", comment="审核状态"
+    )
+    review_notes: Mapped[Optional[str]] = mapped_column(Text, comment="审核备注")
+    reviewed_by: Mapped[Optional[str]] = mapped_column(String(32), comment="审核人")
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, comment="审核时间")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    # relationships
+    section: Mapped["DocumentSection"] = relationship(back_populates="mappings")
+    canonical_chapter: Mapped["CanonicalChapter"] = relationship()
+
+    __table_args__ = (
+        Index("idx_dsm_section", "document_section_id"),
+        Index("idx_dsm_chapter", "canonical_chapter_id"),
+        Index("idx_dsm_review_status", "review_status"),
+        Index("idx_dsm_confidence", "confidence"),
+        {"comment": "文档section到标准章节的映射"}
+    )
+
+
+class KnowledgePointChapterLink(Base):
+    """知识点与章节关联表"""
+    __tablename__ = "knowledge_point_chapter_links"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    knowledge_point_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("knowledge_points.id", ondelete="CASCADE"),
+        nullable=False, comment="知识点ID"
+    )
+    canonical_chapter_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("canonical_chapters.id", ondelete="CASCADE"),
+        nullable=False, comment="标准章节ID"
+    )
+    is_primary: Mapped[bool] = mapped_column(default=False, comment="是否主章节")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # relationships
+    knowledge_point: Mapped["KnowledgePoint"] = relationship(back_populates="chapter_links")
+    canonical_chapter: Mapped["CanonicalChapter"] = relationship()
+
+    __table_args__ = (
+        UniqueConstraint("knowledge_point_id", "canonical_chapter_id", name="uk_kp_chapter_link"),
+        Index("idx_kpcl_knowledge_point", "knowledge_point_id"),
+        Index("idx_kpcl_chapter", "canonical_chapter_id"),
+        {"comment": "知识点与章节关联表"}
+    )
+
+
+class QuestionChapterLink(Base):
+    """题目与章节关联表"""
+    __tablename__ = "question_chapter_links"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    question_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("questions.id", ondelete="CASCADE"),
+        nullable=False, comment="题目ID"
+    )
+    canonical_chapter_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("canonical_chapters.id", ondelete="CASCADE"),
+        nullable=False, comment="标准章节ID"
+    )
+    is_primary: Mapped[bool] = mapped_column(default=False, comment="是否主章节")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # relationships
+    question: Mapped["Question"] = relationship(back_populates="chapter_links")
+    canonical_chapter: Mapped["CanonicalChapter"] = relationship()
+
+    __table_args__ = (
+        UniqueConstraint("question_id", "canonical_chapter_id", name="uk_q_chapter_link"),
+        Index("idx_qcl_question", "question_id"),
+        Index("idx_qcl_chapter", "canonical_chapter_id"),
+        {"comment": "题目与章节关联表"}
+    )
+
+
+class EntitySourceLink(Base):
+    """实体来源引用表 - 记录知识点/题目来自哪个文档的哪个位置"""
+    __tablename__ = "entity_source_links"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    entity_type: Mapped[str] = mapped_column(
+        Enum("knowledge_point", "question"),
+        nullable=False, comment="实体类型"
+    )
+    entity_id: Mapped[str] = mapped_column(String(32), nullable=False, comment="实体ID")
+    document_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("documents.id", ondelete="CASCADE"),
+        nullable=False, comment="来源文档ID"
+    )
+    page_start: Mapped[Optional[int]] = mapped_column(comment="起始页码")
+    page_end: Mapped[Optional[int]] = mapped_column(comment="结束页码")
+    block_ids: Mapped[Optional[List[str]]] = mapped_column(JSON, comment="来源block ID列表")
+    excerpt_text: Mapped[Optional[str]] = mapped_column(Text, comment="来源摘录文本")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_esl_entity", "entity_type", "entity_id"),
+        Index("idx_esl_document", "document_id"),
+        {"comment": "实体来源引用表"}
+    )
+
+
+class KnowledgeRelation(Base):
+    """知识点关系表"""
+    __tablename__ = "knowledge_relations"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="关系ID")
+    source_knowledge_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("knowledge_points.id", ondelete="CASCADE"),
+        nullable=False, comment="源知识点ID"
+    )
+    target_knowledge_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("knowledge_points.id", ondelete="CASCADE"),
+        nullable=False, comment="目标知识点ID"
+    )
+    relation_type: Mapped[str] = mapped_column(
+        Enum("prerequisite", "contrast_with", "common_confusion",
+             "contains", "part_of", "used_in", "similar_to"),
+        nullable=False, comment="关系类型"
+    )
+    directionality: Mapped[str] = mapped_column(
+        Enum("directed", "undirected"),
+        default="directed", comment="方向性"
+    )
+    evidence_text: Mapped[Optional[str]] = mapped_column(Text, comment="证据文本")
+    evidence_page: Mapped[Optional[int]] = mapped_column(comment="证据页码")
+    confidence: Mapped[Optional[float]] = mapped_column(DECIMAL(5, 4), comment="置信度")
+    source_type: Mapped[str] = mapped_column(
+        Enum("rule", "llm", "manual", "term_similarity"),
+        default="llm", comment="来源类型"
+    )
+    review_status: Mapped[str] = mapped_column(
+        Enum("pending", "approved", "rejected"),
+        default="pending", comment="审核状态"
+    )
+    review_notes: Mapped[Optional[str]] = mapped_column(Text, comment="审核备注")
+    reviewed_by: Mapped[Optional[str]] = mapped_column(String(32), comment="审核人")
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, comment="审核时间")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    # relationships
+    source_knowledge: Mapped["KnowledgePoint"] = relationship(foreign_keys=[source_knowledge_id])
+    target_knowledge: Mapped["KnowledgePoint"] = relationship(foreign_keys=[target_knowledge_id])
+
+    __table_args__ = (
+        Index("idx_kr_source", "source_knowledge_id"),
+        Index("idx_kr_target", "target_knowledge_id"),
+        Index("idx_kr_type", "relation_type"),
+        Index("idx_kr_review_status", "review_status"),
+        {"comment": "知识点关系表"}
+    )
+
+
+class RetrievalSegment(Base):
+    """检索单元表 - 用于向量检索的段落"""
+    __tablename__ = "retrieval_segments"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="segment ID")
+    entity_type: Mapped[str] = mapped_column(
+        Enum("knowledge_point", "question"),
+        nullable=False, comment="实体类型"
+    )
+    entity_id: Mapped[str] = mapped_column(String(32), nullable=False, comment="实体ID")
+    document_id: Mapped[Optional[str]] = mapped_column(String(32), comment="来源文档ID")
+    segment_type: Mapped[str] = mapped_column(
+        Enum("content", "title", "explanation", "option"),
+        default="content", comment="段落类型"
+    )
+    content_text: Mapped[str] = mapped_column(Text, nullable=False, comment="段落文本")
+    content_md: Mapped[Optional[str]] = mapped_column(Text, comment="Markdown格式")
+    sparse_text: Mapped[Optional[str]] = mapped_column(Text, comment="稀疏检索文本")
+    context_text: Mapped[Optional[str]] = mapped_column(Text, comment="上下文增强文本")
+    page_no: Mapped[Optional[int]] = mapped_column(comment="页码")
+    subject_id: Mapped[Optional[str]] = mapped_column(String(32), comment="学科ID")
+    chapter_ids: Mapped[Optional[List[str]]] = mapped_column(JSON, comment="章节ID列表")
+    topic_terms: Mapped[Optional[List[str]]] = mapped_column(JSON, comment="主题术语")
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, comment="扩展元数据")
+    qdrant_point_id: Mapped[Optional[str]] = mapped_column(String(100), comment="Qdrant point ID")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    __table_args__ = (
+        Index("idx_rs_entity", "entity_type", "entity_id"),
+        Index("idx_rs_document", "document_id"),
+        Index("idx_rs_subject", "subject_id"),
+        Index("idx_rs_segment_type", "segment_type"),
+        {"comment": "检索单元表"}
     )
