@@ -1,7 +1,7 @@
 # 408 多模态语料库数据结构与迁移实施清单
 
-> 版本：v1.0  
-> 日期：2026-06-09  
+> 版本：v1.1  
+> 日期：2026-06-11  
 > 状态：可开发  
 > 读者：Backend / Data / DBA / PM
 
@@ -27,6 +27,7 @@
 3. 任何可引用的内容都必须能回溯到 `document_blocks` 或 `document_assets`。
 4. `questions` 和 `knowledge_points` 继续保留为 canonical entity，不直接承担原始解析层职责。
 5. 新能力上线必须兼容当前管理端已有的 `knowledge_points`、`questions`、`CrawlTask`、`DownloadedFile`。
+6. 知识点关系边是业务事实的一部分，不能只存在于临时缓存、prompt 或图数据库副本中。
 
 ---
 
@@ -42,11 +43,18 @@ corpus_files
 parse_runs
     ↓
 documents
+    ├─ canonical_chapters
+    ├─ document_sections
+    ├─ document_section_mappings
     ├─ document_pages
     ├─ document_blocks
     └─ document_assets
     ↓
 knowledge_points / questions
+    ├─ knowledge_point_chapter_links
+    └─ question_chapter_links
+    ↓
+knowledge_relations
     ↓
 entity_source_links
     ↓
@@ -165,6 +173,68 @@ CREATE TABLE documents (
 ) COMMENT='正规化文档主表';
 ```
 
+## 4.3A `canonical_chapters`
+
+```sql
+CREATE TABLE canonical_chapters (
+    id VARCHAR(32) PRIMARY KEY COMMENT '标准章节ID',
+    subject_id VARCHAR(32) NOT NULL COMMENT '学科ID',
+    parent_id VARCHAR(32) NULL COMMENT '父章节ID',
+    name VARCHAR(255) NOT NULL COMMENT '标准章节名称',
+    aliases JSON NULL COMMENT '别名列表',
+    description TEXT NULL COMMENT '章节描述',
+    sort_order INT DEFAULT 0 COMMENT '排序序号',
+    status ENUM('active', 'inactive') DEFAULT 'active' COMMENT '状态',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    KEY idx_cc_subject (subject_id),
+    KEY idx_cc_parent (parent_id),
+    KEY idx_cc_status (status)
+) COMMENT='标准章节体系表';
+```
+
+## 4.3B `document_sections`
+
+```sql
+CREATE TABLE document_sections (
+    id VARCHAR(32) PRIMARY KEY COMMENT '文档原生section ID',
+    document_id VARCHAR(32) NOT NULL COMMENT '文档ID',
+    parent_section_id VARCHAR(32) NULL COMMENT '父section ID',
+    title VARCHAR(255) NOT NULL COMMENT '原生标题',
+    level INT NOT NULL COMMENT '标题层级',
+    section_path VARCHAR(1000) NULL COMMENT '原生路径',
+    page_start INT NULL COMMENT '起始页',
+    page_end INT NULL COMMENT '结束页',
+    block_start_id VARCHAR(32) NULL COMMENT '起始block',
+    block_end_id VARCHAR(32) NULL COMMENT '结束block',
+    topic_terms JSON NULL COMMENT '主题术语',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    KEY idx_ds_document (document_id),
+    KEY idx_ds_parent (parent_section_id),
+    KEY idx_ds_document_level (document_id, level)
+) COMMENT='文档原生标题树表';
+```
+
+## 4.3C `document_section_mappings`
+
+```sql
+CREATE TABLE document_section_mappings (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    document_section_id VARCHAR(32) NOT NULL COMMENT '原生section ID',
+    canonical_chapter_id VARCHAR(32) NOT NULL COMMENT '标准章节ID',
+    mapping_type ENUM('exact', 'partial', 'related') DEFAULT 'related' COMMENT '映射类型',
+    confidence DECIMAL(5,4) NULL COMMENT '映射置信度',
+    build_method ENUM('rule', 'llm', 'manual') DEFAULT 'llm' COMMENT '构建方式',
+    review_status ENUM('pending', 'approved', 'rejected') DEFAULT 'pending' COMMENT '审核状态',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    KEY idx_dsm_section (document_section_id),
+    KEY idx_dsm_chapter (canonical_chapter_id),
+    KEY idx_dsm_review_status (review_status)
+) COMMENT='文档section与标准章节映射表';
+```
+
 ## 4.4 `document_pages`
 
 ```sql
@@ -281,6 +351,77 @@ CREATE TABLE retrieval_segments (
 ) COMMENT='统一检索单元表';
 ```
 
+说明：
+
+- `chapter_id` 保留为主章节过滤字段
+- 多章节、映射章节、关系提示、易混知识点摘要进入 `metadata_json`
+- 实体与章节的稳定多对多关系通过 link 表维护
+
+## 4.9 `knowledge_relations`
+
+```sql
+CREATE TABLE knowledge_relations (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    source_knowledge_id VARCHAR(32) NOT NULL COMMENT '起点知识点ID',
+    target_knowledge_id VARCHAR(32) NOT NULL COMMENT '终点知识点ID',
+    relation_type ENUM(
+        'prerequisite',
+        'contains',
+        'part_of',
+        'similar_to',
+        'contrast_with',
+        'common_confusion',
+        'used_in'
+    ) NOT NULL COMMENT '关系类型',
+    directionality ENUM('directed', 'undirected') DEFAULT 'directed' COMMENT '关系方向性',
+    strength DECIMAL(5,4) NULL COMMENT '关系强度',
+    confidence DECIMAL(5,4) NULL COMMENT '构建置信度',
+    source_document_id VARCHAR(32) NULL COMMENT '来源文档ID',
+    evidence_json JSON NULL COMMENT '证据块与页码',
+    build_method ENUM('rule', 'llm', 'manual', 'import') DEFAULT 'llm' COMMENT '构建方式',
+    review_status ENUM('pending', 'approved', 'rejected') DEFAULT 'pending' COMMENT '审核状态',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    KEY idx_kr_source (source_knowledge_id),
+    KEY idx_kr_target (target_knowledge_id),
+    KEY idx_kr_type (relation_type),
+    KEY idx_kr_review_status (review_status),
+    KEY idx_kr_source_target_type (source_knowledge_id, target_knowledge_id, relation_type)
+) COMMENT='知识点关系边表';
+```
+
+## 4.10 `knowledge_point_chapter_links`
+
+```sql
+CREATE TABLE knowledge_point_chapter_links (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    knowledge_point_id VARCHAR(32) NOT NULL COMMENT '知识点ID',
+    canonical_chapter_id VARCHAR(32) NOT NULL COMMENT '标准章节ID',
+    link_role ENUM('primary', 'secondary', 'related') DEFAULT 'secondary' COMMENT '归属角色',
+    confidence DECIMAL(5,4) NULL COMMENT '归属置信度',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_kpcl_kp (knowledge_point_id),
+    KEY idx_kpcl_chapter (canonical_chapter_id),
+    KEY idx_kpcl_role (link_role)
+) COMMENT='知识点章节关联表';
+```
+
+## 4.11 `question_chapter_links`
+
+```sql
+CREATE TABLE question_chapter_links (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    question_id VARCHAR(32) NOT NULL COMMENT '题目ID',
+    canonical_chapter_id VARCHAR(32) NOT NULL COMMENT '标准章节ID',
+    link_role ENUM('primary', 'secondary', 'related') DEFAULT 'secondary' COMMENT '归属角色',
+    confidence DECIMAL(5,4) NULL COMMENT '归属置信度',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_qcl_question (question_id),
+    KEY idx_qcl_chapter (canonical_chapter_id),
+    KEY idx_qcl_role (link_role)
+) COMMENT='题目章节关联表';
+```
+
 ---
 
 ## 5. 现有表扩展设计
@@ -296,6 +437,8 @@ ALTER TABLE knowledge_points
     ADD COLUMN aliases JSON NULL COMMENT '别名列表' AFTER summary,
     ADD COLUMN topic_terms JSON NULL COMMENT '主题术语' AFTER aliases,
     ADD COLUMN modality_flags JSON NULL COMMENT '多模态标记' AFTER topic_terms,
+    ADD COLUMN confusion_point_ids JSON NULL COMMENT '易混知识点ID列表' AFTER modality_flags,
+    ADD COLUMN primary_chapter_id VARCHAR(32) NULL COMMENT '主归属标准章节ID' AFTER chapter_id,
     ADD COLUMN source_document_id VARCHAR(32) NULL COMMENT '来源文档ID' AFTER source,
     ADD COLUMN source_page_start INT NULL COMMENT '来源起始页' AFTER source_page,
     ADD COLUMN source_page_end INT NULL COMMENT '来源结束页' AFTER source_page_start,
@@ -308,7 +451,8 @@ ALTER TABLE knowledge_points
 ```sql
 ALTER TABLE knowledge_points
     ADD KEY idx_kp_source_document_id (source_document_id),
-    ADD KEY idx_kp_review_status (review_status);
+    ADD KEY idx_kp_review_status (review_status),
+    ADD KEY idx_kp_primary_chapter_id (primary_chapter_id);
 ```
 
 ## 5.2 `questions`
@@ -324,6 +468,7 @@ ALTER TABLE questions
     ADD COLUMN topic_terms JSON NULL COMMENT '主题术语' AFTER knowledge_point_ids,
     ADD COLUMN aliases JSON NULL COMMENT '别名词' AFTER topic_terms,
     ADD COLUMN modality_flags JSON NULL COMMENT '多模态标记' AFTER aliases,
+    ADD COLUMN primary_chapter_id VARCHAR(32) NULL COMMENT '主归属标准章节ID' AFTER chapter_id,
     ADD COLUMN source_document_id VARCHAR(32) NULL COMMENT '来源文档ID' AFTER status,
     ADD COLUMN source_page_start INT NULL COMMENT '来源起始页' AFTER source_document_id,
     ADD COLUMN source_page_end INT NULL COMMENT '来源结束页' AFTER source_page_start,
@@ -341,6 +486,7 @@ ALTER TABLE questions
     ADD KEY idx_q_source_type (source_type),
     ADD KEY idx_q_source_document_id (source_document_id),
     ADD KEY idx_q_review_status (review_status),
+    ADD KEY idx_q_primary_chapter_id (primary_chapter_id),
     ADD KEY idx_q_exam_scope_year_subject (exam_scope, exam_year, subject_id);
 ```
 
@@ -404,7 +550,11 @@ ALTER TABLE downloaded_files
   "segment_role": "stem",
   "subject_id": "subj_cn",
   "chapter_id": "ch_cn_04",
+  "chapter_ids": ["ch_cn_04", "ch_cn_05"],
   "knowledge_point_ids": ["kp_001", "kp_002"],
+  "has_relation_edges": true,
+  "has_confusion_edges": true,
+  "relation_keywords": ["流量控制", "拥塞控制", "滑动窗口"],
   "question_type": "choice",
   "difficulty": "medium",
   "exam_scope": "408",
@@ -432,6 +582,7 @@ Qdrant payload 索引优先建立：
 7. `exam_year`
 8. `source_type`
 9. `status`
+10. `has_confusion_edges`
 
 ## 6.5 检索字段分层
 
@@ -446,7 +597,7 @@ Qdrant payload 索引优先建立：
 
 ## 7. Alembic 迁移顺序
 
-推荐拆成 6 个 revision，不建议一个 revision 塞完所有改动。
+推荐拆成 8 个 revision，不建议一个 revision 塞完所有改动。
 
 ## 7.1 Revision 1：新增语料文件与解析表
 
@@ -460,17 +611,20 @@ Qdrant payload 索引优先建立：
 
 - `add_corpus_file_pipeline_tables`
 
-## 7.2 Revision 2：新增页、块、资产表
+## 7.2 Revision 2：新增章节映射、页、块、资产表
 
 目标：
 
+- `canonical_chapters`
+- `document_sections`
+- `document_section_mappings`
 - `document_pages`
 - `document_blocks`
 - `document_assets`
 
 命名建议：
 
-- `add_document_layout_tables`
+- `add_document_structure_and_layout_tables`
 
 ## 7.3 Revision 3：扩展 knowledge_points / questions / downloaded_files
 
@@ -482,29 +636,61 @@ Qdrant payload 索引优先建立：
 
 - `extend_knowledge_and_question_for_multimodal`
 
-## 7.4 Revision 4：新增实体引用与 segment 表
+## 7.4 Revision 4：新增章节 link、实体引用、segment 与关系表
 
 目标：
 
+- `knowledge_point_chapter_links`
+- `question_chapter_links`
 - `entity_source_links`
 - `retrieval_segments`
+- `knowledge_relations`
 
 命名建议：
 
-- `add_entity_source_and_retrieval_segments`
+- `add_entity_source_segments_and_relations`
 
-## 7.5 Revision 5：补充历史数据回填脚本
+## 7.5 Revision 5：补充历史数据与章节映射回填脚本
 
 目标：
 
 - 将已有 `DownloadedFile` 补注册进 `corpus_files`
 - 将已有 `knowledge_points` / `questions` 补 `source_document_id`
+- 将已有 `chapters` 迁移或映射为 `canonical_chapters`
+- 回填 `primary_chapter_id`
+- 生成初版 chapter link
 
 说明：
 
 - 这一步建议使用独立脚本，不直接写在 Alembic upgrade 中
 
-## 7.6 Revision 6：可选兼容清理
+## 7.6 Revision 6：章节映射构建脚本
+
+目标：
+
+- 为新旧文档生成 `document_sections`
+- 为 `document_sections` 生成初版 `document_section_mappings`
+- 为实体推导附属章节 link
+
+说明：
+
+- 建议使用独立脚本，不直接写在 Alembic upgrade 中
+- 低置信度映射必须进入审核队列
+
+## 7.7 Revision 7：关系构建与关系回填脚本
+
+目标：
+
+- 为已存在知识点生成初版 `knowledge_relations`
+- 回填 `confusion_point_ids`
+- 为 `retrieval_segments` 写入关系增强 metadata
+
+说明：
+
+- 建议使用独立脚本，不直接写在 Alembic upgrade 中
+- 首版允许 rule + LLM 混合生成，但必须带 `review_status`
+
+## 7.8 Revision 8：可选兼容清理
 
 目标：
 
@@ -660,4 +846,3 @@ Qdrant payload 索引优先建立：
 4. `questions` 支持 `exam_scope + exam_year + subject_id` 的结构化过滤
 5. 老数据不因迁移丢失
 6. 新旧检索链可并行验证
-

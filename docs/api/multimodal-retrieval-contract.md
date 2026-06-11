@@ -1,7 +1,7 @@
 # 408 多模态语料入库与检索 API 契约
 
-> 版本：v1.0  
-> 日期：2026-06-09  
+> 版本：v1.1  
+> 日期：2026-06-11  
 > 状态：可开发  
 > 读者：Backend / Frontend / Data / QA
 
@@ -29,6 +29,7 @@
 4. 所有检索接口必须支持 `filters`
 5. 所有检索结果必须可回溯到 `source_refs`
 6. 题目检索与知识点检索必须分接口，不允许只保留一个混合入口
+7. 知识点检索与问答接口必须支持关系增强结果，至少覆盖前置点、对比点、易混点
 
 ---
 
@@ -60,6 +61,7 @@
 | `retrieval_mode` | `filter_only`, `sparse`, `dense`, `hybrid`, `hybrid_rerank` |
 | `intent_type` | `retrieve_knowledge`, `retrieve_question`, `retrieve_mixed`, `qa`, `compare`, `explain_question` |
 | `question_source_type` | `past_exam`, `textbook_example`, `mock_exam`, `practice`, `other` |
+| `relation_type` | `prerequisite`, `contains`, `part_of`, `similar_to`, `contrast_with`, `common_confusion`, `used_in` |
 
 ---
 
@@ -215,12 +217,66 @@
   "context_text": "这是一道来自2018年408真题、计算机网络章节、主题为TCP流量控制的题目片段...",
   "keyword_text": "TCP 流量控制 窗口 408 2018",
   "metadata_json": {
+    "has_relation_edges": true,
+    "has_confusion_edges": true,
+    "relation_keywords": ["流量控制", "拥塞控制", "滑动窗口"],
     "exam_scope": "408",
     "exam_year": 2018,
     "paper_name": "2018年全国硕士研究生招生考试408",
     "topic_terms": ["tcp", "流量控制"]
   },
   "status": "active"
+}
+```
+
+## 4.8 `KnowledgeRelation`
+
+```json
+{
+  "id": 101,
+  "source_knowledge_id": "kp_tcp_flow_control",
+  "target_knowledge_id": "kp_tcp_congestion_control",
+  "relation_type": "common_confusion",
+  "directionality": "undirected",
+  "strength": 0.92,
+  "confidence": 0.88,
+  "source_document_id": "doc_001",
+  "evidence_json": {
+    "block_ids": ["blk_021", "blk_022"],
+    "page_nos": [18, 19]
+  },
+  "build_method": "llm",
+  "review_status": "approved"
+}
+```
+
+## 4.9 `DocumentSection`
+
+```json
+{
+  "id": "sec_001",
+  "document_id": "doc_001",
+  "parent_section_id": null,
+  "title": "3.4 TCP 传输控制",
+  "level": 2,
+  "section_path": "第3章/3.4 TCP 传输控制",
+  "page_start": 18,
+  "page_end": 25,
+  "topic_terms": ["tcp", "流量控制", "拥塞控制"]
+}
+```
+
+## 4.10 `DocumentSectionMapping`
+
+```json
+{
+  "id": 1,
+  "document_section_id": "sec_001",
+  "canonical_chapter_id": "ch_cn_04",
+  "mapping_type": "partial",
+  "confidence": 0.86,
+  "build_method": "llm",
+  "review_status": "approved"
 }
 ```
 
@@ -456,6 +512,8 @@
   },
   "keywords": ["TCP", "计算机网络"],
   "must_terms": ["TCP"],
+  "relation_intent": "none",
+  "chapter_match_mode": "strict",
   "semantic_query": "2018年408真题中关于TCP的题目"
 }
 ```
@@ -473,7 +531,8 @@
     "exam_scope": "408",
     "exam_year": 2018,
     "subject_id": "subj_cn",
-    "topic_terms": ["tcp"]
+    "topic_terms": ["tcp"],
+    "chapter_match_mode": "strict"
   },
   "mode": "hybrid_rerank",
   "top_k": 20,
@@ -491,6 +550,8 @@
         "id": "q_001",
         "subject_id": "subj_cn",
         "chapter_id": "ch_cn_04",
+        "primary_chapter_id": "ch_cn_04",
+        "chapter_ids": ["ch_cn_04", "ch_cn_05"],
         "type": "choice",
         "content": "关于TCP流量控制...",
         "options": [
@@ -538,10 +599,65 @@
   "query": "TCP流量控制的核心机制",
   "filters": {
     "subject_id": "subj_cn",
-    "chapter_id": "ch_cn_04"
+    "chapter_id": "ch_cn_04",
+    "chapter_match_mode": "expanded"
+  },
+  "relation_options": {
+    "expand_confusions": true,
+    "expand_prerequisites": true,
+    "expand_contrasts": true,
+    "max_relation_hops": 1
   },
   "mode": "hybrid_rerank",
   "top_k": 10
+}
+```
+
+响应示例：
+
+```json
+{
+  "items": [
+    {
+      "knowledge_point": {
+        "id": "kp_tcp_flow_control",
+        "title": "TCP流量控制",
+        "subject_id": "subj_cn",
+        "chapter_id": "ch_cn_04",
+        "primary_chapter_id": "ch_cn_04",
+        "chapter_ids": ["ch_cn_04", "ch_cn_05"]
+      },
+      "score": 0.9442,
+      "source_refs": [
+        {
+          "document_id": "doc_001",
+          "block_id": "blk_021",
+          "page_no": 18,
+          "quote_role": "definition",
+          "quote_text": "TCP流量控制..."
+        }
+      ],
+      "related_knowledge": [
+        {
+          "knowledge_point_id": "kp_tcp_congestion_control",
+          "relation_type": "common_confusion",
+          "title": "TCP拥塞控制",
+          "reason": "易与当前知识点混淆，需重点区分控制目标与触发原因"
+        },
+        {
+          "knowledge_point_id": "kp_sliding_window",
+          "relation_type": "prerequisite",
+          "title": "滑动窗口",
+          "reason": "理解流量控制前建议先掌握滑动窗口"
+        }
+      ]
+    }
+  ],
+  "total": 1,
+  "query_info": {
+    "intent_type": "retrieve_knowledge",
+    "relation_intent": "expand_confusions"
+  }
 }
 ```
 
@@ -585,8 +701,9 @@
 2. 过滤条件
 3. sparse 命中
 4. dense 命中
-5. 融合结果
-6. rerank 结果
+5. relation expansion 命中
+6. 融合结果
+7. rerank 结果
 
 响应示例：
 
@@ -596,6 +713,7 @@
   "filters": {},
   "sparse_hits": [],
   "dense_hits": [],
+  "relation_hits": [],
   "merged_hits": [],
   "reranked_hits": []
 }
@@ -625,7 +743,13 @@
   "retrieval_options": {
     "mode": "hybrid_rerank",
     "targets": ["knowledge"],
-    "top_k": 8
+    "top_k": 8,
+    "relation_options": {
+      "expand_confusions": true,
+      "expand_prerequisites": true,
+      "expand_contrasts": true,
+      "max_relation_hops": 1
+    }
   }
 }
 ```
@@ -653,7 +777,15 @@
       "quote_text": "..."
     }
   ],
-  "suggestions": []
+  "suggestions": [],
+  "related_knowledge": [
+    {
+      "knowledge_point_id": "kp_tcp_congestion_control",
+      "relation_type": "contrast_with",
+      "title": "TCP拥塞控制",
+      "reason": "用于区分流量控制和拥塞控制"
+    }
+  ]
 }
 ```
 
@@ -731,6 +863,7 @@ export interface DocumentBlock {
 export interface RetrievalFilters {
   subject_id?: string
   chapter_id?: string
+  chapter_match_mode?: 'strict' | 'expanded'
   difficulty?: string
   question_type?: string
   exam_scope?: string
@@ -739,6 +872,13 @@ export interface RetrievalFilters {
   source_type?: string
   topic_terms?: string[]
   modality_flags?: string[]
+}
+
+export interface RelationOptions {
+  expand_confusions?: boolean
+  expand_prerequisites?: boolean
+  expand_contrasts?: boolean
+  max_relation_hops?: number
 }
 
 export interface SourceRef {
@@ -759,6 +899,12 @@ export interface KnowledgeSearchItem {
   knowledge_point: Record<string, unknown>
   score: number
   source_refs: SourceRef[]
+  related_knowledge?: Array<{
+    knowledge_point_id: string
+    relation_type: string
+    title: string
+    reason?: string
+  }>
 }
 ```
 
@@ -788,4 +934,3 @@ export interface KnowledgeSearchItem {
 5. 最后联调 `chat/rag`
 
 不要跳过 `admin/retrieval/debug`，否则检索问题无法快速定位。
-

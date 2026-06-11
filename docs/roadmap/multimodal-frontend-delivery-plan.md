@@ -1,7 +1,7 @@
 # 多模态语料入库与检索 - 前端交付任务单
 
-> 版本：v1.0  
-> 日期：2026-06-10  
+> 版本：v1.1  
+> 日期：2026-06-11  
 > 状态：执行中  
 > 读者：Frontend / PM / Backend
 
@@ -18,8 +18,10 @@
 3. 页 / block / asset 查看
 4. 知识点审核
 5. 题目审核
-6. 检索调试页
-7. 问答引用展示升级
+6. section 映射审核
+7. 关系审核
+8. 检索调试页
+9. 问答引用展示升级
 
 ---
 
@@ -31,8 +33,10 @@
 - `/admin/ingest/parse-runs`
 - `/admin/ingest/documents/:id`
 - `/admin/ingest/documents/:id/blocks`
+- `/admin/review/sections`
 - `/admin/review/knowledge`
 - `/admin/review/questions`
+- `/admin/review/relations`
 - `/admin/retrieval/debug`
 
 复用并改造：
@@ -68,6 +72,7 @@
 - `FE-B3` 解析任务列表
 - `FE-B4` 文档详情页
 - `FE-B5` 文档块列表与过滤
+- `FE-B6` 文档 section 树与章节映射面板
 
 验收：
 
@@ -79,9 +84,11 @@
 
 - `FE-C1` 知识点审核列表
 - `FE-C2` 题目审核列表
-- `FE-C3` 审核详情抽屉
-- `FE-C4` approve/reject 操作
-- `FE-C5` 来源引用回跳到 block
+- `FE-C3` section 映射审核页
+- `FE-C4` 关系审核页
+- `FE-C5` 审核详情抽屉
+- `FE-C6` approve/reject 操作
+- `FE-C7` 来源引用回跳到 block
 
 验收：
 
@@ -93,7 +100,7 @@
 
 - `FE-D1` 查询输入与 filters 表单
 - `FE-D2` 展示 query understanding
-- `FE-D3` 展示 sparse/dense/rerank 结果
+- `FE-D3` 展示 sparse/dense/relation/rerank 结果
 - `FE-D4` 展示 source refs 与页码
 - `FE-D5` 支持 question / knowledge / mixed 模式切换
 
@@ -107,7 +114,8 @@
 
 - `FE-E1` 会话详情展示 citations
 - `FE-E2` 支持“仅查知识点 / 仅查题目”
-- `FE-E3` 支持跳转到来源页或 block
+- `FE-E3` 展示易混点 / 前置点 / 对比点
+- `FE-E4` 支持跳转到来源页或 block
 
 验收：
 
@@ -121,10 +129,11 @@
 
 | 任务ID | 内容 | 依赖 | 验收 |
 |--------|------|------|------|
-| `FE-TYPE-01` | `CorpusFile`/`ParseRun`/`DocumentBlock` 类型 | API 契约 | 类型可编译 |
-| `FE-TYPE-02` | `RetrievalFilters`/`QuestionSearchItem` 类型 | API 契约 | 类型可编译 |
+| `FE-TYPE-01` | `CorpusFile`/`ParseRun`/`DocumentBlock`/`DocumentSection` 类型 | API 契约 | 类型可编译 |
+| `FE-TYPE-02` | `RetrievalFilters`/`QuestionSearchItem`/`KnowledgeSearchItem`/`RelationOptions` 类型 | API 契约 | 类型可编译 |
 | `FE-API-01` | `scanCorpusFiles` 等 API | 后端接口 | 请求成功 |
-| `FE-API-02` | `searchQuestions`/`searchKnowledge` API | 后端接口 | 请求成功 |
+| `FE-API-02` | `searchQuestions`/`searchKnowledge`/`searchMixed` API | 后端接口 | 请求成功 |
+| `FE-API-03` | `reviewSectionMappings`/`reviewRelations` API | 后端接口 | 请求成功 |
 
 ## 4.2 页面任务
 
@@ -132,11 +141,13 @@
 |--------|------|----------|
 | `FE-PAGE-01` | 语料文件列表 | 状态筛选、批量扫描 |
 | `FE-PAGE-02` | 解析任务列表 | 状态、耗时、失败原因 |
-| `FE-PAGE-03` | 文档详情页 | 基本信息、页统计、资产预览 |
+| `FE-PAGE-03` | 文档详情页 | 基本信息、页统计、资产预览、原生标题树、章节映射 |
 | `FE-PAGE-04` | block 页 | page/block_type/review_status 过滤 |
-| `FE-PAGE-05` | 知识点审核页 | 审核、来源引用 |
-| `FE-PAGE-06` | 题目审核页 | 结构化字段、题型、年份、学科筛选 |
-| `FE-PAGE-07` | 检索调试页 | filters + debug 结果 |
+| `FE-PAGE-05` | section 映射审核页 | 候选章节、置信度、审核 |
+| `FE-PAGE-06` | 知识点审核页 | 审核、来源引用、章节归属、关系入口 |
+| `FE-PAGE-07` | 题目审核页 | 结构化字段、题型、年份、学科筛选、章节归属 |
+| `FE-PAGE-08` | 关系审核页 | relation_type、证据、方向、审核 |
+| `FE-PAGE-09` | 检索调试页 | filters + debug 结果 |
 
 ## 4.3 组件任务
 
@@ -145,6 +156,10 @@
 - `SourceRefList`
 - `DocumentBlockPreview`
 - `AssetPreview`
+- `SectionTree`
+- `ChapterMappingPanel`
+- `ChapterLinkTagList`
+- `RelationEdgeList`
 - `ReviewStatusTag`
 - `RetrievalDebugPanel`
 - `FilterBuilder`
@@ -180,6 +195,8 @@
 - 页缩略图
 - 资产预览
 - block 数量统计
+- 原生标题树
+- 标准章节映射
 - “抽取知识点/题目”操作
 - “重建索引”操作
 
@@ -210,7 +227,28 @@
 - 解析
 - topic_terms
 - 知识点绑定
+- 主章节与关联章节
 - 来源页码与引用片段
+
+## 5.5 section 映射审核页
+
+必须支持：
+
+- 左侧原生标题树
+- 右侧候选标准章节
+- `mapping_type`
+- `confidence`
+- approve / reject / 手工改绑
+
+## 5.6 关系审核页
+
+必须支持：
+
+- `relation_type`
+- `directionality`
+- source / target 知识点
+- evidence
+- approve / reject / 修改关系类型
 
 ## 5.5 检索调试页
 
@@ -219,7 +257,8 @@
 1. query understanding
 2. filters
 3. sparse / dense hits
-4. reranked hits
+4. relation hits
+5. reranked hits
 
 不允许只展示最终结果，否则无法排查检索问题。
 
@@ -229,10 +268,12 @@
 
 1. 先联调 `corpus files`
 2. 再联调 `parse runs`
-3. 再联调 `documents/blocks`
-4. 再联调 `review`
-5. 再联调 `retrieval debug`
-6. 最后联调 `chat citations`
+3. 再联调 `documents/blocks/sections`
+4. 再联调 `section mapping review`
+5. 再联调 `knowledge/question review`
+6. 再联调 `relation review`
+7. 再联调 `retrieval debug`
+8. 最后联调 `chat citations`
 
 ---
 
@@ -243,6 +284,8 @@
 3. 审核状态操作测试
 4. debug 结果展示测试
 5. source ref 跳转测试
+6. section 映射审核测试
+7. 关系审核测试
 
 ---
 
@@ -252,7 +295,6 @@
 
 1. 管理员可从 UI 管理语料文件和解析任务
 2. 能查看文档 block、图、表、公式等多模态内容
-3. 能审核知识点和题目
+3. 能审核 section 映射、知识点、题目和关系
 4. 能调试题目和知识点检索
-5. 问答结果可展示 citations 并跳转来源
-
+5. 问答结果可展示 citations、易混点和前置点

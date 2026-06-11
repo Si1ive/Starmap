@@ -1,7 +1,7 @@
 # 408 多模态语料入库与检索实施设计
 
-> 版本：v1.0  
-> 日期：2026-06-09  
+> 版本：v1.1  
+> 日期：2026-06-11  
 > 状态：执行基线  
 > 读者：Backend / Data / Frontend / PM
 
@@ -15,7 +15,8 @@
 2. 支持从复杂文档中抽取两类核心实体：`知识点` 与 `题目`
 3. 支持面向题目与知识点的分流检索，而不是把所有内容混在一个向量库里检索
 4. 支持图、表、公式、文本等多模态内容的保真展示与引用
-5. 为后续工程实现提供明确的数据结构、服务边界、API 草案、阶段计划和验收标准
+5. 在系统构建阶段沉淀知识点关系网络，支撑易混知识点讲解、跨章节关联和后续学习路径规划
+6. 为后续工程实现提供明确的数据结构、服务边界、API 草案、阶段计划和验收标准
 
 本文档是工程团队的执行基线。后续开发以本文档为准，若有偏离，必须在 `docs/DECISIONS.md` 中记录。
 
@@ -42,7 +43,8 @@
 
 - 主存储：`MySQL`
 - 检索缓存与异步任务状态：`Redis`
-- 图谱增强：`Neo4j`，不作为首期阻塞项
+- 知识点关系事实源：`MySQL`
+- 图谱查询加速与可视化：`Neo4j`，作为关系读模型与增强层，不是唯一事实源
 - 目标向量库：`Qdrant`
 - 现有 `ChromaDB`：保留为过渡方案，不作为终局检索底座
 - 文档解析主路线：`Docling`
@@ -108,13 +110,24 @@ download/ 文件
     ├─ 知识点抽取
     └─ 题目抽取
     ↓
+章节映射构建
+    ├─ document sections
+    ├─ canonical chapters
+    └─ section mappings
+    ↓
+知识关系构建
+    ├─ prerequisite / part_of / contains
+    ├─ similar_to / contrast_with
+    └─ common_confusion / used_in
+    ↓
 segment 构建与上下文化增强
     ↓
 索引写入
     ├─ MySQL canonical data
+    ├─ MySQL relation edges
     ├─ Qdrant dense/sparse vectors
     ├─ Redis cache
-    └─ Neo4j relations（后置）
+    └─ Neo4j graph projection（可后置同步）
     ↓
 检索服务
     ├─ 题目检索
@@ -134,7 +147,9 @@ segment 构建与上下文化增强
 |----|------|----------------|
 | 原始文件层 | 存储文件来源、哈希、版本、状态 | 不能直接作为检索数据 |
 | 文档正规化层 | 保留版面和多模态结构 | 不能直接作为业务展示对象 |
+| 章节映射层 | 建立文档原生标题树与标准章节体系的映射 | 不能替代知识点实体 |
 | 业务实体层 | 输出知识点、题目等标准实体 | 不能替代检索 segment |
+| 关系层 | 输出知识点之间的先修、对比、易混关系 | 不能替代实体事实源 |
 | 检索单元层 | 组织召回文本、上下文、元数据 | 不能替代原始来源存储 |
 | 索引层 | 实现 dense/sparse/过滤/重排 | 不能成为唯一事实来源 |
 
@@ -292,6 +307,123 @@ fallback 方案：
 
 首期不要求自动关系抽取 100% 正确，但必须预留人工校正入口。
 
+## 5.4 知识点关系网络原则
+
+知识点关系网络不是后续“学习路径功能”的附属能力，而是系统在构建语料库时就必须沉淀的基础能力。
+
+原因：
+
+1. 用户提问时，经常需要解释相似概念、对立概念、前置概念
+2. 很多学习难点本质上不是“单个知识点不会”，而是“多个相近知识点分不清”
+3. 后续学习路径规划只是复用同一套关系网络，不应重新单独建模
+
+因此，知识点关系至少要支持以下类型：
+
+- `prerequisite`：先修关系
+- `contains`：包含关系
+- `part_of`：从属关系
+- `similar_to`：语义相近
+- `contrast_with`：对比关系
+- `common_confusion`：高频易混关系
+- `used_in`：某知识点被用于另一个知识点或题型
+
+其中：
+
+- `prerequisite`、`contains`、`part_of` 通常是有向关系
+- `similar_to`、`contrast_with`、`common_confusion` 通常是双向关系
+
+每条关系都必须尽可能保留：
+
+- 关系类型
+- 方向
+- 强度或权重
+- 置信度
+- 关系来源
+- 证据引用
+- 审核状态
+
+## 5.5 易混知识点讲解能力
+
+系统在回答用户问题时，不应只返回“命中的那个知识点”，还要能够按关系图补充相关知识点，尤其是：
+
+- 和当前知识点最容易混淆的概念
+- 用户理解当前知识点之前必须先掌握的前置概念
+- 经常一起出题、一起比较的相关知识点
+
+例如：
+
+- 用户问“TCP 流量控制和拥塞控制有什么区别”
+- 系统不能只召回“TCP 流量控制”
+- 还应通过 `contrast_with`、`common_confusion` 关系主动带出“TCP 拥塞控制”
+- 回答阶段按“定义 -> 目标 -> 触发条件 -> 控制对象 -> 常见混淆点”组织输出
+
+## 5.6 章节体系建模原则
+
+本项目不能把“章节”继续视为唯一固定树。
+
+原因：
+
+1. 每本教材的标题体系和拆分粒度不同
+2. 平台最终需要形成一套相对稳定的标准章节体系
+3. 新文档接入时，必须先识别其原生标题结构，再判断与标准体系如何映射
+4. 知识点、题目和关系都可能跨多个章节存在
+
+因此，章节必须拆成两层：
+
+- `canonical chapter`：平台内部逐步沉淀的标准章节体系
+- `document section`：每份文档解析出的原生标题树
+
+两者不是同一个对象，必须显式建立映射关系。
+
+## 5.7 为什么不能只用一个 `chapter_id`
+
+当前 `chapter_id` 只能表达“主归属章节”，不能表达以下事实：
+
+1. 一个知识点跨多个章节反复出现
+2. 一个题目同时考察多个章节内容
+3. 一个文档标题和平台章节名完全不同，但语义上对应同一知识域
+4. 一个知识点和另一个知识点位于不同章节，却存在强依赖或高频易混
+
+因此后续实现里应区分：
+
+- `primary_chapter_id`：主归属章节，服务主过滤与主展示
+- `chapter links`：附属章节，服务跨章节检索和关系分析
+- `document section mappings`：文档原生 section 到标准章节的映射
+
+## 5.8 新文档接入时的章节映射策略
+
+新增文档进入系统后，不应直接要求人工先选定唯一章节，而应按以下流程处理：
+
+1. 从文档中抽取原生标题树
+2. 生成 `document_sections`
+3. 对每个 section 做标准章节候选匹配
+4. 产出 1~N 个 `canonical chapter` 候选及置信度
+5. 人工审核低置信度映射
+6. 再基于映射结果去归属知识点、题目和关系
+
+候选匹配依据至少包括：
+
+- section 标题语义
+- section 下的主题术语
+- 该 section 下知识点与题目的已知归属
+- 与已有标准章节的历史相似映射
+
+## 5.9 跨章节实体归属原则
+
+知识点和题目允许跨章节关联，但必须保留一个主归属，避免管理端和检索层失去稳定主键。
+
+推荐规则：
+
+- 每个 `knowledge_point` 保留一个 `primary_chapter_id`
+- 每个 `question` 保留一个 `primary_chapter_id`
+- 通过 link 表维护附属章节关系
+- 检索默认先按主章节过滤，必要时可开启跨章节扩展
+
+这意味着：
+
+- “按章节浏览”仍然可用
+- “跨章节讲解 / 学习路径 / 易混分析”也有数据基础
+
 ---
 
 ## 6. 数据结构设计
@@ -301,7 +433,8 @@ fallback 方案：
 - `MySQL` 存 canonical data 和管理字段
 - `Qdrant` 存检索向量和 payload
 - `Redis` 存缓存、任务状态、检索中间结果
-- `Neo4j` 存知识点图关系，后置实现
+- `MySQL` 存知识点关系边，作为关系事实源
+- `Neo4j` 可作为关系查询和可视化增强层，但不是必需事实源
 
 ## 6.2 新增 MySQL 表
 
@@ -365,6 +498,65 @@ fallback 方案：
 | `document_markdown` | longtext | 展示友好版本 |
 | `document_json` | json | 结构化版本 |
 | `status` | enum | active/pending/deleted |
+| `created_at` | datetime | 创建时间 |
+| `updated_at` | datetime | 更新时间 |
+
+### 6.2.3A `canonical_chapters`
+
+用途：平台内部标准章节体系，不要求一次性预设完整，但要逐步沉淀并稳定维护。
+
+建议字段：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | varchar(32) | 标准章节ID |
+| `subject_id` | varchar(32) | 学科ID |
+| `parent_id` | varchar(32) | 父章节ID，可为空 |
+| `name` | varchar(255) | 标准章节名 |
+| `aliases` | json | 别名列表 |
+| `description` | text | 章节说明 |
+| `sort_order` | int | 排序 |
+| `status` | enum | active/inactive |
+| `created_at` | datetime | 创建时间 |
+| `updated_at` | datetime | 更新时间 |
+
+### 6.2.3B `document_sections`
+
+用途：存储每份文档解析出的原生标题树。
+
+建议字段：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | varchar(32) | section ID |
+| `document_id` | varchar(32) | 文档ID |
+| `parent_section_id` | varchar(32) | 父 section |
+| `title` | varchar(255) | 原生标题 |
+| `level` | int | 标题层级 |
+| `section_path` | varchar(1000) | 原生路径 |
+| `page_start` | int | 起始页 |
+| `page_end` | int | 结束页 |
+| `block_start_id` | varchar(32) | 起始 block |
+| `block_end_id` | varchar(32) | 结束 block |
+| `topic_terms` | json | 本 section 主题术语 |
+| `created_at` | datetime | 创建时间 |
+| `updated_at` | datetime | 更新时间 |
+
+### 6.2.3C `document_section_mappings`
+
+用途：建立文档原生 section 与标准章节体系的映射。
+
+建议字段：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | bigint | 自增ID |
+| `document_section_id` | varchar(32) | 原生 section |
+| `canonical_chapter_id` | varchar(32) | 标准章节 |
+| `mapping_type` | varchar(20) | exact/partial/related |
+| `confidence` | decimal(5,4) | 映射置信度 |
+| `build_method` | varchar(20) | rule/llm/manual |
+| `review_status` | enum | pending/approved/rejected |
 | `created_at` | datetime | 创建时间 |
 | `updated_at` | datetime | 更新时间 |
 
@@ -467,6 +659,58 @@ fallback 方案：
 | `created_at` | datetime | 创建时间 |
 | `updated_at` | datetime | 更新时间 |
 
+### 6.2.9 `knowledge_relations`
+
+用途：存储知识点之间的显式关系边，服务于检索增强、易混讲解和学习路径规划。
+
+建议字段：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | bigint | 自增ID |
+| `source_knowledge_id` | varchar(32) | 起点知识点 |
+| `target_knowledge_id` | varchar(32) | 终点知识点 |
+| `relation_type` | varchar(50) | prerequisite/similar_to/common_confusion/... |
+| `directionality` | varchar(20) | directed/undirected |
+| `strength` | decimal(5,4) | 关系强度 |
+| `confidence` | decimal(5,4) | 构建置信度 |
+| `source_document_id` | varchar(32) | 主要来源文档 |
+| `evidence_json` | json | 证据块、页码、说明 |
+| `build_method` | varchar(20) | rule/llm/manual/import |
+| `review_status` | enum | pending/approved/rejected |
+| `created_at` | datetime | 创建时间 |
+| `updated_at` | datetime | 更新时间 |
+
+### 6.2.10 `knowledge_point_chapter_links`
+
+用途：知识点与标准章节的多对多附属关系。
+
+建议字段：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | bigint | 自增ID |
+| `knowledge_point_id` | varchar(32) | 知识点ID |
+| `canonical_chapter_id` | varchar(32) | 标准章节ID |
+| `link_role` | varchar(20) | primary/secondary/related |
+| `confidence` | decimal(5,4) | 归属置信度 |
+| `created_at` | datetime | 创建时间 |
+
+### 6.2.11 `question_chapter_links`
+
+用途：题目与标准章节的多对多附属关系。
+
+建议字段：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | bigint | 自增ID |
+| `question_id` | varchar(32) | 题目ID |
+| `canonical_chapter_id` | varchar(32) | 标准章节ID |
+| `link_role` | varchar(20) | primary/secondary/related |
+| `confidence` | decimal(5,4) | 归属置信度 |
+| `created_at` | datetime | 创建时间 |
+
 ## 6.3 对现有业务表的扩展
 
 现有 `knowledge_points` 与 `questions` 表继续保留，但建议扩展字段。
@@ -490,6 +734,7 @@ fallback 方案：
 - `source_page_end`
 - `review_status`
 - `review_notes`
+- `primary_chapter_id`
 
 ### 6.3.2 `questions` 扩展字段
 
@@ -507,6 +752,7 @@ fallback 方案：
 - `source_page_end`
 - `review_status`
 - `review_notes`
+- `primary_chapter_id`
 
 ## 6.4 标签体系设计
 
@@ -557,6 +803,7 @@ fallback 方案：
 | `segment_role` | stem/explanation/body/... |
 | `subject_id` | 学科 |
 | `chapter_id` | 章节 |
+| `chapter_ids` | 关联章节 |
 | `knowledge_point_ids` | 关联知识点 |
 | `question_type` | 题型 |
 | `difficulty` | 难度 |
@@ -568,6 +815,14 @@ fallback 方案：
 | `source_type` | 真题/教材/模拟题 |
 | `page_no` | 页码 |
 | `status` | 状态 |
+
+关系增强字段建议不把整张关系图直接展开进 payload，而是保留轻量提示：
+
+| 字段 | 说明 |
+|------|------|
+| `has_relation_edges` | 是否存在关系边 |
+| `has_confusion_edges` | 是否存在易混边 |
+| `relation_keywords` | 关系增强关键词摘要 |
 
 ---
 
@@ -584,6 +839,13 @@ fallback 方案：
 
 不能把这四类请求全部发到同一条召回链上。
 
+同时，知识点检索和 RAG 问答都必须支持“关系增强召回”，不能只停留在首轮向量命中。
+
+章节相关检索也必须区分两种模式：
+
+1. `strict_chapter_match`：仅匹配主章节
+2. `expanded_chapter_match`：匹配主章节 + 关联章节 + 映射章节
+
 ## 7.2 查询理解
 
 查询进入系统后先经过 `Query Understanding`，输出：
@@ -594,6 +856,8 @@ fallback 方案：
 - `semantic_query`
 - `keywords`
 - `must_terms`
+- `relation_intent`
+- `chapter_match_mode`
 
 ### 示例
 
@@ -614,9 +878,24 @@ fallback 方案：
   },
   "keywords": ["TCP", "计算机网络"],
   "must_terms": ["TCP"],
+  "relation_intent": "none",
+  "chapter_match_mode": "strict",
   "semantic_query": "2018年408真题中关于TCP机制的题目"
 }
 ```
+
+对于以下类型请求，要额外识别关系意图：
+
+- “区别 / 对比 / 联系”
+- “容易混淆 / 容易搞错”
+- “先学什么 / 依赖什么”
+- “相关知识点 / 关联题目”
+
+对于以下类型请求，通常要考虑章节扩展：
+
+- “这个知识点涉及哪些章节”
+- “跨章节怎么理解”
+- “和另一个章节中的哪个知识点有关”
 
 ## 7.3 检索模式
 
@@ -671,17 +950,21 @@ fallback 方案：
 1. Query Understanding
 2. 结构化过滤
 3. dense 为主，sparse 为辅
-4. rerank
-5. 返回知识点实体
+4. 首轮召回知识点
+5. 基于 `knowledge_relations` 做关系邻域扩展
+6. 基于章节映射和附属章节做候选扩展
+7. rerank
+8. 返回知识点实体 + 关系补充实体
 
 ### RAG 问答链
 
 1. Query Understanding
 2. 判断优先检索对象：知识点 / 题目 / 混合
 3. 多路召回
-4. 引用去重与聚合
-5. 生成回答
-6. 返回答案 + citation
+4. 基于知识点关系图补充易混点、前置点、对比点
+5. 引用去重与聚合
+6. 生成回答
+7. 返回答案 + citation
 
 ## 7.5 为什么不能只按业务实体入向量库
 
@@ -703,6 +986,7 @@ fallback 方案：
 - 所属章节
 - 实体类型
 - 该段在文档中的角色
+- 关键关系提示（如果存在）
 
 示例：
 
@@ -714,6 +998,12 @@ fallback 方案：
 ```
 
 此文本用于 dense embedding，不直接用于前端展示。
+
+对于知识点 segment，可额外拼入轻量关系提示，例如：
+
+```text
+该知识点常与 TCP 拥塞控制 混淆，对比时应关注控制目标、触发原因和反馈机制。
+```
 
 ---
 
@@ -776,6 +1066,7 @@ fallback 方案：
 - `corpus_service.py`
 - `document_parse_service.py`
 - `entity_extraction_service.py`
+- `relation_service.py`
 - `segment_service.py`
 - `retrieval_service.py`
 - `rerank_service.py`
@@ -873,6 +1164,8 @@ fallback 方案：
 
 用途：知识点检索
 
+返回结果必须支持附带相关知识点和易混知识点。
+
 ### `POST /api/v1/retrieval/mixed/search`
 
 用途：题目 + 知识点混合检索
@@ -887,6 +1180,7 @@ fallback 方案：
 - 过滤条件
 - dense 命中
 - sparse 命中
+- relation expansion 结果
 - rerank 前后结果
 
 该接口是首期必须实现的工程调试能力。
@@ -938,6 +1232,8 @@ fallback 方案：
 目标：
 
 - 从 block 抽取知识点与题目
+
+- 同步构建知识点关系边
 
 任务：
 

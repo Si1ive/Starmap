@@ -12,6 +12,40 @@
 
 ## 2026-06-08
 
+### [docs] 多模态检索设计补充知识点关系图基线
+- **类型**：docs
+- **影响**：`README.md`, `docs/tech/`, `docs/api/`, `docs/roadmap/`
+- **描述**：
+  - 明确知识点关系图不是“学习路径功能”的附属物，而是系统构建阶段必须沉淀的基础能力
+  - 新增 `knowledge_relations` 设计，用于承载先修、对比、易混、相似等关系
+  - 检索链路补充 relation-aware retrieval，知识点检索和问答需返回易混点、前置点、对比点
+  - 后端交付计划增加关系构建、关系增强召回、关系调试与验收标准
+
+### [docs] 多模态检索设计补充双层章节体系
+- **类型**：docs
+- **影响**：`README.md`, `docs/tech/`, `docs/api/`, `docs/roadmap/`
+- **描述**：
+  - 明确“标准章节体系”和“文档原生标题树”必须分层建模，不能继续只依赖单一 `chapter_id`
+  - 新增 `canonical_chapters`、`document_sections`、`document_section_mappings`
+  - 新增 `knowledge_point_chapter_links`、`question_chapter_links`，支撑跨章节归属与扩展检索
+  - 检索契约补充 `chapter_match_mode`，支持严格章节匹配与扩展章节匹配
+
+### [docs] 新增多模态执行清单并细化前后端作业项
+- **类型**：docs
+- **影响**：`README.md`, `docs/roadmap/`
+- **描述**：
+  - 新增 `docs/roadmap/multimodal-execution-checklist.md`，将方案细化为可直接开工的执行清单
+  - 前端交付单补充 section 映射审核页、关系审核页、关系增强问答展示
+  - 数据交付单补充标准章节体系、标题映射标注集、知识点关系评测集
+
+### [docs] 执行清单继续细化到接口级与审核口径
+- **类型**：docs
+- **影响**：`docs/roadmap/`
+- **描述**：
+  - 在执行清单中补充接口级开发清单，按端点列出输入、输出、依赖和验收
+  - 补充统一审核状态机，覆盖 section 映射、实体、关系和回写规则
+  - 补充解析、映射、关系、检索、问答的统一验收口径
+
 ### [docs] 项目定位转型 - 从艺人知识图谱到408考研学习平台
 - **类型**：refactor
 - **影响**：全项目
