@@ -159,7 +159,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
     title="StarMap API",
-    description="艺人知识图谱与对话Agent",
+    description="408考研智能学习平台",
     version="1.0.0"
 )
 

@@ -12,7 +12,7 @@
 
 填写信息：
 - Repository name: `starmap`
-- Description: `StarMap - 艺人知识图谱与对话Agent`
+- Description: `408考研智能学习平台`
 - Visibility: Public（推荐，可展示）或 Private
 - Initialize: ❌ 不要勾选（已有本地仓库）
 

@@ -91,49 +91,28 @@
 
 ### 2026-06-02：数据库选择
 
-**背景**：需要存储图数据、向量数据、缓存数据
+**背景**：需要存储结构化数据、向量数据、缓存数据
 
 **选项**：
 - 选项A：单一数据库（PostgreSQL + 插件）
-- 选项B：多数据库（Neo4j + ChromaDB + Redis）
+- 选项B：多数据库（MySQL + Qdrant + Redis）
 
 **决策**：选择选项B
 
 **原因**：
-- Neo4j是图数据库首选
-- ChromaDB专注向量检索
-- Redis适合缓存和会话
+- MySQL 存储学科/章节/知识点/题目等结构化数据
+- Qdrant 专注向量检索（多模态语料）
+- Redis 适合缓存和会话
 
 **影响**：
 - 增加运维复杂度
-- 需要Docker Compose编排
+- 需要 Docker Compose 编排
 - 各数据库需要独立维护
 
 **负责人**：Backend
 
 ---
 
-### 2026-06-02：爬虫数据源
-
-**背景**：需要确定艺人数据来源
-
-**选项**：
-- 选项A：单一数据源（仅维基百科）
-- 选项B：多数据源（维基百科 + 豆瓣 + 其他）
-
-**决策**：MVP用选项A，后续扩展选项B
-
-**原因**：
-- 维基百科数据结构化程度高
-- 先验证核心流程再扩展
-
-**影响**：
-- MVP阶段数据量有限
-- 需要设计可扩展的爬虫框架
-
-**负责人**：Data
-
----
 
 ### 2026-06-02：Agent方案
 
@@ -182,15 +161,13 @@
 **具体方案**：
 - 前端：独立React项目，Ant Design Pro组件库
 - 后端：独立API模块（/api/v1/admin），JWT认证
-- 功能：看板、艺人管理、爬虫管理、对话管理、监控、配置
+- 功能：看板、知识点管理、题目管理、爬虫管理、对话管理、监控、配置
 - 角色：超级管理员(L3)、数据管理员(L2)、运营人员(L1)
 
 **负责人**：PM
 
 **相关文档**：
 - [后台管理端PRD](./admin/PRD.md)
-- [前端开发路线](./admin/frontend-roadmap.md)
-- [后端开发路线](./admin/backend-roadmap.md)
 
 ---
 
@@ -213,35 +190,26 @@
 **决策**：选择选项B
 
 **原因**：
-- MySQL 适合存储结构化数据（人物属性、作品信息）
+- MySQL 适合存储结构化数据（学科、章节、知识点、题目）
 - MySQL 支持事务，保证数据一致性
 - MySQL 的列表查询、分页、筛选性能更好
-- Neo4j 专注关系网络，发挥图遍历优势
 - 爬虫任务、日志、审计等数据天然适合关系型数据库
-- 团队对 MySQL 运维经验丰富
 
 **影响**：
-- 增加一个数据库服务（Docker Compose 中添加 MySQL）
-- 需要设计 MySQL ↔ Neo4j 数据同步机制
 - 需要创建 ORM 模型和连接封装
 - 需要更新架构文档和数据模型文档
 - 需要创建数据库初始化脚本
-- 增加运维复杂度（备份、监控）
 
 **具体方案**：
 - MySQL 8.0，使用 SQLAlchemy 2.0 + asyncmy 异步驱动
-- 表结构：persons, works, person_works, person_relations, crawl_tasks, crawl_logs, admin_users, audit_logs
-- 同步策略：关系创建时同步到 Neo4j，人物/作品更新时异步同步
 - 连接池：10个连接，支持自动重连
 
-**负责人**：Backend + Data
+**负责人**：Backend
 
 **相关文档**：
 - [数据模型文档](./tech/data-model.md)
 - [架构设计文档](./tech/architecture.md)
-- [MySQL 连接模块](../backend/app/db/mysql.py)
 - [ORM 模型](../backend/app/models/mysql_models.py)
-- [同步脚本](../backend/scripts/sync_to_neo4j.py)
 
 ---
 
