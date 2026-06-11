@@ -6,13 +6,17 @@
 - 意图识别
 - 回答生成
 - 上下文维护
+- RAG 检索增强生成
 """
 
 import uuid
 from typing import List, Optional
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.db.mysql import mysql_client
 from app.db.redis import RedisClient, get_redis_client
 from app.models.transaction import (
     ChatHistory,
@@ -179,7 +183,7 @@ class ChatService:
         流程：
         1. 获取/创建会话
         2. 保存用户消息
-        3. 从ChromaDB检索相关知识点
+        3. 从向量数据库检索相关知识点
         4. 构建带上下文的prompt
         5. 调用LLM生成回答
         6. 保存助手消息
@@ -196,9 +200,53 @@ class ChatService:
         # 保存用户消息
         await self.save_message(session_id, "user", request.message)
 
-        # 检索相关知识点（向量数据库待接入，当前降级为直接回答）
+        # 检索相关知识点
         sources = []
         context_parts = []
+
+        try:
+            from app.services.retrieval_service import RetrievalService
+
+            async with mysql_client.session() as db:
+                retrieval_service = RetrievalService(db)
+                results = await retrieval_service.search_with_relations(
+                    query=request.message,
+                    subject_id=getattr(request, "subject_id", None),
+                    limit=5,
+                )
+
+                # 构建上下文和来源引用
+                primary = results.get("primary_results", [])
+                related = results.get("related_results", [])
+
+                for i, item in enumerate(primary, 1):
+                    content = item.get("context_text") or item.get("content_text", "")
+                    if content:
+                        source_info = ""
+                        src = item.get("source", {})
+                        if src.get("filename"):
+                            source_info = f" [来源: {src['filename']}"
+                            if src.get("page_no"):
+                                source_info += f" 第{src['page_no']}页"
+                            source_info += "]"
+                        context_parts.append(f"[{i}]{source_info}\n{content}")
+
+                    # 收集来源引用
+                    if item.get("source", {}).get("document_id"):
+                        sources.append(SourceItem(
+                            title=item["source"].get("filename", "未知文档"),
+                            url=f"/documents/{item['source']['document_id']}",
+                            score=item.get("score", 0),
+                        ))
+
+                # 关系扩展的内容也加入上下文（标记为关联知识）
+                for item in related[:2]:
+                    content = item.get("context_text") or item.get("content_text", "")
+                    if content:
+                        context_parts.append(f"[关联知识]\n{content}")
+
+        except Exception as e:
+            logger.warning("检索服务异常，降级为直接回答", error=str(e))
 
         # 生成回答
         if context_parts:

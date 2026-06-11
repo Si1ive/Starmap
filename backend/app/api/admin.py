@@ -2388,3 +2388,676 @@ async def parse_corpus_file(
         raise HTTPException(status_code=500, detail=f"解析失败: {str(e)[:200]}")
 
     return ApiResponse(data=result)
+
+
+@router.get("/corpus/parse-runs", response_model=ApiResponse)
+async def list_parse_runs(
+    corpus_file_id: Optional[str] = None,
+    status: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    """解析任务列表"""
+    from sqlalchemy import and_
+    from app.models.mysql_models import ParseRun
+
+    query = select(ParseRun)
+    count_query = select(func.count()).select_from(ParseRun)
+
+    conditions = []
+    if corpus_file_id:
+        conditions.append(ParseRun.corpus_file_id == corpus_file_id)
+    if status:
+        conditions.append(ParseRun.status == status)
+
+    if conditions:
+        query = query.where(and_(*conditions))
+        count_query = count_query.where(and_(*conditions))
+
+    total = await db.scalar(count_query) or 0
+    query = query.order_by(ParseRun.created_at.desc())
+    query = query.offset((page - 1) * page_size).limit(page_size)
+    result = await db.execute(query)
+    runs = result.scalars().all()
+
+    items = [
+        {
+            "id": r.id,
+            "corpus_file_id": r.corpus_file_id,
+            "parser_name": r.parser_name,
+            "parser_version": r.parser_version,
+            "parse_mode": r.parse_mode,
+            "status": r.status,
+            "page_count": r.page_count,
+            "block_count": r.block_count,
+            "asset_count": r.asset_count,
+            "confidence": float(r.confidence) if r.confidence else None,
+            "error_detail": r.error_detail,
+            "started_at": r.started_at.isoformat() if r.started_at else None,
+            "completed_at": r.completed_at.isoformat() if r.completed_at else None,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in runs
+    ]
+
+    return ApiResponse(data={
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    })
+
+
+@router.get("/corpus/documents/{document_id}/blocks", response_model=ApiResponse)
+async def list_document_blocks(
+    document_id: str,
+    page_no: Optional[int] = None,
+    block_type: Optional[str] = None,
+    review_status: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+):
+    """文档块列表"""
+    from sqlalchemy import and_
+    from app.models.mysql_models import DocumentBlock
+
+    query = select(DocumentBlock).where(DocumentBlock.document_id == document_id)
+    count_query = select(func.count()).select_from(DocumentBlock).where(DocumentBlock.document_id == document_id)
+
+    conditions = []
+    if page_no is not None:
+        conditions.append(DocumentBlock.page_no == page_no)
+    if block_type:
+        conditions.append(DocumentBlock.block_type == block_type)
+    if review_status:
+        conditions.append(DocumentBlock.review_status == review_status)
+
+    if conditions:
+        query = query.where(and_(*conditions))
+        count_query = count_query.where(and_(*conditions))
+
+    total = await db.scalar(count_query) or 0
+    query = query.order_by(DocumentBlock.page_no, DocumentBlock.order_no)
+    query = query.offset((page - 1) * page_size).limit(page_size)
+    result = await db.execute(query)
+    blocks = result.scalars().all()
+
+    items = [
+        {
+            "id": b.id,
+            "document_id": b.document_id,
+            "page_id": b.page_id,
+            "page_no": b.page_no,
+            "block_type": b.block_type,
+            "order_no": b.order_no,
+            "content_text": b.content_text,
+            "content_md": b.content_md,
+            "html_table": b.html_table,
+            "latex": b.latex,
+            "bbox": b.bbox,
+            "confidence": float(b.confidence) if b.confidence else None,
+            "review_status": b.review_status,
+            "created_at": b.created_at.isoformat() if b.created_at else None,
+        }
+        for b in blocks
+    ]
+
+    return ApiResponse(data={
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    })
+
+
+@router.get("/corpus/documents/{document_id}/sections", response_model=ApiResponse)
+async def get_document_sections(
+    document_id: str,
+    tree: bool = Query(False, description="是否返回树形结构"),
+    db: AsyncSession = Depends(get_db),
+):
+    """获取文档的原生标题树"""
+    from app.services.document_section_service import DocumentSectionService
+
+    service = DocumentSectionService(db)
+    if tree:
+        result = await service.get_section_tree(document_id)
+    else:
+        result = await service.get_sections_flat(document_id)
+
+    return ApiResponse(data=result)
+
+
+@router.post("/corpus/documents/{document_id}/extract-sections", response_model=ApiResponse)
+async def extract_document_sections(
+    document_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """从文档中提取标题树"""
+    from app.services.document_section_service import DocumentSectionService
+
+    service = DocumentSectionService(db)
+    try:
+        result = await service.extract_sections(document_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"提取失败: {str(e)[:200]}")
+
+    return ApiResponse(data=result)
+
+
+@router.post("/corpus/documents/{document_id}/map-chapters", response_model=ApiResponse)
+async def map_document_chapters(
+    document_id: str,
+    subject_id: str = Query(..., description="学科ID"),
+    auto_approve_threshold: float = Query(0.90, description="自动通过阈值"),
+    db: AsyncSession = Depends(get_db),
+):
+    """将文档的 sections 映射到标准章节"""
+    from app.services.chapter_mapping_service import ChapterMappingService
+
+    service = ChapterMappingService(db)
+    try:
+        result = await service.map_sections(
+            document_id=document_id,
+            subject_id=subject_id,
+            auto_approve_threshold=auto_approve_threshold,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"映射失败: {str(e)[:200]}")
+
+    return ApiResponse(data=result)
+
+
+@router.get("/corpus/documents/{document_id}/section-mappings", response_model=ApiResponse)
+async def get_document_section_mappings(
+    document_id: str,
+    review_status: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """获取文档的 section 映射列表"""
+    from app.services.chapter_mapping_service import ChapterMappingService
+
+    service = ChapterMappingService(db)
+    result = await service.get_section_mappings(document_id, review_status)
+
+    return ApiResponse(data=result)
+
+
+@router.post("/corpus/documents/{document_id}/extract-entities", response_model=ApiResponse)
+async def extract_document_entities(
+    document_id: str,
+    extract_knowledge: bool = Query(True, description="是否抽取知识点"),
+    extract_questions: bool = Query(True, description="是否抽取题目"),
+    db: AsyncSession = Depends(get_db),
+):
+    """从文档中抽取知识点和题目"""
+    from app.services.entity_extraction_service import EntityExtractionService
+
+    service = EntityExtractionService(db)
+    try:
+        result = await service.extract_entities(
+            document_id=document_id,
+            extract_knowledge=extract_knowledge,
+            extract_questions=extract_questions,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"抽取失败: {str(e)[:200]}")
+
+    return ApiResponse(data=result)
+
+
+# ========== 标准章节管理 ==========
+
+
+@router.post("/canonical-chapters/init", response_model=ApiResponse)
+async def init_canonical_chapters(
+    subject_id: str = Query(..., description="学科ID"),
+    chapters: List[dict] = [],
+    db: AsyncSession = Depends(get_db),
+):
+    """初始化学科的标准章节体系"""
+    from app.services.chapter_mapping_service import CanonicalChapterService
+
+    service = CanonicalChapterService(db)
+    try:
+        result = await service.init_chapters(subject_id, chapters)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return ApiResponse(data=result)
+
+
+@router.get("/canonical-chapters", response_model=ApiResponse)
+async def get_canonical_chapters(
+    subject_id: str = Query(..., description="学科ID"),
+    tree: bool = Query(False, description="是否返回树形结构"),
+    db: AsyncSession = Depends(get_db),
+):
+    """获取学科的标准章节"""
+    from app.services.chapter_mapping_service import CanonicalChapterService
+
+    service = CanonicalChapterService(db)
+    if tree:
+        result = await service.get_chapters(subject_id)
+    else:
+        result = await service.get_chapters_flat(subject_id)
+
+    return ApiResponse(data=result)
+
+
+# ========== 审核相关 ==========
+
+
+@router.get("/review/sections", response_model=ApiResponse)
+async def list_pending_section_mappings(
+    subject_id: Optional[str] = None,
+    review_status: Optional[str] = "pending",
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    """获取待审核的 section 映射列表"""
+    from app.models.mysql_models import DocumentSectionMapping, DocumentSection, Document, CanonicalChapter
+    from sqlalchemy import and_
+
+    query = (
+        select(DocumentSectionMapping, DocumentSection, CanonicalChapter)
+        .join(DocumentSection, DocumentSectionMapping.document_section_id == DocumentSection.id)
+        .join(Document, DocumentSection.document_id == Document.id)
+        .join(CanonicalChapter, DocumentSectionMapping.canonical_chapter_id == CanonicalChapter.id)
+    )
+    count_query = select(func.count()).select_from(DocumentSectionMapping)
+
+    conditions = []
+    if review_status:
+        conditions.append(DocumentSectionMapping.review_status == review_status)
+    if subject_id:
+        conditions.append(
+            or_(
+                Document.subject_id == subject_id,
+                CanonicalChapter.subject_id == subject_id,
+            )
+        )
+
+    if conditions:
+        query = query.where(and_(*conditions))
+        count_query = count_query.join(
+            DocumentSection, DocumentSectionMapping.document_section_id == DocumentSection.id
+        ).join(
+            Document, DocumentSection.document_id == Document.id
+        ).join(
+            CanonicalChapter, DocumentSectionMapping.canonical_chapter_id == CanonicalChapter.id
+        ).where(and_(*conditions))
+
+    total = await db.scalar(count_query) or 0
+    query = query.order_by(DocumentSectionMapping.created_at.desc())
+    query = query.offset((page - 1) * page_size).limit(page_size)
+    result = await db.execute(query)
+    rows = result.all()
+
+    items = [
+        {
+            "mapping_id": mapping.id,
+            "section_id": section.id,
+            "section_title": section.title,
+            "section_path": section.section_path,
+            "document_id": section.document_id,
+            "canonical_chapter_id": chapter.id,
+            "canonical_chapter_name": chapter.name,
+            "canonical_chapter_code": chapter.code,
+            "mapping_type": mapping.mapping_type,
+            "confidence": float(mapping.confidence),
+            "review_status": mapping.review_status,
+            "review_notes": mapping.review_notes,
+            "created_at": mapping.created_at.isoformat() if mapping.created_at else None,
+        }
+        for mapping, section, chapter in rows
+    ]
+
+    return ApiResponse(data={
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    })
+
+
+@router.post("/review/sections/{mapping_id}", response_model=ApiResponse)
+async def review_section_mapping(
+    mapping_id: str,
+    review_status: str = Query(..., description="审核状态: approved/rejected"),
+    canonical_chapter_id: Optional[str] = None,
+    review_notes: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """审核 section 映射"""
+    from app.services.chapter_mapping_service import ChapterMappingService
+
+    service = ChapterMappingService(db)
+    try:
+        result = await service.review_mapping(
+            mapping_id=mapping_id,
+            review_status=review_status,
+            canonical_chapter_id=canonical_chapter_id,
+            review_notes=review_notes,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    return ApiResponse(data=result)
+
+
+@router.get("/review/knowledge", response_model=ApiResponse)
+async def list_knowledge_points_for_review(
+    subject_id: Optional[str] = None,
+    chapter_id: Optional[str] = None,
+    review_status: Optional[str] = "pending",
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    """获取待审核的知识点列表"""
+    from app.services.review_service import ReviewService
+
+    service = ReviewService(db)
+    result = await service.get_knowledge_points_for_review(
+        subject_id=subject_id,
+        chapter_id=chapter_id,
+        review_status=review_status,
+        page=page,
+        page_size=page_size,
+    )
+
+    return ApiResponse(data=result)
+
+
+@router.post("/review/knowledge/{knowledge_id}", response_model=ApiResponse)
+async def review_knowledge_point(
+    knowledge_id: str,
+    review_status: str = Query(..., description="审核状态: approved/rejected"),
+    review_notes: Optional[str] = None,
+    primary_chapter_id: Optional[str] = None,
+    topic_terms: Optional[List[str]] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """审核知识点"""
+    from app.services.review_service import ReviewService
+
+    service = ReviewService(db)
+    try:
+        result = await service.review_knowledge_point(
+            knowledge_point_id=knowledge_id,
+            review_status=review_status,
+            review_notes=review_notes,
+            primary_chapter_id=primary_chapter_id,
+            topic_terms=topic_terms,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    return ApiResponse(data=result)
+
+
+@router.get("/review/questions", response_model=ApiResponse)
+async def list_questions_for_review(
+    subject_id: Optional[str] = None,
+    chapter_id: Optional[str] = None,
+    exam_scope: Optional[str] = None,
+    exam_year: Optional[int] = None,
+    question_type: Optional[str] = None,
+    review_status: Optional[str] = "pending",
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    """获取待审核的题目列表"""
+    from app.services.review_service import ReviewService
+
+    service = ReviewService(db)
+    result = await service.get_questions_for_review(
+        subject_id=subject_id,
+        chapter_id=chapter_id,
+        exam_scope=exam_scope,
+        exam_year=exam_year,
+        question_type=question_type,
+        review_status=review_status,
+        page=page,
+        page_size=page_size,
+    )
+
+    return ApiResponse(data=result)
+
+
+@router.post("/review/questions/{question_id}", response_model=ApiResponse)
+async def review_question(
+    question_id: str,
+    review_status: str = Query(..., description="审核状态: approved/rejected"),
+    review_notes: Optional[str] = None,
+    primary_chapter_id: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """审核题目"""
+    from app.services.review_service import ReviewService
+
+    service = ReviewService(db)
+    try:
+        result = await service.review_question(
+            question_id=question_id,
+            review_status=review_status,
+            review_notes=review_notes,
+            primary_chapter_id=primary_chapter_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    return ApiResponse(data=result)
+
+
+@router.get("/review/relations", response_model=ApiResponse)
+async def list_relations_for_review(
+    relation_type: Optional[str] = None,
+    review_status: Optional[str] = "pending",
+    subject_id: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    """获取待审核的关系列表"""
+    from app.services.review_service import ReviewService
+
+    service = ReviewService(db)
+    result = await service.get_relations_for_review(
+        relation_type=relation_type,
+        review_status=review_status,
+        subject_id=subject_id,
+        page=page,
+        page_size=page_size,
+    )
+
+    return ApiResponse(data=result)
+
+
+@router.post("/review/relations/{relation_id}", response_model=ApiResponse)
+async def review_relation(
+    relation_id: str,
+    review_status: str = Query(..., description="审核状态: approved/rejected"),
+    relation_type: Optional[str] = None,
+    directionality: Optional[str] = None,
+    review_notes: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """审核关系"""
+    from app.services.review_service import ReviewService
+
+    service = ReviewService(db)
+    try:
+        result = await service.review_relation(
+            relation_id=relation_id,
+            review_status=review_status,
+            relation_type=relation_type,
+            directionality=directionality,
+            review_notes=review_notes,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    return ApiResponse(data=result)
+
+
+@router.get("/review/stats", response_model=ApiResponse)
+async def get_review_stats(
+    subject_id: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """获取审核统计"""
+    from app.services.review_service import ReviewService
+
+    service = ReviewService(db)
+    result = await service.get_review_stats(subject_id)
+
+    return ApiResponse(data=result)
+
+
+# ========== Segment 构建 ==========
+
+
+@router.post("/segments/build", response_model=ApiResponse)
+async def build_segments(
+    subject_id: Optional[str] = None,
+    document_id: Optional[str] = None,
+    rebuild: bool = False,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    构建检索单元（知识点 + 题目）
+
+    从已审核的知识点和题目构建 RetrievalSegment，
+    生成 embedding 并写入 Qdrant。
+    """
+    from app.services.segment_service import SegmentService
+
+    service = SegmentService(db)
+    result = await service.build_all_segments(
+        subject_id=subject_id,
+        document_id=document_id,
+        rebuild=rebuild,
+    )
+
+    return ApiResponse(data=result)
+
+
+@router.post("/segments/build/knowledge", response_model=ApiResponse)
+async def build_knowledge_segments(
+    subject_id: Optional[str] = None,
+    document_id: Optional[str] = None,
+    knowledge_point_ids: Optional[List[str]] = None,
+    rebuild: bool = False,
+    db: AsyncSession = Depends(get_db),
+):
+    """构建知识点检索单元"""
+    from app.services.segment_service import SegmentService
+
+    service = SegmentService(db)
+    result = await service.build_knowledge_segments(
+        subject_id=subject_id,
+        document_id=document_id,
+        knowledge_point_ids=knowledge_point_ids,
+        rebuild=rebuild,
+    )
+
+    return ApiResponse(data=result)
+
+
+@router.post("/segments/build/questions", response_model=ApiResponse)
+async def build_question_segments(
+    subject_id: Optional[str] = None,
+    document_id: Optional[str] = None,
+    question_ids: Optional[List[str]] = None,
+    rebuild: bool = False,
+    db: AsyncSession = Depends(get_db),
+):
+    """构建题目检索单元"""
+    from app.services.segment_service import SegmentService
+
+    service = SegmentService(db)
+    result = await service.build_question_segments(
+        subject_id=subject_id,
+        document_id=document_id,
+        question_ids=question_ids,
+        rebuild=rebuild,
+    )
+
+    return ApiResponse(data=result)
+
+
+# ========== 检索调试 ==========
+
+
+class SearchRequest(BaseModel):
+    """检索请求"""
+    query: str = Field(..., min_length=1, description="查询文本")
+    subject_id: Optional[str] = Field(None, description="学科过滤")
+    chapter_ids: Optional[List[str]] = Field(None, description="章节过滤")
+    entity_type: Optional[str] = Field(None, description="实体类型过滤")
+    mode: str = Field("hybrid", description="检索模式: dense/sparse/hybrid")
+    limit: int = Field(10, ge=1, le=50, description="返回数量")
+
+
+@router.post("/search", response_model=ApiResponse)
+async def search_knowledge(
+    request: SearchRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    检索调试接口
+
+    支持 dense / sparse / hybrid 三种检索模式，
+    可按学科和章节过滤。
+    """
+    from app.services.retrieval_service import RetrievalService
+
+    service = RetrievalService(db)
+    results = await service.search(
+        query=request.query,
+        subject_id=request.subject_id,
+        chapter_ids=request.chapter_ids,
+        entity_type=request.entity_type,
+        mode=request.mode,
+        limit=request.limit,
+    )
+
+    return ApiResponse(data={
+        "results": [r.to_dict() for r in results],
+        "total": len(results),
+        "mode": request.mode,
+    })
+
+
+@router.post("/search/with-relations", response_model=ApiResponse)
+async def search_with_relations(
+    request: SearchRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    带关系扩展的检索
+
+    先做 hybrid 检索拿到 top-K 知识点，
+    再查询关系边，将关联知识点也加入结果。
+    """
+    from app.services.retrieval_service import RetrievalService
+
+    service = RetrievalService(db)
+    result = await service.search_with_relations(
+        query=request.query,
+        subject_id=request.subject_id,
+        chapter_ids=request.chapter_ids,
+        limit=request.limit,
+    )
+
+    return ApiResponse(data=result)
