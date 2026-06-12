@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Card, Form, Input, Select, Button, Space, message, Spin, Tag } from 'antd'
+import { Card, Form, Input, Select, Button, Space, message, Spin } from 'antd'
 import { ArrowLeftOutlined, SaveOutlined } from '@ant-design/icons'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getKnowledgePointDetail, updateKnowledgePoint, getSubjects, getChapters } from '@/api'

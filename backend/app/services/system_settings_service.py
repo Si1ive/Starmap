@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.mysql_models import AuditLog, SystemConfig
+from app.services.document_parsers import inspect_parser_health
 
 
 class SystemSettingsService:
@@ -90,22 +91,35 @@ class SystemSettingsService:
 
         current = await self.load()
         old_parser = current.get("pdf_parser", {}).get("active_parser", "")
+        is_switching = normalized != old_parser
+        notes = (switch_notes or "").strip()
+
+        if is_switching and not notes:
+            raise ValueError("切换 PDF 解析器必须填写切换备注，说明原因、部署步骤和回滚方案")
+
+        if is_switching:
+            parser_health = inspect_parser_health(normalized)
+            if parser_health.get("health_status") != "ready":
+                raise ValueError(
+                    f"目标解析器 {normalized} 当前不可用：{parser_health.get('error_detail') or '未知错误'}。"
+                    " 请先完成旧服务下线、新服务启动和依赖校验，再切换系统配置。"
+                )
 
         current["pdf_parser"] = {
             "active_parser": normalized,
             "service_mode": "single_active",
-            "service_switch_notes": switch_notes or "",
+            "service_switch_notes": notes,
         }
         saved = await self.save(current)
 
-        if normalized != old_parser or switch_notes:
+        if is_switching or notes:
             audit = AuditLog(
                 user_id=user_id,
                 action="pdf_parser_switch",
                 resource_type="system_config",
                 resource_id="pdf_parser",
                 old_values={"active_parser": old_parser},
-                new_values={"active_parser": normalized, "switch_notes": switch_notes or ""},
+                new_values={"active_parser": normalized, "switch_notes": notes},
                 ip_address=ip_address,
                 user_agent=user_agent,
             )
@@ -220,7 +234,7 @@ class SystemSettingsService:
                 "log_level": settings.LOG_LEVEL,
             },
             "pdf_parser": {
-                "active_parser": "docling",
+                "active_parser": "mineru",
                 "service_mode": "single_active",
                 "service_switch_notes": "",
             },

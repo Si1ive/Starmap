@@ -95,7 +95,7 @@
 ```json
 {
   "pdf_parser": {
-    "active_parser": "docling",
+    "active_parser": "mineru",
     "service_mode": "single_active",
     "service_switch_notes": ""
   }
@@ -105,6 +105,7 @@
 说明：
 
 - 当前已升级为数据库持久化方案。
+- 新环境默认以 `MinerU` 作为主解析器，`Docling` 作为性能优先的备选实现。
 - 后续可再迁移到独立配置中心。
 
 对应迁移脚本：
@@ -199,12 +200,12 @@
 ```json
 {
   "pdf_parser": {
-    "active_parser": "docling",
+    "active_parser": "mineru",
     "service_mode": "single_active",
     "service_switch_notes": "",
     "active_runtime_status": {
-      "parser_name": "docling",
-      "parser_version": "2.x",
+      "parser_name": "mineru",
+      "parser_version": "3.x",
       "health_status": "ready",
       "is_available": true,
       "is_active": true,
@@ -213,8 +214,8 @@
     },
     "available_parsers": [
       {
-        "parser_name": "docling",
-        "parser_version": "2.x",
+        "parser_name": "mineru",
+        "parser_version": "3.x",
         "health_status": "ready",
         "is_available": true,
         "is_active": true,
@@ -222,13 +223,13 @@
         "error_detail": null
       },
       {
-        "parser_name": "mineru",
-        "parser_version": "3.x",
+        "parser_name": "docling",
+        "parser_version": "2.x",
         "health_status": "unavailable",
         "is_available": false,
         "is_active": false,
         "checked_at": "2026-06-12T09:10:00",
-        "error_detail": "No module named 'mineru'"
+        "error_detail": "No module named 'docling'"
       }
     ]
   }
@@ -259,6 +260,7 @@
 - 正式运行默认使用系统设置中的当前激活解析器。
 - `parser_name` 字段仅保留给开发调试，不应作为常规产品入口。
 - 系统设置接口会顺带返回解析器探活状态，用于区分“配置已切换”和“服务真实可用”。
+- 当当前激活解析器不可用时，接口应返回明确错误并提示前往“系统设置 -> PDF解析器”完成低频切换，而不是自动 fallback。
 
 ## 9. 后续演进建议
 

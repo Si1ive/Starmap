@@ -12,7 +12,7 @@ INSERT INTO system_configs (config_key, config_value, description)
 VALUES (
     'pdf_parser',
     JSON_OBJECT(
-        'active_parser', 'docling',
+        'active_parser', 'mineru',
         'service_mode', 'single_active',
         'service_switch_notes', ''
     ),

@@ -2,11 +2,12 @@ import { useState } from 'react'
 import { Card, Table, Tag, Button, Modal, Form, Input, Select, Space, message, Steps, Tooltip } from 'antd'
 import { PlusOutlined, FilePdfOutlined, ReloadOutlined, FolderOpenOutlined, SearchOutlined, LoadingOutlined, PlayCircleOutlined } from '@ant-design/icons'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { listCorpusFiles, scanCorpusFiles, parseCorpusFile, extractDocumentSections, mapDocumentChapters, getDownloadedFiles, registerCorpusFileByDownload } from '@/api'
+import { listCorpusFiles, scanCorpusFiles, parseCorpusFile, extractDocumentSections, mapDocumentChapters, extractDocumentEntities, getDownloadedFiles, registerCorpusFileByDownload } from '@/api'
 
 const { Search } = Input
 
 const statusConfig: Record<string, { color: string; text: string }> = {
+  pending: { color: 'blue', text: '已注册' },
   registered: { color: 'blue', text: '已注册' },
   parsed: { color: 'green', text: '已解析' },
   parsing: { color: 'processing', text: '解析中' },
@@ -27,6 +28,7 @@ const PIPELINE_STEPS = [
   { key: 'parse', title: '文档解析' },
   { key: 'sections', title: '提取标题树' },
   { key: 'map', title: '映射章节' },
+  { key: 'extract', title: '抽取实体' },
 ]
 
 const PdfIngest = () => {
@@ -97,7 +99,6 @@ const PdfIngest = () => {
       const parseRes = await parseCorpusFile(fileId, {
         parse_mode: 'primary',
       })
-      if (parseRes.code !== 0) throw new Error(parseRes.message || '解析失败')
 
       steps.parse = 'finish'
       steps.sections = 'process'
@@ -110,8 +111,7 @@ const PdfIngest = () => {
       setPipelineDocId(docId)
 
       // Step 2: 提取标题树
-      const sectionsRes = await extractDocumentSections(docId)
-      if (sectionsRes.code !== 0) throw new Error(sectionsRes.message || '提取标题树失败')
+      await extractDocumentSections(docId)
 
       steps.sections = 'finish'
 
@@ -120,15 +120,14 @@ const PdfIngest = () => {
       setPipelineSteps({ ...steps })
 
       const subjectId = form.getFieldValue('subject_id')
-      const mapRes = await mapDocumentChapters(docId, subjectId || undefined)
-      if (mapRes.code !== 0) {
-        steps.map = 'error'
-        setPipelineSteps({ ...steps })
-        message.warning('章节映射部分失败，可在详情页手动处理')
-      } else {
-        steps.map = 'finish'
-        setPipelineSteps({ ...steps })
-      }
+      await mapDocumentChapters(docId, subjectId || undefined)
+      steps.map = 'finish'
+      steps.extract = 'process'
+      setPipelineSteps({ ...steps })
+
+      await extractDocumentEntities(docId)
+      steps.extract = 'finish'
+      setPipelineSteps({ ...steps })
 
       queryClient.invalidateQueries({ queryKey: ['corpusFiles'] })
       message.success('自动处理完成')
@@ -145,10 +144,6 @@ const PdfIngest = () => {
     setFilePickerVisible(false)
     try {
       const regRes = await registerCorpusFileByDownload(file.id)
-      if (regRes.code !== 0) {
-        message.error(regRes.message || '注册失败')
-        return
-      }
       const corpusFileId = regRes.data!.corpus_file_id
       await runPipeline(corpusFileId)
     } catch (err: any) {
@@ -355,7 +350,7 @@ const PdfIngest = () => {
             onChange={(v) => setParams((p) => ({ ...p, status: v === 'all' ? undefined : v, page: 1 }))}
             options={[
               { label: '全部状态', value: 'all' },
-              { label: '已注册', value: 'registered' },
+              { label: '已注册', value: 'pending' },
               { label: '已解析', value: 'parsed' },
               { label: '解析中', value: 'parsing' },
               { label: '失败', value: 'failed' },

@@ -40,6 +40,10 @@ import {
 } from '@/api'
 import type { CrawlerSource } from '@/types'
 
+const spiderLabelMap: Record<string, string> = {
+  github: 'GitHub',
+}
+
 const healthConfig: Record<string, { color: string; text: string }> = {
   healthy: { color: 'green', text: '健康' },
   degraded: { color: 'orange', text: '降级' },
@@ -240,8 +244,8 @@ const CrawlerSources = () => {
       title: '爬虫类型',
       width: 100,
       render: (_: unknown, record: CrawlerSource) => {
-        const key = (record.config as any)?.spider_key
-        const label = { github: 'GitHub' }[key] || key || '-'
+        const key = String((record.config as any)?.spider_key || '')
+        const label = spiderLabelMap[key] || key || '-'
         return <Tag>{label}</Tag>
       },
     },

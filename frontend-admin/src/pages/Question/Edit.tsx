@@ -176,7 +176,7 @@ const QuestionEdit = () => {
             <Form.List name="options">
               {(fields, { add, remove }) => (
                 <>
-                  {fields.map((field, index) => (
+                  {fields.map((field) => (
                     <Space key={field.key} align="baseline" style={{ marginBottom: 8 }}>
                       <Form.Item
                         {...field}

@@ -15,6 +15,10 @@ import {
   SettingOutlined,
   TeamOutlined,
   FilePdfOutlined,
+  FileTextOutlined,
+  AuditOutlined,
+  SearchOutlined,
+  BranchesOutlined,
 } from '@ant-design/icons'
 import { useAdminStore } from '@/store'
 import { usePermission } from '@/hooks/usePermission'
@@ -26,6 +30,19 @@ const menuItems = [
   { key: '/admin/knowledge', icon: <BookOutlined />, label: '知识点管理' },
   { key: '/admin/questions', icon: <QuestionCircleOutlined />, label: '题目管理' },
   { key: '/admin/ingest', icon: <FilePdfOutlined />, label: 'PDF入库' },
+  { key: '/admin/corpus', icon: <FileTextOutlined />, label: '语料管理' },
+  {
+    key: '/admin/review-group',
+    icon: <AuditOutlined />,
+    label: '审核中心',
+    children: [
+      { key: '/admin/review/sections', label: 'Section 映射' },
+      { key: '/admin/review/knowledge', label: '知识点审核' },
+      { key: '/admin/review/questions', label: '题目审核' },
+      { key: '/admin/review/relations', icon: <BranchesOutlined />, label: '关系审核' },
+    ],
+  },
+  { key: '/admin/search', icon: <SearchOutlined />, label: '检索调试' },
   { key: '/admin/conversations', icon: <MessageOutlined />, label: '智能问答' },
   {
     key: '/admin/crawler-group',
@@ -105,7 +122,7 @@ const AppSider = () => {
 
   // 获取当前选中的菜单key和展开的子菜单key
   const selectedKey = location.pathname
-  const openKeys = ['/admin/crawler-group', '/admin/monitor-group', '/admin/settings-group'].filter(
+  const openKeys = ['/admin/crawler-group', '/admin/monitor-group', '/admin/settings-group', '/admin/review-group'].filter(
     (key) => location.pathname.startsWith(key.replace('-group', '').replace('/admin/settings-group', '/admin/settings'))
   )
 

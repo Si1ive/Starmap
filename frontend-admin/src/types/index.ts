@@ -294,14 +294,18 @@ export interface ApiResponse<T> {
 // 语料文件
 export interface CorpusFile {
   id: string
+  source_ref?: string
+  batch_label?: string
   file_name: string
-  file_path: string
-  file_type: string
+  file_path?: string
+  file_type?: string
   file_ext: string
+  local_path?: string
   file_size: number
+  mime_type?: string
+  doc_type?: string
   source_type: string
   status: string
-  batch_label?: string
   document_id?: string
   created_at?: string
   updated_at?: string

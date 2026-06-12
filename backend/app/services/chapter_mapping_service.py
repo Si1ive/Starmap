@@ -206,19 +206,20 @@ class ChapterMappingService:
     async def map_sections(
         self,
         document_id: str,
-        subject_id: str,
+        subject_id: Optional[str] = None,
         auto_approve_threshold: float = 0.90,
         reject_threshold: float = 0.60,
     ) -> Dict[str, Any]:
         """
         将文档的 sections 映射到标准章节
 
-        首版实现：简单的关键词匹配
-        后续可扩展为向量匹配 + LLM 判别
+        subject_id 可选：
+        - 传入时只匹配该学科的标准章节
+        - 不传时遍历所有学科，每个 section 取最佳匹配
 
         Args:
             document_id: 文档ID
-            subject_id: 学科ID
+            subject_id: 学科ID（可选）
             auto_approve_threshold: 自动通过阈值
             reject_threshold: 拒绝阈值（低于此值）
 
@@ -236,16 +237,25 @@ class ChapterMappingService:
         if not sections:
             return {"mapped_count": 0, "message": "文档没有 sections"}
 
-        # 2. 获取标准章节
-        chapters_result = await self.db.execute(
-            select(CanonicalChapter)
-            .where(CanonicalChapter.subject_id == subject_id)
-            .order_by(CanonicalChapter.sort_order)
-        )
-        chapters = chapters_result.scalars().all()
-
-        if not chapters:
-            return {"mapped_count": 0, "message": "学科没有标准章节"}
+        # 2. 获取标准章节 — 按学科分组或指定学科
+        if subject_id:
+            chapters_result = await self.db.execute(
+                select(CanonicalChapter)
+                .where(CanonicalChapter.subject_id == subject_id)
+                .order_by(CanonicalChapter.sort_order)
+            )
+            chapter_groups = {subject_id: chapters_result.scalars().all()}
+        else:
+            chapters_result = await self.db.execute(
+                select(CanonicalChapter)
+                .where(CanonicalChapter.status == "active")
+                .order_by(CanonicalChapter.subject_id, CanonicalChapter.sort_order)
+            )
+            all_chapters = chapters_result.scalars().all()
+            # 按学科分组
+            chapter_groups: Dict[str, list] = {}
+            for ch in all_chapters:
+                chapter_groups.setdefault(ch.subject_id, []).append(ch)
 
         # 3. 删除旧的映射
         section_ids = [s.id for s in sections]
@@ -257,17 +267,20 @@ class ChapterMappingService:
                 )
             )
 
-        # 4. 构建匹配索引
-        chapter_index = self._build_chapter_index(chapters)
+        # 4. 构建匹配索引 — 每个学科一个索引
+        chapter_indices: Dict[str, Dict[str, Any]] = {}
+        for sid, chapters in chapter_groups.items():
+            if chapters:
+                chapter_indices[sid] = self._build_chapter_index(chapters)
 
-        # 5. 逐个 section 进行映射
+        # 5. 逐个 section 进行映射，跨学科取最佳匹配
         mapped_count = 0
         auto_approved = 0
         pending_review = 0
         rejected = 0
 
         for section in sections:
-            match_result = self._match_section(section, chapter_index)
+            match_result = self._match_section_multi(section, chapter_indices)
 
             if match_result:
                 chapter_id, confidence, mapping_type = match_result
@@ -348,6 +361,25 @@ class ChapterMappingService:
                     }
 
         return index
+
+    def _match_section_multi(
+        self,
+        section: DocumentSection,
+        chapter_indices: Dict[str, Dict[str, Any]]
+    ) -> Optional[tuple]:
+        """
+        跨学科匹配 section 到标准章节，取所有学科中置信度最高的匹配
+
+        Returns:
+            (chapter_id, confidence, mapping_type) 或 None
+        """
+        best = None
+        for _sid, index in chapter_indices.items():
+            result = self._match_section(section, index)
+            if result:
+                if best is None or result[1] > best[1]:
+                    best = result
+        return best
 
     def _match_section(
         self,
@@ -471,7 +503,6 @@ class ChapterMappingService:
         # 如果指定了新的标准章节，更新映射
         if canonical_chapter_id:
             mapping.canonical_chapter_id = canonical_chapter_id
-            mapping.mapping_type = 'manual'
 
         mapping.review_status = review_status
         mapping.review_notes = review_notes

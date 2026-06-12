@@ -1,5 +1,5 @@
 import { useParams, useNavigate } from 'react-router-dom'
-import { Card, Tag, Button, Descriptions, Spin, Space, Radio } from 'antd'
+import { Card, Tag, Button, Descriptions, Spin, Space } from 'antd'
 import { ArrowLeftOutlined, EditOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { getQuestionDetail, getSubjects, getChapters } from '@/api'

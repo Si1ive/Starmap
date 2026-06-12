@@ -1454,17 +1454,21 @@ async def update_settings(
     ip_address = request.client.host if request.client else None
     user_agent = request.headers.get("User-Agent")
     current_settings = await runtime_service.load()
-    saved_runtime = await runtime_service.save_partial(data)
+    payload = dict(data or {})
+    parser_section = payload.pop("pdf_parser", None) if isinstance(payload.get("pdf_parser"), dict) else None
+    saved_runtime = await runtime_service.save_partial(payload) if payload else current_settings
 
-    if isinstance(data.get("pdf_parser"), dict):
-        parser_section = data["pdf_parser"]
-        saved_runtime = await runtime_service.update_pdf_parser(
-            parser_name=parser_section.get("active_parser", current_settings["pdf_parser"]["active_parser"]),
-            switch_notes=parser_section.get("service_switch_notes", ""),
-            user_id=user_id,
-            ip_address=ip_address,
-            user_agent=user_agent,
-        )
+    if parser_section is not None:
+        try:
+            saved_runtime = await runtime_service.update_pdf_parser(
+                parser_name=parser_section.get("active_parser", current_settings["pdf_parser"]["active_parser"]),
+                switch_notes=parser_section.get("service_switch_notes", ""),
+                user_id=user_id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
     return ApiResponse(code=200, message="保存成功", data=saved_runtime)
 
@@ -2503,6 +2507,7 @@ async def parse_corpus_file(
 ):
     """触发文档解析"""
     from app.services.document_parse_service import DocumentParseService
+    from app.services.document_parsers import ParserUnavailableError
 
     service = DocumentParseService(db)
     parse_req = req or ParseCorpusFileRequest()
@@ -2516,8 +2521,8 @@ async def parse_corpus_file(
         detail = str(e)
         status_code = 404 if detail.startswith("语料文件不存在") else 400
         raise HTTPException(status_code=status_code, detail=detail)
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except ParserUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"解析失败: {str(e)[:200]}")
 

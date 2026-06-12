@@ -7,15 +7,17 @@
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 
-from sqlalchemy import select, and_, func
+from sqlalchemy import select, and_, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.core.logging import get_logger
 from app.models.mysql_models import (
-    KnowledgePoint, Question, DocumentSectionMapping,
+    KnowledgePoint, Question, DocumentSectionMapping, CanonicalChapter,
     KnowledgeRelation, KnowledgePointChapterLink, QuestionChapterLink,
     RetrievalSegment
 )
+from app.services.chapter_compat_service import resolve_legacy_chapter_id
 
 logger = get_logger(__name__)
 
@@ -91,8 +93,17 @@ class ReviewService:
 
         # 更新章节归属
         if primary_chapter_id and primary_chapter_id != kp.primary_chapter_id:
+            canonical_chapter = await self.db.get(CanonicalChapter, primary_chapter_id)
             kp.primary_chapter_id = primary_chapter_id
-            kp.chapter_id = primary_chapter_id  # 兼容旧字段
+            if canonical_chapter and canonical_chapter.subject_id:
+                kp.subject_id = canonical_chapter.subject_id
+            legacy_chapter_id = await resolve_legacy_chapter_id(
+                self.db,
+                canonical_chapter_id=primary_chapter_id,
+                subject_id=kp.subject_id,
+            )
+            if legacy_chapter_id:
+                kp.chapter_id = legacy_chapter_id
 
             # 更新章节关联
             await self._update_chapter_links(
@@ -195,8 +206,17 @@ class ReviewService:
 
         # 更新章节归属
         if primary_chapter_id and primary_chapter_id != q.primary_chapter_id:
+            canonical_chapter = await self.db.get(CanonicalChapter, primary_chapter_id)
             q.primary_chapter_id = primary_chapter_id
-            q.chapter_id = primary_chapter_id  # 兼容旧字段
+            if canonical_chapter and canonical_chapter.subject_id:
+                q.subject_id = canonical_chapter.subject_id
+            legacy_chapter_id = await resolve_legacy_chapter_id(
+                self.db,
+                canonical_chapter_id=primary_chapter_id,
+                subject_id=q.subject_id,
+            )
+            if legacy_chapter_id:
+                q.chapter_id = legacy_chapter_id
 
             # 更新章节关联
             await self._update_chapter_links(
@@ -233,18 +253,29 @@ class ReviewService:
         page_size: int = 20,
     ) -> Dict[str, Any]:
         """获取待审核的关系列表"""
+        source_kp = aliased(KnowledgePoint)
+        target_kp = aliased(KnowledgePoint)
         query = (
             select(
                 KnowledgeRelation,
-                KnowledgePoint.source_knowledge_id,
-                KnowledgePoint.target_knowledge_id,
+                source_kp.title.label("source_title"),
+                target_kp.title.label("target_title"),
             )
             .join(
-                KnowledgePoint,
-                KnowledgeRelation.source_knowledge_id == KnowledgePoint.id,
+                source_kp,
+                KnowledgeRelation.source_knowledge_id == source_kp.id,
+            )
+            .join(
+                target_kp,
+                KnowledgeRelation.target_knowledge_id == target_kp.id,
             )
         )
-        count_query = select(func.count()).select_from(KnowledgeRelation)
+        count_query = (
+            select(func.count())
+            .select_from(KnowledgeRelation)
+            .join(source_kp, KnowledgeRelation.source_knowledge_id == source_kp.id)
+            .join(target_kp, KnowledgeRelation.target_knowledge_id == target_kp.id)
+        )
 
         conditions = []
         if relation_type:
@@ -252,7 +283,12 @@ class ReviewService:
         if review_status:
             conditions.append(KnowledgeRelation.review_status == review_status)
         if subject_id:
-            conditions.append(KnowledgePoint.subject_id == subject_id)
+            conditions.append(
+                or_(
+                    source_kp.subject_id == subject_id,
+                    target_kp.subject_id == subject_id,
+                )
+            )
 
         if conditions:
             query = query.where(and_(*conditions))
@@ -266,19 +302,18 @@ class ReviewService:
         rows = result.all()
 
         items = []
-        for relation, source_id, target_id in rows:
-            # 获取源和目标知识点标题
-            source_kp = await self.db.get(KnowledgePoint, relation.source_knowledge_id)
-            target_kp = await self.db.get(KnowledgePoint, relation.target_knowledge_id)
-
+        for relation, source_title, target_title in rows:
             items.append({
                 "id": relation.id,
+                "relation_id": relation.id,
                 "relation_type": relation.relation_type,
                 "directionality": relation.directionality,
                 "source_knowledge_id": relation.source_knowledge_id,
-                "source_knowledge_title": source_kp.title if source_kp else None,
+                "source_knowledge_title": source_title,
+                "source_title": source_title,
                 "target_knowledge_id": relation.target_knowledge_id,
-                "target_knowledge_title": target_kp.title if target_kp else None,
+                "target_knowledge_title": target_title,
+                "target_title": target_title,
                 "evidence_text": relation.evidence_text,
                 "evidence_page": relation.evidence_page,
                 "confidence": float(relation.confidence) if relation.confidence else None,

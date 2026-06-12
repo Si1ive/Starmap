@@ -24,6 +24,13 @@ import QuestionList from '@/pages/Question/List'
 import QuestionDetail from '@/pages/Question/Detail'
 import QuestionEdit from '@/pages/Question/Edit'
 import PdfIngest from '@/pages/Ingest'
+import CorpusPage from '@/pages/Corpus'
+import DocumentDetailPage from '@/pages/Corpus/DocumentDetail'
+import SectionReviewPage from '@/pages/Review/Sections'
+import KnowledgeReviewPage from '@/pages/Review/Knowledge'
+import QuestionReviewPage from '@/pages/Review/Questions'
+import RelationReviewPage from '@/pages/Review/Relations'
+import SearchDebugPage from '@/pages/Search'
 import { usePermission } from '@/hooks/usePermission'
 
 // 路由守卫组件
@@ -103,6 +110,19 @@ const AppRoutes = () => {
 
         {/* PDF入库 */}
         <Route path="ingest" element={<PdfIngest />} />
+
+        {/* 语料管理 */}
+        <Route path="corpus" element={<CorpusPage />} />
+        <Route path="corpus/:id" element={<DocumentDetailPage />} />
+
+        {/* 审核中心 */}
+        <Route path="review/sections" element={<SectionReviewPage />} />
+        <Route path="review/knowledge" element={<KnowledgeReviewPage />} />
+        <Route path="review/questions" element={<QuestionReviewPage />} />
+        <Route path="review/relations" element={<RelationReviewPage />} />
+
+        {/* 检索调试 */}
+        <Route path="search" element={<SearchDebugPage />} />
 
         {/* 对话管理 */}
         <Route path="conversations" element={<ConversationList />} />

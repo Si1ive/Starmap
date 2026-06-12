@@ -20,6 +20,15 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 
+class ParserUnavailableError(RuntimeError):
+    """解析器依赖未就绪或当前服务不可用。"""
+
+    def __init__(self, parser_name: str, detail: str):
+        self.parser_name = parser_name
+        self.detail = detail
+        super().__init__(detail)
+
+
 @dataclass
 class ParsedPage:
     page_no: int
@@ -151,7 +160,8 @@ class DoclingParser:
         try:
             from docling.document_converter import DocumentConverter
         except Exception as exc:
-            raise RuntimeError(
+            raise ParserUnavailableError(
+                self.name,
                 "docling 未安装或当前版本接口不兼容，请先安装并验证 Docling 本地可用"
             ) from exc
 
@@ -261,7 +271,8 @@ class MinerUParser:
         try:
             from mineru.cli.common import convert_single_pdf  # type: ignore
         except Exception as exc:  # pragma: no cover - 依赖环境相关
-            raise RuntimeError(
+            raise ParserUnavailableError(
+                self.name,
                 "mineru 未安装或当前版本接口不兼容，请先安装并验证 MinerU 本地可用"
             ) from exc
 

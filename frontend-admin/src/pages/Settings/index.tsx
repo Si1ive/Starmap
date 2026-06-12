@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Alert, Form, Input, InputNumber, Select, Switch, Button, Card, message, Tabs, Tag, Space, Table } from 'antd'
+import { Alert, Form, Input, InputNumber, Select, Switch, Button, Card, message, Tabs, Tag, Space, Table, Modal } from 'antd'
 import { SaveOutlined } from '@ant-design/icons'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getSettings, updateSettings, getPdfParserHistory } from '@/api'
@@ -37,6 +37,32 @@ const Settings = () => {
   })
 
   const handleSubmit = (values: Partial<SystemSettings>) => {
+    const nextParser = values.pdf_parser?.active_parser
+    const currentParser = parserSettings?.active_parser
+    const switchNotes = values.pdf_parser?.service_switch_notes?.trim() || ''
+    const isSwitching = !!nextParser && !!currentParser && nextParser !== currentParser
+
+    if (isSwitching) {
+      const targetStatus = availableParsers.find((item) => item.parser_name === nextParser)
+      if (!switchNotes) {
+        message.error('切换解析器前必须填写切换备注')
+        return
+      }
+      if (!targetStatus || targetStatus.health_status !== 'ready') {
+        message.error(`目标解析器 ${nextParser} 当前不可用，请先完成停旧启新和依赖校验`)
+        return
+      }
+
+      Modal.confirm({
+        title: '确认切换系统级 PDF 解析器',
+        content: `将从 ${currentParser} 切换到 ${nextParser}。这会影响后续所有文档解析，请确认旧服务已下线、新服务已启动，并已准备好回滚方案。`,
+        okText: '确认切换',
+        cancelText: '取消',
+        onOk: () => mutation.mutate(values),
+      })
+      return
+    }
+
     mutation.mutate(values)
   }
 
@@ -92,7 +118,7 @@ const Settings = () => {
       log_level: 'INFO',
     },
     pdf_parser: {
-      active_parser: 'docling',
+      active_parser: 'mineru',
       service_mode: 'single_active',
       service_switch_notes: '',
     },
@@ -233,6 +259,14 @@ const Settings = () => {
                 description="切换 PDF 解析器意味着你要停掉当前服务、卸载或下线原实现，再注册并启用新的解析服务。同一时间只允许一个解析器处于激活状态。"
               />
 
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginBottom: 16 }}
+                message="推荐策略：默认使用 MinerU，需要极致吞吐时再切换 Docling"
+                description="MinerU 更适合作为当前项目的主流默认方案；Docling 保留为高性能备选。切换动作应低频，并伴随部署、验证和回滚记录。"
+              />
+
               {activeRuntimeStatus && (
                 <Alert
                   style={{ marginBottom: 16 }}
@@ -276,8 +310,8 @@ const Settings = () => {
 
               <Form.Item name={['pdf_parser', 'active_parser']} label="当前激活解析器">
                 <Select>
-                  <Option value="docling">Docling</Option>
-                  <Option value="mineru">MinerU</Option>
+                  <Option value="mineru">MinerU（推荐默认）</Option>
+                  <Option value="docling">Docling（性能优先）</Option>
                 </Select>
               </Form.Item>
 

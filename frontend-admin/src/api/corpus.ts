@@ -20,7 +20,12 @@ export const scanCorpusFiles = (req: {
   root_path: string
   file_types?: string[]
   batch_label?: string
-}): Promise<ApiResponse<{ registered_count: number; skipped_count: number; failed_count: number }>> => {
+}): Promise<ApiResponse<{
+  registered_count: number
+  skipped_count: number
+  failed_count: number
+  items?: Array<{ id: string; file_name: string; status: string }>
+}>> => {
   return adminClient.post('/corpus/files/scan', req)
 }
 

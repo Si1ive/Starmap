@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Card, Table, Tag, Button, Input, Select, Space, message } from 'antd'
-import { EyeOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Card, Table, Tag, Button, Input, Select, Space } from 'antd'
+import { EyeOutlined, EditOutlined } from '@ant-design/icons'
+import { useQuery } from '@tanstack/react-query'
 import { getKnowledgePoints, getSubjects, getChapters } from '@/api'
 import type { KnowledgePoint } from '@/types'
 
@@ -21,7 +21,6 @@ const examFreqConfig: Record<string, { color: string; text: string }> = {
 
 const KnowledgeList = () => {
   const navigate = useNavigate()
-  const queryClient = useQueryClient()
   const [params, setParams] = useState<{
     page: number
     page_size: number

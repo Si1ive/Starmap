@@ -14,12 +14,28 @@ from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.models.mysql_models import CorpusFile
+from app.models.mysql_models import CorpusFile, Document
 
 logger = get_logger(__name__)
 
 # 默认支持的文件类型
 SUPPORTED_EXTENSIONS = {"pdf", "docx", "pptx"}
+
+# 本地 downloads 目录（兼容容器路径 → 本地路径映射）
+_LOCAL_DOWNLOADS = str(Path(__file__).parent.parent.parent / "downloads")
+
+
+def _resolve_download_path(file_path: str) -> Path:
+    """将容器路径 /app/downloads/... 翻译为本地实际路径"""
+    p = Path(file_path)
+    if p.exists():
+        return p
+    # 容器路径前缀翻译
+    if file_path.startswith("/app/downloads/"):
+        local = Path(_LOCAL_DOWNLOADS) / file_path[len("/app/downloads/"):]
+        if local.exists():
+            return local
+    return p
 
 # MIME 类型映射
 MIME_MAP = {
@@ -77,6 +93,7 @@ class CorpusService:
         registered = 0
         skipped = 0
         errors: List[Dict[str, str]] = []
+        registered_items: List[Dict[str, str]] = []
 
         for file_path in root.rglob("*"):
             if not file_path.is_file():
@@ -114,6 +131,13 @@ class CorpusService:
                 )
                 self.db.add(corpus_file)
                 registered += 1
+                registered_items.append(
+                    {
+                        "id": corpus_file.id,
+                        "file_name": corpus_file.file_name,
+                        "status": corpus_file.status,
+                    }
+                )
 
             except Exception as e:
                 errors.append({"file": str(file_path), "error": str(e)})
@@ -132,10 +156,78 @@ class CorpusService:
 
         return {
             "total_scanned": total_scanned,
+            "registered_count": registered,
+            "skipped_count": skipped,
+            "failed_count": len(errors),
+            "items": registered_items,
             "registered": registered,
             "skipped": skipped,
             "errors": errors,
             "batch_label": batch,
+        }
+
+    async def register_single_file(
+        self,
+        file_path: str,
+        batch_label: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        注册单个文件到 corpus_files
+
+        如果文件已存在（SHA256 匹配），返回已有的 corpus_file 信息。
+
+        Args:
+            file_path: 文件的绝对路径
+            batch_label: 批次标签
+
+        Returns:
+            {"corpus_file_id": str, "status": str, "is_new": bool}
+        """
+        p = _resolve_download_path(file_path)
+        if not p.exists() or not p.is_file():
+            raise ValueError(f"文件不存在: {file_path}")
+
+        ext = p.suffix.lstrip(".").lower()
+        if ext not in SUPPORTED_EXTENSIONS:
+            raise ValueError(f"不支持的文件类型: {ext}，支持: {', '.join(sorted(SUPPORTED_EXTENSIONS))}")
+
+        sha256 = compute_sha256(str(p))
+
+        # 去重检查
+        existing = await self.db.execute(
+            select(CorpusFile).where(CorpusFile.sha256 == sha256)
+        )
+        existing_file = existing.scalar_one_or_none()
+        if existing_file:
+            logger.debug("文件已存在，返回已有记录", file=str(p), sha256=sha256[:16])
+            return {
+                "corpus_file_id": existing_file.id,
+                "status": existing_file.status,
+                "is_new": False,
+            }
+
+        stat = p.stat()
+        batch = batch_label or f"single-{generate_id()[:8]}"
+        corpus_file = CorpusFile(
+            id=generate_id(),
+            source_type="upload",
+            source_ref=batch,
+            file_name=p.name,
+            file_ext=ext,
+            local_path=str(p),
+            sha256=sha256,
+            file_size=stat.st_size,
+            mime_type=MIME_MAP.get(ext),
+            status="pending",
+        )
+        self.db.add(corpus_file)
+        await self.db.commit()
+
+        logger.info("单文件注册成功", file=str(p), corpus_file_id=corpus_file.id)
+        return {
+            "corpus_file_id": corpus_file.id,
+            "status": "pending",
+            "is_new": True,
         }
 
     async def get_corpus_files(
@@ -148,7 +240,10 @@ class CorpusService:
         keyword: Optional[str] = None,
     ) -> Dict[str, Any]:
         """分页查询语料文件"""
-        query = select(CorpusFile)
+        query = (
+            select(CorpusFile, Document.id.label("document_id"))
+            .outerjoin(Document, Document.corpus_file_id == CorpusFile.id)
+        )
         count_query = select(func.count()).select_from(CorpusFile)
 
         conditions = []
@@ -173,31 +268,38 @@ class CorpusService:
         query = query.order_by(CorpusFile.created_at.desc())
         query = query.offset((page - 1) * page_size).limit(page_size)
         result = await self.db.execute(query)
-        items = result.scalars().all()
+        rows = result.all()
 
         return {
-            "items": [self._to_dict(f) for f in items],
+            "items": [self._to_dict(f, document_id=document_id) for f, document_id in rows],
             "total": total,
             "page": page,
             "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size if page_size else 0,
         }
 
     async def get_corpus_file_detail(self, file_id: str) -> Optional[Dict[str, Any]]:
         """获取语料文件详情"""
         result = await self.db.execute(
-            select(CorpusFile).where(CorpusFile.id == file_id)
+            select(CorpusFile, Document.id.label("document_id"))
+            .outerjoin(Document, Document.corpus_file_id == CorpusFile.id)
+            .where(CorpusFile.id == file_id)
         )
-        f = result.scalar_one_or_none()
-        if not f:
+        row = result.one_or_none()
+        if not row:
             return None
-        return self._to_dict(f)
+        corpus_file, document_id = row
+        return self._to_dict(corpus_file, document_id=document_id)
 
-    def _to_dict(self, f: CorpusFile) -> Dict[str, Any]:
+    def _to_dict(self, f: CorpusFile, document_id: Optional[str] = None) -> Dict[str, Any]:
         return {
             "id": f.id,
             "source_type": f.source_type,
             "source_ref": f.source_ref,
+            "batch_label": f.source_ref,
             "file_name": f.file_name,
+            "file_path": f.local_path,
+            "file_type": f.file_ext,
             "file_ext": f.file_ext,
             "local_path": f.local_path,
             "sha256": f.sha256,
@@ -207,6 +309,7 @@ class CorpusService:
             "version": f.version,
             "status": f.status,
             "error_detail": f.error_detail,
+            "document_id": document_id,
             "created_at": f.created_at.isoformat() if f.created_at else None,
             "updated_at": f.updated_at.isoformat() if f.updated_at else None,
         }

@@ -20,6 +20,7 @@ from app.models.mysql_models import (
     DocumentPage, DocumentBlock, DocumentAsset,
 )
 from app.services.document_parsers import (
+    ParserUnavailableError,
     ParsedAsset,
     ParsedBlock,
     ParsedDocumentResult,
@@ -162,6 +163,32 @@ class DocumentParseService:
                 "elapsed_seconds": round(elapsed, 2),
             }
 
+        except ParserUnavailableError as e:
+            elapsed = time.time() - start_time
+            error_msg = (
+                f"当前激活解析器 {parser.name} 不可用：{str(e)}。"
+                " 请在系统设置 -> PDF解析器完成停旧启新后重试。"
+            )[:500]
+            parse_run.status = "failed"
+            parse_run.error_detail = error_msg
+            parse_run.completed_at = datetime.utcnow()
+            parse_run.metrics_json = {
+                "elapsed_seconds": round(elapsed, 2),
+                "parser": parser.name,
+                "parser_version": parser.version,
+                "parse_mode": parse_mode,
+            }
+            corpus_file.status = "failed"
+            corpus_file.error_detail = error_msg
+            await self.db.commit()
+            logger.error(
+                "文档解析器不可用",
+                corpus_file_id=corpus_file_id,
+                parser=parser.name,
+                error=error_msg,
+            )
+            raise ParserUnavailableError(parser.name, error_msg) from e
+
         except RuntimeError as e:
             elapsed = time.time() - start_time
             error_msg = str(e)[:500]
@@ -178,7 +205,7 @@ class DocumentParseService:
             corpus_file.error_detail = error_msg
             await self.db.commit()
             logger.error(
-                "文档解析器不可用",
+                "文档解析运行时失败",
                 corpus_file_id=corpus_file_id,
                 parser=parser.name,
                 error=error_msg,
