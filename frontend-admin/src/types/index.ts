@@ -198,17 +198,16 @@ export interface Conversation {
 
 // 看板统计
 export interface DashboardStats {
-  person_count: number
-  work_count: number
-  relation_count: number
+  person_count?: number
+  work_count?: number
+  relation_count?: number
   today_chat_count: number
-  data_completeness: number
-  api_avg_response: number
-  // 408平台
-  subject_count?: number
-  chapter_count?: number
-  knowledge_point_count?: number
-  question_count?: number
+  data_completeness?: number
+  api_avg_response?: number
+  subject_count: number
+  chapter_count: number
+  knowledge_point_count: number
+  question_count: number
 }
 
 // ========== 408考研平台 ==========

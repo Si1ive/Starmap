@@ -1,4 +1,4 @@
-# StarMap 版本控制机制
+# 408 平台版本控制机制
 
 ## 状态：✅ 已配置
 
@@ -11,7 +11,7 @@
 访问：https://github.com/new
 
 填写信息：
-- Repository name: `starmap`
+- Repository name: `starmap`（当前远程仓库名）
 - Description: `408考研智能学习平台`
 - Visibility: Public（推荐，可展示）或 Private
 - Initialize: ❌ 不要勾选（已有本地仓库）

@@ -138,6 +138,14 @@
 | POST | `/api/v1/admin/search` | 搜索 |
 | POST | `/api/v1/admin/search/with-relations` | 带关系扩展搜索 |
 
+### 系统设置
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/admin/settings` | 读取系统设置与 PDF 解析器运行状态 |
+| PUT | `/api/v1/admin/settings` | 更新系统设置中的 PDF 解析器单活配置 |
+| GET | `/api/v1/admin/settings/pdf-parser/history` | 查看 PDF 解析器切换审计历史 |
+
 ### 对话
 
 | 方法 | 路径 | 说明 |

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import tempfile
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol
 
@@ -385,6 +386,44 @@ def get_parser(parser_name: str) -> DocumentParser:
     if normalized == "mineru":
         return MinerUParser()
     raise ValueError(f"不支持的解析器: {parser_name}")
+
+
+def get_supported_parser_names() -> List[str]:
+    return ["docling", "mineru"]
+
+
+def inspect_parser_health(parser_name: str) -> Dict[str, Any]:
+    normalized = (parser_name or "").strip().lower()
+    parser = get_parser(normalized)
+    checked_at = datetime.utcnow().isoformat()
+
+    try:
+        if normalized == "docling":
+            from docling.document_converter import DocumentConverter
+
+            _ = DocumentConverter
+        elif normalized == "mineru":
+            from mineru.cli.common import convert_single_pdf  # type: ignore
+
+            _ = convert_single_pdf
+
+        return {
+            "parser_name": parser.name,
+            "parser_version": parser.version,
+            "health_status": "ready",
+            "is_available": True,
+            "checked_at": checked_at,
+            "error_detail": None,
+        }
+    except Exception as exc:
+        return {
+            "parser_name": parser.name,
+            "parser_version": parser.version,
+            "health_status": "unavailable",
+            "is_available": False,
+            "checked_at": checked_at,
+            "error_detail": str(exc)[:200],
+        }
 
 
 def choose_parser(

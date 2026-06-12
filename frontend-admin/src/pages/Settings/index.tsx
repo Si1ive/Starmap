@@ -1,8 +1,8 @@
-import { useState } from 'react'
-import { Alert, Form, Input, InputNumber, Select, Switch, Button, Card, message, Tabs } from 'antd'
+import { useEffect, useState } from 'react'
+import { Alert, Form, Input, InputNumber, Select, Switch, Button, Card, message, Tabs, Tag, Space, Table } from 'antd'
 import { SaveOutlined } from '@ant-design/icons'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getSettings, updateSettings } from '@/api'
+import { getSettings, updateSettings, getPdfParserHistory } from '@/api'
 import type { SystemSettings } from '@/api/settings'
 
 const { TextArea } = Input
@@ -24,15 +24,25 @@ const Settings = () => {
     onSuccess: () => {
       message.success('保存成功')
       queryClient.invalidateQueries({ queryKey: ['settings'] })
+      queryClient.invalidateQueries({ queryKey: ['pdf-parser-history'] })
     },
     onError: () => {
       message.error('保存失败')
     },
   })
 
+  const { data: historyData, isLoading: historyLoading } = useQuery({
+    queryKey: ['pdf-parser-history'],
+    queryFn: () => getPdfParserHistory(1, 20),
+  })
+
   const handleSubmit = (values: Partial<SystemSettings>) => {
     mutation.mutate(values)
   }
+
+  const parserSettings = data?.data?.pdf_parser
+  const activeRuntimeStatus = parserSettings?.active_runtime_status
+  const availableParsers = parserSettings?.available_parsers || []
 
   const initialValues = data?.data || {
     llm: {
@@ -59,7 +69,7 @@ const Settings = () => {
       user_agents: [],
     },
     system: {
-      name: 'StarMap',
+      name: '408考研学习平台',
       maintenance_mode: false,
       log_level: 'INFO',
     },
@@ -70,8 +80,25 @@ const Settings = () => {
     },
   }
 
+  useEffect(() => {
+    if (data?.data) {
+      form.setFieldsValue(data.data)
+    }
+  }, [data, form])
+
   if (isLoading) {
     return <div>加载中...</div>
+  }
+
+  const formatCheckTime = (value?: string) => {
+    if (!value) return '-'
+    return new Date(value).toLocaleString('zh-CN')
+  }
+
+  const getParserStatusTag = (status?: 'ready' | 'unavailable') => {
+    if (status === 'ready') return <Tag color="green">可用</Tag>
+    if (status === 'unavailable') return <Tag color="red">不可用</Tag>
+    return <Tag>未知</Tag>
   }
 
   return (
@@ -188,6 +215,47 @@ const Settings = () => {
                 description="切换 PDF 解析器意味着你要停掉当前服务、卸载或下线原实现，再注册并启用新的解析服务。同一时间只允许一个解析器处于激活状态。"
               />
 
+              {activeRuntimeStatus && (
+                <Alert
+                  style={{ marginBottom: 16 }}
+                  type={activeRuntimeStatus.health_status === 'ready' ? 'success' : 'error'}
+                  showIcon
+                  message={`当前激活解析器运行状态：${activeRuntimeStatus.parser_name}`}
+                  description={
+                    activeRuntimeStatus.error_detail
+                      ? `${activeRuntimeStatus.error_detail}（最近检查：${formatCheckTime(activeRuntimeStatus.checked_at)}）`
+                      : `状态正常，最近检查：${formatCheckTime(activeRuntimeStatus.checked_at)}`
+                  }
+                />
+              )}
+
+              <div style={{ marginBottom: 16 }}>
+                {availableParsers.map((item) => (
+                  <div
+                    key={item.parser_name}
+                    style={{
+                      border: '1px solid #f0f0f0',
+                      borderRadius: 8,
+                      padding: 12,
+                      marginBottom: 8,
+                    }}
+                  >
+                    <Space wrap>
+                      <strong>{item.parser_name}</strong>
+                      <Tag>{item.parser_version}</Tag>
+                      {getParserStatusTag(item.health_status)}
+                      {item.is_active ? <Tag color="blue">当前激活</Tag> : null}
+                    </Space>
+                    <div style={{ marginTop: 8, color: '#666' }}>
+                      最近检查：{formatCheckTime(item.checked_at)}
+                    </div>
+                    {item.error_detail ? (
+                      <div style={{ marginTop: 6, color: '#cf1322' }}>{item.error_detail}</div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+
               <Form.Item name={['pdf_parser', 'active_parser']} label="当前激活解析器">
                 <Select>
                   <Option value="docling">Docling</Option>
@@ -206,6 +274,35 @@ const Settings = () => {
               >
                 <TextArea rows={4} placeholder="例如：已停用 Docling 容器，切换为 MinerU OCR 服务，等待重建解析镜像" />
               </Form.Item>
+            </Card>
+
+            <Card title="切换历史" style={{ marginTop: 16 }}>
+              <Table
+                loading={historyLoading}
+                dataSource={historyData?.data?.items || []}
+                rowKey="id"
+                pagination={false}
+                size="small"
+                locale={{ emptyText: '暂无切换记录' }}
+              >
+                <Table.Column
+                  title="时间"
+                  dataIndex="created_at"
+                  key="created_at"
+                  width={180}
+                  render={(val: string) => val ? new Date(val).toLocaleString('zh-CN') : '-'}
+                />
+                <Table.Column title="旧解析器" dataIndex="old_parser" key="old_parser" width={120} />
+                <Table.Column title="新解析器" dataIndex="new_parser" key="new_parser" width={120} />
+                <Table.Column title="备注" dataIndex="switch_notes" key="switch_notes" ellipsis />
+                <Table.Column
+                  title="操作人"
+                  dataIndex="user_id"
+                  key="user_id"
+                  width={100}
+                  render={(val: string | null) => val || 'System'}
+                />
+              </Table>
             </Card>
           </TabPane>
         </Tabs>

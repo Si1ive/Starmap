@@ -128,8 +128,9 @@
 
 1. 在“系统设置”中增加 `PDF解析器` 页签。
 2. 页签中展示当前激活解析器。
-3. 保存时更新系统级设置。
-4. 提示用户这属于服务级切换动作。
+3. 页签中同时展示解析器运行状态探活结果。
+4. 保存时更新系统级设置。
+5. 提示用户这属于服务级切换动作。
 
 ## 5. 为什么不能放在 PDF 入库页
 
@@ -200,7 +201,36 @@
   "pdf_parser": {
     "active_parser": "docling",
     "service_mode": "single_active",
-    "service_switch_notes": ""
+    "service_switch_notes": "",
+    "active_runtime_status": {
+      "parser_name": "docling",
+      "parser_version": "2.x",
+      "health_status": "ready",
+      "is_available": true,
+      "is_active": true,
+      "checked_at": "2026-06-12T09:10:00",
+      "error_detail": null
+    },
+    "available_parsers": [
+      {
+        "parser_name": "docling",
+        "parser_version": "2.x",
+        "health_status": "ready",
+        "is_available": true,
+        "is_active": true,
+        "checked_at": "2026-06-12T09:10:00",
+        "error_detail": null
+      },
+      {
+        "parser_name": "mineru",
+        "parser_version": "3.x",
+        "health_status": "unavailable",
+        "is_available": false,
+        "is_active": false,
+        "checked_at": "2026-06-12T09:10:00",
+        "error_detail": "No module named 'mineru'"
+      }
+    ]
   }
 }
 ```
@@ -228,6 +258,7 @@
 
 - 正式运行默认使用系统设置中的当前激活解析器。
 - `parser_name` 字段仅保留给开发调试，不应作为常规产品入口。
+- 系统设置接口会顺带返回解析器探活状态，用于区分“配置已切换”和“服务真实可用”。
 
 ## 9. 后续演进建议
 

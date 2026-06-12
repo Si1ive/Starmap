@@ -12,12 +12,12 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.mysql_models import SystemConfig
+from app.models.mysql_models import AuditLog, SystemConfig
 
 DEFAULT_SETTINGS: Dict[str, Any] = {
     "pdf_parser": {
@@ -74,19 +74,44 @@ class SystemSettingsService:
             return DEFAULT_SETTINGS["pdf_parser"]["active_parser"]
         return normalized
 
-    async def update_pdf_parser(self, parser_name: str, switch_notes: str = "") -> Dict[str, Any]:
-        """更新当前激活的 PDF 解析器配置。"""
+    async def update_pdf_parser(
+        self,
+        parser_name: str,
+        switch_notes: str = "",
+        user_id: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """更新当前激活的 PDF 解析器配置，并记录审计日志。"""
         normalized = str(parser_name).strip().lower()
         if normalized not in {"docling", "mineru"}:
             raise ValueError("pdf_parser.active_parser 仅支持 docling 或 mineru")
 
         current = await self.load()
+        old_parser = current.get("pdf_parser", {}).get("active_parser", "")
+
         current["pdf_parser"] = {
             "active_parser": normalized,
             "service_mode": "single_active",
             "service_switch_notes": switch_notes or "",
         }
-        return await self.save(current)
+        saved = await self.save(current)
+
+        if normalized != old_parser or switch_notes:
+            audit = AuditLog(
+                user_id=user_id,
+                action="pdf_parser_switch",
+                resource_type="system_config",
+                resource_id="pdf_parser",
+                old_values={"active_parser": old_parser},
+                new_values={"active_parser": normalized, "switch_notes": switch_notes or ""},
+                ip_address=ip_address,
+                user_agent=user_agent,
+            )
+            self.db.add(audit)
+            await self.db.flush()
+
+        return saved
 
     @staticmethod
     def _merge_defaults(data: Dict[str, Any]) -> Dict[str, Any]:

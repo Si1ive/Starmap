@@ -243,7 +243,7 @@ $ git commit -m "fix(backend): 修复搜索API参数验证"
 $ git checkout -b feature/backend-search
 
 # 实现模型
-$ git add backend/app/models/person.py
+$ git add backend/app/models/mysql_models.py
 $ git commit -m "feat(backend): 添加知识点数据模型"
 
 # 实现服务
@@ -277,7 +277,7 @@ $ git add frontend/src/pages/Search/index.tsx
 $ git commit -m "feat(frontend): 添加搜索页面"
 
 # 对接API
-$ git add frontend/src/api/person.ts
+$ git add frontend-admin/src/api/search.ts
 $ git commit -m "feat(frontend): 对接搜索API"
 
 # 推送

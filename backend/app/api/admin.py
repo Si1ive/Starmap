@@ -1,25 +1,7 @@
 """
-后台管理 API 路由
+后台管理 API 路由。
 
-提供管理员认证和后台管理相关的 RESTful API：
-- POST /auth/login - 管理员登录
-- POST /auth/logout - 管理员登出
-- GET /auth/me - 获取当前管理员信息
-- GET /dashboard/stats - 看板统计数据
-- GET /dashboard/charts - 看板图表数据
-- GET /persons - 艺人列表
-- GET /persons/{id} - 艺人详情
-- POST /persons - 创建艺人
-- PUT /persons/{id} - 更新艺人
-- DELETE /persons/{id} - 删除艺人
-- GET /crawler/tasks - 爬虫任务列表
-- POST /crawler/tasks - 创建爬虫任务
-- POST /crawler/tasks/{id}/stop - 停止爬虫任务
-- GET /conversations - 对话记录列表
-- GET /monitor/api - API 性能监控
-- GET /monitor/database - 数据库监控
-- GET /settings - 系统配置
-- PUT /settings - 更新系统配置
+当前提供认证、看板、爬虫、对话、监控、系统设置等后台接口。
 """
 
 import json
@@ -29,7 +11,7 @@ from pathlib import Path
 from typing import Optional, List, Any, Literal
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, Response, FileResponse
 from pydantic import BaseModel, Field
@@ -192,12 +174,11 @@ async def get_current_user():
 
 class DashboardStats(BaseModel):
     """看板统计数据"""
-    person_count: int
-    work_count: int
-    relation_count: int
+    subject_count: int
+    chapter_count: int
+    knowledge_point_count: int
+    question_count: int
     today_chat_count: int
-    data_completeness: float
-    api_avg_response: float
 
 
 @router.get("/dashboard/stats", response_model=ApiResponse)
@@ -1368,9 +1349,20 @@ async def get_settings(db: AsyncSession = Depends(get_db)):
     返回当前系统配置，从环境变量和数据库配置读取。
     """
     from app.core.config import settings
+    from app.services.document_parsers import get_supported_parser_names, inspect_parser_health
     from app.services.system_settings_service import SystemSettingsService
 
     runtime_settings = await SystemSettingsService(db).load()
+    active_parser = runtime_settings["pdf_parser"]["active_parser"]
+    available_parsers = []
+    for parser_name in get_supported_parser_names():
+        parser_status = inspect_parser_health(parser_name)
+        parser_status["is_active"] = parser_name == active_parser
+        available_parsers.append(parser_status)
+    active_runtime_status = next(
+        (item for item in available_parsers if item["is_active"]),
+        None,
+    )
     
     return ApiResponse(
         code=200,
@@ -1380,7 +1372,7 @@ async def get_settings(db: AsyncSession = Depends(get_db)):
                 "model": settings.OPENAI_MODEL,
                 "temperature": 0.7,
                 "max_tokens": 2000,
-                "system_prompt": "你是一个专业的艺人知识助手..."
+                "system_prompt": "你是一个专业的408考研学习助手，擅长解释知识点、题目分析与学习规划。"
             },
             "search": {
                 "default_page_size": 20,
@@ -1407,31 +1399,97 @@ async def get_settings(db: AsyncSession = Depends(get_db)):
                 "log_level": settings.LOG_LEVEL
             },
             "pdf_parser": {
-                "active_parser": runtime_settings["pdf_parser"]["active_parser"],
+                "active_parser": active_parser,
                 "service_mode": runtime_settings["pdf_parser"]["service_mode"],
                 "service_switch_notes": runtime_settings["pdf_parser"]["service_switch_notes"],
+                "active_runtime_status": active_runtime_status,
+                "available_parsers": available_parsers,
             }
         }
     )
 
 
+@router.get("/settings/pdf-parser/history", response_model=ApiResponse)
+async def get_pdf_parser_history(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    """获取 PDF 解析器切换历史"""
+    from app.models.mysql_models import AuditLog
+
+    query = (
+        select(AuditLog)
+        .where(
+            AuditLog.action == "pdf_parser_switch",
+            AuditLog.resource_type == "system_config",
+            AuditLog.resource_id == "pdf_parser",
+        )
+        .order_by(AuditLog.created_at.desc())
+    )
+
+    count_query = select(func.count()).select_from(query.subquery())
+    total = await db.scalar(count_query) or 0
+
+    query = query.offset((page - 1) * page_size).limit(page_size)
+    result = await db.execute(query)
+    rows = result.scalars().all()
+
+    items = [
+        {
+            "id": row.id,
+            "old_parser": row.old_values.get("active_parser") if row.old_values else None,
+            "new_parser": row.new_values.get("active_parser") if row.new_values else None,
+            "switch_notes": (row.new_values or {}).get("switch_notes", ""),
+            "user_id": row.user_id,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        }
+        for row in rows
+    ]
+
+    return ApiResponse(
+        code=200,
+        message="success",
+        data={
+            "items": items,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        },
+    )
+
+
 @router.put("/settings", response_model=ApiResponse)
-async def update_settings(data: dict, db: AsyncSession = Depends(get_db)):
+async def update_settings(
+    data: dict,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
     """
     更新系统配置
     
-    当前仅对 PDF 解析器配置做数据库持久化，其余配置先原样回显。
+    当前仅对 PDF 解析器配置做数据库持久化，其余配置仍由既有配置来源提供。
     """
     from app.services.system_settings_service import SystemSettingsService
 
     runtime_service = SystemSettingsService(db)
     saved_runtime = await runtime_service.load()
+    auth_header = request.headers.get("Authorization", "")
+    user_id: Optional[str] = None
+    if auth_header.startswith("Bearer mock_jwt_token_"):
+        user_id = auth_header.replace("Bearer mock_jwt_token_", "", 1)
+
+    ip_address = request.client.host if request.client else None
+    user_agent = request.headers.get("User-Agent")
 
     if isinstance(data.get("pdf_parser"), dict):
         parser_section = data["pdf_parser"]
         saved_runtime = await runtime_service.update_pdf_parser(
             parser_name=parser_section.get("active_parser", saved_runtime["pdf_parser"]["active_parser"]),
             switch_notes=parser_section.get("service_switch_notes", ""),
+            user_id=user_id,
+            ip_address=ip_address,
+            user_agent=user_agent,
         )
 
     response_data = {
