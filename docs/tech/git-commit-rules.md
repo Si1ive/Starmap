@@ -26,7 +26,7 @@
 |------|------|---------|
 | 完成一个API接口 | 实现搜索接口 | `feat(backend): 添加知识点搜索API` |
 | 完成一个组件 | 实现搜索框 | `feat(frontend): 添加搜索框组件` |
-| 修复一个Bug | 修复连接超时 | `fix(backend): 修复Neo4j连接超时` |
+| 修复一个Bug | 修复连接超时 | `fix(backend): 修复Qdrant连接超时` |
 | 重构代码 | 优化查询逻辑 | `refactor(search): 优化检索链路` |
 | 更新文档 | 更新API文档 | `docs(api): 更新搜索接口文档` |
 | 添加测试 | 添加单元测试 | `test(backend): 添加搜索接口测试` |

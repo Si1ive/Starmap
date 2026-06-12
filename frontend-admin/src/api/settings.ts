@@ -35,6 +35,28 @@ export interface SystemSettings {
     timeout: number
     user_agents: string[]
     proxy?: string
+    max_concurrent?: number
+    request_delay?: number
+    request_timeout?: number
+    max_retries?: number
+    retry_delay?: number
+    user_agent?: string
+    proxy_enabled?: boolean
+    proxy_url?: string
+    respect_robots_txt?: boolean
+    auto_detect_encoding?: boolean
+    follow_redirects?: boolean
+    max_redirects?: number
+    max_depth?: number
+    dedup_enabled?: boolean
+    storage_batch_size?: number
+    log_level?: string
+    data_sources?: Array<{
+      name: string
+      url: string
+      enabled: boolean
+      priority: number
+    }>
   }
   system: {
     name: string

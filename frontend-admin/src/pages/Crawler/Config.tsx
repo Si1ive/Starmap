@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { Card, Form, Input, Select, Switch, InputNumber, Button, message, Row, Col } from 'antd'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getSettings, updateSettings } from '@/api'
@@ -23,6 +24,28 @@ const CrawlerConfig = () => {
   })
 
   const settings = (data?.data?.crawler || {}) as Record<string, any>
+
+  useEffect(() => {
+    form.setFieldsValue({
+      max_concurrent: settings.max_concurrent,
+      request_delay: settings.request_delay,
+      request_timeout: settings.request_timeout,
+      max_retries: settings.max_retries,
+      retry_delay: settings.retry_delay,
+      user_agent: settings.user_agent,
+      proxy_enabled: settings.proxy_enabled,
+      proxy_url: settings.proxy_url,
+      respect_robots_txt: settings.respect_robots_txt,
+      auto_detect_encoding: settings.auto_detect_encoding,
+      follow_redirects: settings.follow_redirects,
+      max_redirects: settings.max_redirects,
+      max_depth: settings.max_depth,
+      dedup_enabled: settings.dedup_enabled,
+      storage_batch_size: settings.storage_batch_size,
+      log_level: settings.log_level,
+      data_sources: settings.data_sources,
+    })
+  }, [form, settings])
 
   const handleSave = () => {
     form.validateFields().then((values) => {
@@ -97,7 +120,7 @@ const CrawlerConfig = () => {
             </Col>
             <Col xs={24} md={8}>
               <Form.Item label="User-Agent" name="user_agent">
-                <Input placeholder="StarMap/1.0" />
+                <Input placeholder="408-Platform/1.0" />
               </Form.Item>
             </Col>
           </Row>

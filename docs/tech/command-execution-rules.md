@@ -84,14 +84,14 @@
 
 **命令：**
 ```bash
-docker-compose up -d neo4j
+podman run -d --name starmap-qdrant -p 6333:6333 qdrant/qdrant:latest
 ```
 
-**功能：** 启动Neo4j数据库容器
+**功能：** 启动Qdrant向量数据库容器
 
-**目的：** 验证Neo4j服务是否能正常启动，为后续开发提供数据库环境
+**目的：** 验证Qdrant服务是否能正常启动，为检索与语料入库链路提供环境
 
-**预期结果：** 容器状态为Up，端口7474和7687可访问
+**预期结果：** 容器状态为Up，端口6333可访问
 
 **是否执行？** 是
 ```
@@ -102,23 +102,23 @@ docker-compose up -d neo4j
 
 **命令：**
 ```bash
-docker-compose up -d neo4j
+podman run -d --name starmap-qdrant -p 6333:6333 qdrant/qdrant:latest
 ```
 
 **实际输出：**
 ```
 [+] Running 2/2
  ⠿ Network starmap_default  Created
- ⠿ Container starmap-neo4j-1  Started
+ ⠿ Container starmap-qdrant  Started
 ```
 
 **分析结论：**
 - ✅ 结果正常
-- ✅ Neo4j容器已成功启动
+- ✅ Qdrant容器已成功启动
 - ✅ 网络配置正确
 
 **下一步：**
-- 验证Neo4j是否可访问：curl http://localhost:7474
+- 验证Qdrant是否可访问：curl http://localhost:6333/collections
 - 继续启动其他服务
 ```
 
@@ -207,7 +207,7 @@ npm ERR! peer react@"^17.0.0" from some-package@1.0.0
 
 | 命令 | 功能 | 示例说明 |
 |------|------|---------|
-| `docker-compose up` | 启动服务 | "启动Neo4j数据库服务" |
+| `docker-compose up` | 启动服务 | "启动MySQL、Redis、Qdrant等基础服务" |
 | `docker-compose down` | 停止服务 | "停止所有容器，释放资源" |
 | `docker ps` | 查看容器 | "检查服务运行状态" |
 | `docker logs` | 查看日志 | "查看服务日志，排查问题" |
@@ -269,9 +269,9 @@ podman-compose -f docker-compose.podman.yml up -d
 ```
 [+] Running 4/4
  ⠿ Network starmap_default      Created
- ⠿ Container starmap-neo4j-1     Started
+ ⠿ Container starmap-qdrant      Started
  ⠿ Container starmap-redis-1     Started
- ⠿ Container starmap-redis-1     Started
+ ⠿ Container starmap-mysql-1     Started
 ```
 
 **结论：** ✅ 所有服务启动成功

@@ -32,7 +32,7 @@ podman run -d --name starmap-qdrant \
 ### 3. 初始化 MySQL
 
 ```bash
-podman exec -i starmap-mysql mysql -u starmap -p starmap < backend/scripts/init_408_tables.sql
+podman exec -i starmap-mysql mysql -ustarmap -pstarmap123 starmap < backend/scripts/init_408_tables.sql
 ```
 
 ### 4. 启动后端

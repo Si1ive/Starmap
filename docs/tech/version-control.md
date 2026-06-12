@@ -53,7 +53,7 @@ feature/backend-api (后端功能分支)
 feature/frontend-search (前端功能分支)
 feature/data-crawler (数据功能分支)
   ↑
-hotfix/neo4j-timeout (紧急修复分支)
+hotfix/qdrant-timeout (紧急修复分支)
 release/v0.1.0 (发布准备分支)
 ```
 
@@ -87,7 +87,7 @@ release/v0.1.0 (发布准备分支)
 | `feat` | 新功能 | `feat(backend): 添加对话API` |
 | `fix` | 修复 | `fix(frontend): 修复搜索框样式` |
 | `docs` | 文档 | `docs(api): 更新接口文档` |
-| `refactor` | 重构 | `refactor(db): 优化Neo4j查询` |
+| `refactor` | 重构 | `refactor(db): 优化Qdrant检索链路` |
 | `test` | 测试 | `test(agent): 添加意图识别测试` |
 | `chore` | 构建/工具 | `chore(deps): 升级FastAPI版本` |
 
@@ -152,12 +152,12 @@ git push origin feature/backend-api-chat
 # 从main创建热修复分支
 git checkout main
 git pull origin main
-git checkout -b hotfix/neo4j-timeout
+git checkout -b hotfix/qdrant-timeout
 
 # 修复完成后
 git add .
-git commit -m "fix(db): 修复Neo4j连接超时"
-git push origin hotfix/neo4j-timeout
+git commit -m "fix(db): 修复Qdrant连接超时"
+git push origin hotfix/qdrant-timeout
 
 # 合并到main和develop（GitHub上操作）
 ```

@@ -12,20 +12,14 @@
 
 from __future__ import annotations
 
+import copy
 from typing import Any, Dict, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.models.mysql_models import AuditLog, SystemConfig
-
-DEFAULT_SETTINGS: Dict[str, Any] = {
-    "pdf_parser": {
-        "active_parser": "docling",
-        "service_mode": "single_active",
-        "service_switch_notes": "",
-    }
-}
 
 
 class SystemSettingsService:
@@ -63,15 +57,22 @@ class SystemSettingsService:
         await self.db.flush()
         return merged
 
+    async def save_partial(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """按顶级 section 增量保存系统设置。"""
+        current = await self.load()
+        sanitized = self._sanitize_input(data)
+        merged = self._merge_section_dicts(current, sanitized)
+        return await self.save(merged)
+
     async def get_active_pdf_parser(self) -> str:
         """获取当前激活的 PDF 解析器。"""
         data = await self.load()
         parser_name = (
-            data.get("pdf_parser", {}).get("active_parser") or DEFAULT_SETTINGS["pdf_parser"]["active_parser"]
+            data.get("pdf_parser", {}).get("active_parser") or self._default_settings()["pdf_parser"]["active_parser"]
         )
         normalized = str(parser_name).strip().lower()
         if normalized not in {"docling", "mineru"}:
-            return DEFAULT_SETTINGS["pdf_parser"]["active_parser"]
+            return self._default_settings()["pdf_parser"]["active_parser"]
         return normalized
 
     async def update_pdf_parser(
@@ -113,21 +114,128 @@ class SystemSettingsService:
 
         return saved
 
-    @staticmethod
-    def _merge_defaults(data: Dict[str, Any]) -> Dict[str, Any]:
-        merged = {
-            "pdf_parser": {
-                **DEFAULT_SETTINGS["pdf_parser"],
-                **(data.get("pdf_parser") or {}),
-            }
-        }
+    @classmethod
+    def _merge_defaults(cls, data: Dict[str, Any]) -> Dict[str, Any]:
+        defaults = cls._default_settings()
+        merged = copy.deepcopy(defaults)
         for key, value in data.items():
-            if key != "pdf_parser":
+            if key not in merged:
+                merged[key] = value
+                continue
+            if isinstance(merged[key], dict) and isinstance(value, dict):
+                merged[key] = cls._deep_merge_dicts(merged[key], value)
+            else:
                 merged[key] = value
         return merged
+
+    @classmethod
+    def _merge_section_dicts(cls, base: Dict[str, Any], updates: Dict[str, Any]) -> Dict[str, Any]:
+        merged = copy.deepcopy(base)
+        for key, value in updates.items():
+            if isinstance(merged.get(key), dict) and isinstance(value, dict):
+                merged[key] = cls._deep_merge_dicts(merged[key], value)
+            else:
+                merged[key] = value
+        return merged
+
+    @staticmethod
+    def _deep_merge_dicts(base: Dict[str, Any], updates: Dict[str, Any]) -> Dict[str, Any]:
+        merged = copy.deepcopy(base)
+        for key, value in updates.items():
+            if isinstance(merged.get(key), dict) and isinstance(value, dict):
+                merged[key] = SystemSettingsService._deep_merge_dicts(merged[key], value)
+            else:
+                merged[key] = value
+        return merged
+
+    @classmethod
+    def _sanitize_input(cls, data: Dict[str, Any]) -> Dict[str, Any]:
+        defaults = cls._default_settings()
+        sanitized: Dict[str, Any] = {}
+        for key, value in data.items():
+            if not isinstance(value, dict):
+                continue
+            if key == "pdf_parser":
+                sanitized[key] = {
+                    "active_parser": value.get(
+                        "active_parser",
+                        defaults["pdf_parser"]["active_parser"],
+                    ),
+                    "service_mode": "single_active",
+                    "service_switch_notes": value.get("service_switch_notes", ""),
+                }
+                continue
+            sanitized[key] = value
+        return sanitized
+
+    @staticmethod
+    def _default_settings() -> Dict[str, Any]:
+        return {
+            "llm": {
+                "model": settings.OPENAI_MODEL,
+                "temperature": 0.7,
+                "max_tokens": 2000,
+                "system_prompt": "你是一个专业的408考研学习助手，擅长解释知识点、题目分析与学习规划。",
+            },
+            "search": {
+                "default_page_size": 20,
+                "max_results": 100,
+                "similarity_threshold": 0.8,
+                "weights": {
+                    "name": 1.0,
+                    "category": 0.8,
+                    "relation": 0.6,
+                },
+                "cache_ttl": 300,
+            },
+            "crawler": {
+                "request_interval": 1.0,
+                "max_concurrency": 5,
+                "timeout": 30,
+                "user_agents": [],
+                "proxy": None,
+                "max_concurrent": 5,
+                "request_delay": 1.0,
+                "request_timeout": 30,
+                "max_retries": 3,
+                "retry_delay": 2.0,
+                "user_agent": "408-Platform/1.0",
+                "proxy_enabled": False,
+                "proxy_url": "",
+                "respect_robots_txt": True,
+                "auto_detect_encoding": True,
+                "follow_redirects": True,
+                "max_redirects": 5,
+                "max_depth": 3,
+                "dedup_enabled": True,
+                "storage_batch_size": 100,
+                "log_level": settings.LOG_LEVEL,
+                "data_sources": [],
+            },
+            "system": {
+                "name": settings.APP_NAME,
+                "logo": None,
+                "announcement": "",
+                "maintenance_mode": False,
+                "log_level": settings.LOG_LEVEL,
+            },
+            "pdf_parser": {
+                "active_parser": "docling",
+                "service_mode": "single_active",
+                "service_switch_notes": "",
+            },
+        }
 
     @staticmethod
     def _default_description(config_key: str) -> str:
         if config_key == "pdf_parser":
             return "PDF 解析器单活切换配置"
+        if config_key == "llm":
+            return "LLM 参数配置"
+        if config_key == "search":
+            return "搜索参数配置"
+        if config_key == "crawler":
+            return "爬虫运行配置"
+        if config_key == "system":
+            return "系统基础配置"
         return "系统配置"

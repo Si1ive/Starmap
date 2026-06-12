@@ -1346,9 +1346,8 @@ async def get_settings(db: AsyncSession = Depends(get_db)):
     """
     获取系统配置
     
-    返回当前系统配置，从环境变量和数据库配置读取。
+    返回当前系统配置，优先读取数据库持久化内容。
     """
-    from app.core.config import settings
     from app.services.document_parsers import get_supported_parser_names, inspect_parser_health
     from app.services.system_settings_service import SystemSettingsService
 
@@ -1368,36 +1367,10 @@ async def get_settings(db: AsyncSession = Depends(get_db)):
         code=200,
         message="success",
         data={
-            "llm": {
-                "model": settings.OPENAI_MODEL,
-                "temperature": 0.7,
-                "max_tokens": 2000,
-                "system_prompt": "你是一个专业的408考研学习助手，擅长解释知识点、题目分析与学习规划。"
-            },
-            "search": {
-                "default_page_size": 20,
-                "max_results": 100,
-                "similarity_threshold": 0.8,
-                "weights": {
-                    "name": 1.0,
-                    "category": 0.8,
-                    "relation": 0.6
-                },
-                "cache_ttl": 300
-            },
-            "crawler": {
-                "request_interval": 1.0,
-                "max_concurrency": 5,
-                "timeout": 30,
-                "user_agents": [],
-                "proxy": None
-            },
-            "system": {
-                "name": settings.APP_NAME,
-                "announcement": "",
-                "maintenance_mode": False,
-                "log_level": settings.LOG_LEVEL
-            },
+            "llm": runtime_settings["llm"],
+            "search": runtime_settings["search"],
+            "crawler": runtime_settings["crawler"],
+            "system": runtime_settings["system"],
             "pdf_parser": {
                 "active_parser": active_parser,
                 "service_mode": runtime_settings["pdf_parser"]["service_mode"],
@@ -1468,12 +1441,11 @@ async def update_settings(
     """
     更新系统配置
     
-    当前仅对 PDF 解析器配置做数据库持久化，其余配置仍由既有配置来源提供。
+    所有顶级 section 统一落库；PDF 解析器切换额外记录审计日志。
     """
     from app.services.system_settings_service import SystemSettingsService
 
     runtime_service = SystemSettingsService(db)
-    saved_runtime = await runtime_service.load()
     auth_header = request.headers.get("Authorization", "")
     user_id: Optional[str] = None
     if auth_header.startswith("Bearer mock_jwt_token_"):
@@ -1481,22 +1453,20 @@ async def update_settings(
 
     ip_address = request.client.host if request.client else None
     user_agent = request.headers.get("User-Agent")
+    current_settings = await runtime_service.load()
+    saved_runtime = await runtime_service.save_partial(data)
 
     if isinstance(data.get("pdf_parser"), dict):
         parser_section = data["pdf_parser"]
         saved_runtime = await runtime_service.update_pdf_parser(
-            parser_name=parser_section.get("active_parser", saved_runtime["pdf_parser"]["active_parser"]),
+            parser_name=parser_section.get("active_parser", current_settings["pdf_parser"]["active_parser"]),
             switch_notes=parser_section.get("service_switch_notes", ""),
             user_id=user_id,
             ip_address=ip_address,
             user_agent=user_agent,
         )
 
-    response_data = {
-        **data,
-        "pdf_parser": saved_runtime["pdf_parser"],
-    }
-    return ApiResponse(code=200, message="保存成功", data=response_data)
+    return ApiResponse(code=200, message="保存成功", data=saved_runtime)
 
 
 
