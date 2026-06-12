@@ -26,7 +26,7 @@ import json
 import os
 import asyncio
 from pathlib import Path
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Literal
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status, WebSocket, WebSocketDisconnect
@@ -1361,13 +1361,16 @@ async def get_error_logs(
 # ========== 系统配置相关 ==========
 
 @router.get("/settings", response_model=ApiResponse)
-async def get_settings():
+async def get_settings(db: AsyncSession = Depends(get_db)):
     """
     获取系统配置
     
-    返回当前系统配置，从环境变量和配置文件读取。
+    返回当前系统配置，从环境变量和数据库配置读取。
     """
     from app.core.config import settings
+    from app.services.system_settings_service import SystemSettingsService
+
+    runtime_settings = await SystemSettingsService(db).load()
     
     return ApiResponse(
         code=200,
@@ -1402,19 +1405,40 @@ async def get_settings():
                 "announcement": "",
                 "maintenance_mode": False,
                 "log_level": settings.LOG_LEVEL
+            },
+            "pdf_parser": {
+                "active_parser": runtime_settings["pdf_parser"]["active_parser"],
+                "service_mode": runtime_settings["pdf_parser"]["service_mode"],
+                "service_switch_notes": runtime_settings["pdf_parser"]["service_switch_notes"],
             }
         }
     )
 
 
 @router.put("/settings", response_model=ApiResponse)
-async def update_settings(data: dict):
+async def update_settings(data: dict, db: AsyncSession = Depends(get_db)):
     """
     更新系统配置
     
-    TODO: 实现配置持久化存储
+    当前仅对 PDF 解析器配置做数据库持久化，其余配置先原样回显。
     """
-    return ApiResponse(code=200, message="保存成功", data=data)
+    from app.services.system_settings_service import SystemSettingsService
+
+    runtime_service = SystemSettingsService(db)
+    saved_runtime = await runtime_service.load()
+
+    if isinstance(data.get("pdf_parser"), dict):
+        parser_section = data["pdf_parser"]
+        saved_runtime = await runtime_service.update_pdf_parser(
+            parser_name=parser_section.get("active_parser", saved_runtime["pdf_parser"]["active_parser"]),
+            switch_notes=parser_section.get("service_switch_notes", ""),
+        )
+
+    response_data = {
+        **data,
+        "pdf_parser": saved_runtime["pdf_parser"],
+    }
+    return ApiResponse(code=200, message="保存成功", data=response_data)
 
 
 
@@ -2306,6 +2330,68 @@ async def scan_corpus_files(
     return ApiResponse(data=result)
 
 
+class RegisterFileRequest(BaseModel):
+    """单文件注册请求"""
+    file_path: str = Field(..., description="文件绝对路径")
+    batch_label: Optional[str] = Field(default=None, description="批次标签")
+
+
+@router.post("/corpus/files/register", response_model=ApiResponse)
+async def register_corpus_file(
+    req: RegisterFileRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """注册单个文件到语料库（如已存在则返回已有记录）"""
+    from app.services.corpus_service import CorpusService
+
+    service = CorpusService(db)
+    try:
+        result = await service.register_single_file(
+            file_path=req.file_path,
+            batch_label=req.batch_label,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return ApiResponse(data=result)
+
+
+class RegisterByDownloadRequest(BaseModel):
+    """通过已下载文件ID注册"""
+    downloaded_file_id: str = Field(..., description="已下载文件ID")
+    batch_label: Optional[str] = Field(default=None, description="批次标签")
+
+
+@router.post("/corpus/files/register-by-download", response_model=ApiResponse)
+async def register_corpus_file_by_download(
+    req: RegisterByDownloadRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """通过已下载文件ID注册到语料库"""
+    from app.models.mysql_models import DownloadedFile
+    from app.services.corpus_service import CorpusService
+
+    result = await db.execute(
+        select(DownloadedFile).where(DownloadedFile.id == req.downloaded_file_id)
+    )
+    downloaded = result.scalar_one_or_none()
+    if not downloaded:
+        raise HTTPException(status_code=404, detail="已下载文件不存在")
+    if not downloaded.local_path:
+        raise HTTPException(status_code=400, detail="该文件未下载到本地，local_path 为空")
+
+    service = CorpusService(db)
+    try:
+        reg_result = await service.register_single_file(
+            file_path=downloaded.local_path,
+            batch_label=req.batch_label or downloaded.task_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return ApiResponse(data=reg_result)
+
+
 @router.get("/corpus/files", response_model=ApiResponse)
 async def list_corpus_files(
     page: int = Query(1, ge=1),
@@ -2369,19 +2455,39 @@ async def get_corpus_file_detail(
     return ApiResponse(data=result)
 
 
+class ParseCorpusFileRequest(BaseModel):
+    """单文件解析请求"""
+    parser_name: Optional[Literal["docling", "mineru"]] = Field(
+        default=None,
+        description="仅用于开发期临时覆盖；正式运行应通过系统设置切换单活解析器",
+    )
+    parse_mode: Literal["primary", "fallback", "retry", "manual_fix"] = Field(
+        default="primary",
+        description="解析执行标记，用于区分主解析、重试、人工修复等运行语义",
+    )
+
+
 @router.post("/corpus/files/{file_id}/parse", response_model=ApiResponse)
 async def parse_corpus_file(
     file_id: str,
+    req: Optional[ParseCorpusFileRequest] = None,
     db: AsyncSession = Depends(get_db),
 ):
     """触发文档解析"""
     from app.services.document_parse_service import DocumentParseService
 
     service = DocumentParseService(db)
+    parse_req = req or ParseCorpusFileRequest()
     try:
-        result = await service.parse_document(file_id)
+        result = await service.parse_document(
+            file_id,
+            parser_name=parse_req.parser_name,
+            parse_mode=parse_req.parse_mode,
+        )
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        detail = str(e)
+        status_code = 404 if detail.startswith("语料文件不存在") else 400
+        raise HTTPException(status_code=status_code, detail=detail)
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
@@ -2552,7 +2658,7 @@ async def extract_document_sections(
 @router.post("/corpus/documents/{document_id}/map-chapters", response_model=ApiResponse)
 async def map_document_chapters(
     document_id: str,
-    subject_id: str = Query(..., description="学科ID"),
+    subject_id: Optional[str] = Query(None, description="学科ID，不传则遍历所有学科匹配"),
     auto_approve_threshold: float = Query(0.90, description="自动通过阈值"),
     db: AsyncSession = Depends(get_db),
 ):

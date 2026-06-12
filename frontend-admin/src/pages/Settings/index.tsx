@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Form, Input, InputNumber, Select, Switch, Button, Card, message, Tabs } from 'antd'
+import { Alert, Form, Input, InputNumber, Select, Switch, Button, Card, message, Tabs } from 'antd'
 import { SaveOutlined } from '@ant-design/icons'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getSettings, updateSettings } from '@/api'
@@ -62,6 +62,11 @@ const Settings = () => {
       name: 'StarMap',
       maintenance_mode: false,
       log_level: 'INFO',
+    },
+    pdf_parser: {
+      active_parser: 'docling',
+      service_mode: 'single_active',
+      service_switch_notes: '',
     },
   }
 
@@ -169,6 +174,37 @@ const Settings = () => {
                   <Option value="WARNING">WARNING</Option>
                   <Option value="ERROR">ERROR</Option>
                 </Select>
+              </Form.Item>
+            </Card>
+          </TabPane>
+
+          <TabPane tab="PDF解析器" key="pdf-parser">
+            <Card>
+              <Alert
+                type="warning"
+                showIcon
+                style={{ marginBottom: 16 }}
+                message="这是系统级切换，不是单文件参数"
+                description="切换 PDF 解析器意味着你要停掉当前服务、卸载或下线原实现，再注册并启用新的解析服务。同一时间只允许一个解析器处于激活状态。"
+              />
+
+              <Form.Item name={['pdf_parser', 'active_parser']} label="当前激活解析器">
+                <Select>
+                  <Option value="docling">Docling</Option>
+                  <Option value="mineru">MinerU</Option>
+                </Select>
+              </Form.Item>
+
+              <Form.Item name={['pdf_parser', 'service_mode']} label="运行模式">
+                <Input disabled />
+              </Form.Item>
+
+              <Form.Item
+                name={['pdf_parser', 'service_switch_notes']}
+                label="切换备注"
+                tooltip="记录本次服务切换的原因、依赖变更、安装步骤或回滚说明"
+              >
+                <TextArea rows={4} placeholder="例如：已停用 Docling 容器，切换为 MinerU OCR 服务，等待重建解析镜像" />
               </Form.Item>
             </Card>
           </TabPane>

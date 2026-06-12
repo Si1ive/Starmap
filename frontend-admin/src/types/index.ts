@@ -289,3 +289,155 @@ export interface ApiResponse<T> {
   data: T
   request_id: string
 }
+
+// ========== 多模态入库 ==========
+
+// 语料文件
+export interface CorpusFile {
+  id: string
+  file_name: string
+  file_path: string
+  file_type: string
+  file_ext: string
+  file_size: number
+  source_type: string
+  status: string
+  batch_label?: string
+  document_id?: string
+  created_at?: string
+  updated_at?: string
+}
+
+// 解析记录
+export interface ParseRun {
+  id: string
+  corpus_file_id: string
+  parser_name: DocumentParserName
+  parser_version?: string
+  parse_mode?: ParseMode
+  status: string
+  page_count?: number
+  block_count?: number
+  asset_count?: number
+  confidence?: number
+  error_detail?: string
+  started_at?: string
+  completed_at?: string
+  created_at?: string
+}
+
+export type DocumentParserName = 'docling' | 'mineru'
+
+export type ParseMode = 'primary' | 'fallback' | 'retry' | 'manual_fix'
+
+export interface ParseCorpusFileRequest {
+  parser_name?: DocumentParserName
+  parse_mode?: ParseMode
+}
+
+// 文档 section
+export interface DocumentSection {
+  id: string
+  document_id: string
+  title: string
+  level: number
+  section_path: string
+  page_start?: number
+  page_end?: number
+  parent_id?: string
+  children?: DocumentSection[]
+}
+
+// Section 映射
+export interface SectionMapping {
+  mapping_id: string
+  section_id: string
+  section_title: string
+  section_path?: string
+  document_id?: string
+  canonical_chapter_id: string
+  canonical_chapter_name: string
+  canonical_chapter_code?: string
+  mapping_type: string
+  confidence: number
+  review_status: string
+  review_notes?: string
+  created_at?: string
+}
+
+// 审核项
+export interface ReviewItem {
+  id: string
+  title?: string
+  content?: string
+  type?: string
+  difficulty?: string
+  exam_frequency?: string
+  subject_id?: string
+  chapter_id?: string
+  primary_chapter_id?: string
+  topic_terms?: string[]
+  source?: string
+  review_status: string
+  review_notes?: string
+  created_at?: string
+}
+
+// 关系审核
+export interface RelationReview {
+  relation_id: string
+  source_knowledge_id: string
+  source_title: string
+  target_knowledge_id: string
+  target_title: string
+  relation_type: string
+  directionality?: string
+  evidence_text?: string
+  review_status: string
+  review_notes?: string
+  created_at?: string
+}
+
+// 检索结果
+export interface SearchResult {
+  segment_id: string
+  entity_type: string
+  entity_id: string
+  segment_type: string
+  content_text: string
+  context_text?: string
+  score: number
+  subject_id?: string
+  chapter_ids?: string[]
+  source?: {
+    document_id?: string
+    filename?: string
+    page_no?: number
+  }
+}
+
+// 检索调试结果
+export interface SearchDebugResult {
+  primary_results: SearchResult[]
+  related_results: SearchResult[]
+  relations: Array<{
+    relation_id: string
+    relation_type: string
+    direction: string
+    related_knowledge_id: string
+    related_knowledge_title: string
+    evidence_text?: string
+  }>
+}
+
+// 标准章节
+export interface CanonicalChapter {
+  id: string
+  subject_id: string
+  name: string
+  code?: string
+  parent_id?: string
+  level: number
+  sort_order: number
+  aliases?: string[]
+}

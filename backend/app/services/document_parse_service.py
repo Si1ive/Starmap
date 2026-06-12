@@ -1,9 +1,8 @@
 """
 文档解析服务
 
-使用 Docling 解析 PDF/DOCX/PPTX，输出结构化 pages/blocks/assets 并落库。
-Phase 0: PoC 验证，输出解析结果概览。
-Phase 1: 完整落库 document_pages/document_blocks/document_assets。
+通过标准化适配层解析 PDF/DOCX/PPTX，输出统一的 pages/blocks/assets 并落库。
+当前支持 Docling / MinerU 双解析器，可手动切换单一活动解析器。
 """
 
 import time
@@ -20,6 +19,14 @@ from app.models.mysql_models import (
     CorpusFile, ParseRun, Document,
     DocumentPage, DocumentBlock, DocumentAsset,
 )
+from app.services.document_parsers import (
+    ParsedAsset,
+    ParsedBlock,
+    ParsedDocumentResult,
+    ParsedPage,
+    choose_parser,
+)
+from app.services.system_settings_service import SystemSettingsService
 
 logger = get_logger(__name__)
 
@@ -28,89 +35,24 @@ def generate_id() -> str:
     return uuid.uuid4().hex[:32]
 
 
-# Docling block type -> our block_type mapping
-BLOCK_TYPE_MAP = {
-    "Title": "title",
-    "Heading": "heading",
-    "Paragraph": "paragraph",
-    "ListItem": "list",
-    "List": "list",
-    "Table": "table",
-    "TableCaption": "table_caption",
-    "Picture": "figure",
-    "Figure": "figure",
-    "FigureCaption": "figure_caption",
-    "Equation": "formula",
-    "CodeBlock": "code",
-    "PageBreak": "unknown",
-}
-
-
-def _map_block_type(docling_type: str) -> str:
-    """Map Docling block class name to our block_type enum."""
-    return BLOCK_TYPE_MAP.get(docling_type, "paragraph")
-
-
-def _extract_page_no(item) -> int:
-    """Extract page number from a Docling block item."""
-    # Docling items may have prov (provenance) with page info
-    if hasattr(item, "prov") and item.prov:
-        prov = item.prov
-        if isinstance(prov, list) and len(prov) > 0:
-            return getattr(prov[0], "page_no", 1) or 1
-        return getattr(prov, "page_no", 1) or 1
-    return 1
-
-
-def _extract_bbox(item) -> Optional[dict]:
-    """Extract bounding box from a Docling block item."""
-    if hasattr(item, "prov") and item.prov:
-        prov = item.prov
-        if isinstance(prov, list) and len(prov) > 0:
-            prov = prov[0]
-        if hasattr(prov, "bbox") and prov.bbox:
-            b = prov.bbox
-            return {
-                "l": getattr(b, "l", None),
-                "t": getattr(b, "t", None),
-                "r": getattr(b, "r", None),
-                "b": getattr(b, "b", None),
-            }
-    return None
-
-
-def _extract_text(item) -> str:
-    """Extract text content from a Docling block item."""
-    if hasattr(item, "text") and item.text:
-        return item.text
-    if hasattr(item, "caption") and item.caption:
-        return item.caption
-    return ""
-
-
-def _extract_md(item) -> str:
-    """Extract markdown representation if available."""
-    if hasattr(item, "export_to_markdown"):
-        try:
-            return item.export_to_markdown()
-        except Exception:
-            pass
-    return _extract_text(item)
-
-
 class DocumentParseService:
     """文档解析服务"""
 
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def parse_document(self, corpus_file_id: str) -> Dict[str, Any]:
+    async def parse_document(
+        self,
+        corpus_file_id: str,
+        parser_name: Optional[str] = None,
+        parse_mode: str = "primary",
+    ) -> Dict[str, Any]:
         """
         解析单个文档
 
         1. 读取 corpus_file 记录
         2. 创建 parse_run 记录
-        3. 调用 Docling 解析
+        3. 选择解析器并输出标准化结构
         4. 创建/更新 Document 记录
         5. 落库 pages、blocks、assets
         6. 更新 parse_run 状态和指标
@@ -126,26 +68,33 @@ class DocumentParseService:
         if not corpus_file.local_path or not Path(corpus_file.local_path).exists():
             raise ValueError(f"文件不存在于磁盘: {corpus_file.local_path}")
 
+        parser = choose_parser(
+            requested_parser=parser_name,
+            file_path=corpus_file.local_path,
+            default_parser=await SystemSettingsService(self.db).get_active_pdf_parser(),
+        )
+
         # 2. 创建 parse_run
         parse_run = ParseRun(
             id=generate_id(),
             corpus_file_id=corpus_file_id,
-            parser_name="docling",
-            parser_version="2.x",
-            parse_mode="primary",
+            parser_name=parser.name,
+            parser_version=parser.version,
+            parse_mode=parse_mode,
             status="running",
         )
         self.db.add(parse_run)
 
         # 更新文件状态
         corpus_file.status = "parsing"
+        corpus_file.error_detail = None
         await self.db.commit()
 
         start_time = time.time()
 
         try:
-            # 3. 调用 Docling 解析
-            parse_result = self._run_docling(corpus_file.local_path)
+            # 3. 调用解析器并标准化
+            parse_result = parser.parse(corpus_file.local_path)
 
             # 4. 创建/更新 Document
             document = await self._get_or_create_document(
@@ -153,29 +102,37 @@ class DocumentParseService:
             )
 
             # 5. 落库 pages、blocks、assets
-            await self._persist_pages(document.id, parse_result["pages"])
-            await self._persist_assets(document.id, parse_result["assets"])
-            await self._persist_blocks(document.id, parse_result["blocks"])
+            await self._persist_pages(document.id, parse_result.pages)
+            await self._persist_assets(document.id, parse_result.assets)
+            await self._persist_blocks(document.id, parse_result.blocks)
 
             elapsed = time.time() - start_time
 
             # 6. 更新 parse_run
             parse_run.status = "success"
-            parse_run.page_count = parse_result.get("page_count", 0)
-            parse_run.block_count = parse_result.get("block_count", 0)
-            parse_run.asset_count = parse_result.get("asset_count", 0)
+            parse_run.parser_name = parse_result.parser_name
+            parse_run.parser_version = parse_result.parser_version
+            parse_run.parse_mode = parse_mode
+            parse_run.page_count = parse_result.page_count
+            parse_run.block_count = parse_result.block_count
+            parse_run.asset_count = parse_result.asset_count
+            parse_run.confidence = parse_result.confidence
             parse_run.completed_at = datetime.utcnow()
             parse_run.metrics_json = {
                 "elapsed_seconds": round(elapsed, 2),
-                "parser": "docling",
+                "parser": parse_result.parser_name,
+                "parser_version": parse_result.parser_version,
+                "parse_mode": parse_mode,
+                "metadata": parse_result.metadata or {},
             }
 
             # 更新文件状态
             corpus_file.status = "parsed"
+            corpus_file.error_detail = None
 
             # 更新文档
-            document.page_count = parse_result.get("page_count", 0)
-            document.document_markdown = parse_result.get("document_markdown", "")
+            document.page_count = parse_result.page_count
+            document.document_markdown = parse_result.document_markdown or ""
             document.status = "pending"
 
             await self.db.commit()
@@ -184,9 +141,11 @@ class DocumentParseService:
                 "文档解析成功并落库",
                 corpus_file_id=corpus_file_id,
                 document_id=document.id,
-                pages=parse_result.get("page_count"),
-                blocks=parse_result.get("block_count"),
-                assets=parse_result.get("asset_count"),
+                parser=parse_result.parser_name,
+                parse_mode=parse_mode,
+                pages=parse_result.page_count,
+                blocks=parse_result.block_count,
+                assets=parse_result.asset_count,
                 elapsed=f"{elapsed:.2f}s",
             )
 
@@ -194,21 +153,37 @@ class DocumentParseService:
                 "parse_run_id": parse_run.id,
                 "document_id": document.id,
                 "status": "success",
-                "page_count": parse_result.get("page_count", 0),
-                "block_count": parse_result.get("block_count", 0),
-                "asset_count": parse_result.get("asset_count", 0),
+                "parser_name": parse_result.parser_name,
+                "parser_version": parse_result.parser_version,
+                "parse_mode": parse_mode,
+                "page_count": parse_result.page_count,
+                "block_count": parse_result.block_count,
+                "asset_count": parse_result.asset_count,
                 "elapsed_seconds": round(elapsed, 2),
             }
 
-        except ImportError:
-            error_msg = "docling 未安装，请执行: pip install docling>=2.0.0"
+        except RuntimeError as e:
+            elapsed = time.time() - start_time
+            error_msg = str(e)[:500]
             parse_run.status = "failed"
             parse_run.error_detail = error_msg
+            parse_run.completed_at = datetime.utcnow()
+            parse_run.metrics_json = {
+                "elapsed_seconds": round(elapsed, 2),
+                "parser": parser.name,
+                "parser_version": parser.version,
+                "parse_mode": parse_mode,
+            }
             corpus_file.status = "failed"
             corpus_file.error_detail = error_msg
             await self.db.commit()
-            logger.error("Docling 未安装", corpus_file_id=corpus_file_id)
-            raise RuntimeError(error_msg)
+            logger.error(
+                "文档解析器不可用",
+                corpus_file_id=corpus_file_id,
+                parser=parser.name,
+                error=error_msg,
+            )
+            raise
 
         except Exception as e:
             elapsed = time.time() - start_time
@@ -216,132 +191,30 @@ class DocumentParseService:
             parse_run.status = "failed"
             parse_run.error_detail = error_msg
             parse_run.completed_at = datetime.utcnow()
-            parse_run.metrics_json = {"elapsed_seconds": round(elapsed, 2)}
+            parse_run.metrics_json = {
+                "elapsed_seconds": round(elapsed, 2),
+                "parser": parser.name,
+                "parser_version": parser.version,
+                "parse_mode": parse_mode,
+            }
 
             corpus_file.status = "failed"
             corpus_file.error_detail = error_msg
 
             await self.db.commit()
-            logger.error("文档解析失败", corpus_file_id=corpus_file_id, error=error_msg)
+            logger.error(
+                "文档解析失败",
+                corpus_file_id=corpus_file_id,
+                parser=parser.name,
+                error=error_msg,
+            )
             raise
-
-    def _run_docling(self, file_path: str) -> Dict[str, Any]:
-        """
-        调用 Docling 解析文档
-
-        Returns:
-            dict with keys: page_count, block_count, asset_count,
-                            pages, blocks, assets, document_markdown
-        """
-        from docling.document_converter import DocumentConverter
-
-        converter = DocumentConverter()
-        result = converter.convert(file_path)
-        doc = result.document
-
-        # --- pages ---
-        pages_raw = doc.pages if hasattr(doc, "pages") else []
-        pages = []
-        for i, page in enumerate(pages_raw):
-            page_no = i + 1
-            width = getattr(page, "width", None) or getattr(page, "size", None)
-            height = getattr(page, "height", None)
-            if hasattr(page, "size") and page.size:
-                width = getattr(page.size, "width", width)
-                height = getattr(page.size, "height", height)
-            pages.append({
-                "page_no": page_no,
-                "width": int(width) if width else None,
-                "height": int(height) if height else None,
-            })
-
-        # --- blocks ---
-        blocks = []
-        block_count = 0
-        order_counters: Dict[int, int] = {}  # page_no -> order_no counter
-
-        if hasattr(doc, "body") and doc.body:
-            for item in doc.body.walk():
-                block_count += 1
-                docling_type = type(item).__name__
-                block_type = _map_block_type(docling_type)
-                page_no = _extract_page_no(item)
-
-                # Increment per-page order
-                order_no = order_counters.get(page_no, 0)
-                order_counters[page_no] = order_no + 1
-
-                text = _extract_text(item)
-                md = _extract_md(item)
-
-                block_data = {
-                    "page_no": page_no,
-                    "block_type": block_type,
-                    "order_no": order_no,
-                    "content_text": text,
-                    "content_md": md if md != text else None,
-                    "bbox": _extract_bbox(item),
-                }
-
-                # Extract table HTML if it's a table
-                if docling_type in ("Table",) and hasattr(item, "export_to_html"):
-                    try:
-                        block_data["html_table"] = item.export_to_html()
-                    except Exception:
-                        pass
-
-                # Extract LaTeX for equations
-                if docling_type in ("Equation",) and hasattr(item, "text"):
-                    block_data["latex"] = getattr(item, "text", None)
-
-                blocks.append(block_data)
-
-        # --- assets (figures/pictures) ---
-        assets = []
-        asset_count = 0
-        if hasattr(doc, "pictures"):
-            for pic in doc.pictures:
-                asset_count += 1
-                page_no = 1
-                caption = ""
-                if hasattr(pic, "prov") and pic.prov:
-                    prov = pic.prov[0] if isinstance(pic.prov, list) and pic.prov else pic.prov
-                    page_no = getattr(prov, "page_no", 1) or 1
-                if hasattr(pic, "caption"):
-                    caption = pic.caption or ""
-                elif hasattr(pic, "text"):
-                    caption = pic.text or ""
-
-                assets.append({
-                    "page_no": page_no,
-                    "asset_type": "figure",
-                    "caption_text": caption,
-                    "bbox": _extract_bbox(pic),
-                })
-
-        # --- document markdown ---
-        document_markdown = ""
-        if hasattr(doc, "export_to_markdown"):
-            try:
-                document_markdown = doc.export_to_markdown()
-            except Exception:
-                pass
-
-        return {
-            "page_count": len(pages),
-            "block_count": block_count,
-            "asset_count": asset_count,
-            "pages": pages,
-            "blocks": blocks,
-            "assets": assets,
-            "document_markdown": document_markdown,
-        }
 
     async def _get_or_create_document(
         self,
         corpus_file: CorpusFile,
         parse_run_id: str,
-        parse_result: Dict[str, Any],
+        parse_result: ParsedDocumentResult,
     ) -> Document:
         """Get existing or create new Document for a corpus file."""
         result = await self.db.execute(
@@ -364,7 +237,7 @@ class DocumentParseService:
         await self.db.flush()
         return document
 
-    async def _persist_pages(self, document_id: str, pages: List[Dict[str, Any]]) -> None:
+    async def _persist_pages(self, document_id: str, pages: List[ParsedPage]) -> None:
         """Persist page records."""
         # Remove old pages for re-parse
         old = await self.db.execute(
@@ -377,15 +250,15 @@ class DocumentParseService:
             page = DocumentPage(
                 id=generate_id(),
                 document_id=document_id,
-                page_no=page_data["page_no"],
-                width=page_data.get("width"),
-                height=page_data.get("height"),
+                page_no=page_data.page_no,
+                width=page_data.width,
+                height=page_data.height,
             )
             self.db.add(page)
 
         await self.db.flush()
 
-    async def _persist_assets(self, document_id: str, assets: List[Dict[str, Any]]) -> None:
+    async def _persist_assets(self, document_id: str, assets: List[ParsedAsset]) -> None:
         """Persist asset records."""
         # Remove old assets for re-parse
         old = await self.db.execute(
@@ -398,17 +271,17 @@ class DocumentParseService:
             asset = DocumentAsset(
                 id=generate_id(),
                 document_id=document_id,
-                page_no=asset_data["page_no"],
-                asset_type=asset_data.get("asset_type", "figure"),
-                file_path="",  # Phase 2: save actual file
-                caption_text=asset_data.get("caption_text"),
-                bbox=asset_data.get("bbox"),
+                page_no=asset_data.page_no,
+                asset_type=asset_data.asset_type or "figure",
+                file_path=asset_data.file_path or "",
+                caption_text=asset_data.caption_text,
+                bbox=asset_data.bbox,
             )
             self.db.add(asset)
 
         await self.db.flush()
 
-    async def _persist_blocks(self, document_id: str, blocks: List[Dict[str, Any]]) -> None:
+    async def _persist_blocks(self, document_id: str, blocks: List[ParsedBlock]) -> None:
         """Persist block records."""
         # Remove old blocks for re-parse
         old = await self.db.execute(
@@ -421,14 +294,14 @@ class DocumentParseService:
             block = DocumentBlock(
                 id=generate_id(),
                 document_id=document_id,
-                page_no=block_data["page_no"],
-                block_type=block_data["block_type"],
-                order_no=block_data["order_no"],
-                content_text=block_data.get("content_text"),
-                content_md=block_data.get("content_md"),
-                bbox=block_data.get("bbox"),
-                html_table=block_data.get("html_table"),
-                latex=block_data.get("latex"),
+                page_no=block_data.page_no,
+                block_type=block_data.block_type,
+                order_no=block_data.order_no,
+                content_text=block_data.content_text,
+                content_md=block_data.content_md,
+                bbox=block_data.bbox,
+                html_table=block_data.html_table,
+                latex=block_data.latex,
             )
             self.db.add(block)
 

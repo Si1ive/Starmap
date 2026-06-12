@@ -8,6 +8,10 @@
 
 - [多模态语料入库与检索 API 契约](./multimodal-retrieval-contract.md)
 
+补充设计：
+
+- PDF 解析器的系统级切换方案见 [技术文档](../tech/pdf-parser-switching-design.md)
+
 ## 1. 契约原则
 
 1. 当前项目为 408 考研学习平台，接口语义必须围绕学科、章节、知识点、题目、语料和检索。
@@ -114,6 +118,10 @@
 | POST | `/api/v1/admin/corpus/documents/{document_id}/extract-sections` | 抽取原生章节 |
 | POST | `/api/v1/admin/corpus/documents/{document_id}/map-chapters` | 标准章节映射 |
 | POST | `/api/v1/admin/corpus/documents/{document_id}/extract-entities` | 抽取知识点与题目 |
+
+说明：
+
+- 当前激活的 PDF 解析器不在入库页切换，而是通过 `/api/v1/admin/settings` 维护系统级单活配置。
 
 ### 审核与检索
 

@@ -1,16 +1,16 @@
 import { useState } from 'react'
-import { Card, Table, Tag, Button, Modal, Form, Input, Select, Space, message, Progress, Tooltip } from 'antd'
-import { PlusOutlined, FilePdfOutlined, ReloadOutlined, FolderOpenOutlined, SearchOutlined } from '@ant-design/icons'
+import { Card, Table, Tag, Button, Modal, Form, Input, Select, Space, message, Steps, Tooltip } from 'antd'
+import { PlusOutlined, FilePdfOutlined, ReloadOutlined, FolderOpenOutlined, SearchOutlined, LoadingOutlined, PlayCircleOutlined } from '@ant-design/icons'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getSubjects, getChapters, ingestPdf, getIngestTasks, getDownloadedFiles } from '@/api'
-import type { DownloadedFile } from '@/types'
+import { listCorpusFiles, scanCorpusFiles, parseCorpusFile, extractDocumentSections, mapDocumentChapters, getDownloadedFiles, registerCorpusFileByDownload } from '@/api'
+
+const { Search } = Input
 
 const statusConfig: Record<string, { color: string; text: string }> = {
-  pending: { color: 'default', text: '待执行' },
-  running: { color: 'processing', text: '运行中' },
-  completed: { color: 'success', text: '已完成' },
-  failed: { color: 'error', text: '失败' },
-  stopped: { color: 'warning', text: '已停止' },
+  registered: { color: 'blue', text: '已注册' },
+  parsed: { color: 'green', text: '已解析' },
+  parsing: { color: 'processing', text: '解析中' },
+  failed: { color: 'red', text: '失败' },
 }
 
 const fileStatusConfig: Record<string, { color: string; text: string }> = {
@@ -21,41 +21,35 @@ const fileStatusConfig: Record<string, { color: string; text: string }> = {
   skipped: { color: 'default', text: '跳过' },
 }
 
-const formatFileSize = (bytes?: number) => {
-  if (!bytes) return '-'
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
+// 处理步骤
+const PIPELINE_STEPS = [
+  { key: 'scan', title: '扫描注册' },
+  { key: 'parse', title: '文档解析' },
+  { key: 'sections', title: '提取标题树' },
+  { key: 'map', title: '映射章节' },
+]
 
 const PdfIngest = () => {
   const queryClient = useQueryClient()
   const [modalVisible, setModalVisible] = useState(false)
   const [form] = Form.useForm()
-  const [selectedSubject, setSelectedSubject] = useState<string | undefined>()
-  const [params, setParams] = useState({ page: 1, page_size: 20 })
+  const [params, setParams] = useState({ page: 1, page_size: 20, status: undefined as string | undefined })
+  const [keyword, setKeyword] = useState<string | undefined>()
 
-  // 文件选择弹窗状态
+  // 文件选择弹窗
   const [filePickerVisible, setFilePickerVisible] = useState(false)
   const [fileParams, setFileParams] = useState<{
-    page: number; page_size: number;
-    file_type?: string; keyword?: string
+    page: number; page_size: number; file_type?: string; keyword?: string
   }>({ page: 1, page_size: 10, file_type: 'pdf' })
 
-  const { data: tasksData, isLoading } = useQuery({
-    queryKey: ['ingestTasks', params],
-    queryFn: () => getIngestTasks(params),
-  })
+  // 管线进度弹窗
+  const [pipelineVisible, setPipelineVisible] = useState(false)
+  const [pipelineSteps, setPipelineSteps] = useState<Record<string, 'wait' | 'process' | 'finish' | 'error'>>({})
+  const [pipelineDocId, setPipelineDocId] = useState<string | null>(null)
 
-  const { data: subjectsData } = useQuery({
-    queryKey: ['subjects'],
-    queryFn: getSubjects,
-  })
-
-  const { data: chaptersData } = useQuery({
-    queryKey: ['chapters', selectedSubject],
-    queryFn: () => getChapters(selectedSubject!),
-    enabled: !!selectedSubject,
+  const { data, isLoading } = useQuery({
+    queryKey: ['corpusFiles', params, keyword],
+    queryFn: () => listCorpusFiles({ ...params, keyword }),
   })
 
   const { data: filesData, isLoading: filesLoading } = useQuery({
@@ -64,32 +58,119 @@ const PdfIngest = () => {
     enabled: filePickerVisible,
   })
 
-  const tasks = tasksData?.data?.items || []
-  const total = tasksData?.data?.total || 0
-  const subjects = subjectsData?.data || []
-  const chapters = chaptersData?.data || []
-  const downloadedFiles = (filesData?.data?.items || []) as DownloadedFile[]
+  const files = data?.data?.items || []
+  const total = data?.data?.total || 0
+  const downloadedFiles = (filesData?.data?.items || []) as any[]
   const filesTotal = filesData?.data?.total || 0
 
-  const ingestMutation = useMutation({
-    mutationFn: ingestPdf,
-    onSuccess: (res) => {
-      message.success(`PDF入库任务已创建: ${res.data?.task_id}`)
+  // 扫描并自动走完全流程
+  const scanMutation = useMutation({
+    mutationFn: scanCorpusFiles,
+    onSuccess: async (res) => {
+      const count = res.data?.registered_count || 0
+      message.success(`扫描完成：注册 ${count} 个文件`)
       setModalVisible(false)
       form.resetFields()
-      queryClient.invalidateQueries({ queryKey: ['ingestTasks'] })
+      queryClient.invalidateQueries({ queryKey: ['corpusFiles'] })
+
+      // 如果有注册成功的文件，提示用户可批量处理
+      if (count > 0) {
+        message.info('可在列表中点击"自动处理"逐个处理文件，或等待后续批量处理功能')
+      }
     },
   })
 
-  const handleSubmit = () => {
+  // 自动处理管线：解析 → 提取标题 → 映射章节
+  const runPipeline = async (fileId: string, documentId?: string) => {
+    setPipelineVisible(true)
+    setPipelineDocId(documentId || null)
+    const steps: Record<string, 'wait' | 'process' | 'finish' | 'error'> = {}
+    PIPELINE_STEPS.forEach((s) => (steps[s.key] = 'wait'))
+    setPipelineSteps({ ...steps })
+
+    try {
+      // Step 1: 解析（如果还没解析）
+      steps.scan = 'finish'
+      steps.parse = 'process'
+      setPipelineSteps({ ...steps })
+
+      const parseRes = await parseCorpusFile(fileId, {
+        parse_mode: 'primary',
+      })
+      if (parseRes.code !== 0) throw new Error(parseRes.message || '解析失败')
+
+      steps.parse = 'finish'
+      steps.sections = 'process'
+      setPipelineSteps({ ...steps })
+
+      // 从解析结果获取 document_id
+      const docId = parseRes.data?.document_id || documentId
+      if (!docId) throw new Error('未获取到文档ID')
+
+      setPipelineDocId(docId)
+
+      // Step 2: 提取标题树
+      const sectionsRes = await extractDocumentSections(docId)
+      if (sectionsRes.code !== 0) throw new Error(sectionsRes.message || '提取标题树失败')
+
+      steps.sections = 'finish'
+
+      // Step 3: 映射章节（不选学科则遍历所有学科自动匹配）
+      steps.map = 'process'
+      setPipelineSteps({ ...steps })
+
+      const subjectId = form.getFieldValue('subject_id')
+      const mapRes = await mapDocumentChapters(docId, subjectId || undefined)
+      if (mapRes.code !== 0) {
+        steps.map = 'error'
+        setPipelineSteps({ ...steps })
+        message.warning('章节映射部分失败，可在详情页手动处理')
+      } else {
+        steps.map = 'finish'
+        setPipelineSteps({ ...steps })
+      }
+
+      queryClient.invalidateQueries({ queryKey: ['corpusFiles'] })
+      message.success('自动处理完成')
+    } catch (err: any) {
+      // 标记当前步骤为错误
+      const currentKey = Object.keys(steps).find((k) => steps[k] === 'process')
+      if (currentKey) steps[currentKey] = 'error'
+      setPipelineSteps({ ...steps })
+      message.error(err.message || '处理失败')
+    }
+  }
+
+  const handleSelectFile = async (file: any) => {
+    setFilePickerVisible(false)
+    try {
+      const regRes = await registerCorpusFileByDownload(file.id)
+      if (regRes.code !== 0) {
+        message.error(regRes.message || '注册失败')
+        return
+      }
+      const corpusFileId = regRes.data!.corpus_file_id
+      await runPipeline(corpusFileId)
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail
+      message.error(detail || err.message || '处理失败')
+    }
+  }
+
+  const handleCreateAndProcess = () => {
     form.validateFields().then((values) => {
-      ingestMutation.mutate(values)
+      scanMutation.mutate({
+        root_path: values.root_path,
+        batch_label: values.batch_label || undefined,
+      })
     })
   }
 
-  const handleSelectFile = (file: DownloadedFile) => {
-    form.setFieldValue('pdf_path', file.local_path)
-    setFilePickerVisible(false)
+  const formatFileSize = (bytes?: number) => {
+    if (!bytes) return '-'
+    if (bytes < 1024) return `${bytes} B`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
   }
 
   const fileColumns = [
@@ -97,8 +178,8 @@ const PdfIngest = () => {
       title: '文件名',
       dataIndex: 'file_name',
       ellipsis: true,
-      render: (name: string, record: DownloadedFile) => (
-        <Tooltip title={record.file_path}>
+      render: (name: string, record: any) => (
+        <Tooltip title={record.file_path || record.local_path}>
           <span>{name}</span>
         </Tooltip>
       ),
@@ -131,125 +212,172 @@ const PdfIngest = () => {
       },
     },
     {
-      title: '失败原因',
-      dataIndex: 'error_detail',
-      ellipsis: true,
-      render: (err: string) => err ? (
-        <Tooltip title={err}>
-          <span style={{ color: '#ff4d4f', fontSize: 12 }}>{err}</span>
-        </Tooltip>
-      ) : '-',
-    },
-    {
       title: '操作',
       key: 'action',
-      width: 80,
-      render: (_: unknown, record: DownloadedFile) => (
-        <Button
-          type="link"
-          size="small"
-          disabled={record.status === 'failed'}
-          onClick={() => handleSelectFile(record)}
-        >
-          选择
-        </Button>
+      width: 100,
+      render: (_: unknown, record: any) => (
+        <Tooltip title={!record.local_path ? '文件未下载到本地，无法处理' : undefined}>
+          <Button
+            type="link"
+            size="small"
+            disabled={record.status === 'failed' || !record.local_path}
+            onClick={() => handleSelectFile(record)}
+          >
+            选择并处理
+          </Button>
+        </Tooltip>
       ),
     },
   ]
 
   const columns = [
     {
-      title: '任务名称',
-      dataIndex: 'name',
-      width: 250,
-    },
-    {
-      title: '状态',
-      dataIndex: 'status',
-      width: 100,
-      render: (s: string) => {
-        const config = statusConfig[s] || { color: 'default', text: s }
-        return <Tag color={config.color}>{config.text}</Tag>
-      },
-    },
-    {
-      title: '进度',
-      dataIndex: 'progress',
-      width: 150,
-      render: (progress: number, record: any) => (
-        <Progress
-          percent={Math.round(progress)}
-          size="small"
-          status={record.status === 'failed' ? 'exception' : record.status === 'completed' ? 'success' : 'active'}
-        />
-      ),
-    },
-    {
-      title: '成功/失败',
-      width: 100,
-      render: (_: any, record: any) => (
+      title: '文件名',
+      dataIndex: 'file_name',
+      key: 'file_name',
+      ellipsis: true,
+      render: (text: string) => (
         <span>
-          <span style={{ color: '#52c41a' }}>{record.success_count || 0}</span>
-          {' / '}
-          <span style={{ color: '#ff4d4f' }}>{record.failed_count || 0}</span>
+          <FilePdfOutlined style={{ marginRight: 8 }} />
+          {text}
         </span>
       ),
     },
     {
+      title: '类型',
+      dataIndex: 'file_ext',
+      key: 'file_ext',
+      width: 80,
+      render: (ext: string) => <Tag>{ext?.toUpperCase()}</Tag>,
+    },
+    {
+      title: '大小',
+      dataIndex: 'file_size',
+      key: 'file_size',
+      width: 100,
+      render: formatFileSize,
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 100,
+      render: (s: string) => {
+        const cfg = statusConfig[s] || { color: 'default', text: s }
+        return <Tag color={cfg.color}>{cfg.text}</Tag>
+      },
+    },
+    {
+      title: '批次',
+      dataIndex: 'batch_label',
+      key: 'batch_label',
+      width: 120,
+      ellipsis: true,
+    },
+    {
       title: '创建时间',
       dataIndex: 'created_at',
-      width: 180,
-      render: (t: string) => (t ? new Date(t).toLocaleString('zh-CN') : '-'),
+      key: 'created_at',
+      width: 170,
+      render: (t: string) => t ? new Date(t).toLocaleString('zh-CN') : '-',
     },
     {
-      title: '完成时间',
-      dataIndex: 'completed_at',
-      width: 180,
-      render: (t: string) => (t ? new Date(t).toLocaleString('zh-CN') : '-'),
-    },
-    {
-      title: '错误信息',
-      dataIndex: 'error_message',
-      ellipsis: true,
-      render: (msg: string) => msg || '-',
+      title: '操作',
+      key: 'actions',
+      width: 200,
+      render: (_: any, record: any) => (
+        <Space>
+          <Button
+            type="primary"
+            size="small"
+            icon={<PlayCircleOutlined />}
+            onClick={() => runPipeline(record.id, record.document_id)}
+          >
+            自动处理
+          </Button>
+          {record.document_id && (
+            <Button
+              type="link"
+              size="small"
+              onClick={() => window.open(`/admin/corpus/${record.document_id}`, '_blank')}
+            >
+              详情
+            </Button>
+          )}
+        </Space>
+      ),
     },
   ]
+
+  const stepStatusToAntd = (s: 'wait' | 'process' | 'finish' | 'error') => s
 
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <h2 style={{ margin: 0 }}>PDF入库</h2>
+        <h2 style={{ margin: 0 }}>PDF 入库</h2>
         <Space>
           <Button
             icon={<ReloadOutlined />}
-            onClick={() => queryClient.invalidateQueries({ queryKey: ['ingestTasks'] })}
+            onClick={() => queryClient.invalidateQueries({ queryKey: ['corpusFiles'] })}
           >
             刷新
           </Button>
           <Button
             type="primary"
             icon={<PlusOutlined />}
+            onClick={() => {
+              setFileParams({ page: 1, page_size: 10, file_type: 'pdf' })
+              setFilePickerVisible(true)
+            }}
+          >
+            选择文件入库
+          </Button>
+          <Button
+            icon={<FolderOpenOutlined />}
             onClick={() => setModalVisible(true)}
           >
-            新增入库任务
+            扫描目录
           </Button>
         </Space>
       </div>
 
+      <Card style={{ marginBottom: 16 }}>
+        <Space wrap>
+          <Search
+            placeholder="搜索文件名"
+            style={{ width: 250 }}
+            onSearch={(v) => setKeyword(v || undefined)}
+            allowClear
+          />
+          <Select
+            value={params.status || 'all'}
+            style={{ width: 130 }}
+            onChange={(v) => setParams((p) => ({ ...p, status: v === 'all' ? undefined : v, page: 1 }))}
+            options={[
+              { label: '全部状态', value: 'all' },
+              { label: '已注册', value: 'registered' },
+              { label: '已解析', value: 'parsed' },
+              { label: '解析中', value: 'parsing' },
+              { label: '失败', value: 'failed' },
+            ]}
+          />
+        </Space>
+      </Card>
+
       <Card>
         <Table
           columns={columns}
-          dataSource={tasks as any[]}
+          dataSource={files}
           rowKey="id"
           loading={isLoading}
           size="small"
-          scroll={{ x: 1200 }}
+          scroll={{ x: 1000 }}
           pagination={{
             current: params.page,
             pageSize: params.page_size,
             total,
             showSizeChanger: true,
-            showTotal: (count) => `共 ${count} 条`,
+            showTotal: (count) => `共 ${count} 个文件`,
           }}
           onChange={(pagination) =>
             setParams((prev) => ({
@@ -261,71 +389,38 @@ const PdfIngest = () => {
         />
       </Card>
 
-      {/* 创建入库任务弹窗 */}
+      {/* 扫描目录弹窗（批量操作） */}
       <Modal
-        title="新增PDF入库任务"
+        title="扫描目录入库"
         open={modalVisible}
-        onOk={handleSubmit}
-        onCancel={() => {
-          setModalVisible(false)
-          form.resetFields()
-        }}
-        confirmLoading={ingestMutation.isPending}
-        width={600}
+        onCancel={() => { setModalVisible(false); form.resetFields() }}
+        footer={null}
+        width={500}
       >
         <Form form={form} layout="vertical">
           <Form.Item
-            name="pdf_path"
-            label="PDF文件路径"
-            rules={[{ required: true, message: '请输入或选择PDF文件路径' }]}
-            tooltip="可手动输入服务器路径，或点击右侧按钮从已下载文件中选择"
+            name="root_path"
+            label="扫描目录"
+            rules={[{ required: true, message: '请输入目录路径' }]}
+            tooltip="填写文件所在目录，系统会自动扫描并注册所有支持的文件（pdf/docx/pptx）"
           >
-            <Input
-              placeholder="/data/books/王道数据结构2025.pdf"
-              prefix={<FilePdfOutlined />}
-              addonAfter={
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<FolderOpenOutlined />}
-                  onClick={() => {
-                    setFileParams({ page: 1, page_size: 10, file_type: 'pdf' })
-                    setFilePickerVisible(true)
-                  }}
-                  style={{ margin: -4, padding: '0 4px' }}
-                >
-                  选择文件
-                </Button>
-              }
-            />
+            <Input placeholder="/data/books/" />
           </Form.Item>
-          <Form.Item
-            name="subject_id"
-            label="学科"
-            rules={[{ required: true, message: '请选择学科' }]}
-          >
-            <Select
-              placeholder="选择学科"
-              onChange={(value) => {
-                setSelectedSubject(value)
-                form.setFieldValue('chapter_id', undefined)
-              }}
-              options={subjects.map((s) => ({ label: s.name, value: s.id }))}
-            />
+
+          <Form.Item name="batch_label" label="批次标签">
+            <Input placeholder="可选，如 2026春季" />
           </Form.Item>
-          <Form.Item
-            name="chapter_id"
-            label="章节"
-            rules={[{ required: true, message: '请选择章节' }]}
-          >
-            <Select
-              placeholder="选择章节"
-              disabled={!selectedSubject}
-              options={chapters.map((c) => ({ label: c.name, value: c.id }))}
-            />
-          </Form.Item>
-          <Form.Item name="source" label="来源说明">
-            <Input placeholder="如：王道2025/数据结构" />
+
+          <Form.Item>
+            <Button
+              type="primary"
+              icon={<FolderOpenOutlined />}
+              loading={scanMutation.isPending}
+              block
+              onClick={handleCreateAndProcess}
+            >
+              扫描并注册
+            </Button>
           </Form.Item>
         </Form>
       </Modal>
@@ -379,6 +474,32 @@ const PdfIngest = () => {
               page_size: pagination.pageSize || 10,
             }))
           }
+        />
+      </Modal>
+
+      {/* 自动处理进度弹窗 */}
+      <Modal
+        title="自动处理进度"
+        open={pipelineVisible}
+        onCancel={() => setPipelineVisible(false)}
+        footer={
+          pipelineDocId
+            ? <Button type="primary" href={`/admin/corpus/${pipelineDocId}`} target="_blank">查看文档详情</Button>
+            : null
+        }
+        width={500}
+      >
+        <Steps
+          direction="vertical"
+          size="small"
+          items={PIPELINE_STEPS.map((step) => {
+            const s = pipelineSteps[step.key] || 'wait'
+            return {
+              title: step.title,
+              status: stepStatusToAntd(s),
+              icon: s === 'process' ? <LoadingOutlined /> : undefined,
+            }
+          })}
         />
       </Modal>
     </div>

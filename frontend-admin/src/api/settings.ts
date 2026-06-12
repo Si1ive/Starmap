@@ -33,6 +33,11 @@ export interface SystemSettings {
     maintenance_mode: boolean
     log_level: string
   }
+  pdf_parser: {
+    active_parser: 'docling' | 'mineru'
+    service_mode: 'single_active'
+    service_switch_notes: string
+  }
 }
 
 export const getSettings = (): Promise<ApiResponse<SystemSettings>> => {

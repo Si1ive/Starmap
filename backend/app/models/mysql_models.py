@@ -334,6 +334,23 @@ class AuditLog(Base):
     )
 
 
+class SystemConfig(Base):
+    """系统配置表"""
+    __tablename__ = "system_configs"
+
+    config_key: Mapped[str] = mapped_column(String(100), primary_key=True, comment="配置键")
+    config_value: Mapped[Optional[dict]] = mapped_column(JSON, comment="配置值 JSON")
+    description: Mapped[Optional[str]] = mapped_column(String(255), comment="配置说明")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    __table_args__ = (
+        {"comment": "系统配置表"}
+    )
+
+
 # ========== 408 考研平台模型 ==========
 
 

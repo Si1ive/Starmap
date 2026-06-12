@@ -479,6 +479,13 @@ fallback 方案：
 | `started_at` | datetime | 开始时间 |
 | `completed_at` | datetime | 完成时间 |
 
+解析策略说明：
+
+- 解析层通过 `DocumentParser -> ParsedDocumentResult` 适配接口屏蔽 `Docling` 与 `MinerU` 的原始结构差异。
+- `DocumentParseService` 只依赖标准化结果并落库到统一表结构，因此手动切换解析器不会要求 `documents`、`document_pages`、`document_blocks`、`document_assets` 的上下游跟着改。
+- 运行模式采用单活解析器：同一时间只运行一个解析服务，通过后端默认值或单次请求参数手动切换，不做自动双路路由。
+- 差异仍然会体现在语义层面，例如分页颗粒度、块切分方式、表格/图片抽取丰富度、OCR 质量；这些差异通过标准化层被限制在内容质量范围内，而不是接口结构范围内。
+
 ### 6.2.3 `documents`
 
 用途：正规化后的文档主记录

@@ -338,13 +338,12 @@
 
 ### `POST /api/v1/admin/corpus/files/{file_id}/parse`
 
-请求：
+请求体可选；未传时使用后端当前单活默认解析器。
 
 ```json
 {
-  "parser": "docling",
-  "fallback_enabled": true,
-  "force_reparse": false
+  "parser_name": "docling",
+  "parse_mode": "primary"
 }
 ```
 
@@ -353,9 +352,24 @@
 ```json
 {
   "parse_run_id": "pr_001",
-  "status": "running"
+  "document_id": "doc_001",
+  "status": "success",
+  "parser_name": "docling",
+  "parser_version": "2.x",
+  "parse_mode": "primary",
+  "page_count": 24,
+  "block_count": 382,
+  "asset_count": 16,
+  "elapsed_seconds": 5.21
 }
 ```
+
+说明：
+
+- `parser_name` 支持 `docling` / `mineru`；用于手动指定本次解析器。
+- 系统设计为单活解析器运行模式，同一时间只运行一个解析服务，不做自动 fallback 路由。
+- `parse_mode` 仅保留执行语义标记，不再承担自动切换解析器的职责。
+- 下游只消费标准化后的 `documents` / `document_pages` / `document_blocks` / `document_assets`，不直接依赖具体解析器原始输出。
 
 ## 5.4 解析任务列表
 
