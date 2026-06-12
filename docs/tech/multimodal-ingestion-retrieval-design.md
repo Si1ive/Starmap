@@ -44,7 +44,7 @@
 - 主存储：`MySQL`
 - 检索缓存与异步任务状态：`Redis`
 - 知识点关系事实源：`MySQL`
-- 图谱查询加速与可视化：`Neo4j`，作为关系读模型与增强层，不是唯一事实源
+- 关系查询增强与可视化：可选独立图读模型，作为增强层而不是唯一事实源
 - 目标向量库：`Qdrant`
 - 向量检索底座统一使用 `Qdrant`
 - 文档解析主路线：`Docling`
@@ -127,7 +127,7 @@ segment 构建与上下文化增强
     ├─ MySQL relation edges
     ├─ Qdrant dense/sparse vectors
     ├─ Redis cache
-    └─ Neo4j graph projection（可后置同步）
+    └─ 可选关系读模型 projection（可后置同步）
     ↓
 检索服务
     ├─ 题目检索
@@ -434,7 +434,7 @@ fallback 方案：
 - `Qdrant` 存检索向量和 payload
 - `Redis` 存缓存、任务状态、检索中间结果
 - `MySQL` 存知识点关系边，作为关系事实源
-- `Neo4j` 可作为关系查询和可视化增强层，但不是必需事实源
+- 独立关系读模型可作为查询和可视化增强层，但不是必需事实源
 
 ## 6.2 新增 MySQL 表
 
