@@ -12,6 +12,14 @@
 
 ## 2026-06-08
 
+### [docs] 新增 PDF 解析器部署方案
+- **类型**：docs
+- **影响**：`docs/tech/README.md`, `docs/tech/pdf-parser-deployment.md`
+- **描述**：
+  - 明确当前 PDF 解析器并非独立远程服务，而是 `backend` 进程内直接导入 `Docling` / `MinerU`
+  - 给出与现有 Podman 基线一致的部署建议：解析器依赖进入 `backend` 镜像，按单活模式低频切换
+  - 明确推荐默认部署 `MinerU`，`Docling` 作为性能优先备选，并定义停旧启新的切换流程
+
 ### [docs] 多模态检索设计补充知识点关系图基线
 - **类型**：docs
 - **影响**：`README.md`, `docs/tech/`, `docs/api/`, `docs/roadmap/`

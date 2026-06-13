@@ -7,6 +7,7 @@
 - [架构设计](./architecture.md) - 系统架构
 - [多模态入库与检索设计](./multimodal-ingestion-retrieval-design.md) - 语料入库与检索方案
 - [PDF 解析器切换设计](./pdf-parser-switching-design.md) - Docling / MinerU 单活切换方案
+- [PDF 解析器部署方案](./pdf-parser-deployment.md) - Podman 下的单活部署建议
 - [多模态数据结构与迁移清单](./multimodal-schema-migration-plan.md) - 迁移与回填说明
 - [部署指南](./deployment.md) - 本地开发与部署
 
