@@ -30,6 +30,12 @@
 - `backend/parser_service/Dockerfile`
 - `docker-compose.podman.yml` 中的 `pdf-parser-service`
 
+当前唯一有效的本地编排入口为：
+
+- `docker-compose.podman.yml`
+
+旧的 `docker-compose.yml` 已移除，避免与当前 Podman 基线和 Qdrant 方案冲突。
+
 并且当前镜像构建策略已经细化为：
 
 - `PARSER_FLAVOR=mineru`：安装 `MinerU`

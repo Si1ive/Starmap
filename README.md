@@ -75,15 +75,8 @@ podman machine start
 ### 3. 启动基础设施（Podman）
 
 ```bash
-# 启动 MySQL + Redis + Scrapy Service
+# 启动 MySQL + Redis + Qdrant + PDF Parser + Backend + Admin
 podman-compose -f docker-compose.podman.yml up -d
-
-# 启动 Qdrant（独立容器）
-podman run -d --name starmap-qdrant \
-  -p 6333:6333 -p 6334:6334 \
-  -v qdrant_data:/qdrant/storage \
-  --memory=512m \
-  qdrant/qdrant:latest
 
 # 查看服务状态
 podman ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
@@ -98,6 +91,8 @@ podman exec -i starmap-mysql mysql -u starmap -p starmap < backend/scripts/init_
 ```
 
 ### 5. 启动后端服务
+
+如已使用 `podman-compose -f docker-compose.podman.yml up -d backend`，可跳过本节。
 
 ```bash
 cd backend
@@ -117,6 +112,8 @@ python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 - API 文档: http://localhost:8000/docs
 
 ### 6. 启动前端管理端
+
+如已使用 `podman-compose -f docker-compose.podman.yml up -d frontend-admin`，可跳过本节。
 
 ```bash
 cd frontend-admin
@@ -185,6 +182,7 @@ my-agent/
 | MySQL | localhost:3306 | `starmap` | `starmap123` |
 | Redis | localhost:6379 | - | - |
 | Qdrant | http://localhost:6333 | - | - |
+| PDF Parser Service | http://localhost:8090 | - | - |
 | 管理端 | http://localhost:5174 | `admin` | `admin123` |
 
 ## 服务端口
@@ -195,6 +193,7 @@ my-agent/
 | Redis | 6379 | 缓存服务 |
 | Qdrant | 6333 | 向量数据库 API（多模态检索） |
 | Qdrant gRPC | 6334 | 向量数据库 gRPC |
+| PDF Parser Service | 8090 | 独立 PDF 解析服务 |
 | Scrapy Service | - | 爬虫消费进程（无对外端口） |
 | 后端 API | 8000 | FastAPI 服务 |
 | 管理端前端 | 5174 | Vite 开发服务器 |

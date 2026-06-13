@@ -38,7 +38,7 @@ AI应告知：
 - 需要你：
   1. 检查docker compose版本（docker compose version）
   2. 如使用旧版docker-compose，请升级到v2
-  3. 或修改docker-compose.yml格式适配旧版
+  3. 或统一改用 `podman-compose -f docker-compose.podman.yml`
 - 替代方案：手动启动各个服务
 ```
 
@@ -50,7 +50,7 @@ AI应告知：
 - 需要你：
   1. 检查占用端口的进程（lsof -i :XXXX）
   2. 停止占用进程，或
-  3. 修改docker-compose.yml中的端口映射
+  3. 修改 `docker-compose.podman.yml` 中的端口映射
 - 我可以：帮你修改端口配置
 ```
 
@@ -254,9 +254,9 @@ python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-# Docker
-docker-compose down -v
-docker-compose up -d
+# Podman
+podman-compose -f docker-compose.podman.yml down -v
+podman-compose -f docker-compose.podman.yml up -d
 ```
 
 ### 检查状态
@@ -267,9 +267,9 @@ lsof -i :5173
 lsof -i :7474
 lsof -i :6379
 
-# 检查Docker
-docker ps
-docker-compose ps
+# 检查 Podman
+podman ps
+podman-compose -f docker-compose.podman.yml ps
 
 # 检查版本
 node -v

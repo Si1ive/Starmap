@@ -22,11 +22,6 @@ cd my-agent
 
 ```bash
 podman-compose -f docker-compose.podman.yml up -d
-
-podman run -d --name starmap-qdrant \
-  -p 6333:6333 -p 6334:6334 \
-  -v qdrant_data:/qdrant/storage \
-  qdrant/qdrant:latest
 ```
 
 ### 2.1 启动本地 PDF 解析服务
@@ -61,6 +56,8 @@ podman exec -i starmap-mysql mysql -ustarmap -pstarmap123 starmap < backend/scri
 
 ### 4. 启动后端
 
+如已通过 `podman-compose -f docker-compose.podman.yml up -d backend` 启动容器，可跳过本节。
+
 ```bash
 cd backend
 python3 -m venv venv
@@ -71,6 +68,8 @@ python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 ### 5. 启动管理端
+
+如已通过 `podman-compose -f docker-compose.podman.yml up -d frontend-admin` 启动容器，可跳过本节。
 
 ```bash
 cd frontend-admin
@@ -126,6 +125,12 @@ podman logs starmap-pdf-parser-service
 
 ```bash
 curl http://localhost:6333/collections
+```
+
+### PDF 解析服务健康检查
+
+```bash
+curl http://localhost:8090/health
 ```
 
 ### Redis 健康检查

@@ -61,7 +61,7 @@ restore_mysql() {
         fi
     else
         echo -e "${RED}❌ MySQL 容器未运行，无法恢复${NC}"
-        echo "请先启动容器: docker-compose up -d mysql"
+        echo "请先启动容器: podman-compose -f docker-compose.podman.yml up -d mysql"
     fi
     echo ""
 }

@@ -131,7 +131,7 @@ case $ROLE in
         echo -e "${BLUE}后端工程师专属提示：${NC}"
         echo "- API文档位置: docs/api/README.md"
         echo "- 数据库模型: docs/tech/data-model.md"
-        echo "- 启动命令: docker-compose up -d mysql neo4j redis"
+        echo "- 启动命令: podman-compose -f docker-compose.podman.yml up -d mysql redis qdrant pdf-parser-service backend"
         ;;
     frontend)
         echo -e "${BLUE}前端工程师专属提示：${NC}"

@@ -203,15 +203,15 @@ npm ERR! peer react@"^17.0.0" from some-package@1.0.0
 | `git merge` | 合并分支 | "将功能分支合并到开发分支" |
 | `git log` | 查看历史 | "查看提交记录，确认版本" |
 
-### Docker命令
+### 容器命令
 
 | 命令 | 功能 | 示例说明 |
 |------|------|---------|
-| `docker-compose up` | 启动服务 | "启动MySQL、Redis、Qdrant等基础服务" |
-| `docker-compose down` | 停止服务 | "停止所有容器，释放资源" |
-| `docker ps` | 查看容器 | "检查服务运行状态" |
-| `docker logs` | 查看日志 | "查看服务日志，排查问题" |
-| `docker build` | 构建镜像 | "构建应用Docker镜像" |
+| `podman-compose -f docker-compose.podman.yml up` | 启动服务 | "启动MySQL、Redis、Qdrant、PDF解析服务等基础服务" |
+| `podman-compose -f docker-compose.podman.yml down` | 停止服务 | "停止当前 Podman 编排内的所有服务" |
+| `podman ps` | 查看容器 | "检查服务运行状态" |
+| `podman logs` | 查看日志 | "查看服务日志，排查问题" |
+| `podman build` | 构建镜像 | "构建应用镜像" |
 
 ### Python命令
 
@@ -257,7 +257,7 @@ podman-compose -f docker-compose.podman.yml up -d
 ```
 
 **说明：**
-- `docker-compose up`：启动Docker Compose定义的服务
+- `podman-compose -f docker-compose.podman.yml up`：启动当前项目定义的 Podman 服务
 - `-d`：后台运行（detached模式）
 - 启动基础设施服务，不启动后端和前端
 
@@ -355,12 +355,12 @@ rm -rf node_modules
 **结果：** Docker version 24.0.2 ✅
 
 ### 步骤2/3：启动服务
-**命令：** `docker-compose up -d`
+**命令：** `podman-compose -f docker-compose.podman.yml up -d`
 **目的：** 启动所有服务
 **结果：** 所有服务启动成功 ✅
 
 ### 步骤3/3：验证状态
-**命令：** `docker-compose ps`
+**命令：** `podman-compose -f docker-compose.podman.yml ps`
 **目的：** 检查服务状态
 **结果：** 所有服务状态为Up ✅
 
