@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import copy
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -76,9 +77,21 @@ class SystemSettingsService:
             return self._default_settings()["pdf_parser"]["active_parser"]
         return normalized
 
+    async def get_pdf_parser_runtime_config(self) -> Dict[str, Any]:
+        data = await self.load()
+        parser_config = data.get("pdf_parser", {})
+        defaults = self._default_settings()["pdf_parser"]
+        merged = copy.deepcopy(defaults)
+        merged.update(parser_config if isinstance(parser_config, dict) else {})
+        return merged
+
     async def update_pdf_parser(
         self,
         parser_name: str,
+        deployment_target: str = "local",
+        local_service_endpoint: Optional[str] = None,
+        remote_service_endpoint: Optional[str] = None,
+        request_timeout_seconds: Optional[int] = None,
         switch_notes: str = "",
         user_id: Optional[str] = None,
         ip_address: Optional[str] = None,
@@ -88,17 +101,69 @@ class SystemSettingsService:
         normalized = str(parser_name).strip().lower()
         if normalized not in {"docling", "mineru"}:
             raise ValueError("pdf_parser.active_parser 仅支持 docling 或 mineru")
+        target = str(deployment_target or "local").strip().lower()
+        if target not in {"local", "remote"}:
+            raise ValueError("pdf_parser.deployment_target 仅支持 local 或 remote")
 
         current = await self.load()
-        old_parser = current.get("pdf_parser", {}).get("active_parser", "")
-        is_switching = normalized != old_parser
+        current_parser_config = current.get("pdf_parser", {})
+        old_parser = current_parser_config.get("active_parser", "")
+        old_target = current_parser_config.get("deployment_target", "local")
+        old_local_endpoint = current_parser_config.get(
+            "local_service_endpoint",
+            self._default_settings()["pdf_parser"]["local_service_endpoint"],
+        )
+        old_remote_endpoint = current_parser_config.get("remote_service_endpoint", "")
+        old_timeout = int(
+            current_parser_config.get(
+                "request_timeout_seconds",
+                self._default_settings()["pdf_parser"]["request_timeout_seconds"],
+            )
+        )
+        next_local_endpoint = (
+            str(local_service_endpoint).strip()
+            if local_service_endpoint is not None
+            else str(old_local_endpoint or self._default_settings()["pdf_parser"]["local_service_endpoint"]).strip()
+        )
+        next_remote_endpoint = (
+            str(remote_service_endpoint).strip()
+            if remote_service_endpoint is not None
+            else str(old_remote_endpoint or "").strip()
+        )
+        next_timeout = int(request_timeout_seconds or old_timeout or 120)
+        if next_timeout < 5 or next_timeout > 600:
+            raise ValueError("pdf_parser.request_timeout_seconds 仅支持 5-600 秒")
+
+        is_switching = (
+            normalized != old_parser
+            or target != old_target
+            or next_local_endpoint != str(old_local_endpoint or "")
+            or next_remote_endpoint != str(old_remote_endpoint or "")
+            or next_timeout != old_timeout
+        )
         notes = (switch_notes or "").strip()
 
         if is_switching and not notes:
-            raise ValueError("切换 PDF 解析器必须填写切换备注，说明原因、部署步骤和回滚方案")
+            raise ValueError("切换 PDF 解析器或部署位置必须填写切换备注，说明原因、部署步骤和回滚方案")
 
-        if is_switching:
-            parser_health = inspect_parser_health(normalized)
+        if target == "remote":
+            if not next_remote_endpoint:
+                raise ValueError("远程解析服务模式必须填写 remote_service_endpoint")
+            parsed = urlparse(next_remote_endpoint)
+            if not (parsed.scheme and parsed.netloc):
+                raise ValueError("remote_service_endpoint 地址格式不合法，需包含协议和主机")
+
+        if is_switching and target == "local":
+            parser_health = inspect_parser_health(
+                normalized,
+                {
+                    "active_parser": normalized,
+                    "deployment_target": target,
+                    "local_service_endpoint": next_local_endpoint,
+                    "remote_service_endpoint": next_remote_endpoint,
+                    "request_timeout_seconds": next_timeout,
+                },
+            )
             if parser_health.get("health_status") != "ready":
                 raise ValueError(
                     f"目标解析器 {normalized} 当前不可用：{parser_health.get('error_detail') or '未知错误'}。"
@@ -109,6 +174,10 @@ class SystemSettingsService:
             "active_parser": normalized,
             "service_mode": "single_active",
             "service_switch_notes": notes,
+            "deployment_target": target,
+            "local_service_endpoint": next_local_endpoint,
+            "remote_service_endpoint": next_remote_endpoint,
+            "request_timeout_seconds": next_timeout,
         }
         saved = await self.save(current)
 
@@ -118,8 +187,21 @@ class SystemSettingsService:
                 action="pdf_parser_switch",
                 resource_type="system_config",
                 resource_id="pdf_parser",
-                old_values={"active_parser": old_parser},
-                new_values={"active_parser": normalized, "switch_notes": notes},
+                old_values={
+                    "active_parser": old_parser,
+                    "deployment_target": old_target,
+                    "local_service_endpoint": old_local_endpoint,
+                    "remote_service_endpoint": old_remote_endpoint,
+                    "request_timeout_seconds": old_timeout,
+                },
+                new_values={
+                    "active_parser": normalized,
+                    "deployment_target": target,
+                    "local_service_endpoint": next_local_endpoint,
+                    "remote_service_endpoint": next_remote_endpoint,
+                    "request_timeout_seconds": next_timeout,
+                    "switch_notes": notes,
+                },
                 ip_address=ip_address,
                 user_agent=user_agent,
             )
@@ -177,6 +259,19 @@ class SystemSettingsService:
                     ),
                     "service_mode": "single_active",
                     "service_switch_notes": value.get("service_switch_notes", ""),
+                    "deployment_target": value.get(
+                        "deployment_target",
+                        defaults["pdf_parser"]["deployment_target"],
+                    ),
+                    "local_service_endpoint": value.get(
+                        "local_service_endpoint",
+                        defaults["pdf_parser"]["local_service_endpoint"],
+                    ),
+                    "remote_service_endpoint": value.get("remote_service_endpoint", ""),
+                    "request_timeout_seconds": value.get(
+                        "request_timeout_seconds",
+                        defaults["pdf_parser"]["request_timeout_seconds"],
+                    ),
                 }
                 continue
             sanitized[key] = value
@@ -237,6 +332,10 @@ class SystemSettingsService:
                 "active_parser": "mineru",
                 "service_mode": "single_active",
                 "service_switch_notes": "",
+                "deployment_target": "local",
+                "local_service_endpoint": settings.PDF_PARSER_LOCAL_ENDPOINT,
+                "remote_service_endpoint": "",
+                "request_timeout_seconds": 120,
             },
         }
 

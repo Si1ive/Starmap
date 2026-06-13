@@ -48,6 +48,23 @@
 - `PDF 入库` 页面不应暴露解析器选择控件。
 - 单文件入库只调用“当前系统激活解析器”。
 
+### 3.4 部署位置显式化原则
+
+- PDF 解析器除“解析器类型”外，还需要显式区分“部署位置”。
+- 当前支持的部署位置：
+  - `local`：本地 Podman 解析服务
+  - `remote`：远程机器上的解析服务
+- 系统设置应同时维护：
+  - `active_parser`
+  - `deployment_target`
+  - `local_service_endpoint`
+  - `remote_service_endpoint`
+
+说明：
+
+- `local` 模式是当前主实现路径。
+- `remote` 模式本期先保留配置结构和扩展口，不在本期实现真实请求转发。
+
 ## 4. 当前实现
 
 ## 4.1 解析适配层
@@ -97,7 +114,11 @@
   "pdf_parser": {
     "active_parser": "mineru",
     "service_mode": "single_active",
-    "service_switch_notes": ""
+    "service_switch_notes": "",
+    "deployment_target": "local",
+    "local_service_endpoint": "http://localhost:8090",
+    "remote_service_endpoint": "",
+    "request_timeout_seconds": 120
   }
 }
 ```

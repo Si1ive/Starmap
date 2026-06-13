@@ -1353,9 +1353,10 @@ async def get_settings(db: AsyncSession = Depends(get_db)):
 
     runtime_settings = await SystemSettingsService(db).load()
     active_parser = runtime_settings["pdf_parser"]["active_parser"]
+    parser_runtime_config = runtime_settings["pdf_parser"]
     available_parsers = []
     for parser_name in get_supported_parser_names():
-        parser_status = inspect_parser_health(parser_name)
+        parser_status = inspect_parser_health(parser_name, parser_runtime_config)
         parser_status["is_active"] = parser_name == active_parser
         available_parsers.append(parser_status)
     active_runtime_status = next(
@@ -1375,6 +1376,10 @@ async def get_settings(db: AsyncSession = Depends(get_db)):
                 "active_parser": active_parser,
                 "service_mode": runtime_settings["pdf_parser"]["service_mode"],
                 "service_switch_notes": runtime_settings["pdf_parser"]["service_switch_notes"],
+                "deployment_target": runtime_settings["pdf_parser"]["deployment_target"],
+                "local_service_endpoint": runtime_settings["pdf_parser"]["local_service_endpoint"],
+                "remote_service_endpoint": runtime_settings["pdf_parser"]["remote_service_endpoint"],
+                "request_timeout_seconds": runtime_settings["pdf_parser"]["request_timeout_seconds"],
                 "active_runtime_status": active_runtime_status,
                 "available_parsers": available_parsers,
             }
@@ -1413,6 +1418,8 @@ async def get_pdf_parser_history(
             "id": row.id,
             "old_parser": row.old_values.get("active_parser") if row.old_values else None,
             "new_parser": row.new_values.get("active_parser") if row.new_values else None,
+            "old_target": row.old_values.get("deployment_target") if row.old_values else None,
+            "new_target": row.new_values.get("deployment_target") if row.new_values else None,
             "switch_notes": (row.new_values or {}).get("switch_notes", ""),
             "user_id": row.user_id,
             "created_at": row.created_at.isoformat() if row.created_at else None,
@@ -1462,6 +1469,22 @@ async def update_settings(
         try:
             saved_runtime = await runtime_service.update_pdf_parser(
                 parser_name=parser_section.get("active_parser", current_settings["pdf_parser"]["active_parser"]),
+                deployment_target=parser_section.get(
+                    "deployment_target",
+                    current_settings["pdf_parser"]["deployment_target"],
+                ),
+                local_service_endpoint=parser_section.get(
+                    "local_service_endpoint",
+                    current_settings["pdf_parser"]["local_service_endpoint"],
+                ),
+                remote_service_endpoint=parser_section.get(
+                    "remote_service_endpoint",
+                    current_settings["pdf_parser"]["remote_service_endpoint"],
+                ),
+                request_timeout_seconds=parser_section.get(
+                    "request_timeout_seconds",
+                    current_settings["pdf_parser"]["request_timeout_seconds"],
+                ),
                 switch_notes=parser_section.get("service_switch_notes", ""),
                 user_id=user_id,
                 ip_address=ip_address,

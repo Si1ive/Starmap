@@ -8,6 +8,8 @@ export interface PdfParserRuntimeStatus {
   is_available: boolean
   is_active: boolean
   checked_at: string
+  deployment_target?: 'local' | 'remote'
+  service_endpoint?: string
   error_detail?: string | null
 }
 
@@ -69,6 +71,10 @@ export interface SystemSettings {
     active_parser: 'docling' | 'mineru'
     service_mode: 'single_active'
     service_switch_notes: string
+    deployment_target: 'local' | 'remote'
+    local_service_endpoint: string
+    remote_service_endpoint: string
+    request_timeout_seconds: number
     active_runtime_status?: PdfParserRuntimeStatus | null
     available_parsers?: PdfParserRuntimeStatus[]
   }
@@ -86,6 +92,8 @@ export interface PdfParserSwitchHistoryItem {
   id: number
   old_parser: string | null
   new_parser: string | null
+  old_target: 'local' | 'remote' | null
+  new_target: 'local' | 'remote' | null
   switch_notes: string
   user_id: string | null
   created_at: string

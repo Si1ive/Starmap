@@ -12,6 +12,15 @@
 
 ## 2026-06-08
 
+### [feat] PDF 解析器支持本地 Podman / 远程服务配置抽象
+- **类型**：feat
+- **影响**：`backend/app/api/admin.py`, `backend/app/core/config.py`, `backend/app/services/document_parse_service.py`, `backend/app/services/document_parsers.py`, `backend/app/services/system_settings_service.py`, `frontend-admin/src/api/settings.ts`, `frontend-admin/src/pages/Settings/index.tsx`, `docs/api/README.md`, `docs/tech/pdf-parser-switching-design.md`, `docs/tech/pdf-parser-deployment.md`
+- **描述**：
+  - 为 `pdf_parser` 增加 `deployment_target`、本地服务地址、远程服务地址和请求超时配置
+  - `local` 模式下改为访问本地 Podman 解析服务，默认读取 `PDF_PARSER_LOCAL_ENDPOINT`
+  - `remote` 模式先保留地址配置和扩展口，解析与探活链路暂不实现，返回明确提示
+  - 管理端系统设置页新增部署位置和服务地址配置，并在切换历史中记录部署位置变化
+
 ### [docs] 新增 PDF 解析器部署方案
 - **类型**：docs
 - **影响**：`docs/tech/README.md`, `docs/tech/pdf-parser-deployment.md`

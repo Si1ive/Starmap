@@ -39,8 +39,17 @@ const Settings = () => {
   const handleSubmit = (values: Partial<SystemSettings>) => {
     const nextParser = values.pdf_parser?.active_parser
     const currentParser = parserSettings?.active_parser
+    const nextTarget = values.pdf_parser?.deployment_target
+    const currentTarget = parserSettings?.deployment_target
     const switchNotes = values.pdf_parser?.service_switch_notes?.trim() || ''
-    const isSwitching = !!nextParser && !!currentParser && nextParser !== currentParser
+    const isSwitching =
+      (!!nextParser && !!currentParser && nextParser !== currentParser) ||
+      (!!nextTarget && !!currentTarget && nextTarget !== currentTarget)
+
+    if (nextTarget === 'remote' && !values.pdf_parser?.remote_service_endpoint?.trim()) {
+      message.error('远程模式必须填写远程解析服务地址')
+      return
+    }
 
     if (isSwitching) {
       const targetStatus = availableParsers.find((item) => item.parser_name === nextParser)
@@ -48,14 +57,14 @@ const Settings = () => {
         message.error('切换解析器前必须填写切换备注')
         return
       }
-      if (!targetStatus || targetStatus.health_status !== 'ready') {
+      if (nextTarget === 'local' && (!targetStatus || targetStatus.health_status !== 'ready')) {
         message.error(`目标解析器 ${nextParser} 当前不可用，请先完成停旧启新和依赖校验`)
         return
       }
 
       Modal.confirm({
-        title: '确认切换系统级 PDF 解析器',
-        content: `将从 ${currentParser} 切换到 ${nextParser}。这会影响后续所有文档解析，请确认旧服务已下线、新服务已启动，并已准备好回滚方案。`,
+        title: '确认切换系统级 PDF 解析配置',
+        content: `将从 ${currentParser}/${currentTarget} 切换到 ${nextParser}/${nextTarget}。这会影响后续所有文档解析，请确认旧服务已下线、新服务已启动，并已准备好回滚方案。`,
         okText: '确认切换',
         cancelText: '取消',
         onOk: () => mutation.mutate(values),
@@ -121,6 +130,10 @@ const Settings = () => {
       active_parser: 'mineru',
       service_mode: 'single_active',
       service_switch_notes: '',
+      deployment_target: 'local',
+      local_service_endpoint: 'http://localhost:8090',
+      remote_service_endpoint: '',
+      request_timeout_seconds: 120,
     },
   }
 
@@ -256,15 +269,15 @@ const Settings = () => {
                 showIcon
                 style={{ marginBottom: 16 }}
                 message="这是系统级切换，不是单文件参数"
-                description="切换 PDF 解析器意味着你要停掉当前服务、卸载或下线原实现，再注册并启用新的解析服务。同一时间只允许一个解析器处于激活状态。"
+                description="切换 PDF 解析器或服务部署位置意味着你要停掉当前服务、下线原实现，再启用新的解析服务。同一时间只允许一个解析器处于激活状态。"
               />
 
               <Alert
                 type="info"
                 showIcon
                 style={{ marginBottom: 16 }}
-                message="推荐策略：默认使用 MinerU，需要极致吞吐时再切换 Docling"
-                description="MinerU 更适合作为当前项目的主流默认方案；Docling 保留为高性能备选。切换动作应低频，并伴随部署、验证和回滚记录。"
+                message="推荐策略：默认使用 MinerU + 本地 Podman 服务"
+                description="MinerU 更适合作为当前项目的主流默认方案；Docling 保留为高性能备选。本地模式默认访问本机 Podman 中的解析服务；远程模式当前先保留配置扩展口。"
               />
 
               {activeRuntimeStatus && (
@@ -272,11 +285,11 @@ const Settings = () => {
                   style={{ marginBottom: 16 }}
                   type={activeRuntimeStatus.health_status === 'ready' ? 'success' : 'error'}
                   showIcon
-                  message={`当前激活解析器运行状态：${activeRuntimeStatus.parser_name}`}
+                  message={`当前激活解析器运行状态：${activeRuntimeStatus.parser_name} / ${activeRuntimeStatus.deployment_target || parserSettings?.deployment_target}`}
                   description={
                     activeRuntimeStatus.error_detail
-                      ? `${activeRuntimeStatus.error_detail}（最近检查：${formatCheckTime(activeRuntimeStatus.checked_at)}）`
-                      : `状态正常，最近检查：${formatCheckTime(activeRuntimeStatus.checked_at)}`
+                      ? `${activeRuntimeStatus.error_detail}（服务地址：${activeRuntimeStatus.service_endpoint || '-'}，最近检查：${formatCheckTime(activeRuntimeStatus.checked_at)}）`
+                      : `状态正常，服务地址：${activeRuntimeStatus.service_endpoint || '-'}，最近检查：${formatCheckTime(activeRuntimeStatus.checked_at)}`
                   }
                 />
               )}
@@ -295,10 +308,14 @@ const Settings = () => {
                     <Space wrap>
                       <strong>{item.parser_name}</strong>
                       <Tag>{item.parser_version}</Tag>
+                      <Tag>{item.deployment_target === 'remote' ? '远程' : '本地'}</Tag>
                       {getParserStatusTag(item.health_status)}
                       {item.is_active ? <Tag color="blue">当前激活</Tag> : null}
                     </Space>
                     <div style={{ marginTop: 8, color: '#666' }}>
+                      服务地址：{item.service_endpoint || '-'}
+                    </div>
+                    <div style={{ marginTop: 4, color: '#666' }}>
                       最近检查：{formatCheckTime(item.checked_at)}
                     </div>
                     {item.error_detail ? (
@@ -313,6 +330,47 @@ const Settings = () => {
                   <Option value="mineru">MinerU（推荐默认）</Option>
                   <Option value="docling">Docling（性能优先）</Option>
                 </Select>
+              </Form.Item>
+
+              <Form.Item name={['pdf_parser', 'deployment_target']} label="部署位置">
+                <Select>
+                  <Option value="local">本地 Podman 服务</Option>
+                  <Option value="remote">远程解析服务</Option>
+                </Select>
+              </Form.Item>
+
+              <Form.Item
+                name={['pdf_parser', 'local_service_endpoint']}
+                label="本地解析服务地址"
+                tooltip="默认指向本机 Podman 暴露端口；如 backend 也运行在容器中，可改为容器网络内地址"
+              >
+                <Input placeholder="http://localhost:8090" />
+              </Form.Item>
+
+              <Form.Item
+                shouldUpdate={(prevValues, currentValues) =>
+                  prevValues.pdf_parser?.deployment_target !== currentValues.pdf_parser?.deployment_target
+                }
+                noStyle
+              >
+                {({ getFieldValue }) =>
+                  getFieldValue(['pdf_parser', 'deployment_target']) === 'remote' ? (
+                    <Form.Item
+                      name={['pdf_parser', 'remote_service_endpoint']}
+                      label="远程解析服务地址"
+                      rules={[{ required: true, message: '请选择远程模式时必须填写远程地址' }]}
+                    >
+                      <Input placeholder="https://parser.example.com" />
+                    </Form.Item>
+                  ) : null
+                }
+              </Form.Item>
+
+              <Form.Item
+                name={['pdf_parser', 'request_timeout_seconds']}
+                label="解析请求超时（秒）"
+              >
+                <InputNumber min={5} max={600} style={{ width: '100%' }} />
               </Form.Item>
 
               <Form.Item name={['pdf_parser', 'service_mode']} label="运行模式">
@@ -346,6 +404,8 @@ const Settings = () => {
                 />
                 <Table.Column title="旧解析器" dataIndex="old_parser" key="old_parser" width={120} />
                 <Table.Column title="新解析器" dataIndex="new_parser" key="new_parser" width={120} />
+                <Table.Column title="旧位置" dataIndex="old_target" key="old_target" width={100} />
+                <Table.Column title="新位置" dataIndex="new_target" key="new_target" width={100} />
                 <Table.Column title="备注" dataIndex="switch_notes" key="switch_notes" ellipsis />
                 <Table.Column
                   title="操作人"

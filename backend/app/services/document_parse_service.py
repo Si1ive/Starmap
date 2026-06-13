@@ -69,10 +69,10 @@ class DocumentParseService:
         if not corpus_file.local_path or not Path(corpus_file.local_path).exists():
             raise ValueError(f"文件不存在于磁盘: {corpus_file.local_path}")
 
+        runtime_config = await SystemSettingsService(self.db).get_pdf_parser_runtime_config()
         parser = choose_parser(
             requested_parser=parser_name,
-            file_path=corpus_file.local_path,
-            default_parser=await SystemSettingsService(self.db).get_active_pdf_parser(),
+            runtime_config=runtime_config,
         )
 
         # 2. 创建 parse_run

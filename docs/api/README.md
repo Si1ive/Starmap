@@ -123,6 +123,9 @@
 
 - 当前激活的 PDF 解析器不在入库页切换，而是通过 `/api/v1/admin/settings` 维护系统级单活配置。
 - 新环境默认 `MinerU`，`Docling` 作为性能优先备选；当激活解析器不可用时，`parse` 应返回明确错误提示，不做自动 fallback。
+- `pdf_parser` 现支持两种部署位置：
+  - `local`：访问本机 Podman 中的解析服务，默认读取 `local_service_endpoint`
+  - `remote`：保存远程地址信息，当前版本仅保留扩展口，暂未实现远程请求转发
 
 ### 审核与检索
 

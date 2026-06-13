@@ -37,6 +37,9 @@ class Settings(BaseSettings):
 
     # 日志
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+
+    # PDF Parser Service
+    PDF_PARSER_LOCAL_ENDPOINT: str = os.getenv("PDF_PARSER_LOCAL_ENDPOINT", "http://localhost:8090")
     
     model_config = {
         "env_file": ".env"
