@@ -7,11 +7,15 @@ services:
       dockerfile: parser_service/Dockerfile
       args:
         PARSER_FLAVOR: ${PDF_PARSER_FLAVOR:-mineru}
+        MINERU_PACKAGE_SPEC: ${MINERU_PACKAGE_SPEC:-mineru[all]>=3.3,<4}
+        DOCLING_PACKAGE_SPEC: ${DOCLING_PACKAGE_SPEC:-docling>=2.0.0}
     container_name: starmap-pdf-parser-service
     ports:
       - "8090:8090"
     environment:
       - PDF_PARSER_SERVICE_DEFAULT=${PDF_PARSER_SERVICE_DEFAULT:-mineru}
+      - PARSER_SERVICE_HOST=0.0.0.0
+      - PARSER_SERVICE_PORT=8090
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health').read()"]

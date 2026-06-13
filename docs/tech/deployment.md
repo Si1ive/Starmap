@@ -36,6 +36,7 @@ podman run -d --name starmap-qdrant \
 ```bash
 export PDF_PARSER_FLAVOR=mineru
 export PDF_PARSER_SERVICE_DEFAULT=mineru
+export MINERU_PACKAGE_SPEC='mineru[all]>=3.3,<4'
 podman-compose -f docker-compose.podman.yml up -d pdf-parser-service
 ```
 
@@ -46,6 +47,11 @@ export PDF_PARSER_FLAVOR=docling
 export PDF_PARSER_SERVICE_DEFAULT=docling
 podman-compose -f docker-compose.podman.yml up -d --build pdf-parser-service
 ```
+
+注意：
+
+- 若你当前是 `macOS + Podman`，这条链路更适合联调，不建议直接承载大规模 PDF 批量解析
+- 若你要稳定跑 `MinerU`，更建议把 `pdf-parser-service` 部署到 `Linux` 机器
 
 ### 3. 初始化 MySQL
 
@@ -96,6 +102,7 @@ REDIS_URL=redis://localhost:6379
 QDRANT_HOST=localhost
 QDRANT_PORT=6333
 PDF_PARSER_LOCAL_ENDPOINT=http://localhost:8090
+MINERU_PACKAGE_SPEC=mineru[all]>=3.3,<4
 ```
 
 ## 运维说明

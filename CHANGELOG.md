@@ -19,6 +19,7 @@
   - 新增独立 `pdf-parser-service`，提供 `/health` 与 `/parse` 接口，供主 backend 在本地模式下通过 HTTP 调用
   - 新增独立 Dockerfile 和 Podman 编排入口，支持按 `mineru` / `docling` 构建不同解析服务镜像
   - 部署文档补充本地独立解析服务启动方式和 `PDF_PARSER_LOCAL_ENDPOINT` 配置说明
+  - 进一步细化 `MinerU` 镜像构建参数、启动脚本与平台限制说明，明确 `macOS + Podman` 更适合联调而非重负载运行
 
 ### [feat] PDF 解析器支持本地 Podman / 远程服务配置抽象
 - **类型**：feat

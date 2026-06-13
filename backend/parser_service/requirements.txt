@@ -5,4 +5,3 @@ pydantic==2.13.4
 pydantic-settings==2.14.1
 requests==2.31.0
 structlog==25.5.0
-docling>=2.0.0

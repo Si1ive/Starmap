@@ -30,6 +30,18 @@
 - `backend/parser_service/Dockerfile`
 - `docker-compose.podman.yml` 中的 `pdf-parser-service`
 
+并且当前镜像构建策略已经细化为：
+
+- `PARSER_FLAVOR=mineru`：安装 `MinerU`
+- `PARSER_FLAVOR=docling`：安装 `Docling`
+- `PARSER_FLAVOR=both`：两套依赖同时安装，仅建议开发调试
+
+对于 `MinerU`，当前建议优先按官方主线依赖构建：
+
+- `mineru[all]>=3.3,<4`
+
+若后续你明确只需要轻量模式，再评估是否缩减为更小的安装集合。
+
 ## 2. 为什么当前不建议单独拆解析器容器
 
 当前代码路径在 `backend/app/services/document_parsers.py`，解析器调用是进程内 import：
