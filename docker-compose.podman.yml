@@ -1,6 +1,24 @@
 version: '3.8'
 
 services:
+  pdf-parser-service:
+    build:
+      context: ./backend
+      dockerfile: parser_service/Dockerfile
+      args:
+        PARSER_FLAVOR: ${PDF_PARSER_FLAVOR:-mineru}
+    container_name: starmap-pdf-parser-service
+    ports:
+      - "8090:8090"
+    environment:
+      - PDF_PARSER_SERVICE_DEFAULT=${PDF_PARSER_SERVICE_DEFAULT:-mineru}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health').read()"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+
   # MySQL 主数据库
   mysql:
     image: docker.io/mysql:8.0

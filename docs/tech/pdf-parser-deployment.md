@@ -24,6 +24,12 @@
 - **要用 Podman**：是，和现有项目基线一致。
 - **要不要单独给解析器再开一个 Podman 容器**：建议，尤其当本机算力有限时。
 
+当前仓库已提供独立解析服务脚手架：
+
+- `backend/parser_service/main.py`
+- `backend/parser_service/Dockerfile`
+- `docker-compose.podman.yml` 中的 `pdf-parser-service`
+
 ## 2. 为什么当前不建议单独拆解析器容器
 
 当前代码路径在 `backend/app/services/document_parsers.py`，解析器调用是进程内 import：

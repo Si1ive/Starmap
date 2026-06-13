@@ -478,7 +478,7 @@ def _normalize_runtime_config(runtime_config: Optional[Dict[str, Any]] = None) -
         active_parser = "mineru"
 
     deployment_target = str(config.get("deployment_target") or "local").strip().lower()
-    if deployment_target not in {"local", "remote"}:
+    if deployment_target not in {"local", "remote", "embedded"}:
         deployment_target = "local"
 
     timeout_seconds = int(config.get("request_timeout_seconds") or 120)
@@ -605,6 +605,41 @@ def inspect_parser_health(
     normalized = (parser_name or "").strip().lower()
     config = _normalize_runtime_config(runtime_config)
     checked_at = datetime.utcnow().isoformat()
+
+    if config.deployment_target == "embedded":
+        parser = get_parser(normalized)
+        try:
+            if normalized == "docling":
+                from docling.document_converter import DocumentConverter
+
+                _ = DocumentConverter
+            elif normalized == "mineru":
+                from mineru.cli.common import convert_single_pdf  # type: ignore
+
+                _ = convert_single_pdf
+
+            return {
+                "parser_name": parser.name,
+                "parser_version": parser.version,
+                "health_status": "ready",
+                "is_available": True,
+                "checked_at": checked_at,
+                "deployment_target": "embedded",
+                "service_endpoint": None,
+                "error_detail": None,
+            }
+        except Exception as exc:
+            return {
+                "parser_name": parser.name,
+                "parser_version": parser.version,
+                "health_status": "unavailable",
+                "is_available": False,
+                "checked_at": checked_at,
+                "deployment_target": "embedded",
+                "service_endpoint": None,
+                "error_detail": str(exc)[:200],
+            }
+
     service_endpoint = (
         config.local_service_endpoint
         if config.deployment_target == "local"

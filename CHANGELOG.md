@@ -12,6 +12,14 @@
 
 ## 2026-06-08
 
+### [feat] 新增独立 PDF 解析服务脚手架
+- **类型**：feat
+- **影响**：`backend/parser_service/`, `docker-compose.podman.yml`, `docs/tech/deployment.md`, `docs/tech/pdf-parser-deployment.md`
+- **描述**：
+  - 新增独立 `pdf-parser-service`，提供 `/health` 与 `/parse` 接口，供主 backend 在本地模式下通过 HTTP 调用
+  - 新增独立 Dockerfile 和 Podman 编排入口，支持按 `mineru` / `docling` 构建不同解析服务镜像
+  - 部署文档补充本地独立解析服务启动方式和 `PDF_PARSER_LOCAL_ENDPOINT` 配置说明
+
 ### [feat] PDF 解析器支持本地 Podman / 远程服务配置抽象
 - **类型**：feat
 - **影响**：`backend/app/api/admin.py`, `backend/app/core/config.py`, `backend/app/services/document_parse_service.py`, `backend/app/services/document_parsers.py`, `backend/app/services/system_settings_service.py`, `frontend-admin/src/api/settings.ts`, `frontend-admin/src/pages/Settings/index.tsx`, `docs/api/README.md`, `docs/tech/pdf-parser-switching-design.md`, `docs/tech/pdf-parser-deployment.md`

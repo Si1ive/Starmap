@@ -29,6 +29,24 @@ podman run -d --name starmap-qdrant \
   qdrant/qdrant:latest
 ```
 
+### 2.1 启动本地 PDF 解析服务
+
+默认按 `MinerU` 构建独立解析服务镜像：
+
+```bash
+export PDF_PARSER_FLAVOR=mineru
+export PDF_PARSER_SERVICE_DEFAULT=mineru
+podman-compose -f docker-compose.podman.yml up -d pdf-parser-service
+```
+
+如果要切换为 `Docling`：
+
+```bash
+export PDF_PARSER_FLAVOR=docling
+export PDF_PARSER_SERVICE_DEFAULT=docling
+podman-compose -f docker-compose.podman.yml up -d --build pdf-parser-service
+```
+
 ### 3. 初始化 MySQL
 
 ```bash
@@ -42,6 +60,7 @@ cd backend
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
+export PDF_PARSER_LOCAL_ENDPOINT=http://localhost:8090
 python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
@@ -58,6 +77,7 @@ npm run dev
 | 服务 | 地址 |
 |------|------|
 | 后端 API | `http://localhost:8000` |
+| PDF 解析服务 | `http://localhost:8090` |
 | Swagger | `http://localhost:8000/docs` |
 | 管理端 | `http://localhost:5174` |
 | Qdrant | `http://localhost:6333` |
@@ -75,6 +95,7 @@ MYSQL_DATABASE=starmap
 REDIS_URL=redis://localhost:6379
 QDRANT_HOST=localhost
 QDRANT_PORT=6333
+PDF_PARSER_LOCAL_ENDPOINT=http://localhost:8090
 ```
 
 ## 运维说明
@@ -91,6 +112,7 @@ podman ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 podman logs starmap-backend
 podman logs starmap-mysql
 podman logs starmap-qdrant
+podman logs starmap-pdf-parser-service
 ```
 
 ### Qdrant 健康检查
