@@ -17,33 +17,45 @@ from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.logging import get_logger
 from app.models.mysql_models import AuditLog, SystemConfig
 from app.services.document_parsers import inspect_parser_health
+
+logger = get_logger(__name__)
 
 
 class SystemSettingsService:
     """系统设置读写服务"""
 
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: Optional[AsyncSession]):
         self.db = db
 
     async def load(self) -> Dict[str, Any]:
         """读取系统设置并补齐默认值。"""
+        if self.db is None:
+            return self._default_settings()
+
         data: Dict[str, Any] = {}
-        result = await self.db.execute(select(SystemConfig))
-        rows = result.scalars().all()
-        for row in rows:
-            data[row.config_key] = row.config_value or {}
+        try:
+            result = await self.db.execute(select(SystemConfig))
+            rows = result.scalars().all()
+            for row in rows:
+                data[row.config_key] = row.config_value or {}
+        except SQLAlchemyError as exc:
+            logger.warning("系统设置读取失败，回退默认配置", error=str(exc))
+            return self._default_settings()
         return self._merge_defaults(data)
 
     async def save(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """保存系统设置。"""
+        db = self._require_db()
         merged = self._merge_defaults(data)
         for key, value in merged.items():
-            result = await self.db.execute(
+            result = await db.execute(
                 select(SystemConfig).where(SystemConfig.config_key == key)
             )
             row = result.scalar_one_or_none()
@@ -55,8 +67,8 @@ class SystemSettingsService:
                     config_value=value,
                     description=self._default_description(key),
                 )
-                self.db.add(row)
-        await self.db.flush()
+                db.add(row)
+        await db.flush()
         return merged
 
     async def save_partial(self, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -92,6 +104,7 @@ class SystemSettingsService:
         local_service_endpoint: Optional[str] = None,
         remote_service_endpoint: Optional[str] = None,
         request_timeout_seconds: Optional[int] = None,
+        processing_window_size: Optional[int] = None,
         switch_notes: str = "",
         user_id: Optional[str] = None,
         ip_address: Optional[str] = None,
@@ -120,6 +133,12 @@ class SystemSettingsService:
                 self._default_settings()["pdf_parser"]["request_timeout_seconds"],
             )
         )
+        old_processing_window_size = int(
+            current_parser_config.get(
+                "processing_window_size",
+                self._default_settings()["pdf_parser"]["processing_window_size"],
+            )
+        )
         next_local_endpoint = (
             str(local_service_endpoint).strip()
             if local_service_endpoint is not None
@@ -130,9 +149,19 @@ class SystemSettingsService:
             if remote_service_endpoint is not None
             else str(old_remote_endpoint or "").strip()
         )
-        next_timeout = int(request_timeout_seconds or old_timeout or 120)
+        next_timeout = int(request_timeout_seconds or old_timeout or 600)
         if next_timeout < 5 or next_timeout > 600:
             raise ValueError("pdf_parser.request_timeout_seconds 仅支持 5-600 秒")
+        next_processing_window_size = int(
+            processing_window_size
+            or current_parser_config.get(
+                "processing_window_size",
+                self._default_settings()["pdf_parser"]["processing_window_size"],
+            )
+            or self._default_settings()["pdf_parser"]["processing_window_size"]
+        )
+        if next_processing_window_size < 1 or next_processing_window_size > 64:
+            raise ValueError("pdf_parser.processing_window_size 仅支持 1-64")
 
         is_switching = (
             normalized != old_parser
@@ -140,6 +169,7 @@ class SystemSettingsService:
             or next_local_endpoint != str(old_local_endpoint or "")
             or next_remote_endpoint != str(old_remote_endpoint or "")
             or next_timeout != old_timeout
+            or next_processing_window_size != old_processing_window_size
         )
         notes = (switch_notes or "").strip()
 
@@ -162,6 +192,7 @@ class SystemSettingsService:
                     "local_service_endpoint": next_local_endpoint,
                     "remote_service_endpoint": next_remote_endpoint,
                     "request_timeout_seconds": next_timeout,
+                    "processing_window_size": next_processing_window_size,
                 },
             )
             if parser_health.get("health_status") != "ready":
@@ -178,6 +209,7 @@ class SystemSettingsService:
             "local_service_endpoint": next_local_endpoint,
             "remote_service_endpoint": next_remote_endpoint,
             "request_timeout_seconds": next_timeout,
+            "processing_window_size": next_processing_window_size,
         }
         saved = await self.save(current)
 
@@ -193,6 +225,7 @@ class SystemSettingsService:
                     "local_service_endpoint": old_local_endpoint,
                     "remote_service_endpoint": old_remote_endpoint,
                     "request_timeout_seconds": old_timeout,
+                    "processing_window_size": old_processing_window_size,
                 },
                 new_values={
                     "active_parser": normalized,
@@ -200,15 +233,22 @@ class SystemSettingsService:
                     "local_service_endpoint": next_local_endpoint,
                     "remote_service_endpoint": next_remote_endpoint,
                     "request_timeout_seconds": next_timeout,
+                    "processing_window_size": next_processing_window_size,
                     "switch_notes": notes,
                 },
                 ip_address=ip_address,
                 user_agent=user_agent,
             )
-            self.db.add(audit)
-            await self.db.flush()
+            db = self._require_db()
+            db.add(audit)
+            await db.flush()
 
         return saved
+
+    def _require_db(self) -> AsyncSession:
+        if self.db is None:
+            raise RuntimeError("数据库不可用，当前操作无法完成")
+        return self.db
 
     @classmethod
     def _merge_defaults(cls, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -271,6 +311,10 @@ class SystemSettingsService:
                     "request_timeout_seconds": value.get(
                         "request_timeout_seconds",
                         defaults["pdf_parser"]["request_timeout_seconds"],
+                    ),
+                    "processing_window_size": value.get(
+                        "processing_window_size",
+                        defaults["pdf_parser"]["processing_window_size"],
                     ),
                 }
                 continue
@@ -335,7 +379,8 @@ class SystemSettingsService:
                 "deployment_target": "local",
                 "local_service_endpoint": settings.PDF_PARSER_LOCAL_ENDPOINT,
                 "remote_service_endpoint": "",
-                "request_timeout_seconds": 120,
+                "request_timeout_seconds": 600,
+                "processing_window_size": 1,
             },
         }
 

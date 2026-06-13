@@ -9,6 +9,9 @@
 
 from __future__ import annotations
 
+import inspect
+import json
+import os
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime
@@ -22,6 +25,49 @@ from app.core.logging import get_logger
 from app.core.config import settings
 
 logger = get_logger(__name__)
+
+
+def _ensure_mineru_runtime_defaults() -> None:
+    if not os.getenv("MINERU_PDF_RENDER_THREADS"):
+        os.environ["MINERU_PDF_RENDER_THREADS"] = "1"
+    if not os.getenv("MINERU_PDF_RENDER_TIMEOUT"):
+        os.environ["MINERU_PDF_RENDER_TIMEOUT"] = "600"
+    if not os.getenv("MINERU_PROCESSING_WINDOW_SIZE"):
+        os.environ["MINERU_PROCESSING_WINDOW_SIZE"] = "1"
+
+
+def _patch_mineru_pdf_rendering() -> None:
+    try:
+        import mineru.utils.pdf_image_tools as pdf_image_tools  # type: ignore
+    except Exception:
+        return
+
+    if getattr(pdf_image_tools, "_starmap_single_process_render_patch", False):
+        return
+
+    def _load_images_from_pdf_bytes_range_single_process(
+        pdf_bytes: bytes,
+        dpi=pdf_image_tools.DEFAULT_PDF_IMAGE_DPI,
+        start_page_id=0,
+        end_page_id=0,
+        image_type=pdf_image_tools.ImageType.PIL,
+        timeout=None,
+        threads=None,
+    ):
+        if end_page_id < start_page_id:
+            return []
+        return pdf_image_tools.load_images_from_pdf_core(
+            pdf_bytes,
+            dpi=dpi,
+            start_page_id=start_page_id,
+            end_page_id=end_page_id,
+            image_type=image_type,
+        )
+
+    pdf_image_tools._load_images_from_pdf_bytes_range = (  # type: ignore[attr-defined]
+        _load_images_from_pdf_bytes_range_single_process
+    )
+    pdf_image_tools._starmap_single_process_render_patch = True  # type: ignore[attr-defined]
 
 
 class ParserUnavailableError(RuntimeError):
@@ -100,27 +146,65 @@ class PdfParserRuntimeConfig:
     local_service_endpoint: str
     remote_service_endpoint: str
     request_timeout_seconds: int
+    processing_window_size: Optional[int] = None
 
 
 BLOCK_TYPE_MAP = {
     "Title": "title",
+    "TitleItem": "title",
+    "TITLE": "title",
     "Heading": "heading",
+    "SectionHeaderItem": "heading",
+    "SECTION_HEADER": "heading",
     "Paragraph": "paragraph",
+    "TextItem": "paragraph",
+    "TEXT": "paragraph",
+    "PARAGRAPH": "paragraph",
+    "REFERENCE": "paragraph",
+    "HANDWRITTEN_TEXT": "paragraph",
     "ListItem": "list",
     "List": "list",
+    "LIST_ITEM": "list",
     "Table": "table",
+    "TableItem": "table",
+    "TABLE": "table",
+    "DOCUMENT_INDEX": "table",
     "TableCaption": "table_caption",
     "Picture": "figure",
     "Figure": "figure",
+    "PictureItem": "figure",
+    "PICTURE": "figure",
+    "CHART": "figure",
     "FigureCaption": "figure_caption",
     "Equation": "formula",
+    "FormulaItem": "formula",
+    "FORMULA": "formula",
     "CodeBlock": "code",
+    "CodeItem": "code",
+    "CODE": "code",
     "PageBreak": "unknown",
 }
 
 
 def _map_docling_block_type(docling_type: str) -> str:
     return BLOCK_TYPE_MAP.get(docling_type, "paragraph")
+
+
+def _resolve_docling_type(item: Any) -> str:
+    candidates = [type(item).__name__]
+    label = getattr(item, "label", None)
+    if label is not None:
+        label_value = getattr(label, "value", None)
+        if label_value:
+            candidates.append(str(label_value))
+            candidates.append(str(label_value).upper())
+        candidates.append(str(label))
+
+    for candidate in candidates:
+        mapped = BLOCK_TYPE_MAP.get(candidate)
+        if mapped:
+            return mapped
+    return "paragraph"
 
 
 def _extract_page_no(item: Any) -> int:
@@ -148,21 +232,77 @@ def _extract_bbox(item: Any) -> Optional[dict]:
     return None
 
 
-def _extract_text(item: Any) -> str:
+def _extract_text(item: Any, doc: Any = None) -> str:
     if hasattr(item, "text") and item.text:
         return item.text
+    caption_text = getattr(item, "caption_text", None)
+    if callable(caption_text) and doc is not None:
+        try:
+            text = caption_text(doc)
+            if text:
+                return text
+        except Exception:
+            pass
     if hasattr(item, "caption") and item.caption:
         return item.caption
     return ""
 
 
-def _extract_md(item: Any) -> str:
-    if hasattr(item, "export_to_markdown"):
+def _call_docling_export(item: Any, method_name: str, doc: Any = None) -> str:
+    method = getattr(item, method_name, None)
+    if not callable(method):
+        return ""
+
+    try:
+        signature = inspect.signature(method)
+    except (TypeError, ValueError):
+        signature = None
+
+    try:
+        if signature is not None and len(signature.parameters) >= 1 and doc is not None:
+            return method(doc)
+        return method()
+    except Exception:
+        return ""
+
+
+def _extract_md(item: Any, doc: Any = None) -> str:
+    markdown = _call_docling_export(item, "export_to_markdown", doc)
+    if markdown:
+        return markdown
+    return _extract_text(item, doc)
+
+
+def _iterate_docling_items(doc: Any) -> List[Any]:
+    iterate_items = getattr(doc, "iterate_items", None)
+    if callable(iterate_items):
+        return [item for item, _ in iterate_items(with_groups=False, traverse_pictures=True)]
+
+    body = getattr(doc, "body", None)
+    if body is None:
+        return []
+
+    walk = getattr(body, "walk", None)
+    if callable(walk):
+        return list(walk())
+
+    return []
+
+
+def _export_docling_markdown(doc: Any) -> str:
+    exporter = getattr(doc, "export_to_markdown", None)
+    if not callable(exporter):
+        return ""
+
+    try:
+        return exporter(traverse_pictures=True)
+    except TypeError:
         try:
-            return item.export_to_markdown()
+            return exporter()
         except Exception:
-            pass
-    return _extract_text(item)
+            return ""
+    except Exception:
+        return ""
 
 
 class DoclingParser:
@@ -199,66 +339,47 @@ class DoclingParser:
             )
 
         blocks: List[ParsedBlock] = []
-        order_counters: Dict[int, int] = {}
-        if hasattr(doc, "body") and doc.body:
-            for item in doc.body.walk():
-                docling_type = type(item).__name__
-                page_no = _extract_page_no(item)
-                order_no = order_counters.get(page_no, 0)
-                order_counters[page_no] = order_no + 1
-
-                block = ParsedBlock(
-                    page_no=page_no,
-                    block_type=_map_docling_block_type(docling_type),
-                    order_no=order_no,
-                    content_text=_extract_text(item),
-                    content_md=None,
-                    bbox=_extract_bbox(item),
-                )
-
-                md = _extract_md(item)
-                if md != block.content_text:
-                    block.content_md = md
-
-                if docling_type == "Table" and hasattr(item, "export_to_html"):
-                    try:
-                        block.html_table = item.export_to_html()
-                    except Exception:
-                        pass
-
-                if docling_type == "Equation" and hasattr(item, "text"):
-                    block.latex = getattr(item, "text", None)
-
-                blocks.append(block)
-
         assets: List[ParsedAsset] = []
-        if hasattr(doc, "pictures"):
-            for pic in doc.pictures:
-                page_no = 1
-                caption = ""
-                if hasattr(pic, "prov") and pic.prov:
-                    prov = pic.prov[0] if isinstance(pic.prov, list) and pic.prov else pic.prov
-                    page_no = getattr(prov, "page_no", 1) or 1
-                if hasattr(pic, "caption"):
-                    caption = pic.caption or ""
-                elif hasattr(pic, "text"):
-                    caption = pic.text or ""
+        order_counters: Dict[int, int] = {}
+        for item in _iterate_docling_items(doc):
+            block_type = _resolve_docling_type(item)
+            page_no = _extract_page_no(item)
+            order_no = order_counters.get(page_no, 0)
+            order_counters[page_no] = order_no + 1
 
+            content_text = _extract_text(item, doc) or None
+            content_md = _extract_md(item, doc)
+
+            block = ParsedBlock(
+                page_no=page_no,
+                block_type=block_type,
+                order_no=order_no,
+                content_text=content_text,
+                content_md=content_md if content_md and content_md != content_text else None,
+                bbox=_extract_bbox(item),
+            )
+
+            if block_type == "table":
+                html_table = _call_docling_export(item, "export_to_html", doc)
+                if html_table:
+                    block.html_table = html_table
+
+            if block_type == "formula" and hasattr(item, "text"):
+                block.latex = getattr(item, "text", None)
+
+            if block_type in {"figure", "table"}:
                 assets.append(
                     ParsedAsset(
                         page_no=page_no,
-                        asset_type="figure",
-                        caption_text=caption,
-                        bbox=_extract_bbox(pic),
+                        asset_type=block_type,
+                        caption_text=content_text,
+                        bbox=block.bbox,
                     )
                 )
 
-        document_markdown = ""
-        if hasattr(doc, "export_to_markdown"):
-            try:
-                document_markdown = doc.export_to_markdown()
-            except Exception:
-                pass
+            blocks.append(block)
+
+        document_markdown = _export_docling_markdown(doc)
 
         return ParsedDocumentResult(
             parser_name=self.name,
@@ -267,6 +388,7 @@ class DoclingParser:
             blocks=blocks,
             assets=assets,
             document_markdown=document_markdown,
+            metadata={"source_file": file_path},
         )
 
 
@@ -281,20 +403,57 @@ class MinerUParser:
         当前实现优先兼容已安装的 python 包；若环境未安装，则抛出清晰错误。
         这里统一输出 ParsedDocumentResult，下游不感知 MinerU 原始结构。
         """
+        _ensure_mineru_runtime_defaults()
+        _patch_mineru_pdf_rendering()
+        legacy_converter = None
+        do_parse = None
         try:
-            from mineru.cli.common import convert_single_pdf  # type: ignore
-        except Exception as exc:  # pragma: no cover - 依赖环境相关
+            from mineru.cli.common import convert_single_pdf as legacy_converter  # type: ignore
+        except Exception:
+            legacy_converter = None
+
+        try:
+            from mineru.cli.common import do_parse  # type: ignore
+        except Exception:
+            do_parse = None
+
+        if legacy_converter is None and do_parse is None:  # pragma: no cover - 依赖环境相关
             raise ParserUnavailableError(
                 self.name,
                 "mineru 未安装或当前版本接口不兼容，请先安装并验证 MinerU 本地可用"
-            ) from exc
+            )
 
         with tempfile.TemporaryDirectory(prefix="mineru_parse_") as temp_dir:
             output_dir = Path(temp_dir)
-            result = convert_single_pdf(  # type: ignore
-                pdf_path=file_path,
-                output_dir=str(output_dir),
-            )
+            result: Any = None
+
+            if legacy_converter is not None:
+                result = legacy_converter(  # type: ignore[misc]
+                    pdf_path=file_path,
+                    output_dir=str(output_dir),
+                )
+            else:
+                pdf_name = Path(file_path).name
+                pdf_bytes = Path(file_path).read_bytes()
+                do_parse(  # type: ignore[misc]
+                    output_dir=str(output_dir),
+                    pdf_file_names=[pdf_name],
+                    pdf_bytes_list=[pdf_bytes],
+                    p_lang_list=[""],
+                    backend="pipeline",
+                    parse_method="auto",
+                    formula_enable=True,
+                    table_enable=True,
+                    f_draw_layout_bbox=False,
+                    f_draw_span_bbox=False,
+                    f_dump_md=True,
+                    f_dump_middle_json=False,
+                    f_dump_model_output=False,
+                    f_dump_orig_pdf=False,
+                    f_dump_content_list=True,
+                    image_analysis=True,
+                    client_side_output_generation=False,
+                )
 
             normalized = self._normalize_result(file_path=file_path, result=result, output_dir=output_dir)
             return normalized
@@ -317,6 +476,7 @@ class MinerUParser:
         blocks: List[ParsedBlock] = []
         assets: List[ParsedAsset] = []
         document_markdown = ""
+        content_list: List[Dict[str, Any]] = []
 
         if isinstance(result, dict):
             markdown_path = result.get("markdown_path") or result.get("md_path")
@@ -365,6 +525,56 @@ class MinerUParser:
             if page_count > 0:
                 pages = [ParsedPage(page_no=index + 1) for index in range(page_count)]
 
+        if not content_list:
+            content_list_path = next(output_dir.rglob("*_content_list.json"), None)
+            if content_list_path and content_list_path.exists():
+                try:
+                    loaded_content = json.loads(content_list_path.read_text(encoding="utf-8", errors="ignore"))
+                    if isinstance(loaded_content, list):
+                        content_list = loaded_content
+                except Exception:
+                    content_list = []
+
+            if content_list:
+                order_counters = {}
+                for item in content_list:
+                    if not isinstance(item, dict):
+                        continue
+                    page_idx = item.get("page_idx")
+                    page_no = int(page_idx or 0) + 1 if page_idx is not None else int(item.get("page_no", 1) or 1)
+                    order_no = order_counters.get(page_no, 0)
+                    order_counters[page_no] = order_no + 1
+
+                    item_type = str(item.get("type") or item.get("category") or "paragraph").lower()
+                    block_type = self._map_mineru_block_type(item_type)
+                    bbox = item.get("bbox") if isinstance(item.get("bbox"), dict) else None
+                    text = item.get("text") or item.get("content") or ""
+                    md = item.get("markdown") or item.get("md") or None
+
+                    if block_type in {"figure", "table"}:
+                        assets.append(
+                            ParsedAsset(
+                                page_no=page_no,
+                                asset_type=block_type,
+                                caption_text=item.get("caption") or text or None,
+                                bbox=bbox,
+                                file_path=item.get("image_path") or item.get("file_path"),
+                            )
+                        )
+
+                    blocks.append(
+                        ParsedBlock(
+                            page_no=page_no,
+                            block_type=block_type,
+                            order_no=order_no,
+                            content_text=text or None,
+                            content_md=md if md and md != text else None,
+                            bbox=bbox,
+                            html_table=item.get("html") if block_type == "table" else None,
+                            latex=item.get("latex") if block_type == "formula" else None,
+                        )
+                    )
+
         if not pages:
             max_page_no = max((block.page_no for block in blocks), default=0)
             if max_page_no > 0:
@@ -404,11 +614,18 @@ class MinerUParser:
 
 
 class LocalParserServiceClient:
-    def __init__(self, parser_name: str, endpoint: str, timeout_seconds: int):
+    def __init__(
+        self,
+        parser_name: str,
+        endpoint: str,
+        timeout_seconds: int,
+        processing_window_size: Optional[int] = None,
+    ):
         self.name = parser_name
         self.version = "service"
         self.endpoint = endpoint.rstrip("/")
         self.timeout_seconds = timeout_seconds
+        self.processing_window_size = processing_window_size
 
     def parse(self, file_path: str) -> ParsedDocumentResult:
         if not self.endpoint:
@@ -421,7 +638,14 @@ class LocalParserServiceClient:
             with open(file_path, "rb") as file_obj:
                 response = requests.post(
                     f"{self.endpoint}/parse",
-                    data={"parser_name": self.name},
+                    data={
+                        "parser_name": self.name,
+                        **(
+                            {"processing_window_size": str(self.processing_window_size)}
+                            if self.name == "mineru" and self.processing_window_size
+                            else {}
+                        ),
+                    },
                     files={"file": (Path(file_path).name, file_obj, "application/pdf")},
                     timeout=self.timeout_seconds,
                 )
@@ -481,9 +705,20 @@ def _normalize_runtime_config(runtime_config: Optional[Dict[str, Any]] = None) -
     if deployment_target not in {"local", "remote", "embedded"}:
         deployment_target = "local"
 
-    timeout_seconds = int(config.get("request_timeout_seconds") or 120)
+    timeout_seconds = int(config.get("request_timeout_seconds") or 600)
     if timeout_seconds < 5:
         timeout_seconds = 5
+    if timeout_seconds > 1800:
+        timeout_seconds = 1800
+
+    processing_window_size = config.get("processing_window_size")
+    if processing_window_size is not None:
+        try:
+            processing_window_size = int(processing_window_size)
+        except (TypeError, ValueError):
+            processing_window_size = None
+    if processing_window_size is not None and processing_window_size < 1:
+        processing_window_size = 1
 
     local_endpoint = str(
         config.get("local_service_endpoint") or settings.PDF_PARSER_LOCAL_ENDPOINT
@@ -496,6 +731,7 @@ def _normalize_runtime_config(runtime_config: Optional[Dict[str, Any]] = None) -
         local_service_endpoint=local_endpoint,
         remote_service_endpoint=remote_endpoint,
         request_timeout_seconds=timeout_seconds,
+        processing_window_size=processing_window_size,
     )
 
 
@@ -614,9 +850,14 @@ def inspect_parser_health(
 
                 _ = DocumentConverter
             elif normalized == "mineru":
-                from mineru.cli.common import convert_single_pdf  # type: ignore
+                try:
+                    from mineru.cli.common import convert_single_pdf  # type: ignore
 
-                _ = convert_single_pdf
+                    _ = convert_single_pdf
+                except Exception:
+                    from mineru.cli.common import do_parse  # type: ignore
+
+                    _ = do_parse
 
             return {
                 "parser_name": parser.name,
@@ -753,6 +994,7 @@ def choose_parser(
             parser_name=parser_name,
             endpoint=config.local_service_endpoint,
             timeout_seconds=config.request_timeout_seconds,
+            processing_window_size=config.processing_window_size,
         )
 
     if config.deployment_target == "remote":

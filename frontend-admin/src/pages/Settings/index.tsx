@@ -133,7 +133,8 @@ const Settings = () => {
       deployment_target: 'local',
       local_service_endpoint: 'http://localhost:8090',
       remote_service_endpoint: '',
-      request_timeout_seconds: 120,
+      request_timeout_seconds: 600,
+      processing_window_size: 1,
     },
   }
 
@@ -371,6 +372,14 @@ const Settings = () => {
                 label="解析请求超时（秒）"
               >
                 <InputNumber min={5} max={600} style={{ width: '100%' }} />
+              </Form.Item>
+
+              <Form.Item
+                name={['pdf_parser', 'processing_window_size']}
+                label="MinerU 处理窗口大小"
+                tooltip="每次送入 MinerU 的页窗口大小。1 最稳，值越大吞吐越高但更吃内存。该值会随每次解析请求下发到本地解析服务。"
+              >
+                <InputNumber min={1} max={64} style={{ width: '100%' }} />
               </Form.Item>
 
               <Form.Item name={['pdf_parser', 'service_mode']} label="运行模式">

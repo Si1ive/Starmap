@@ -82,6 +82,19 @@ podman-compose -f docker-compose.podman.yml up -d
 podman ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 ```
 
+当前编排已内置：
+
+- `pdf-parser-service` 默认构建 `docling + mineru`
+- `MinerU` 模型缓存持久化，避免容器重建后重复下载
+- `backend` 启动前自动执行 `alembic upgrade head`
+- PDF 解析请求超时可在后台“系统配置 -> PDF解析器”调整，`MinerU` 窗口大小也可在同处调整
+
+说明：`pdf-parser-service` 默认使用较轻量但可实际解析的 `mineru[pipeline]>=3.3,<4` 安装规格，避免 `macOS + Podman` 下首次构建直接拉起 `mineru[all]` 导致镜像层过大。若你明确需要完整依赖，再额外导出：
+
+```bash
+export MINERU_PACKAGE_SPEC='mineru[all]>=3.3,<4'
+```
+
 ### 4. 初始化数据库
 
 ```bash

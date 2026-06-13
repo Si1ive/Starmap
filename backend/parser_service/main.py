@@ -9,8 +9,10 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import os
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -29,6 +31,7 @@ from app.services.document_parsers import (
 )
 
 logger = get_logger(__name__)
+_MINERU_RUNTIME_LOCK = threading.Lock()
 
 APP_VERSION = "1.0.0"
 DEFAULT_PARSER = os.getenv("PDF_PARSER_SERVICE_DEFAULT", "mineru").strip().lower() or "mineru"
@@ -104,6 +107,25 @@ def _serialize_asset(asset: ParsedAsset) -> Dict[str, Any]:
     }
 
 
+@contextmanager
+def _temporary_mineru_processing_window_size(value: Optional[int]):
+    if value is None:
+        yield
+        return
+
+    normalized = max(1, int(value))
+    with _MINERU_RUNTIME_LOCK:
+        original = os.getenv("MINERU_PROCESSING_WINDOW_SIZE")
+        os.environ["MINERU_PROCESSING_WINDOW_SIZE"] = str(normalized)
+        try:
+            yield
+        finally:
+            if original is None:
+                os.environ.pop("MINERU_PROCESSING_WINDOW_SIZE", None)
+            else:
+                os.environ["MINERU_PROCESSING_WINDOW_SIZE"] = original
+
+
 @app.get("/health")
 async def health_check(parser_name: Optional[str] = None) -> Dict[str, Any]:
     normalized = _resolve_parser_name(parser_name)
@@ -127,6 +149,7 @@ async def health_check(parser_name: Optional[str] = None) -> Dict[str, Any]:
 async def parse_document(
     file: UploadFile = File(...),
     parser_name: Optional[str] = Form(default=None),
+    processing_window_size: Optional[int] = Form(default=None),
 ) -> Dict[str, Any]:
     normalized = _resolve_parser_name(parser_name)
     suffix = Path(file.filename or "document.pdf").suffix or ".pdf"
@@ -140,12 +163,20 @@ async def parse_document(
         with tempfile.TemporaryDirectory(prefix="parser_service_") as temp_dir:
             temp_path = Path(temp_dir) / f"input{suffix}"
             temp_path.write_bytes(await file.read())
-            result = parser.parse(str(temp_path))
+            with _temporary_mineru_processing_window_size(
+                processing_window_size if normalized == "mineru" else None
+            ):
+                result = parser.parse(str(temp_path))
             payload = _serialize_parse_result(result)
             payload["metadata"] = {
                 **(payload.get("metadata") or {}),
                 "source_filename": file.filename,
                 "service_parser": normalized,
+                **(
+                    {"processing_window_size": processing_window_size}
+                    if normalized == "mineru" and processing_window_size is not None
+                    else {}
+                ),
             }
             return {
                 "code": 200,

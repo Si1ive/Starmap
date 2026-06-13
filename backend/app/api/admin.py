@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger, get_request_id
 from app.core.websocket import log_websocket_manager
-from app.db import get_db
+from app.db import get_db, get_optional_db
 from app.services.source_service import CrawlerSourceService
 from app.services.stats_service import CrawlerStatsService
 from app.services.schedule_service import CrawlerScheduleService
@@ -1342,7 +1342,7 @@ async def get_error_logs(
 # ========== 系统配置相关 ==========
 
 @router.get("/settings", response_model=ApiResponse)
-async def get_settings(db: AsyncSession = Depends(get_db)):
+async def get_settings(db: Optional[AsyncSession] = Depends(get_optional_db)):
     """
     获取系统配置
     
@@ -1380,6 +1380,7 @@ async def get_settings(db: AsyncSession = Depends(get_db)):
                 "local_service_endpoint": runtime_settings["pdf_parser"]["local_service_endpoint"],
                 "remote_service_endpoint": runtime_settings["pdf_parser"]["remote_service_endpoint"],
                 "request_timeout_seconds": runtime_settings["pdf_parser"]["request_timeout_seconds"],
+                "processing_window_size": runtime_settings["pdf_parser"]["processing_window_size"],
                 "active_runtime_status": active_runtime_status,
                 "available_parsers": available_parsers,
             }
@@ -1484,6 +1485,10 @@ async def update_settings(
                 request_timeout_seconds=parser_section.get(
                     "request_timeout_seconds",
                     current_settings["pdf_parser"]["request_timeout_seconds"],
+                ),
+                processing_window_size=parser_section.get(
+                    "processing_window_size",
+                    current_settings["pdf_parser"]["processing_window_size"],
                 ),
                 switch_notes=parser_section.get("service_switch_notes", ""),
                 user_id=user_id,

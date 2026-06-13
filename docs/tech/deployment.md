@@ -24,24 +24,31 @@ cd my-agent
 podman-compose -f docker-compose.podman.yml up -d
 ```
 
+当前 `docker-compose.podman.yml` 已内置以下行为：
+
+- `pdf-parser-service` 默认以 `PARSER_FLAVOR=both` 构建，同时提供 `docling` / `mineru`
+- `pdf-parser-service` 挂载持久化 `mineru_cache` 卷，避免模型重复下载
+- `backend` 启动前自动执行 `alembic upgrade head`，用于补齐 `document_pages` 等解析链路表
+- `MinerU` 默认窗口大小为 `1`，也可在后台“系统配置 -> PDF解析器”里调整 `processing_window_size`
+
 ### 2.1 启动本地 PDF 解析服务
 
-默认按 `MinerU` 构建独立解析服务镜像：
+默认按双依赖构建独立解析服务镜像，激活解析器仍由后台系统设置控制：
 
 ```bash
-export PDF_PARSER_FLAVOR=mineru
+export PDF_PARSER_FLAVOR=both
 export PDF_PARSER_SERVICE_DEFAULT=mineru
-export MINERU_PACKAGE_SPEC='mineru[all]>=3.3,<4'
+export MINERU_PACKAGE_SPEC='mineru[pipeline]>=3.3,<4'
 podman-compose -f docker-compose.podman.yml up -d pdf-parser-service
 ```
 
-如果要切换为 `Docling`：
+若你是在 `Linux` 机器上做完整批量解析，且明确需要官方全量依赖，再切到：
 
 ```bash
-export PDF_PARSER_FLAVOR=docling
-export PDF_PARSER_SERVICE_DEFAULT=docling
-podman-compose -f docker-compose.podman.yml up -d --build pdf-parser-service
+export MINERU_PACKAGE_SPEC='mineru[all]>=3.3,<4'
 ```
+
+如只想在镜像层单装某一种解析器，仍可显式改回 `mineru` 或 `docling`。
 
 注意：
 
@@ -101,7 +108,7 @@ REDIS_URL=redis://localhost:6379
 QDRANT_HOST=localhost
 QDRANT_PORT=6333
 PDF_PARSER_LOCAL_ENDPOINT=http://localhost:8090
-MINERU_PACKAGE_SPEC=mineru[all]>=3.3,<4
+MINERU_PACKAGE_SPEC=mineru[pipeline]>=3.3,<4
 ```
 
 ## 运维说明

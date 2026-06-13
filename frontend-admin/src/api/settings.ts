@@ -75,6 +75,7 @@ export interface SystemSettings {
     local_service_endpoint: string
     remote_service_endpoint: string
     request_timeout_seconds: number
+    processing_window_size: number
     active_runtime_status?: PdfParserRuntimeStatus | null
     available_parsers?: PdfParserRuntimeStatus[]
   }

@@ -52,8 +52,14 @@ cd backend
 python3 -m venv venv
 source venv/bin/activate
 pip install -r parser_service/requirements.txt
-pip install "mineru[all]>=3.3,<4"
+pip install "mineru[pipeline]>=3.3,<4"
 uvicorn parser_service.main:app --host 0.0.0.0 --port 8090
+```
+
+如需完整依赖集合，再改为：
+
+```bash
+pip install "mineru[all]>=3.3,<4"
 ```
 
 ## Podman 构建
@@ -65,7 +71,7 @@ podman build \
   -f backend/parser_service/Dockerfile \
   -t starmap-pdf-parser:mineru \
   --build-arg PARSER_FLAVOR=mineru \
-  --build-arg MINERU_PACKAGE_SPEC='mineru[all]>=3.3,<4' \
+  --build-arg MINERU_PACKAGE_SPEC='mineru[pipeline]>=3.3,<4' \
   backend
 ```
 
@@ -92,7 +98,10 @@ podman build \
 ## 运行建议
 
 - 本地联调默认：
-  - `PARSER_FLAVOR=mineru`
+  - `PARSER_FLAVOR=both`
   - `PDF_PARSER_SERVICE_DEFAULT=mineru`
+- `MinerU` 首次启动会下载模型；当前 `docker-compose.podman.yml` 已将 `/root/.cache` 挂载为持久卷，后续重建容器不会重复全量下载
+- `MinerU` 配置文件默认落在 `MINERU_TOOLS_CONFIG_JSON=/root/.cache/mineru/mineru.json`，避免配置写在容器易失层
+- 若你在 `Linux` 机器上追求更完整的官方依赖集合，可显式传入 `MINERU_PACKAGE_SPEC='mineru[all]>=3.3,<4'`
 - 若你的开发机是 `macOS`，优先只把它作为联调机，不要把大量解析任务压在本机上
 - 如果准备正式跑批量 PDF，优先把这个服务部署到单独的 Linux 机器

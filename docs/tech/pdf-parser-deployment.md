@@ -42,11 +42,18 @@
 - `PARSER_FLAVOR=docling`：安装 `Docling`
 - `PARSER_FLAVOR=both`：两套依赖同时安装，仅建议开发调试
 
-对于 `MinerU`，当前建议优先按官方主线依赖构建：
+当前 `pdf-parser-service` 还额外做了两件事：
+
+- 将 `MinerU` 模型缓存目录持久化到容器卷，避免每次重建后重复下载
+- 将 `MINERU_PROCESSING_WINDOW_SIZE` 默认压到 `1`，把页面推理改成逐页窗口，降低峰值内存
+
+对于 `MinerU`，当前默认先按较轻量依赖构建：
+
+- `mineru[pipeline]>=3.3,<4`
+
+若后续你明确需要官方完整依赖集合，再切换为：
 
 - `mineru[all]>=3.3,<4`
-
-若后续你明确只需要轻量模式，再评估是否缩减为更小的安装集合。
 
 ## 2. 为什么当前不建议单独拆解析器容器
 
