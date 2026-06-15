@@ -866,11 +866,49 @@ class DocumentAsset(Base):
 # ========== 多模态语料库扩展模型 ==========
 
 
+class ExamOutline(Base):
+    """考试大纲元信息表"""
+    __tablename__ = "exam_outlines"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="大纲ID")
+    name: Mapped[str] = mapped_column(String(100), nullable=False, comment="大纲名称，如：2025年408考研大纲")
+    year: Mapped[int] = mapped_column(nullable=False, comment="考试年份")
+    version: Mapped[str] = mapped_column(String(20), default="v1.0", comment="版本号")
+    description: Mapped[Optional[str]] = mapped_column(Text, comment="大纲说明")
+    release_date: Mapped[Optional[datetime]] = mapped_column(Date, comment="发布日期")
+    effective_date: Mapped[Optional[datetime]] = mapped_column(Date, comment="生效日期")
+    status: Mapped[str] = mapped_column(
+        Enum("draft", "active", "archived"),
+        default="draft",
+        comment="状态：draft=草稿, active=启用, archived=归档"
+    )
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否默认大纲")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    # relationships
+    chapters: Mapped[List["CanonicalChapter"]] = relationship(back_populates="outline")
+
+    __table_args__ = (
+        Index("idx_outline_year", "year"),
+        Index("idx_outline_status", "status"),
+        Index("idx_outline_default", "is_default"),
+        UniqueConstraint("year", "version", name="uk_outline_year_version"),
+        {"comment": "考试大纲元信息表"}
+    )
+
+
 class CanonicalChapter(Base):
-    """标准章节表 - 学科的标准章节体系"""
+    """标准章节表 - 学科的标准章节体系（考试大纲章节）"""
     __tablename__ = "canonical_chapters"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="章节ID")
+    outline_id: Mapped[Optional[str]] = mapped_column(
+        String(32), ForeignKey("exam_outlines.id", ondelete="CASCADE"),
+        comment="所属大纲ID"
+    )
     subject_id: Mapped[str] = mapped_column(
         String(32), ForeignKey("subjects.id", ondelete="CASCADE"),
         nullable=False, comment="所属学科ID"
@@ -879,9 +917,10 @@ class CanonicalChapter(Base):
         String(32), ForeignKey("canonical_chapters.id", ondelete="CASCADE"),
         comment="父章节ID，顶级章节为NULL"
     )
-    level: Mapped[int] = mapped_column(default=1, comment="层级：1=一级章节，2=二级章节")
+    level: Mapped[int] = mapped_column(default=1, comment="层级：1=一级章节，2=二级章节，3=三级章节")
     name: Mapped[str] = mapped_column(String(200), nullable=False, comment="标准章节名称")
     code: Mapped[Optional[str]] = mapped_column(String(50), comment="章节编码，如 CH1.2")
+    outline_code: Mapped[Optional[str]] = mapped_column(String(50), comment="大纲中的编号，如：1.1.1、一、(一)")
     aliases: Mapped[Optional[List[str]]] = mapped_column(JSON, comment="别名列表")
     description: Mapped[Optional[str]] = mapped_column(Text, comment="章节描述")
     sort_order: Mapped[int] = mapped_column(default=0, comment="排序序号")
@@ -895,15 +934,17 @@ class CanonicalChapter(Base):
     )
 
     # relationships
+    outline: Mapped[Optional["ExamOutline"]] = relationship(back_populates="chapters")
     subject: Mapped["Subject"] = relationship()
     parent: Mapped[Optional["CanonicalChapter"]] = relationship(remote_side="CanonicalChapter.id")
     children: Mapped[List["CanonicalChapter"]] = relationship(back_populates="parent")
 
     __table_args__ = (
+        Index("idx_canonical_chapters_outline", "outline_id"),
         Index("idx_canonical_chapters_subject", "subject_id"),
         Index("idx_canonical_chapters_parent", "parent_id"),
         Index("idx_canonical_chapters_level", "level"),
-        {"comment": "标准章节表"}
+        {"comment": "标准章节表（考试大纲章节）"}
     )
 
 

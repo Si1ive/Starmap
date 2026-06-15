@@ -6,6 +6,7 @@ import { ConfigProvider } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import App from './App'
 import './index.css'
+import './styles/markdown.css'
 
 const queryClient = new QueryClient({
   defaultOptions: {

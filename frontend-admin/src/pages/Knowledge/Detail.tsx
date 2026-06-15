@@ -1,8 +1,12 @@
 import { useParams, useNavigate } from 'react-router-dom'
-import { Card, Tag, Button, Descriptions, Spin, Space, Tabs } from 'antd'
+import { Card, Tag, Button, Descriptions, Spin, Space, Tabs, Typography } from 'antd'
 import { ArrowLeftOutlined, EditOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { getKnowledgePointDetail, getSubjects, getChapters } from '@/api'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+
+const { Paragraph } = Typography
 
 const difficultyConfig: Record<string, { color: string; text: string }> = {
   easy: { color: 'green', text: '简单' },
@@ -86,7 +90,7 @@ const KnowledgeDetail = () => {
             label: '知识点内容',
             children: (
               <Card>
-                <div style={{ marginBottom: 16 }}>
+                <div style={{ marginBottom: 24 }}>
                   <Space>
                     <Tag color={difficulty.color}>{difficulty.text}</Tag>
                     <Tag color={examFreq.color}>{examFreq.text}</Tag>
@@ -96,13 +100,16 @@ const KnowledgeDetail = () => {
                   </Space>
                 </div>
                 <div
+                  className="markdown-content"
                   style={{
-                    whiteSpace: 'pre-wrap',
                     lineHeight: 1.8,
                     fontSize: 14,
+                    color: '#333',
                   }}
                 >
-                  {point.content}
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {point.content || '暂无内容'}
+                  </ReactMarkdown>
                 </div>
               </Card>
             ),
@@ -135,19 +142,33 @@ const KnowledgeDetail = () => {
           },
           {
             key: 'keypoints',
-            label: '要点',
+            label: '核心要点',
             children: (
               <Card>
                 {point.key_points && point.key_points.length > 0 ? (
-                  <ol style={{ paddingLeft: 20 }}>
+                  <div>
                     {point.key_points.map((kp, idx) => (
-                      <li key={idx} style={{ marginBottom: 8, lineHeight: 1.6 }}>
-                        {kp}
-                      </li>
+                      <div
+                        key={idx}
+                        style={{
+                          padding: '12px 16px',
+                          marginBottom: 12,
+                          background: '#f5f5f5',
+                          borderRadius: 4,
+                          borderLeft: '4px solid #1890ff',
+                        }}
+                      >
+                        <Space>
+                          <Tag color="blue">{idx + 1}</Tag>
+                          <span style={{ fontSize: 14 }}>{kp}</span>
+                        </Space>
+                      </div>
                     ))}
-                  </ol>
+                  </div>
                 ) : (
-                  <div style={{ color: '#999' }}>暂无要点</div>
+                  <div style={{ color: '#999', textAlign: 'center', padding: 40 }}>
+                    暂无核心要点
+                  </div>
                 )}
               </Card>
             ),
