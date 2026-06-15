@@ -2557,6 +2557,36 @@ async def parse_corpus_file(
     return ApiResponse(data=result)
 
 
+@router.delete("/corpus/files/{file_id}", response_model=ApiResponse)
+async def delete_corpus_file(
+    file_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """删除语料文件记录"""
+    from sqlalchemy import delete
+
+    # 检查文件是否存在
+    result = await db.execute(select(CorpusFile).where(CorpusFile.id == file_id))
+    corpus_file = result.scalar_one_or_none()
+
+    if not corpus_file:
+        raise HTTPException(status_code=404, detail="语料文件不存在")
+
+    # 删除关联的解析任务
+    await db.execute(delete(ParseRun).where(ParseRun.corpus_file_id == file_id))
+
+    # 删除关联的文档（如果存在）
+    if corpus_file.document_id:
+        await db.execute(delete(Document).where(Document.id == corpus_file.document_id))
+
+    # 删除文件记录
+    await db.execute(delete(CorpusFile).where(CorpusFile.id == file_id))
+
+    await db.commit()
+
+    return ApiResponse(message="删除成功", data={"file_id": file_id, "file_name": corpus_file.file_name})
+
+
 @router.get("/corpus/parse-runs", response_model=ApiResponse)
 async def list_parse_runs(
     corpus_file_id: Optional[str] = None,

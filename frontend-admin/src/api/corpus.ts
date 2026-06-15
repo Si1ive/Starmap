@@ -59,6 +59,10 @@ export const registerCorpusFileByDownload = (downloaded_file_id: string, batch_l
   return adminClient.post('/corpus/files/register-by-download', { downloaded_file_id, batch_label })
 }
 
+export const deleteCorpusFile = (id: string): Promise<ApiResponse<{ file_id: string; file_name: string }>> => {
+  return adminClient.delete(`/corpus/files/${id}`)
+}
+
 // ========== 文档 ==========
 
 export const getDocumentDetail = (id: string): Promise<ApiResponse<CorpusDocument>> => {

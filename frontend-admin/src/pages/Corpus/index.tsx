@@ -24,6 +24,8 @@ import {
   PlusOutlined,
   SearchOutlined,
   LoadingOutlined,
+  DeleteOutlined,
+  RedoOutlined,
 } from '@ant-design/icons'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -35,6 +37,7 @@ import {
   extractDocumentEntities,
   getDownloadedFiles,
   registerCorpusFileByDownload,
+  deleteCorpusFile,
 } from '@/api'
 import type { CorpusFile, DownloadedFile } from '@/types'
 
@@ -118,6 +121,18 @@ const CorpusPage = () => {
       setScanModalOpen(false)
       form.resetFields()
       queryClient.invalidateQueries({ queryKey: ['corpusFiles'] })
+    },
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: deleteCorpusFile,
+    onSuccess: (res) => {
+      message.success(`已删除：${res.data?.file_name}`)
+      queryClient.invalidateQueries({ queryKey: ['corpusFiles'] })
+    },
+    onError: (err: any) => {
+      const detail = err?.response?.data?.detail
+      message.error(detail || err.message || '删除失败')
     },
   })
 
@@ -207,6 +222,17 @@ const CorpusPage = () => {
     }
   }
 
+  const handleDelete = (record: CorpusFile) => {
+    Modal.confirm({
+      title: '确认删除',
+      content: `确定要删除文件 "${record.file_name}" 吗？此操作将同时删除关联的解析记录和文档数据，且无法恢复。`,
+      okText: '确定',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: () => deleteMutation.mutate(record.id),
+    })
+  }
+
   const columns = [
     {
       title: '文件名',
@@ -261,7 +287,7 @@ const CorpusPage = () => {
     {
       title: '操作',
       key: 'actions',
-      width: 180,
+      width: 240,
       render: (_: unknown, record: CorpusFile) => (
         <Space>
           {record.document_id && (
@@ -269,17 +295,39 @@ const CorpusPage = () => {
               详情
             </Button>
           )}
-          <Tooltip title={getProcessDisabledReason(record) || '执行解析、标题树、章节映射和实体抽取'}>
-            <Button
-              type="link"
-              size="small"
-              icon={<PlayCircleOutlined />}
-              disabled={record.status === 'parsed' || record.status === 'parsing'}
-              onClick={() => runPipeline(record.id, record.document_id)}
-            >
-              处理
-            </Button>
-          </Tooltip>
+          {record.status === 'failed' || record.status === 'pending' ? (
+            <Tooltip title="重新执行解析流程">
+              <Button
+                type="link"
+                size="small"
+                icon={<RedoOutlined />}
+                onClick={() => runPipeline(record.id, record.document_id)}
+              >
+                重试
+              </Button>
+            </Tooltip>
+          ) : (
+            <Tooltip title={getProcessDisabledReason(record) || '执行解析、标题树、章节映射和实体抽取'}>
+              <Button
+                type="link"
+                size="small"
+                icon={<PlayCircleOutlined />}
+                disabled={record.status === 'parsed' || record.status === 'parsing'}
+                onClick={() => runPipeline(record.id, record.document_id)}
+              >
+                处理
+              </Button>
+            </Tooltip>
+          )}
+          <Button
+            type="link"
+            size="small"
+            danger
+            icon={<DeleteOutlined />}
+            onClick={() => handleDelete(record)}
+          >
+            删除
+          </Button>
         </Space>
       ),
     },
