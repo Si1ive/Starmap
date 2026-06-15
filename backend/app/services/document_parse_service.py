@@ -153,6 +153,11 @@ class DocumentParseService:
 
             await self.db.commit()
 
+            # 刷新对象以避免访问detached对象
+            await self.db.refresh(parse_run)
+            await self.db.refresh(document)
+            await self.db.refresh(corpus_file)
+
             logger.info(
                 "文档解析成功并落库",
                 corpus_file_id=corpus_file_id,

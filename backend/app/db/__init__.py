@@ -13,18 +13,22 @@ logger = get_logger(__name__)
 async def get_db():
     """
     获取数据库会话（用于 FastAPI Depends）
-    
+
     使用独立的会话管理器，避免与 mysql_client.session() 冲突。
     """
     if not mysql_client._session_maker:
         await mysql_client.connect()
-    
+
     session = mysql_client._session_maker()
     try:
         yield session
-        await session.commit()
+        # 如果session内部已经commit过（如长时间运行的任务），
+        # 这里的commit可能会触发警告，但不影响数据一致性
+        if session.in_transaction():
+            await session.commit()
     except Exception:
-        await session.rollback()
+        if session.in_transaction():
+            await session.rollback()
         raise
     finally:
         await session.close()
@@ -47,9 +51,11 @@ async def get_optional_db():
     session: Optional[AsyncSession] = mysql_client._session_maker()
     try:
         yield session
-        await session.commit()
+        if session.in_transaction():
+            await session.commit()
     except Exception:
-        await session.rollback()
+        if session.in_transaction():
+            await session.rollback()
         raise
     finally:
         await session.close()
