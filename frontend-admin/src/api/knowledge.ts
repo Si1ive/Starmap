@@ -57,7 +57,7 @@ export const updateKnowledgePoint = (
   return adminClient.put(`/knowledge/points/${id}`, data)
 }
 
-// ========== PDF入库 ==========
+// ========== 旧版 PDF 入库接口 ==========
 
 export interface IngestPdfData {
   pdf_path: string

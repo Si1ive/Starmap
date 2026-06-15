@@ -148,6 +148,12 @@ class DocumentSectionService:
         if not document:
             raise ValueError(f"文档不存在: {document_id}")
 
+        existing_sections_result = await self.db.execute(
+            select(DocumentSection.id).where(DocumentSection.document_id == document_id).limit(1)
+        )
+        if existing_sections_result.scalar_one_or_none():
+            raise ValueError("该文档已生成原生标题树，无需重复提取")
+
         # 2. 获取所有 blocks，按页码和顺序排列
         blocks_result = await self.db.execute(
             select(DocumentBlock)

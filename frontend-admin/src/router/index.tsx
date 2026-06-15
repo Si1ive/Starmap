@@ -23,7 +23,6 @@ import KnowledgeEdit from '@/pages/Knowledge/Edit'
 import QuestionList from '@/pages/Question/List'
 import QuestionDetail from '@/pages/Question/Detail'
 import QuestionEdit from '@/pages/Question/Edit'
-import PdfIngest from '@/pages/Ingest'
 import CorpusPage from '@/pages/Corpus'
 import DocumentDetailPage from '@/pages/Corpus/DocumentDetail'
 import SectionReviewPage from '@/pages/Review/Sections'
@@ -108,10 +107,8 @@ const AppRoutes = () => {
           }
         />
 
-        {/* PDF入库 */}
-        <Route path="ingest" element={<PdfIngest />} />
-
         {/* 语料管理 */}
+        <Route path="ingest" element={<Navigate to="/admin/corpus" replace />} />
         <Route path="corpus" element={<CorpusPage />} />
         <Route path="corpus/:id" element={<DocumentDetailPage />} />
 

@@ -5,6 +5,7 @@
 当前支持 Docling / MinerU 双解析器，可手动切换单一活动解析器。
 """
 
+import asyncio
 import time
 import uuid
 from datetime import datetime
@@ -69,6 +70,17 @@ class DocumentParseService:
         if not corpus_file.local_path or not Path(corpus_file.local_path).exists():
             raise ValueError(f"文件不存在于磁盘: {corpus_file.local_path}")
 
+        if corpus_file.status == "parsing":
+            raise ValueError("该语料正在解析中，请稍后刷新状态")
+
+        if corpus_file.status == "parsed" and parse_mode in {"primary", "fallback"}:
+            existing_document = await self._get_document_by_corpus_file_id(corpus_file_id)
+            raise ValueError(
+                "该语料已成功解析，无需重复执行；如需重跑请使用 retry 或 manual_fix 模式"
+                if existing_document
+                else "该语料已标记为解析成功，无需重复执行；如需重跑请使用 retry 或 manual_fix 模式"
+            )
+
         runtime_config = await SystemSettingsService(self.db).get_pdf_parser_runtime_config()
         parser = choose_parser(
             requested_parser=parser_name,
@@ -95,7 +107,9 @@ class DocumentParseService:
 
         try:
             # 3. 调用解析器并标准化
-            parse_result = parser.parse(corpus_file.local_path)
+            # 解析器本身是同步 CPU/IO 重任务，放到线程池执行，避免阻塞事件循环，
+            # 否则解析过程中管理端的列表查询会一起超时。
+            parse_result = await asyncio.to_thread(parser.parse, corpus_file.local_path)
 
             # 4. 创建/更新 Document
             document = await self._get_or_create_document(
@@ -134,6 +148,7 @@ class DocumentParseService:
             # 更新文档
             document.page_count = parse_result.page_count
             document.document_markdown = parse_result.document_markdown or ""
+            document.document_json = self._serialize_parse_result(parse_result)
             document.status = "pending"
 
             await self.db.commit()
@@ -237,6 +252,12 @@ class DocumentParseService:
             )
             raise
 
+    async def _get_document_by_corpus_file_id(self, corpus_file_id: str) -> Optional[Document]:
+        result = await self.db.execute(
+            select(Document).where(Document.corpus_file_id == corpus_file_id)
+        )
+        return result.scalar_one_or_none()
+
     async def _get_or_create_document(
         self,
         corpus_file: CorpusFile,
@@ -263,6 +284,48 @@ class DocumentParseService:
         document.latest_parse_run_id = parse_run_id
         await self.db.flush()
         return document
+
+    def _serialize_parse_result(self, parse_result: ParsedDocumentResult) -> Dict[str, Any]:
+        return {
+            "parser_name": parse_result.parser_name,
+            "parser_version": parse_result.parser_version,
+            "confidence": parse_result.confidence,
+            "metadata": parse_result.metadata or {},
+            "page_count": parse_result.page_count,
+            "block_count": parse_result.block_count,
+            "asset_count": parse_result.asset_count,
+            "pages": [
+                {
+                    "page_no": page.page_no,
+                    "width": page.width,
+                    "height": page.height,
+                }
+                for page in parse_result.pages
+            ],
+            "blocks": [
+                {
+                    "page_no": block.page_no,
+                    "block_type": block.block_type,
+                    "order_no": block.order_no,
+                    "content_text": block.content_text,
+                    "content_md": block.content_md,
+                    "bbox": block.bbox,
+                    "html_table": block.html_table,
+                    "latex": block.latex,
+                }
+                for block in parse_result.blocks
+            ],
+            "assets": [
+                {
+                    "page_no": asset.page_no,
+                    "asset_type": asset.asset_type,
+                    "caption_text": asset.caption_text,
+                    "bbox": asset.bbox,
+                    "file_path": asset.file_path,
+                }
+                for asset in parse_result.assets
+            ],
+        }
 
     async def _persist_pages(self, document_id: str, pages: List[ParsedPage]) -> None:
         """Persist page records."""
@@ -432,6 +495,9 @@ class DocumentParseService:
             "subject_id": document.subject_id,
             "source_label": document.source_label,
             "page_count": document.page_count,
+            "latest_parse_run_id": document.latest_parse_run_id,
+            "document_markdown": document.document_markdown,
+            "document_json": document.document_json,
             "status": document.status,
             "created_at": document.created_at.isoformat() if document.created_at else None,
             "updated_at": document.updated_at.isoformat() if document.updated_at else None,

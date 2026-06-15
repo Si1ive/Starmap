@@ -2709,7 +2709,9 @@ async def extract_document_sections(
     try:
         result = await service.extract_sections(document_id)
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        detail = str(e)
+        status_code = 404 if detail.startswith("文档不存在") else 400
+        raise HTTPException(status_code=status_code, detail=detail)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"提取失败: {str(e)[:200]}")
 
@@ -2733,6 +2735,8 @@ async def map_document_chapters(
             subject_id=subject_id,
             auto_approve_threshold=auto_approve_threshold,
         )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"映射失败: {str(e)[:200]}")
 

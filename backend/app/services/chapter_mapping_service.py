@@ -237,6 +237,15 @@ class ChapterMappingService:
         if not sections:
             return {"mapped_count": 0, "message": "文档没有 sections"}
 
+        existing_mapping_result = await self.db.execute(
+            select(DocumentSectionMapping.id)
+            .join(DocumentSection, DocumentSectionMapping.document_section_id == DocumentSection.id)
+            .where(DocumentSection.document_id == document_id)
+            .limit(1)
+        )
+        if existing_mapping_result.scalar_one_or_none():
+            raise ValueError("该文档已完成章节映射，无需重复执行")
+
         # 2. 获取标准章节 — 按学科分组或指定学科
         if subject_id:
             chapters_result = await self.db.execute(
@@ -256,24 +265,13 @@ class ChapterMappingService:
             chapter_groups: Dict[str, list] = {}
             for ch in all_chapters:
                 chapter_groups.setdefault(ch.subject_id, []).append(ch)
-
-        # 3. 删除旧的映射
-        section_ids = [s.id for s in sections]
-        if section_ids:
-            from sqlalchemy import delete
-            await self.db.execute(
-                delete(DocumentSectionMapping).where(
-                    DocumentSectionMapping.document_section_id.in_(section_ids)
-                )
-            )
-
-        # 4. 构建匹配索引 — 每个学科一个索引
+        # 3. 构建匹配索引 — 每个学科一个索引
         chapter_indices: Dict[str, Dict[str, Any]] = {}
         for sid, chapters in chapter_groups.items():
             if chapters:
                 chapter_indices[sid] = self._build_chapter_index(chapters)
 
-        # 5. 逐个 section 进行映射，跨学科取最佳匹配
+        # 4. 逐个 section 进行映射，跨学科取最佳匹配
         mapped_count = 0
         auto_approved = 0
         pending_review = 0

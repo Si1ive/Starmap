@@ -198,10 +198,10 @@ const Dashboard = () => {
                   <Card
                     hoverable
                     style={{ textAlign: 'center' }}
-                    onClick={() => window.location.href = '/admin/crawler'}
+                    onClick={() => window.location.href = '/admin/corpus'}
                   >
                     <FileTextOutlined style={{ fontSize: 32, color: '#fa8c16', marginBottom: 8 }} />
-                    <div>PDF入库</div>
+                    <div>语料入库</div>
                   </Card>
                 </Col>
               </Row>

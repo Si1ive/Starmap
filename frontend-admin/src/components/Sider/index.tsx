@@ -14,7 +14,6 @@ import {
   WarningOutlined,
   SettingOutlined,
   TeamOutlined,
-  FilePdfOutlined,
   FileTextOutlined,
   AuditOutlined,
   SearchOutlined,
@@ -29,7 +28,6 @@ const menuItems = [
   { key: '/admin/dashboard', icon: <DashboardOutlined />, label: '数据看板' },
   { key: '/admin/knowledge', icon: <BookOutlined />, label: '知识点管理' },
   { key: '/admin/questions', icon: <QuestionCircleOutlined />, label: '题目管理' },
-  { key: '/admin/ingest', icon: <FilePdfOutlined />, label: 'PDF入库' },
   { key: '/admin/corpus', icon: <FileTextOutlined />, label: '语料管理' },
   {
     key: '/admin/review-group',

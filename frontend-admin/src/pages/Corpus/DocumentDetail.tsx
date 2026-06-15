@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Card, Button, Tree, Table, Tag, Space, Descriptions, message, Spin, Empty, Select, Modal } from 'antd'
+import { Card, Button, Tree, Table, Tag, Space, Descriptions, message, Spin, Empty, Select, Modal, Alert, Tooltip } from 'antd'
 import { ArrowLeftOutlined, ApartmentOutlined, NodeIndexOutlined, ExperimentOutlined } from '@ant-design/icons'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getDocumentDetail, getDocumentSections, getSectionMappings, extractDocumentSections, mapDocumentChapters, extractDocumentEntities, getSubjects } from '@/api'
@@ -56,6 +56,13 @@ const DocumentDetailPage = () => {
       queryClient.invalidateQueries({ queryKey: ['documentSections', id] })
       queryClient.invalidateQueries({ queryKey: ['sectionMappings', id] })
     },
+    onError: (err: any) => {
+      const detail = err?.response?.data?.detail
+      if (typeof detail === 'string' && detail.includes('无需重复提取')) {
+        message.info(detail)
+        queryClient.invalidateQueries({ queryKey: ['documentSections', id] })
+      }
+    },
   })
 
   const mapChaptersMut = useMutation({
@@ -64,6 +71,13 @@ const DocumentDetailPage = () => {
       message.success('章节映射完成')
       queryClient.invalidateQueries({ queryKey: ['document', id] })
       queryClient.invalidateQueries({ queryKey: ['sectionMappings', id] })
+    },
+    onError: (err: any) => {
+      const detail = err?.response?.data?.detail
+      if (typeof detail === 'string' && detail.includes('无需重复执行')) {
+        message.info(detail)
+        queryClient.invalidateQueries({ queryKey: ['sectionMappings', id] })
+      }
     },
   })
 
@@ -80,6 +94,8 @@ const DocumentDetailPage = () => {
   const mappings = mappingsData?.data || []
   const subjects = subjectsData?.data || []
   const treeData = buildTreeData(Array.isArray(sections) ? sections : [])
+  const hasSections = treeData.length > 0
+  const hasMappings = mappings.length > 0
 
   if (isLoading) {
     return <div style={{ textAlign: 'center', padding: 100 }}><Spin size="large" /></div>
@@ -106,6 +122,9 @@ const DocumentDetailPage = () => {
     },
   ]
 
+  const extractSectionsTip = hasSections ? '该文档已经生成原生标题树，无需重复提取' : '从已解析的 blocks 中识别文档原始章节结构'
+  const mapChaptersTip = hasMappings ? '该文档已经完成章节映射，无需重复执行' : '将原生标题树映射到系统标准章节体系'
+
   return (
     <div>
       <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/admin/corpus')} style={{ marginBottom: 16 }}>
@@ -125,12 +144,25 @@ const DocumentDetailPage = () => {
       </Card>
 
       <Card style={{ marginBottom: 16 }}>
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="原生标题树是从文档内容里识别出来的章节结构；映射到标准章节是把这些标题挂到系统维护的学科章节体系上，供后续知识点和题目归属使用。"
+        />
         <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <h4 style={{ margin: 0 }}><ApartmentOutlined style={{ marginRight: 8 }} />原生标题树</h4>
           <Space>
-            <Button icon={<NodeIndexOutlined />} loading={extractSectionsMut.isPending} onClick={() => extractSectionsMut.mutate()}>
-              提取标题树
-            </Button>
+            <Tooltip title={extractSectionsTip}>
+              <Button
+                icon={<NodeIndexOutlined />}
+                loading={extractSectionsMut.isPending}
+                disabled={hasSections}
+                onClick={() => extractSectionsMut.mutate()}
+              >
+                提取标题树
+              </Button>
+            </Tooltip>
             <Select
               placeholder="全部学科（自动识别）"
               style={{ width: 180 }}
@@ -139,9 +171,16 @@ const DocumentDetailPage = () => {
               allowClear
               options={subjects.map((s: any) => ({ label: s.name, value: s.id }))}
             />
-            <Button type="primary" loading={mapChaptersMut.isPending} onClick={() => mapChaptersMut.mutate()}>
-              映射到标准章节
-            </Button>
+            <Tooltip title={mapChaptersTip}>
+              <Button
+                type="primary"
+                loading={mapChaptersMut.isPending}
+                disabled={!hasSections || hasMappings}
+                onClick={() => mapChaptersMut.mutate()}
+              >
+                映射到标准章节
+              </Button>
+            </Tooltip>
           </Space>
         </div>
         {treeData.length > 0 ? (
@@ -153,10 +192,11 @@ const DocumentDetailPage = () => {
 
       <Card>
         <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h4 style={{ margin: 0 }}>Section 映射</h4>
+          <h4 style={{ margin: 0 }}>章节映射结果</h4>
           <Button
             icon={<ExperimentOutlined />}
             loading={extractEntitiesMut.isPending}
+            disabled={!hasMappings}
             onClick={() => Modal.confirm({
               title: '确认抽取',
               content: '将从文档中抽取知识点和题目，确认继续？',

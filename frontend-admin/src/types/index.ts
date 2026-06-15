@@ -311,6 +311,27 @@ export interface CorpusFile {
   updated_at?: string
 }
 
+export interface CorpusDocument {
+  id: string
+  corpus_file_id: string
+  title?: string
+  file_name?: string
+  doc_type?: string
+  subject_id?: string
+  source_label?: string
+  page_count?: number
+  block_count?: number
+  status: string
+  latest_parse_run_id?: string
+  document_markdown?: string
+  document_json?: Record<string, unknown>
+  pages?: Array<Record<string, unknown>>
+  blocks?: Array<Record<string, unknown>>
+  assets?: Array<Record<string, unknown>>
+  created_at?: string
+  updated_at?: string
+}
+
 // 解析记录
 export interface ParseRun {
   id: string

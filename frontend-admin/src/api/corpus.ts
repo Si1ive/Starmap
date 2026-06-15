@@ -5,6 +5,7 @@ import type {
   CorpusFile,
   ParseRun,
   ParseCorpusFileRequest,
+  CorpusDocument,
   DocumentSection,
   SectionMapping,
   ReviewItem,
@@ -60,7 +61,7 @@ export const registerCorpusFileByDownload = (downloaded_file_id: string, batch_l
 
 // ========== 文档 ==========
 
-export const getDocumentDetail = (id: string): Promise<ApiResponse<any>> => {
+export const getDocumentDetail = (id: string): Promise<ApiResponse<CorpusDocument>> => {
   return adminClient.get(`/corpus/documents/${id}`)
 }
 
