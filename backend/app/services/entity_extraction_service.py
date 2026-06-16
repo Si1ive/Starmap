@@ -147,6 +147,246 @@ class OptionIntegrityChecker:
         }
 
 
+class QuestionNumberChecker:
+    """题目编号连续性检查器"""
+
+    # 题号正则模式（按优先级）
+    NUMBER_PATTERNS = [
+        (r'^(\d+)[.、．]\s*', 'arabic'),      # 1. 2. 3.
+        (r'^[（(](\d+)[）)]\s*', 'paren'),    # (1) (2) (3)
+        (r'^\[(\d+)\]\s*', 'bracket'),        # [1] [2] [3]
+        (r'^例(\d+)', 'example'),              # 例1 例2
+        (r'^第(\d+)题', 'diti'),               # 第1题 第2题
+    ]
+
+    def extract_question_numbers(self, questions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        提取所有题目的编号
+
+        Returns:
+            [{'index': 0, 'number': 1, 'pattern': 'arabic', 'text': '1.', 'question': {...}}, ...]
+        """
+        results = []
+        for i, q in enumerate(questions):
+            # 优先从题干或content开头提取
+            text = (q.get('stem') or q.get('content') or q.get('raw_text', '')).strip()
+
+            number_info = None
+            for pattern, pattern_type in self.NUMBER_PATTERNS:
+                match = re.match(pattern, text)
+                if match:
+                    number_info = {
+                        'index': i,
+                        'number': int(match.group(1)),
+                        'pattern': pattern_type,
+                        'text': match.group(0),
+                        'question': q
+                    }
+                    break
+
+            if number_info:
+                results.append(number_info)
+            else:
+                # 没有识别到编号
+                results.append({
+                    'index': i,
+                    'number': None,
+                    'pattern': 'none',
+                    'text': '',
+                    'question': q
+                })
+
+        return results
+
+    def detect_continuity_issues(self, number_infos: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        检测编号连续性问题
+
+        Returns:
+            {
+                'segments': [  # 分段统计
+                    {
+                        'start_index': 0,
+                        'end_index': 10,
+                        'number_range': (1, 11),
+                        'pattern': 'arabic',
+                        'issues': [...]
+                    }
+                ],
+                'global_issues': {
+                    'total_questions': 50,
+                    'numbered_questions': 45,
+                    'unnumbered_questions': 5,
+                    'unnumbered_indices': [3, 7, 12]
+                }
+            }
+        """
+        # Step 1: 分段（遇到编号重新从1开始，或pattern变化，认为是新段）
+        segments = self._segment_by_pattern(number_infos)
+
+        # Step 2: 对每段检查连续性
+        for seg in segments:
+            seg['issues'] = self._check_segment_continuity(seg)
+
+        # Step 3: 全局统计
+        global_issues = self._compute_global_stats(number_infos)
+
+        return {
+            'segments': segments,
+            'global_issues': global_issues
+        }
+
+    def _segment_by_pattern(self, number_infos: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        按编号模式和重置点分段
+        例如：1,2,3,4,1,2,3 → 两段：[1-4] 和 [1-3]
+        """
+        segments = []
+        current_segment = {
+            'start_index': 0,
+            'numbers': [],
+            'pattern': None,
+            'infos': []
+        }
+
+        for i, info in enumerate(number_infos):
+            number = info['number']
+            pattern = info['pattern']
+
+            if pattern == 'none':
+                continue  # 跳过无编号的题目
+
+            # 判断是否开始新段
+            should_start_new_segment = (
+                # pattern变化
+                (current_segment['pattern'] and pattern != current_segment['pattern']) or
+                # 编号重新从1开始（且不是第一题）
+                (number == 1 and current_segment['numbers'] and current_segment['numbers'][-1] != 0)
+            )
+
+            if should_start_new_segment:
+                # 保存当前段
+                current_segment['end_index'] = i - 1
+                if current_segment['numbers']:
+                    current_segment['number_range'] = (
+                        min(current_segment['numbers']),
+                        max(current_segment['numbers'])
+                    )
+                    segments.append(current_segment)
+                # 开始新段
+                current_segment = {
+                    'start_index': i,
+                    'numbers': [number],
+                    'pattern': pattern,
+                    'infos': [info]
+                }
+            else:
+                # 继续当前段
+                current_segment['numbers'].append(number)
+                current_segment.setdefault('infos', []).append(info)
+                current_segment['pattern'] = pattern
+
+        # 添加最后一段
+        if current_segment['numbers']:
+            current_segment['end_index'] = len(number_infos) - 1
+            current_segment['number_range'] = (
+                min(current_segment['numbers']),
+                max(current_segment['numbers'])
+            )
+            segments.append(current_segment)
+
+        return segments
+
+    def _check_segment_continuity(self, segment: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        检查单个段的连续性
+
+        Returns:
+            问题列表：[
+                {'type': 'missing', 'missing_number': 3, 'after_index': 5, 'severity': 'high'},
+                {'type': 'duplicate', 'number': 5, 'indices': [7, 8], 'severity': 'medium'},
+                {'type': 'jump', 'from_number': 10, 'to_number': 15, 'gap': 4, 'at_index': 12, 'severity': 'high'}
+            ]
+        """
+        issues = []
+        numbers = segment['numbers']
+        infos = segment['infos']
+
+        if not numbers:
+            return issues
+
+        # 期望的连续序列
+        expected_start = numbers[0]
+        expected_end = expected_start + len(numbers) - 1
+        expected_numbers = list(range(expected_start, expected_end + 1))
+        actual_numbers = numbers
+
+        # 检查缺失
+        missing = set(expected_numbers) - set(actual_numbers)
+        if missing:
+            for miss_num in sorted(missing):
+                # 找到缺失编号应该出现的位置
+                before_index = None
+                for i, num in enumerate(actual_numbers):
+                    if num < miss_num:
+                        before_index = infos[i]['index']
+
+                issues.append({
+                    'type': 'missing',
+                    'missing_number': miss_num,
+                    'after_index': before_index,
+                    'severity': 'high'
+                })
+
+        # 检查重复
+        from collections import Counter
+        duplicates = [num for num, count in Counter(actual_numbers).items() if count > 1]
+        for dup_num in duplicates:
+            dup_indices = [info['index'] for info in infos if info['number'] == dup_num]
+            issues.append({
+                'type': 'duplicate',
+                'number': dup_num,
+                'indices': dup_indices,
+                'severity': 'medium'
+            })
+
+        # 检查跳跃（相邻编号差值>1）
+        for i in range(len(actual_numbers) - 1):
+            diff = actual_numbers[i + 1] - actual_numbers[i]
+            if diff > 1:
+                issues.append({
+                    'type': 'jump',
+                    'from_number': actual_numbers[i],
+                    'to_number': actual_numbers[i + 1],
+                    'gap': diff - 1,
+                    'at_index': infos[i + 1]['index'],
+                    'severity': 'high'
+                })
+            elif diff < 0:
+                issues.append({
+                    'type': 'reverse',
+                    'from_number': actual_numbers[i],
+                    'to_number': actual_numbers[i + 1],
+                    'at_index': infos[i + 1]['index'],
+                    'severity': 'high'
+                })
+
+        return issues
+
+    def _compute_global_stats(self, number_infos: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """计算全局统计"""
+        total = len(number_infos)
+        numbered = sum(1 for info in number_infos if info['number'] is not None)
+        unnumbered_indices = [info['index'] for info in number_infos if info['number'] is None]
+
+        return {
+            'total_questions': total,
+            'numbered_questions': numbered,
+            'unnumbered_questions': total - numbered,
+            'unnumbered_indices': unnumbered_indices
+        }
+
+
 class EntityExtractionService:
     """实体抽取服务"""
 
