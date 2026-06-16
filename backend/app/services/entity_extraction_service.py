@@ -387,6 +387,240 @@ class QuestionNumberChecker:
         }
 
 
+class RuleBasedFixer:
+    """基于规则的问题修复器"""
+
+    def __init__(self):
+        self.option_checker = OptionIntegrityChecker()
+
+    def fix_option_issues(
+        self,
+        questions: List[Dict[str, Any]],
+        option_issues: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        修复选项不完整的问题
+        策略：向后查找（换页/换列后的block）中缺失的选项
+        """
+        fixed_questions = questions.copy()
+
+        for issue in option_issues:
+            idx = issue['question_index']
+            missing = issue['missing_options']
+
+            if issue['issue_type'] == 'missing_end':
+                # 缺尾部选项，向后查找
+                found_options = self._search_options_forward(
+                    questions,
+                    idx,
+                    missing,
+                    max_distance=3  # 最多向后看3个题目
+                )
+
+                if found_options:
+                    # 合并选项
+                    if 'options' not in fixed_questions[idx]:
+                        fixed_questions[idx]['options'] = []
+                    fixed_questions[idx]['options'].extend(found_options['options'])
+                    # 标记为已修复
+                    fixed_questions[idx]['fixed_by_rule'] = 'option_append'
+                    fixed_questions[idx]['fixed_source_index'] = found_options['source_index']
+                    logger.info(f"Fixed question {idx}: appended options {missing}")
+
+        return fixed_questions
+
+    def fix_number_issues(
+        self,
+        questions: List[Dict[str, Any]],
+        continuity_report: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """
+        修复编号相关问题
+        """
+        fixed_questions = questions.copy()
+
+        for segment in continuity_report['segments']:
+            for issue in segment['issues']:
+
+                if issue['type'] == 'missing':
+                    # 编号缺失：可能是题目被拆分了
+                    fixed = self._fix_missing_number(
+                        fixed_questions,
+                        issue['missing_number'],
+                        issue['after_index']
+                    )
+                    if fixed:
+                        fixed_questions = fixed
+
+                elif issue['type'] == 'duplicate':
+                    # 编号重复：可能是一道题被错误拆成两道
+                    fixed = self._fix_duplicate_number(
+                        fixed_questions,
+                        issue['number'],
+                        issue['indices']
+                    )
+                    if fixed:
+                        fixed_questions = fixed
+
+        return fixed_questions
+
+    def _search_options_forward(
+        self,
+        questions: List[Dict[str, Any]],
+        start_idx: int,
+        missing_labels: List[str],
+        max_distance: int
+    ) -> Optional[Dict[str, Any]]:
+        """
+        向后搜索缺失的选项
+        """
+        current_q = questions[start_idx]
+        current_page = current_q.get('page_no', 0)
+
+        for offset in range(1, max_distance + 1):
+            if start_idx + offset >= len(questions):
+                break
+
+            next_q = questions[start_idx + offset]
+            next_page = next_q.get('page_no', 0)
+
+            # 只在相邻页或同页查找
+            if abs(next_page - current_page) > 1:
+                break
+
+            # 检查next_q是否包含缺失的选项
+            next_options = next_q.get('options', [])
+            next_labels = [opt.get('label', opt.get('option_label', '')) for opt in next_options]
+
+            # 如果next_q只包含缺失的选项（说明是被拆分的部分）
+            if set(next_labels) == set(missing_labels):
+                return {
+                    'source_index': start_idx + offset,
+                    'options': next_options
+                }
+
+            # 如果next_q包含部分缺失选项
+            found_labels = set(next_labels) & set(missing_labels)
+            if found_labels:
+                found_options = [opt for opt in next_options if opt.get('label', opt.get('option_label', '')) in found_labels]
+                return {
+                    'source_index': start_idx + offset,
+                    'options': found_options,
+                    'partial': True
+                }
+
+        return None
+
+    def _fix_missing_number(
+        self,
+        questions: List[Dict[str, Any]],
+        missing_num: int,
+        after_index: Optional[int]
+    ) -> Optional[List[Dict[str, Any]]]:
+        """
+        修复缺失的编号
+        场景：编号应该是1,2,3，但实际只有1,3（缺2）
+        可能原因：题2被拆成了两部分，分别附在题1和题3上
+        """
+        if after_index is None:
+            return None
+
+        # 查找after_index之后的题目，看是否有无编号的题目
+        for offset in range(1, 4):
+            if after_index + offset >= len(questions):
+                break
+
+            candidate = questions[after_index + offset]
+            candidate_num = self._extract_number(candidate)
+
+            # 如果找到无编号的题目，且它的内容看起来像独立题目
+            if candidate_num is None and self._looks_like_complete_question(candidate):
+                # 给它赋予缺失的编号
+                candidate['inferred_number'] = missing_num
+                candidate['fixed_by_rule'] = 'number_infer'
+                logger.info(f"Inferred missing number {missing_num} for question at index {after_index + offset}")
+                return questions
+
+        return None
+
+    def _fix_duplicate_number(
+        self,
+        questions: List[Dict[str, Any]],
+        dup_num: int,
+        dup_indices: List[int]
+    ) -> Optional[List[Dict[str, Any]]]:
+        """
+        修复重复的编号
+        场景：两道题都标记为"3"
+        可能原因：一道题被错误拆成两道
+        """
+        if len(dup_indices) != 2:
+            return None  # 暂时只处理2个重复的情况
+
+        idx1, idx2 = dup_indices
+        q1, q2 = questions[idx1], questions[idx2]
+
+        # 判断是否应该合并
+        if self._should_merge_duplicates(q1, q2):
+            # 合并两道题
+            merged = self._merge_questions(q1, q2)
+            merged['fixed_by_rule'] = 'duplicate_merge'
+
+            # 替换idx1，删除idx2
+            new_questions = questions[:idx1] + [merged] + questions[idx1+1:idx2] + questions[idx2+1:]
+            logger.info(f"Merged duplicate number {dup_num} at indices {idx1}, {idx2}")
+            return new_questions
+
+        return None
+
+    def _extract_number(self, question: Dict[str, Any]) -> Optional[int]:
+        """从题目中提取编号"""
+        text = (question.get('stem') or question.get('content') or question.get('raw_text', '')).strip()
+        for pattern, _ in QuestionNumberChecker.NUMBER_PATTERNS:
+            match = re.match(pattern, text)
+            if match:
+                return int(match.group(1))
+        return None
+
+    def _looks_like_complete_question(self, question: Dict[str, Any]) -> bool:
+        """判断是否看起来像完整的题目"""
+        # 有足够长的题干
+        stem_length = len(question.get('stem', '') or question.get('content', ''))
+        # 选择题有选项
+        has_options = len(question.get('options', [])) > 0
+        return stem_length > 20 and has_options
+
+    def _should_merge_duplicates(self, q1: Dict[str, Any], q2: Dict[str, Any]) -> bool:
+        """判断两个重复编号的题目是否应该合并"""
+        # 检查页码相邻
+        page1 = q1.get('page_no', 0)
+        page2 = q2.get('page_no', 0)
+        if abs(page2 - page1) > 1:
+            return False
+
+        # 检查q1缺选项，q2只有选项
+        q1_result = self.option_checker.check(q1)
+
+        return (
+            not q1_result['is_complete'] and
+            q1_result['issue_type'] == 'missing_end' and
+            len(q2.get('stem', '') or q2.get('content', '')) < 20 and  # q2题干很短
+            len(q2.get('options', [])) > 0     # q2有选项
+        )
+
+    def _merge_questions(self, q1: Dict[str, Any], q2: Dict[str, Any]) -> Dict[str, Any]:
+        """合并两道题目"""
+        merged = q1.copy()
+        stem1 = q1.get('stem', '') or q1.get('content', '')
+        stem2 = q2.get('stem', '') or q2.get('content', '')
+        merged['stem'] = (stem1 + ' ' + stem2).strip()
+        if 'content' in merged:
+            merged['content'] = merged['stem']
+        merged['options'] = q1.get('options', []) + q2.get('options', [])
+        merged['page_range'] = f"{q1.get('page_no')}-{q2.get('page_no')}"
+        return merged
+
+
 class EntityExtractionService:
     """实体抽取服务"""
 
