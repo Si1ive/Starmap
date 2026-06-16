@@ -65,6 +65,88 @@ def clean_blocks_punctuation(blocks: List[DocumentBlock]) -> List[DocumentBlock]
     return blocks
 
 
+class OptionIntegrityChecker:
+    """选择题选项完整性检查器"""
+
+    EXPECTED_OPTIONS = {
+        'single_choice': ['A', 'B', 'C', 'D'],
+        'multiple_choice': ['A', 'B', 'C', 'D'],
+    }
+
+    def check(self, question: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        检查选项是否完整
+
+        Args:
+            question: 题目字典，包含question_type和options字段
+
+        Returns:
+            {
+                'is_complete': bool,
+                'missing_options': ['C', 'D'],
+                'issue_type': 'missing_end' | 'missing_middle' | 'missing_start' | 'too_few' | 'complete'
+            }
+        """
+        question_type = question.get('question_type') or question.get('type')
+        if question_type not in ['single_choice', 'multiple_choice', 'choice']:
+            return {'is_complete': True, 'issue_type': 'not_choice', 'missing_options': []}
+
+        options = question.get('options', [])
+        if not options:
+            return {
+                'is_complete': False,
+                'missing_options': ['A', 'B', 'C', 'D'],
+                'issue_type': 'missing_all'
+            }
+
+        # 提取选项标签
+        option_labels = sorted([opt.get('label', opt.get('option_label', '')) for opt in options if opt.get('label') or opt.get('option_label')])
+
+        if not option_labels:
+            return {
+                'is_complete': False,
+                'missing_options': ['A', 'B', 'C', 'D'],
+                'issue_type': 'missing_all'
+            }
+
+        # 期望的选项（从第一个到最后一个应该连续）
+        first_label = option_labels[0]
+        last_label = option_labels[-1]
+        expected_labels = [chr(ord(first_label) + i)
+                          for i in range(ord(last_label) - ord(first_label) + 1)]
+
+        missing = set(expected_labels) - set(option_labels)
+
+        if not missing:
+            # 检查是否至少有4个选项（单选题标准）
+            if len(option_labels) < 4:
+                missing_count = 4 - len(option_labels)
+                return {
+                    'is_complete': False,
+                    'missing_options': [chr(ord(last_label) + i + 1) for i in range(missing_count)],
+                    'issue_type': 'too_few'
+                }
+            return {'is_complete': True, 'issue_type': 'complete', 'missing_options': []}
+
+        # 判断缺失位置
+        missing_list = sorted(list(missing))
+        expected_end = expected_labels[-len(missing_list):]
+        expected_start = expected_labels[:len(missing_list)]
+
+        if set(missing_list) == set(expected_end):
+            issue_type = 'missing_end'  # 缺尾部：有AB缺CD
+        elif set(missing_list) == set(expected_start):
+            issue_type = 'missing_start'  # 缺头部：有CD缺AB（罕见）
+        else:
+            issue_type = 'missing_middle'  # 缺中间：有AC缺B
+
+        return {
+            'is_complete': False,
+            'missing_options': missing_list,
+            'issue_type': issue_type
+        }
+
+
 class EntityExtractionService:
     """实体抽取服务"""
 
