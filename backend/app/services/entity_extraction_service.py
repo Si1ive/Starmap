@@ -785,6 +785,83 @@ class LLMFallbackFixer:
         return questions
 
 
+def comprehensive_validation(questions: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    综合校验，生成完整的问题报告
+
+    Returns:
+        {
+            'option_issues': [...],
+            'number_continuity': {...},
+            'quantity_check': {...},
+            'summary': {
+                'total_issues': int,
+                'critical_issues': [...]
+            }
+        }
+    """
+    option_checker = OptionIntegrityChecker()
+    number_checker = QuestionNumberChecker()
+
+    # 1. 选项完整性
+    option_issues = []
+    for i, q in enumerate(questions):
+        result = option_checker.check(q)
+        if not result['is_complete']:
+            option_issues.append({
+                'question_index': i,
+                'question_number': _extract_question_number_simple(q),
+                'page_no': q.get('page_no'),
+                **result
+            })
+
+    # 2. 编号连续性
+    number_infos = number_checker.extract_question_numbers(questions)
+    continuity_report = number_checker.detect_continuity_issues(number_infos)
+
+    # 3. 数量一致性
+    max_number = max([info['number'] for info in number_infos if info['number']], default=0)
+    quantity_check = {
+        'total_extracted': len(questions),
+        'max_number_found': max_number,
+        'is_consistent': len(questions) == continuity_report['global_issues']['numbered_questions']
+    }
+
+    # 4. 收集critical issues
+    critical_issues = []
+    # 选项问题都是critical
+    critical_issues.extend(option_issues)
+    # 编号问题中的high severity
+    for seg in continuity_report['segments']:
+        for iss in seg['issues']:
+            if iss['severity'] == 'high':
+                critical_issues.append({
+                    'question_index': iss.get('after_index', iss.get('at_index', 0)),
+                    'issue_type': iss['type'],
+                    **iss
+                })
+
+    return {
+        'option_issues': option_issues,
+        'number_continuity': continuity_report,
+        'quantity_check': quantity_check,
+        'summary': {
+            'total_issues': len(option_issues) + sum(len(seg['issues']) for seg in continuity_report['segments']),
+            'critical_issues': critical_issues
+        }
+    }
+
+
+def _extract_question_number_simple(question: Dict[str, Any]) -> Optional[int]:
+    """简单提取题号"""
+    text = (question.get('stem') or question.get('content') or '').strip()
+    for pattern, _ in QuestionNumberChecker.NUMBER_PATTERNS:
+        match = re.match(pattern, text)
+        if match:
+            return int(match.group(1))
+    return None
+
+
 class EntityExtractionService:
     """实体抽取服务"""
 
@@ -1062,15 +1139,318 @@ class EntityExtractionService:
         blocks: List[DocumentBlock],
         section_mappings: Dict[int, Dict[str, Optional[str]]],
     ) -> int:
-        """抽取题目"""
+        """
+        抽取题目（带校验和修复）
+
+        完整流程：
+        1. 标点清洗
+        2. 初步提取题目
+        3. 综合校验
+        4. 规则修复
+        5. 重新校验
+        6. LLM兜底（可选）
+        7. 保存题目和诊断报告
+        """
         # Step 1: 清洗blocks中的标点错误
         blocks = clean_blocks_punctuation(blocks)
         logger.info(f"清洗标点完成，处理 {len(blocks)} 个blocks")
 
+        # Step 2: 初步提取题目（转换为字典格式，不直接入库）
+        raw_questions = await self._extract_questions_to_dict(
+            document_id, fallback_subject_id, blocks, section_mappings
+        )
+        logger.info(f"初步提取: {len(raw_questions)} 道题目")
+
+        if not raw_questions:
+            return 0
+
+        # Step 3: 综合校验
+        validation_report = comprehensive_validation(raw_questions)
+        logger.info(f"校验发现 {validation_report['summary']['total_issues']} 个问题")
+
+        # Step 4: 规则修复
+        fixer = RuleBasedFixer()
+
+        # 4.1 修复选项问题
+        questions = fixer.fix_option_issues(raw_questions, validation_report['option_issues'])
+
+        # 4.2 修复编号问题
+        questions = fixer.fix_number_issues(questions, validation_report['number_continuity'])
+
+        rule_fixed_count = sum(1 for q in questions if q.get('fixed_by_rule'))
+        logger.info(f"规则修复: {rule_fixed_count} 道题目")
+
+        # Step 5: 重新校验
+        validation_report_v2 = comprehensive_validation(questions)
+
+        # Step 6: LLM兜底（可选 - 目前暂不启用，因为需要LLM client配置）
+        # if validation_report_v2['summary']['critical_issues']:
+        #     llm_fixer = LLMFallbackFixer(llm_client)
+        #     questions = await llm_fixer.fix_remaining_issues(questions, validation_report_v2)
+
+        # Step 7: 最终验证
+        final_report = comprehensive_validation(questions)
+        logger.info(f"最终: {len(questions)} 道题目, {final_report['summary']['total_issues']} 个剩余问题")
+
+        # Step 8: 保存诊断报告（存储到document的metadata中）
+        diagnostic_report = {
+            'initial_report': validation_report,
+            'after_rule_fix': validation_report_v2,
+            'final_report': final_report,
+            'fix_history': self._extract_fix_history(questions)
+        }
+        await self._save_diagnostic_report(document_id, diagnostic_report)
+
+        # Step 9: 保存题目到数据库
+        question_count = 0
+        for question_dict in questions:
+            saved = await self._save_question_from_dict(question_dict)
+            if saved:
+                question_count += 1
+
+        return question_count
+
+    async def _extract_questions_to_dict(
+        self,
+        document_id: str,
+        fallback_subject_id: str,
+        blocks: List[DocumentBlock],
+        section_mappings: Dict[int, Dict[str, Optional[str]]],
+    ) -> List[Dict[str, Any]]:
+        """
+        将blocks提取为题目字典列表（不入库）
+        用于后续的校验和修复
+        """
+        questions = []
+        question_markers = ['第', '题', '（', '(', 'A.', 'B.', 'C.', 'D.', '1.', '2.', '3.']
+
+        current_question_blocks = []
+        in_question = False
+
+        for block in blocks:
+            text = (block.content_text or "").strip()
+
+            # 检测题目开始
+            is_question_start = False
+            if block.block_type in ('paragraph', 'heading'):
+                for marker in question_markers:
+                    if text.startswith(marker):
+                        is_question_start = True
+                        break
+
+            if is_question_start:
+                # 保存前一个题目
+                if in_question and current_question_blocks:
+                    q_dict = self._blocks_to_question_dict(
+                        document_id, fallback_subject_id, current_question_blocks, section_mappings
+                    )
+                    if q_dict:
+                        questions.append(q_dict)
+                    current_question_blocks = []
+
+                in_question = True
+                current_question_blocks.append(block)
+            elif in_question:
+                if block.block_type in ('title', 'heading'):
+                    if current_question_blocks:
+                        q_dict = self._blocks_to_question_dict(
+                            document_id, fallback_subject_id, current_question_blocks, section_mappings
+                        )
+                        if q_dict:
+                            questions.append(q_dict)
+                        current_question_blocks = []
+                    in_question = False
+                else:
+                    current_question_blocks.append(block)
+
+        # 保存最后一个题目
+        if in_question and current_question_blocks:
+            q_dict = self._blocks_to_question_dict(
+                document_id, fallback_subject_id, current_question_blocks, section_mappings
+            )
+            if q_dict:
+                questions.append(q_dict)
+
+        return questions
+
+    def _blocks_to_question_dict(
+        self,
+        document_id: str,
+        fallback_subject_id: str,
+        blocks: List[DocumentBlock],
+        section_mappings: Dict[int, Dict[str, Optional[str]]],
+    ) -> Optional[Dict[str, Any]]:
+        """将blocks转换为题目字典"""
+        if not blocks:
+            return None
+
+        first_block = blocks[0]
+        mapping_info = section_mappings.get(first_block.page_no)
+
+        primary_chapter_id = mapping_info["chapter_id"] if mapping_info else None
+        subject_id = mapping_info["subject_id"] if mapping_info else fallback_subject_id
+        legacy_chapter_id = mapping_info["legacy_chapter_id"] if mapping_info else None
+
+        # 组合内容
+        content_parts = []
+        for block in blocks:
+            text = block.content_md or block.content_text or ""
+            if text.strip():
+                content_parts.append(text.strip())
+        content = "\n".join(content_parts)
+
+        if not content:
+            return None
+
+        # 判断题型
+        question_type = "short_answer"
+        if any(kw in content for kw in ['A.', 'B.', 'C.', 'D.', 'A、', 'B、', 'C、', 'D、']):
+            question_type = "choice"
+        elif '判断' in content[:50]:
+            question_type = "judge"
+        elif '填空' in content[:50]:
+            question_type = "fill"
+
+        # 提取选项（简单实现）
+        options = []
+        if question_type == "choice":
+            options = self._extract_options_from_content(content)
+
+        return {
+            'id': generate_id(),
+            'document_id': document_id,
+            'subject_id': subject_id,
+            'chapter_id': legacy_chapter_id,
+            'primary_chapter_id': primary_chapter_id,
+            'question_type': question_type,
+            'type': question_type,
+            'content': content,
+            'stem': content,  # 简化处理，后续可优化
+            'options': options,
+            'page_no': first_block.page_no,
+            'block_ids': [b.id for b in blocks],
+            'blocks': blocks,
+            'raw_text': content,
+        }
+
+    def _extract_options_from_content(self, content: str) -> List[Dict[str, str]]:
+        """从内容中提取选项"""
+        options = []
+        # 匹配 A. B. C. D. 或 A、B、C、D、格式
+        pattern = r'([A-E])[.、]\s*([^\n]+?)(?=\s*[A-E][.、]|\s*$)'
+        matches = re.findall(pattern, content, re.MULTILINE | re.DOTALL)
+
+        for label, text in matches:
+            options.append({
+                'label': label,
+                'text': text.strip(),
+                'option_label': label
+            })
+
+        return options
+
+    async def _save_question_from_dict(self, question_dict: Dict[str, Any]) -> bool:
+        """从字典保存题目到数据库"""
+        try:
+            # 创建题目记录
+            question = Question(
+                id=question_dict['id'],
+                subject_id=question_dict['subject_id'],
+                chapter_id=question_dict['chapter_id'],
+                primary_chapter_id=question_dict.get('primary_chapter_id'),
+                source_document_id=question_dict['document_id'],
+                type=question_dict['question_type'],
+                content=question_dict['content'],
+                answer="",
+                review_status="pending",
+            )
+            self.db.add(question)
+
+            # 创建章节关联
+            if question_dict.get('primary_chapter_id'):
+                link = QuestionChapterLink(
+                    question_id=question_dict['id'],
+                    canonical_chapter_id=question_dict['primary_chapter_id'],
+                    is_primary=True,
+                )
+                self.db.add(link)
+
+            # 创建来源引用
+            blocks = question_dict.get('blocks', [])
+            if blocks:
+                source_link = EntitySourceLink(
+                    entity_type="question",
+                    entity_id=question_dict['id'],
+                    document_id=question_dict['document_id'],
+                    page_start=blocks[0].page_no,
+                    page_end=blocks[-1].page_no,
+                    block_ids=question_dict.get('block_ids', []),
+                    excerpt_text=question_dict['content'][:500],
+                )
+                self.db.add(source_link)
+
+            await self.db.flush()
+            return True
+        except Exception as e:
+            logger.error(f"保存题目失败: {e}")
+            return False
+
+    def _extract_fix_history(self, questions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """提取修复历史"""
+        history = []
+        for i, q in enumerate(questions):
+            if q.get('fixed_by_rule'):
+                history.append({
+                    'question_index': i,
+                    'question_id': q.get('id'),
+                    'fix_type': 'rule',
+                    'fix_action': q.get('fixed_by_rule'),
+                    'details': {
+                        'source_index': q.get('fixed_source_index'),
+                        'inferred_number': q.get('inferred_number'),
+                    }
+                })
+            if q.get('fixed_by_llm'):
+                history.append({
+                    'question_index': i,
+                    'question_id': q.get('id'),
+                    'fix_type': 'llm',
+                    'fix_action': 'llm_merge',
+                })
+        return history
+
+    async def _save_diagnostic_report(self, document_id: str, report: Dict[str, Any]) -> None:
+        """保存诊断报告到document的metadata"""
+        try:
+            result = await self.db.execute(
+                select(Document).where(Document.id == document_id)
+            )
+            document = result.scalar_one_or_none()
+            if document:
+                # 将报告存储到document的某个字段（如果有JSON字段）
+                # 或者创建独立的诊断报告表
+                # 这里暂时只记录日志
+                logger.info(f"诊断报告: document={document_id}, "
+                          f"initial_issues={report['initial_report']['summary']['total_issues']}, "
+                          f"final_issues={report['final_report']['summary']['total_issues']}, "
+                          f"fixes={len(report['fix_history'])}")
+        except Exception as e:
+            logger.error(f"保存诊断报告失败: {e}")
+
+    async def _extract_questions_legacy(
+        self,
+        document_id: str,
+        fallback_subject_id: str,
+        blocks: List[DocumentBlock],
+        section_mappings: Dict[int, Dict[str, Optional[str]]],
+    ) -> int:
+        """
+        旧版题目提取逻辑（保留备用）
+        直接保存到数据库，不经过校验和修复
+        """
         question_count = 0
 
         # 简单策略：查找包含题目标记的 blocks
-        # 题目通常以 "第X题"、"X."、"（X）" 等开头
         question_markers = ['第', '题', '（', '(', 'A.', 'B.', 'C.', 'D.']
 
         current_question_blocks = []
@@ -1091,7 +1471,7 @@ class EntityExtractionService:
             if is_question_start:
                 # 保存前一个题目
                 if in_question and current_question_blocks:
-                    created = await self._save_question(
+                    created = await self._save_question_legacy(
                         document_id, fallback_subject_id, current_question_blocks, section_mappings
                     )
                     if created:
@@ -1104,7 +1484,7 @@ class EntityExtractionService:
                 # 如果遇到新的标题，结束当前题目
                 if block.block_type in ('title', 'heading'):
                     if current_question_blocks:
-                        created = await self._save_question(
+                        created = await self._save_question_legacy(
                             document_id, fallback_subject_id, current_question_blocks, section_mappings
                         )
                         if created:
@@ -1116,7 +1496,7 @@ class EntityExtractionService:
 
         # 保存最后一个题目
         if in_question and current_question_blocks:
-            created = await self._save_question(
+            created = await self._save_question_legacy(
                 document_id, fallback_subject_id, current_question_blocks, section_mappings
             )
             if created:
@@ -1124,14 +1504,14 @@ class EntityExtractionService:
 
         return question_count
 
-    async def _save_question(
+    async def _save_question_legacy(
         self,
         document_id: str,
         fallback_subject_id: str,
         blocks: List[DocumentBlock],
         section_mappings: Dict[int, Dict[str, Optional[str]]],
     ) -> bool:
-        """保存单个题目"""
+        """保存单个题目（旧版逻辑）"""
         if not blocks:
             return False
 
