@@ -4,6 +4,7 @@
 从文档的 blocks 中抽取知识点和题目，生成 knowledge_points 和 questions 记录。
 """
 
+import re
 import uuid
 from typing import Dict, Any, List, Optional
 
@@ -23,6 +24,45 @@ logger = get_logger(__name__)
 
 def generate_id() -> str:
     return uuid.uuid4().hex[:32]
+
+
+def clean_punctuation_subscript(text: str) -> str:
+    """
+    清理解析器误识别的标点符号
+    将 <sub>．</sub>、<sub>，</sub> 等错误格式替换为正确的标点
+    """
+    if not text:
+        return text
+
+    patterns = [
+        (r'<sub>\s*[．。]\s*</sub>', '。'),
+        (r'<sub>\s*[，,]\s*</sub>', '，'),
+        (r'<sub>\s*[；;]\s*</sub>', '；'),
+        (r'<sub>\s*[：:]\s*</sub>', '：'),
+        (r'<sub>\s*[！!]\s*</sub>', '！'),
+        (r'<sub>\s*[？?]\s*</sub>', '？'),
+        (r'<sub>\s*[、]\s*</sub>', '、'),
+    ]
+
+    cleaned = text
+    for pattern, replacement in patterns:
+        cleaned = re.sub(pattern, replacement, cleaned)
+
+    return cleaned
+
+
+def clean_blocks_punctuation(blocks: List[DocumentBlock]) -> List[DocumentBlock]:
+    """
+    清理所有blocks中的标点错误
+    修改blocks的content_text和content_md字段
+    """
+    for block in blocks:
+        if block.content_text:
+            block.content_text = clean_punctuation_subscript(block.content_text)
+        if block.content_md:
+            block.content_md = clean_punctuation_subscript(block.content_md)
+
+    return blocks
 
 
 class EntityExtractionService:
@@ -303,6 +343,10 @@ class EntityExtractionService:
         section_mappings: Dict[int, Dict[str, Optional[str]]],
     ) -> int:
         """抽取题目"""
+        # Step 1: 清洗blocks中的标点错误
+        blocks = clean_blocks_punctuation(blocks)
+        logger.info(f"清洗标点完成，处理 {len(blocks)} 个blocks")
+
         question_count = 0
 
         # 简单策略：查找包含题目标记的 blocks

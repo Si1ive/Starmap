@@ -216,7 +216,7 @@ const DocumentDetailPage = () => {
                     </Button>
                   </div>
                   {mappings.length > 0 ? (
-                    <Table dataSource={mappings} columns={columns} rowKey="id" pagination={false} />
+                    <Table dataSource={mappings} columns={mappingColumns} rowKey="id" pagination={false} />
                   ) : (
                     <Empty description="暂无映射结果，请先映射到标准章节" />
                   )}
