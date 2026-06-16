@@ -746,6 +746,7 @@ class Document(Base):
     page_count: Mapped[Optional[int]] = mapped_column(comment="页数")
     document_markdown: Mapped[Optional[str]] = mapped_column(Text, comment="展示Markdown")
     document_json: Mapped[Optional[dict]] = mapped_column(JSON, comment="结构化文档对象")
+    raw_parser_output: Mapped[Optional[dict]] = mapped_column(JSON, comment="解析器原始输出JSON")
     status: Mapped[str] = mapped_column(
         Enum("active", "pending", "deleted"),
         default="pending", comment="业务状态"

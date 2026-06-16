@@ -117,6 +117,7 @@ class ParsedDocumentResult:
     document_markdown: str = ""
     confidence: Optional[float] = None
     metadata: Optional[dict] = None
+    raw_output: Optional[dict] = None  # 解析器原始输出
 
     @property
     def page_count(self) -> int:
@@ -381,6 +382,24 @@ class DoclingParser:
 
         document_markdown = _export_docling_markdown(doc)
 
+        # Docling 的原始输出是对象，我们转换为可序列化的字典
+        raw_output = None
+        try:
+            # 尝试导出为JSON格式，仅保留核心结构信息
+            raw_output = {
+                "parser": self.name,
+                "parser_version": self.version,
+                "page_count": len(pages),
+                "items_count": len(blocks),
+                # Docling 对象太大，只保留元数据
+                "metadata": {
+                    "has_pages": bool(pages),
+                    "has_body": hasattr(doc, "body"),
+                },
+            }
+        except Exception:
+            pass
+
         return ParsedDocumentResult(
             parser_name=self.name,
             parser_version=self.version,
@@ -389,6 +408,7 @@ class DoclingParser:
             assets=assets,
             document_markdown=document_markdown,
             metadata={"source_file": file_path},
+            raw_output=raw_output,
         )
 
 
@@ -585,6 +605,17 @@ class MinerUParser:
             if markdown_candidates:
                 document_markdown = markdown_candidates[0].read_text(encoding="utf-8", errors="ignore")
 
+        # 构造原始输出用于存储
+        raw_output = None
+        if isinstance(result, dict):
+            # 保存原始result字典，但移除文件路径避免数据过大
+            raw_output = {
+                "content_list": content_list,
+                "page_count": result.get("page_count"),
+                "parser": self.name,
+                "parser_version": self.version,
+            }
+
         return ParsedDocumentResult(
             parser_name=self.name,
             parser_version=self.version,
@@ -593,6 +624,7 @@ class MinerUParser:
             assets=assets,
             document_markdown=document_markdown,
             metadata={"source_file": file_path},
+            raw_output=raw_output,
         )
 
     @staticmethod
@@ -804,6 +836,12 @@ def _parsed_document_result_from_dict(
     if fallback_metadata:
         metadata = {**fallback_metadata, **metadata}
 
+    # 优先使用解析服务透传的解析器原始输出（含 MinerU content_list 等）；
+    # 旧版服务未透传时，回退到整个标准化 payload，保证页级对比仍有数据可看。
+    raw_output = payload.get("raw_output")
+    if not isinstance(raw_output, dict):
+        raw_output = payload
+
     return ParsedDocumentResult(
         parser_name=str(payload.get("parser_name") or parser_name),
         parser_version=str(payload.get("parser_version") or "service"),
@@ -813,6 +851,7 @@ def _parsed_document_result_from_dict(
         document_markdown=str(payload.get("document_markdown") or ""),
         confidence=float(payload["confidence"]) if payload.get("confidence") is not None else None,
         metadata=metadata,
+        raw_output=raw_output,
     )
 
 

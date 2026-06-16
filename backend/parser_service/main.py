@@ -73,6 +73,7 @@ def _serialize_parse_result(result: ParsedDocumentResult) -> Dict[str, Any]:
         "page_count": result.page_count,
         "block_count": result.block_count,
         "asset_count": result.asset_count,
+        "raw_output": result.raw_output,
     }
 
 

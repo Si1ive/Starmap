@@ -149,6 +149,7 @@ class DocumentParseService:
             document.page_count = parse_result.page_count
             document.document_markdown = parse_result.document_markdown or ""
             document.document_json = self._serialize_parse_result(parse_result)
+            document.raw_parser_output = parse_result.raw_output
             document.status = "pending"
 
             await self.db.commit()
@@ -503,6 +504,7 @@ class DocumentParseService:
             "latest_parse_run_id": document.latest_parse_run_id,
             "document_markdown": document.document_markdown,
             "document_json": document.document_json,
+            "raw_parser_output": document.raw_parser_output,
             "status": document.status,
             "created_at": document.created_at.isoformat() if document.created_at else None,
             "updated_at": document.updated_at.isoformat() if document.updated_at else None,

@@ -2878,17 +2878,38 @@ async def get_document_page_analysis(
     page_blocks = [b for b in document.get("blocks", []) if b["page_no"] == page_no]
     page_assets = [a for a in document.get("assets", []) if a["page_no"] == page_no]
 
-    # 从document_json中提取该页的原始解析数据
+    # 从raw_parser_output中提取该页的原始解析数据
     raw_parse_data = None
-    if document.get("document_json"):
-        doc_json = document["document_json"]
-        # document_json是解析结果的完整JSON，包含pages/blocks/assets数组
-        if "blocks" in doc_json:
-            # Flat结构，过滤该页数据
+    parser_name = None
+
+    if document.get("raw_parser_output"):
+        raw_output = document["raw_parser_output"]
+        parser_name = raw_output.get("parser") or raw_output.get("parser_name")
+
+        # MinerU 格式：content_list 数组
+        if "content_list" in raw_output and isinstance(raw_output["content_list"], list):
+            page_items = []
+            for item in raw_output["content_list"]:
+                # MinerU 使用 page_idx (0-based) 或 page_no (1-based)
+                item_page = int(item.get("page_idx", 0) or 0) + 1 if item.get("page_idx") is not None else int(item.get("page_no", 1) or 1)
+                if item_page == page_no:
+                    page_items.append(item)
             raw_parse_data = {
-                "blocks": [b for b in doc_json["blocks"] if b.get("page_no") == page_no],
-                "assets": [a for a in doc_json.get("assets", []) if a.get("page_no") == page_no],
+                "parser": parser_name,
+                "content_list": page_items,
             }
+
+        # 回退格式：旧版解析服务透传的整个标准化 payload（含 blocks 数组）
+        elif isinstance(raw_output.get("blocks"), list):
+            raw_parse_data = {
+                "parser": parser_name,
+                "blocks": [b for b in raw_output["blocks"] if b.get("page_no") == page_no],
+                "assets": [a for a in raw_output.get("assets", []) if a.get("page_no") == page_no],
+            }
+
+        # Docling 格式：只有元数据
+        elif "metadata" in raw_output:
+            raw_parse_data = raw_output
 
     return ApiResponse(data={
         "document_id": document_id,
@@ -2898,7 +2919,7 @@ async def get_document_page_analysis(
         "blocks": page_blocks,
         "assets": page_assets,
         "raw_parse_data": raw_parse_data,
-        "parser_name": document.get("document_json", {}).get("parser_name"),
+        "parser_name": parser_name,
     })
 
 
