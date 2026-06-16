@@ -14,6 +14,7 @@ import {
   Tooltip,
   Steps,
   Alert,
+  Upload,
 } from 'antd'
 import {
   FolderOpenOutlined,
@@ -26,8 +27,10 @@ import {
   LoadingOutlined,
   DeleteOutlined,
   RedoOutlined,
+  UploadOutlined,
 } from '@ant-design/icons'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import type { UploadProps } from 'antd'
 import {
   listCorpusFiles,
   scanCorpusFiles,
@@ -38,6 +41,7 @@ import {
   getDownloadedFiles,
   registerCorpusFileByDownload,
   deleteCorpusFile,
+  uploadCorpusFiles,
 } from '@/api'
 import type { CorpusFile, DownloadedFile } from '@/types'
 
@@ -135,6 +139,40 @@ const CorpusPage = () => {
       message.error(detail || err.message || '删除失败')
     },
   })
+
+  const uploadProps: UploadProps = {
+    name: 'files',
+    multiple: true,
+    accept: '.pdf,.docx,.pptx',
+    maxCount: 50,
+    showUploadList: false,
+    customRequest: async ({ file, onSuccess, onError }) => {
+      const formData = new FormData()
+      formData.append('files', file)
+
+      try {
+        const response = await uploadCorpusFiles(formData)
+
+        if (response.data.success_count > 0) {
+          message.success(`成功上传 ${response.data.success_count} 个文件`)
+          queryClient.invalidateQueries({ queryKey: ['corpusFiles'] })
+        }
+
+        if (response.data.skipped_count > 0) {
+          message.info(`${response.data.skipped_count} 个文件已存在，跳过`)
+        }
+
+        if (response.data.failed_count > 0) {
+          message.warning(`${response.data.failed_count} 个文件上传失败`)
+        }
+
+        onSuccess?.(response.data)
+      } catch (error: any) {
+        message.error(error?.response?.data?.detail || '上传失败')
+        onError?.(error)
+      }
+    },
+  }
 
   const files = data?.data?.items || []
   const total = data?.data?.total || 0
@@ -403,6 +441,9 @@ const CorpusPage = () => {
           <Button icon={<SyncOutlined />} onClick={() => queryClient.invalidateQueries({ queryKey: ['corpusFiles'] })}>
             刷新
           </Button>
+          <Upload {...uploadProps}>
+            <Button icon={<UploadOutlined />}>上传文件</Button>
+          </Upload>
           <Button icon={<FolderOpenOutlined />} onClick={() => setScanModalOpen(true)}>
             扫描目录
           </Button>

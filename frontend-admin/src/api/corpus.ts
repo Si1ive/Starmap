@@ -200,3 +200,41 @@ export const buildSegments = (params: {
 }): Promise<ApiResponse<any>> => {
   return adminClient.post('/segments/build', null, { params })
 }
+
+export const uploadCorpusFiles = (formData: FormData, batchLabel?: string): Promise<ApiResponse<{
+  batch_label: string
+  total: number
+  success_count: number
+  skipped_count: number
+  failed_count: number
+  success_items: Array<{ file_name: string; corpus_file_id: string; status: string; is_new: boolean }>
+  skipped_items: Array<{ file_name: string; corpus_file_id: string; status: string; is_new: boolean }>
+  failed_items: Array<{ file_name: string; status: string; error: string }>
+}>> => {
+  return adminClient.post('/corpus/files/upload', formData, {
+    params: batchLabel ? { batch_label: batchLabel } : undefined,
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+    timeout: 5 * 60 * 1000, // 5分钟超时
+  })
+}
+
+export const getDocumentPageAnalysis = (
+  documentId: string,
+  pageNo: number
+): Promise<ApiResponse<{
+  document_id: string
+  page_no: number
+  page_image: string
+  page_info: { width: number; height: number }
+  blocks: Array<any>
+  assets: Array<any>
+  raw_parse_data: any
+  parser_name?: string
+}>> => {
+  return adminClient.get(`/corpus/documents/${documentId}/page-analysis`, {
+    params: { page_no: pageNo },
+    timeout: 30000, // PDF渲染可能较慢
+  })
+}

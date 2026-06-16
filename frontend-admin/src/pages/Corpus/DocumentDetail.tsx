@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Card, Button, Tree, Table, Tag, Space, Descriptions, message, Spin, Empty, Select, Modal, Alert, Tooltip } from 'antd'
+import { Card, Button, Tree, Table, Tag, Space, Descriptions, message, Spin, Empty, Select, Modal, Alert, Tooltip, Tabs } from 'antd'
 import { ArrowLeftOutlined, ApartmentOutlined, NodeIndexOutlined, ExperimentOutlined } from '@ant-design/icons'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getDocumentDetail, getDocumentSections, getSectionMappings, extractDocumentSections, mapDocumentChapters, extractDocumentEntities, getSubjects } from '@/api'
 import type { DataNode } from 'antd/es/tree'
+import PageAnalysis from './PageAnalysis'
 
 const reviewStatusConfig: Record<string, { color: string; text: string }> = {
   pending: { color: 'orange', text: '待审核' },
@@ -191,22 +192,49 @@ const DocumentDetailPage = () => {
       </Card>
 
       <Card>
-        <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h4 style={{ margin: 0 }}>章节映射结果</h4>
-          <Button
-            icon={<ExperimentOutlined />}
-            loading={extractEntitiesMut.isPending}
-            disabled={!hasMappings}
-            onClick={() => Modal.confirm({
-              title: '确认抽取',
-              content: '将从文档中抽取知识点和题目，确认继续？',
-              onOk: () => extractEntitiesMut.mutate(),
-            })}
-          >
-            抽取知识点/题目
-          </Button>
-        </div>
-        <Table dataSource={mappings} columns={mappingColumns} rowKey="mapping_id" pagination={false} size="small" />
+        <Tabs
+          defaultActiveKey="sections"
+          items={[
+            {
+              key: 'sections',
+              label: '章节映射',
+              children: (
+                <>
+                  <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <h4 style={{ margin: 0 }}>章节映射结果</h4>
+                    <Button
+                      icon={<ExperimentOutlined />}
+                      loading={extractEntitiesMut.isPending}
+                      disabled={!hasMappings}
+                      onClick={() => Modal.confirm({
+                        title: '确认抽取',
+                        content: '将从文档中抽取知识点和题目，确认继续？',
+                        onOk: () => extractEntitiesMut.mutate(),
+                      })}
+                    >
+                      抽取知识点/题目
+                    </Button>
+                  </div>
+                  {mappings.length > 0 ? (
+                    <Table dataSource={mappings} columns={columns} rowKey="id" pagination={false} />
+                  ) : (
+                    <Empty description="暂无映射结果，请先映射到标准章节" />
+                  )}
+                </>
+              ),
+            },
+            {
+              key: 'page-analysis',
+              label: '页级对比',
+              children: (
+                <PageAnalysis
+                  documentId={id!}
+                  totalPages={document?.page_count || document?.pages?.length || 0}
+                />
+              ),
+            },
+          ]}
+        />
       </Card>
     </div>
   )

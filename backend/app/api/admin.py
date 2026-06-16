@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional, List, Any, Literal
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, Response, FileResponse
 from pydantic import BaseModel, Field
@@ -2452,6 +2452,93 @@ async def register_corpus_file_by_download(
     return ApiResponse(data=reg_result)
 
 
+@router.post("/corpus/files/upload", response_model=ApiResponse)
+async def upload_corpus_files(
+    files: List[UploadFile] = File(...),
+    batch_label: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    上传文件到语料库
+
+    支持批量上传 PDF/DOCX/PPTX 文件
+    """
+    from app.services.corpus_service import CorpusService, SUPPORTED_EXTENSIONS
+
+    if not files:
+        raise HTTPException(status_code=400, detail="请至少上传一个文件")
+
+    if len(files) > 50:
+        raise HTTPException(status_code=400, detail="单次最多上传50个文件")
+
+    # 创建上传目录
+    upload_dir = Path(__file__).parent.parent.parent / "uploads"
+    upload_dir.mkdir(exist_ok=True)
+
+    batch = batch_label or f"upload-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    success_items = []
+    failed_items = []
+    skipped_items = []
+
+    service = CorpusService(db)
+
+    for file in files:
+        file_result = {"file_name": file.filename}
+
+        try:
+            # 验证文件名
+            if not file.filename:
+                raise ValueError("文件名为空")
+
+            # 验证文件类型
+            ext = Path(file.filename).suffix.lstrip(".").lower()
+            if ext not in SUPPORTED_EXTENSIONS:
+                raise ValueError(f"不支持的文件类型: {ext}，仅支持 {', '.join(SUPPORTED_EXTENSIONS)}")
+
+            # 保存文件到临时路径（带时间戳避免冲突）
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            safe_filename = f"{timestamp}_{file.filename}"
+            file_path = upload_dir / safe_filename
+
+            # 写入文件
+            content = await file.read()
+            file_path.write_bytes(content)
+
+            # 注册到语料库
+            result = await service.register_single_file(
+                file_path=str(file_path),
+                batch_label=batch,
+            )
+
+            file_result.update({
+                "status": "success" if result["is_new"] else "skipped",
+                "corpus_file_id": result["corpus_file_id"],
+                "is_new": result["is_new"],
+            })
+
+            if result["is_new"]:
+                success_items.append(file_result)
+            else:
+                skipped_items.append(file_result)
+
+        except Exception as e:
+            file_result["status"] = "failed"
+            file_result["error"] = str(e)[:200]
+            failed_items.append(file_result)
+            logger.warning("文件上传失败", filename=file.filename, error=str(e))
+
+    return ApiResponse(data={
+        "batch_label": batch,
+        "total": len(files),
+        "success_count": len(success_items),
+        "skipped_count": len(skipped_items),
+        "failed_count": len(failed_items),
+        "success_items": success_items,
+        "skipped_items": skipped_items,
+        "failed_items": failed_items,
+    })
+
+
 @router.get("/corpus/files", response_model=ApiResponse)
 async def list_corpus_files(
     page: int = Query(1, ge=1),
@@ -2572,12 +2659,11 @@ async def delete_corpus_file(
     if not corpus_file:
         raise HTTPException(status_code=404, detail="语料文件不存在")
 
-    # 删除关联的解析任务
+    # 删除关联的解析任务（外键级联会自动删除，但显式删除更清晰）
     await db.execute(delete(ParseRun).where(ParseRun.corpus_file_id == file_id))
 
-    # 删除关联的文档（如果存在）
-    if corpus_file.document_id:
-        await db.execute(delete(Document).where(Document.id == corpus_file.document_id))
+    # 删除关联的文档（通过 corpus_file_id 查找）
+    await db.execute(delete(Document).where(Document.corpus_file_id == file_id))
 
     # 删除文件记录
     await db.execute(delete(CorpusFile).where(CorpusFile.id == file_id))
@@ -2725,6 +2811,95 @@ async def get_document_sections(
         result = await service.get_sections_flat(document_id)
 
     return ApiResponse(data=result)
+
+
+@router.get("/corpus/documents/{document_id}/page-analysis", response_model=ApiResponse)
+async def get_document_page_analysis(
+    document_id: str,
+    page_no: int = Query(..., ge=1, description="页码，从1开始"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取文档指定页的对比分析数据
+
+    返回：
+    - 原始PDF该页的图片（base64）
+    - 该页的解析blocks
+    - 该页的assets
+    - 原始解析JSON（document_json中该页的部分）
+    """
+    import base64
+    import io
+    from pdf2image import convert_from_path
+    from app.services.document_parse_service import DocumentParseService
+
+    service = DocumentParseService(db)
+    document = await service.get_document_detail(document_id)
+
+    if not document:
+        raise HTTPException(status_code=404, detail="文档不存在")
+
+    # 获取原始PDF路径
+    corpus_file_result = await db.execute(
+        select(CorpusFile).where(CorpusFile.id == document["corpus_file_id"])
+    )
+    corpus_file = corpus_file_result.scalar_one_or_none()
+
+    if not corpus_file or not corpus_file.local_path:
+        raise HTTPException(status_code=404, detail="原始文件不存在")
+
+    pdf_path = Path(corpus_file.local_path)
+    if not pdf_path.exists():
+        raise HTTPException(status_code=404, detail="PDF文件不存在于磁盘")
+
+    # 提取PDF指定页为图片
+    try:
+        images = convert_from_path(
+            str(pdf_path),
+            first_page=page_no,
+            last_page=page_no,
+            dpi=150,  # 调整DPI平衡质量和大小
+        )
+
+        if not images:
+            raise HTTPException(status_code=404, detail=f"无法提取第{page_no}页")
+
+        # 转为base64
+        img_byte_arr = io.BytesIO()
+        images[0].save(img_byte_arr, format='PNG', optimize=True)
+        img_byte_arr.seek(0)
+        page_image_base64 = base64.b64encode(img_byte_arr.read()).decode('utf-8')
+
+    except Exception as e:
+        logger.error("PDF渲染失败", document_id=document_id, page_no=page_no, error=str(e))
+        raise HTTPException(status_code=500, detail=f"PDF渲染失败: {str(e)}")
+
+    # 过滤该页的blocks和assets
+    page_blocks = [b for b in document.get("blocks", []) if b["page_no"] == page_no]
+    page_assets = [a for a in document.get("assets", []) if a["page_no"] == page_no]
+
+    # 从document_json中提取该页的原始解析数据
+    raw_parse_data = None
+    if document.get("document_json"):
+        doc_json = document["document_json"]
+        # document_json是解析结果的完整JSON，包含pages/blocks/assets数组
+        if "blocks" in doc_json:
+            # Flat结构，过滤该页数据
+            raw_parse_data = {
+                "blocks": [b for b in doc_json["blocks"] if b.get("page_no") == page_no],
+                "assets": [a for a in doc_json.get("assets", []) if a.get("page_no") == page_no],
+            }
+
+    return ApiResponse(data={
+        "document_id": document_id,
+        "page_no": page_no,
+        "page_image": f"data:image/png;base64,{page_image_base64}",
+        "page_info": next((p for p in document.get("pages", []) if p["page_no"] == page_no), None),
+        "blocks": page_blocks,
+        "assets": page_assets,
+        "raw_parse_data": raw_parse_data,
+        "parser_name": document.get("document_json", {}).get("parser_name"),
+    })
 
 
 @router.post("/corpus/documents/{document_id}/extract-sections", response_model=ApiResponse)
