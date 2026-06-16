@@ -621,6 +621,170 @@ class RuleBasedFixer:
         return merged
 
 
+class LLMFallbackFixer:
+    """LLM兜底修复器"""
+
+    def __init__(self, llm_client):
+        self.llm_client = llm_client
+
+    async def fix_remaining_issues(
+        self,
+        questions: List[Dict[str, Any]],
+        validation_report: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """
+        对规则无法修复的问题，使用LLM进行二次判断
+
+        Args:
+            questions: 题目列表
+            validation_report: 校验报告，包含critical_issues
+
+        Returns:
+            修复后的题目列表
+        """
+        critical_issues = validation_report.get('summary', {}).get('critical_issues', [])
+
+        # 只处理规则未修复的
+        unfixed_issues = [
+            iss for iss in critical_issues
+            if not questions[iss['question_index']].get('fixed_by_rule')
+        ]
+
+        if not unfixed_issues:
+            return questions
+
+        logger.info(f"LLM fallback for {len(unfixed_issues)} unfixed issues")
+
+        for issue in unfixed_issues:
+            idx = issue['question_index']
+
+            # 构造上下文
+            context_start = max(0, idx - 2)
+            context_end = min(len(questions), idx + 3)
+            context_questions = questions[context_start:context_end]
+
+            # 调用LLM
+            prompt = self._build_fix_prompt(
+                context_questions,
+                target_idx=idx - context_start,
+                issue=issue
+            )
+
+            try:
+                llm_response = await self.llm_client.chat(prompt)
+
+                # 应用LLM建议
+                fix_action = self._parse_llm_fix_result(llm_response)
+                if fix_action and fix_action.get('should_merge'):
+                    questions = self._apply_llm_fix(questions, idx, fix_action)
+                    questions[idx]['fixed_by_llm'] = True
+                    logger.info(f"LLM fixed question {idx}")
+            except Exception as e:
+                logger.error(f"LLM fix failed for question {idx}: {e}")
+
+        return questions
+
+    def _build_fix_prompt(
+        self,
+        context: List[Dict[str, Any]],
+        target_idx: int,
+        issue: Dict[str, Any]
+    ) -> str:
+        """构造LLM判断prompt"""
+        # 将题目列表格式化为文本
+        formatted = []
+        for i, q in enumerate(context):
+            marker = " ← 【目标】" if i == target_idx else ""
+            stem = q.get('stem') or q.get('content', '')
+            options = q.get('options', [])
+            options_text = ', '.join([f"{o.get('label', '')}. {o.get('text', '')[:20]}" for o in options])
+
+            formatted.append(f"""
+题目{i+1}{marker}:
+页码: {q.get('page_no', '?')}
+题干: {stem[:200]}...
+选项: {options_text}
+---
+""")
+
+        issue_desc = f"""
+问题类型: {issue.get('issue_type', 'unknown')}
+缺失选项: {issue.get('missing_options', [])}
+"""
+
+        return f"""
+你是一个教材题目结构分析专家。以下是从PDF中提取的题目片段，可能存在跨页/跨列导致的分离问题。
+
+{chr(10).join(formatted)}
+
+【当前问题】
+{issue_desc}
+
+【任务】分析标记为【目标】的题目，判断：
+1. 它是否是一道完整的独立题目？
+2. 如果不完整，它应该与前面哪个题目合并？还是与后面的合并？
+3. 如果需要合并，请给出合并后的完整题目结构（题干+选项）
+
+【输出格式】JSON:
+{{
+  "is_complete": true/false,
+  "should_merge": true/false,
+  "merge_with": "previous" / "next" / "none",
+  "merge_indices": [0, 1],
+  "merged_question": {{
+    "stem": "合并后的题干",
+    "options": [{{"label": "A", "text": "..."}}, ...]
+  }}
+}}
+"""
+
+    def _parse_llm_fix_result(self, llm_response: str) -> Optional[Dict[str, Any]]:
+        """解析LLM返回的合并指令"""
+        try:
+            # 尝试提取JSON
+            import json
+            # 查找JSON块
+            json_match = re.search(r'\{.*\}', llm_response, re.DOTALL)
+            if json_match:
+                result = json.loads(json_match.group(0))
+                return {
+                    'should_merge': result.get('should_merge', False),
+                    'merge_indices': result.get('merge_indices', []),
+                    'merged_question': result.get('merged_question')
+                }
+        except Exception as e:
+            logger.warning(f"Failed to parse LLM response: {e}")
+
+        # LLM返回格式错误，保守处理：不合并
+        return {'should_merge': False}
+
+    def _apply_llm_fix(
+        self,
+        questions: List[Dict[str, Any]],
+        idx: int,
+        fix_action: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """应用LLM的修复建议"""
+        merged_question = fix_action.get('merged_question')
+        if not merged_question:
+            return questions
+
+        # 替换目标题目
+        questions[idx].update(merged_question)
+        questions[idx]['fixed_by_llm'] = True
+
+        # 如果需要删除其他题目（合并的情况）
+        merge_indices = fix_action.get('merge_indices', [])
+        if len(merge_indices) > 1:
+            # 保留第一个索引的题目，删除其他
+            indices_to_remove = sorted(merge_indices[1:], reverse=True)
+            for remove_idx in indices_to_remove:
+                if 0 <= remove_idx < len(questions):
+                    del questions[remove_idx]
+
+        return questions
+
+
 class EntityExtractionService:
     """实体抽取服务"""
 
