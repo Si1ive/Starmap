@@ -113,12 +113,21 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
+# 安装系统依赖（macOS，用于 PDF 渲染）
+brew install poppler
+
 # 配置 OpenAI API Key
 echo "OPENAI_API_KEY=your-api-key" >> .env
 
-# 启动服务
-python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+# 启动服务（务必在激活虚拟环境后启动）
+source venv/bin/activate
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+# 或后台运行
+source venv/bin/activate && nohup python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 > /tmp/backend.log 2>&1 &
 ```
+
+**注意**：后端服务必须在激活虚拟环境后启动，否则将无法加载 `pdf2image` 等依赖模块。
 
 后端服务：
 - API 地址: http://localhost:8000
