@@ -1,11 +1,13 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Table, Button, Input, Tag, Space, Card, Rate } from 'antd'
-import { SearchOutlined, EyeOutlined } from '@ant-design/icons'
-import { useQuery } from '@tanstack/react-query'
-import { getConversations } from '@/api'
+import { Table, Button, Input, Tag, Card, Popconfirm, message } from 'antd'
+import { SearchOutlined, EyeOutlined, DeleteOutlined } from '@ant-design/icons'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { getConversations, deleteConversation } from '@/api'
+
 const ConversationList = () => {
   const navigate = useNavigate()
+  const qc = useQueryClient()
   const [searchParams, setSearchParams] = useState({
     page: 1,
     page_size: 20,
@@ -17,79 +19,54 @@ const ConversationList = () => {
     queryFn: () => getConversations(searchParams),
   })
 
+  const delMut = useMutation({
+    mutationFn: (id: string) => deleteConversation(id),
+    onSuccess: () => {
+      message.success('删除成功')
+      qc.invalidateQueries({ queryKey: ['conversations'] })
+    },
+    onError: () => message.error('删除失败'),
+  })
+
   const columns = [
+    { title: '会话ID', dataIndex: 'id', width: 220, ellipsis: true,
+      render: (v: string) => <code style={{ fontSize: 12 }}>{v}</code> },
+    { title: '标题/首条消息', dataIndex: 'title', ellipsis: true,
+      render: (_: unknown, r: any) => r.title || r.first_message || '-' },
+    { title: '消息数', dataIndex: 'message_count', width: 90 },
+    { title: '是否走 RAG', dataIndex: 'has_knowledge', width: 100,
+      render: (v: boolean) => v ? <Tag color="green">是</Tag> : <Tag>否</Tag> },
     {
-      title: '会话ID',
-      dataIndex: 'id',
-      width: 180,
+      title: '最后消息',
+      dataIndex: 'last_message',
       ellipsis: true,
+      render: (v: string) => <span style={{ color: '#666', fontSize: 12 }}>{v || '-'}</span>,
     },
+    { title: '更新时间', dataIndex: 'updated_at', width: 170,
+      render: (v: string) => v ? new Date(v).toLocaleString('zh-CN') : '-' },
     {
-      title: '用户问题',
-      dataIndex: 'first_message',
-      ellipsis: true,
-    },
-    {
-      title: '对话轮数',
-      dataIndex: 'message_count',
-      width: 100,
-    },
-    {
-      title: '对话时长',
-      dataIndex: 'duration',
-      width: 120,
-      render: (duration: number) => `${Math.round(duration / 60)}分钟`,
-    },
-    {
-      title: '涉及艺人',
-      dataIndex: 'persons',
-      render: (persons: string[]) => (
-        <Space size={[0, 4]} wrap>
-          {persons?.map((person) => (
-            <Tag key={person}>{person}</Tag>
-          ))}
-        </Space>
-      ),
-    },
-    {
-      title: '满意度',
-      dataIndex: 'satisfaction',
-      width: 120,
-      render: (satisfaction: string) => {
-        const rateMap: Record<string, number> = {
-          good: 5,
-          needs_improvement: 3,
-          bad: 1,
-        }
-        return <Rate disabled defaultValue={rateMap[satisfaction] || 0} />
-      },
-    },
-    {
-      title: '创建时间',
-      dataIndex: 'created_at',
-      width: 180,
-    },
-    {
-      title: '操作',
-      key: 'action',
-      width: 100,
+      title: '操作', key: 'action', width: 160,
       render: (_: unknown, record: any) => (
-        <Button type="text" icon={<EyeOutlined />} onClick={() => navigate(`/admin/conversations/${record.id}`)}>
-          查看
-        </Button>
+        <>
+          <Button type="link" icon={<EyeOutlined />} size="small"
+            onClick={() => navigate(`/admin/conversations/${record.id}`)}>查看</Button>
+          <Popconfirm title={`删除会话 ${record.id}？`} onConfirm={() => delMut.mutate(record.id)}>
+            <Button type="link" icon={<DeleteOutlined />} danger size="small">删除</Button>
+          </Popconfirm>
+        </>
       ),
     },
   ]
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <h2 style={{ margin: 0 }}>对话管理</h2>
       </div>
 
-      <Card style={{ marginBottom: 24 }}>
+      <Card style={{ marginBottom: 16 }}>
         <Input.Search
-          placeholder="搜索会话内容"
+          placeholder="搜索标题或首条消息"
           allowClear
           enterButton={<><SearchOutlined /> 搜索</>}
           onSearch={(value) => setSearchParams((prev) => ({ ...prev, q: value, page: 1 }))}
@@ -102,6 +79,7 @@ const ConversationList = () => {
         dataSource={data?.data?.items || []}
         rowKey="id"
         loading={isLoading}
+        size="small"
         pagination={{
           current: searchParams.page,
           pageSize: searchParams.page_size,

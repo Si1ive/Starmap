@@ -19,6 +19,10 @@ export const getConversationDetail = (id: string): Promise<ApiResponse<Conversat
   return adminClient.get(`/conversations/${id}`)
 }
 
+export const deleteConversation = (id: string): Promise<ApiResponse<{ deleted: number }>> => {
+  return adminClient.delete(`/conversations/${id}`)
+}
+
 export const getConversationStats = (): Promise<ApiResponse<Record<string, unknown>>> => {
   return adminClient.get('/conversations/stats')
 }
