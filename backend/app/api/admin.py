@@ -3370,6 +3370,7 @@ async def extract_document_sections(
 async def map_document_chapters(
     document_id: str,
     subject_id: Optional[str] = Query(None, description="学科ID，不传则遍历所有学科匹配"),
+    outline_id: Optional[str] = Query(None, description="大纲ID；传入则只匹配该大纲下章节"),
     auto_approve_threshold: float = Query(0.90, description="自动通过阈值"),
     force: bool = Query(False, description="是否强制重建已有章节映射"),
     db: AsyncSession = Depends(get_db),
@@ -3382,6 +3383,7 @@ async def map_document_chapters(
         result = await service.map_sections(
             document_id=document_id,
             subject_id=subject_id,
+            outline_id=outline_id,
             auto_approve_threshold=auto_approve_threshold,
             force=force,
         )
@@ -3984,3 +3986,98 @@ async def delete_llm_call_logs(
         ids=id_list,
     )
     return ApiResponse(data={"deleted": deleted})
+
+
+
+# ===== 大纲（考试章节体系）独立入库 =====
+
+
+class OutlinePreviewRequest(BaseModel):
+    content: str = Field(..., max_length=2_000_000)
+    filename: Optional[str] = ""
+
+
+class OutlineImportRequest(BaseModel):
+    subject_id: str = Field(..., min_length=1)
+    name: str = Field(..., min_length=1, max_length=200)
+    year: int = Field(..., ge=2000, le=2100)
+    content: str = Field(..., max_length=2_000_000)
+    filename: Optional[str] = ""
+    version: Optional[str] = "v1.0"
+    description: Optional[str] = None
+    set_default: bool = False
+
+
+class OutlineFromDocumentRequest(BaseModel):
+    subject_id: str
+    document_id: str
+    name: str
+    year: int = Field(..., ge=2000, le=2100)
+    version: Optional[str] = "v1.0"
+    set_default: bool = False
+
+
+@router.get("/outlines", response_model=ApiResponse)
+async def list_outlines_endpoint(db: AsyncSession = Depends(get_db)):
+    """列出所有大纲"""
+    from app.services.outline_import_service import list_outlines
+    return ApiResponse(data=await list_outlines(db))
+
+
+@router.get("/outlines/{outline_id}/chapters", response_model=ApiResponse)
+async def get_outline_chapters_endpoint(outline_id: str, db: AsyncSession = Depends(get_db)):
+    """获取大纲下章节树"""
+    from app.services.outline_import_service import get_outline_chapters
+    return ApiResponse(data=await get_outline_chapters(db, outline_id))
+
+
+@router.post("/outlines/preview", response_model=ApiResponse)
+async def preview_outline_import(request: OutlinePreviewRequest, db: AsyncSession = Depends(get_db)):
+    """解析大纲文本但不入库（用于前端预览）"""
+    from app.services.outline_import_service import OutlineImportService
+    service = OutlineImportService(db)
+    try:
+        return ApiResponse(data=await service.preview(content=request.content, filename=request.filename or ""))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/outlines/import", response_model=ApiResponse)
+async def import_outline_endpoint(request: OutlineImportRequest, db: AsyncSession = Depends(get_db)):
+    """导入大纲（创建 exam_outlines + canonical_chapters 树）"""
+    from app.services.outline_import_service import OutlineImportService
+    service = OutlineImportService(db)
+    try:
+        return ApiResponse(data=await service.import_outline(
+            subject_id=request.subject_id,
+            name=request.name,
+            year=request.year,
+            content=request.content,
+            filename=request.filename or "",
+            version=request.version or "v1.0",
+            description=request.description,
+            set_default=request.set_default,
+        ))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/outlines/import-from-document", response_model=ApiResponse)
+async def import_outline_from_document(
+    request: OutlineFromDocumentRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """从已解析文档的 document_sections 转换为大纲"""
+    from app.services.outline_import_service import OutlineImportService
+    service = OutlineImportService(db)
+    try:
+        return ApiResponse(data=await service.import_from_document_sections(
+            subject_id=request.subject_id,
+            document_id=request.document_id,
+            outline_name=request.name,
+            year=request.year,
+            version=request.version or "v1.0",
+            set_default=request.set_default,
+        ))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))

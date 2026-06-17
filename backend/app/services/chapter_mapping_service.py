@@ -255,6 +255,7 @@ class ChapterMappingService:
         self,
         document_id: str,
         subject_id: Optional[str] = None,
+        outline_id: Optional[str] = None,
         auto_approve_threshold: float = 0.90,
         reject_threshold: float = 0.60,
         force: bool = False,
@@ -262,15 +263,8 @@ class ChapterMappingService:
         """
         将文档的 sections 映射到标准章节
 
-        subject_id 可选：
-        - 传入时只匹配该学科的标准章节
-        - 不传时遍历所有学科，每个 section 取最佳匹配
-
-        Args:
-            document_id: 文档ID
-            subject_id: 学科ID（可选）
-            auto_approve_threshold: 自动通过阈值
-            reject_threshold: 拒绝阈值（低于此值）
+        subject_id 可选：传入时只匹配该学科的标准章节，不传则遍历所有学科
+        outline_id 可选：传入时只匹配该大纲下的章节（精度最高）
 
         Returns:
             映射结果统计
@@ -309,8 +303,19 @@ class ChapterMappingService:
                 )
             )
 
-        # 2. 获取标准章节 — 按学科分组或指定学科
-        if subject_id:
+        # 2. 获取标准章节 — 按 outline / subject / 全量
+        if outline_id:
+            chapters_result = await self.db.execute(
+                select(CanonicalChapter)
+                .where(CanonicalChapter.outline_id == outline_id)
+                .where(CanonicalChapter.status == "active")
+                .order_by(CanonicalChapter.subject_id, CanonicalChapter.sort_order)
+            )
+            outline_chapters = chapters_result.scalars().all()
+            chapter_groups: Dict[str, list] = {}
+            for ch in outline_chapters:
+                chapter_groups.setdefault(ch.subject_id, []).append(ch)
+        elif subject_id:
             chapters_result = await self.db.execute(
                 select(CanonicalChapter)
                 .where(CanonicalChapter.subject_id == subject_id)
@@ -324,7 +329,6 @@ class ChapterMappingService:
                 .order_by(CanonicalChapter.subject_id, CanonicalChapter.sort_order)
             )
             all_chapters = chapters_result.scalars().all()
-            # 按学科分组
             chapter_groups: Dict[str, list] = {}
             for ch in all_chapters:
                 chapter_groups.setdefault(ch.subject_id, []).append(ch)

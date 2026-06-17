@@ -16,6 +16,7 @@ import ApiMonitor from '@/pages/Monitor/Api'
 import DatabaseMonitor from '@/pages/Monitor/Database'
 import MonitorErrors from '@/pages/Monitor/Errors'
 import LLMMonitor from '@/pages/Monitor/Llm'
+import OutlineList from '@/pages/Outline'
 import Settings from '@/pages/Settings'
 import SettingsUsers from '@/pages/Settings/Users'
 import KnowledgeList from '@/pages/Knowledge/List'
@@ -112,6 +113,7 @@ const AppRoutes = () => {
         <Route path="ingest" element={<Navigate to="/admin/corpus" replace />} />
         <Route path="corpus" element={<CorpusPage />} />
         <Route path="corpus/:id" element={<DocumentDetailPage />} />
+        <Route path="outlines" element={<OutlineList />} />
 
         {/* 审核中心 */}
         <Route path="review/sections" element={<SectionReviewPage />} />

@@ -19,6 +19,7 @@ import {
   SearchOutlined,
   BranchesOutlined,
   ThunderboltOutlined,
+  ApartmentOutlined,
 } from '@ant-design/icons'
 import { useAdminStore } from '@/store'
 import { usePermission } from '@/hooks/usePermission'
@@ -30,6 +31,7 @@ const menuItems = [
   { key: '/admin/knowledge', icon: <BookOutlined />, label: '知识点管理' },
   { key: '/admin/questions', icon: <QuestionCircleOutlined />, label: '题目管理' },
   { key: '/admin/corpus', icon: <FileTextOutlined />, label: '语料管理' },
+  { key: '/admin/outlines', icon: <ApartmentOutlined />, label: '大纲管理' },
   {
     key: '/admin/review-group',
     icon: <AuditOutlined />,
