@@ -1047,6 +1047,15 @@ class EntityExtractionService:
         # 2.5 清洗 <sub>/<sup> 标签和多余空白，知识点和题目两条路径共用
         blocks = clean_blocks_punctuation(blocks)
 
+        # 2.6 混排识别：把每个 block 标记为 knowledge / question_stem / question_option / answer 等
+        from app.services.block_classifier import BlockClassifier
+        classifier_llm = await self._get_pdf_structure_llm_client()
+        classifier = BlockClassifier(llm_client=classifier_llm)
+        classifications = await classifier.classify(blocks, use_llm=bool(classifier_llm and classifier_llm.is_available))
+        block_label_by_id = {c.block_id: c.label for c in classifications if c.block_id}
+        classification_stats = BlockClassifier.stats(classifications)
+        logger.info("Block 类型分类完成", stats=classification_stats)
+
         # 3. 获取 section 映射，用于确定章节和学科归属
         # page -> {chapter_id, subject_id}
         section_mappings = await self._get_section_mappings(document_id)
@@ -1055,18 +1064,27 @@ class EntityExtractionService:
         question_count = 0
         question_diagnostic: Optional[Dict[str, Any]] = None
 
-        # 4. 抽取知识点
+        # 4. 抽取知识点 — 只用被分类为 knowledge / heading 的 block
         if extract_knowledge:
             await self._cleanup_existing_entities(document_id, "knowledge_point")
+            knowledge_blocks = [
+                b for b in blocks
+                if block_label_by_id.get(getattr(b, "id", ""), "") in ("knowledge", "heading", "table", "figure", "formula")
+            ] or blocks  # 完全识别不出时退化为全量
             knowledge_count = await self._extract_knowledge_points(
-                document_id, fallback_subject_id, blocks, section_mappings
+                document_id, fallback_subject_id, knowledge_blocks, section_mappings
             )
 
-        # 5. 抽取题目
+        # 5. 抽取题目 — 只用被分类为题目相关的 block
         if extract_questions:
             await self._cleanup_existing_entities(document_id, "question")
+            question_blocks = [
+                b for b in blocks
+                if block_label_by_id.get(getattr(b, "id", ""), "") in
+                   ("question_stem", "question_option", "answer", "heading", "unknown")
+            ] or blocks
             question_result = await self._extract_questions(
-                document_id, fallback_subject_id, blocks, section_mappings
+                document_id, fallback_subject_id, question_blocks, section_mappings
             )
             question_count = question_result["saved_count"]
             question_diagnostic = question_result["diagnostic"]
@@ -1085,6 +1103,7 @@ class EntityExtractionService:
             "knowledge_count": knowledge_count,
             "question_count": question_count,
             "question_diagnostic": question_diagnostic,
+            "block_classification": classification_stats,
         }
 
     async def _get_section_mappings(self, document_id: str) -> Dict[int, Dict[str, Optional[str]]]:
