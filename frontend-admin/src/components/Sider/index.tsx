@@ -18,6 +18,7 @@ import {
   AuditOutlined,
   SearchOutlined,
   BranchesOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons'
 import { useAdminStore } from '@/store'
 import { usePermission } from '@/hooks/usePermission'
@@ -61,6 +62,7 @@ const menuItems = [
     label: '系统监控',
     children: [
       { key: '/admin/monitor', label: '概览' },
+      { key: '/admin/monitor/llm', icon: <ThunderboltOutlined />, label: 'LLM 调用' },
       { key: '/admin/monitor/api', icon: <ApiOutlined />, label: 'API性能' },
       { key: '/admin/monitor/database', icon: <DatabaseOutlined />, label: '数据库' },
       { key: '/admin/monitor/errors', icon: <WarningOutlined />, label: '错误日志' },

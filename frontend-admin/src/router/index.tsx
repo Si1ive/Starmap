@@ -15,6 +15,7 @@ import MonitorOverview from '@/pages/Monitor/Overview'
 import ApiMonitor from '@/pages/Monitor/Api'
 import DatabaseMonitor from '@/pages/Monitor/Database'
 import MonitorErrors from '@/pages/Monitor/Errors'
+import LLMMonitor from '@/pages/Monitor/Llm'
 import Settings from '@/pages/Settings'
 import SettingsUsers from '@/pages/Settings/Users'
 import KnowledgeList from '@/pages/Knowledge/List'
@@ -184,6 +185,14 @@ const AppRoutes = () => {
           element={
             <PrivateRoute permission="monitor:view">
               <MonitorErrors />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="monitor/llm"
+          element={
+            <PrivateRoute permission="monitor:view">
+              <LLMMonitor />
             </PrivateRoute>
           }
         />

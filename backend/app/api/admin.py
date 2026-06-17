@@ -3828,3 +3828,76 @@ async def search_with_relations(
     )
 
     return ApiResponse(data=result)
+
+
+
+# ===== LLM 调用监控 =====
+
+
+@router.get("/monitor/llm-calls", response_model=ApiResponse)
+async def list_llm_call_logs(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    model: Optional[str] = None,
+    status: Optional[str] = Query(None, description="success / error / timeout"),
+    called_by: Optional[str] = None,
+    keyword: Optional[str] = Query(None, description="响应文本模糊搜索"),
+    db: AsyncSession = Depends(get_db),
+):
+    """LLM 调用列表（分页 + 过滤）"""
+    from app.services.llm_call_recorder import list_llm_calls
+
+    result = await list_llm_calls(
+        session=db,
+        page=page,
+        page_size=page_size,
+        model=model,
+        status=status,
+        called_by=called_by,
+        keyword=keyword,
+    )
+    return ApiResponse(data=result)
+
+
+@router.get("/monitor/llm-calls/stats", response_model=ApiResponse)
+async def get_llm_calls_stats(
+    hours: int = Query(24, ge=1, le=720, description="时间窗口（小时）"),
+    db: AsyncSession = Depends(get_db),
+):
+    """LLM 调用聚合统计：QPS / 延迟分布 / Token / 成本 / 按模型分组"""
+    from app.services.llm_call_recorder import get_llm_call_stats
+
+    result = await get_llm_call_stats(session=db, hours=hours)
+    return ApiResponse(data=result)
+
+
+@router.get("/monitor/llm-calls/{call_id}", response_model=ApiResponse)
+async def get_llm_call_detail_endpoint(
+    call_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """LLM 调用详情（含完整请求/响应）"""
+    from app.services.llm_call_recorder import get_llm_call_detail
+
+    result = await get_llm_call_detail(session=db, call_id=call_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="调用记录不存在")
+    return ApiResponse(data=result)
+
+
+@router.delete("/monitor/llm-calls", response_model=ApiResponse)
+async def delete_llm_call_logs(
+    older_than_days: Optional[int] = Query(None, ge=0, description="按时间清理：删除 N 天前的记录"),
+    ids: Optional[str] = Query(None, description="按 ID 清理：逗号分隔"),
+    db: AsyncSession = Depends(get_db),
+):
+    """清理 LLM 调用日志"""
+    from app.services.llm_call_recorder import delete_llm_calls
+
+    id_list = [s.strip() for s in (ids or "").split(",") if s.strip()] or None
+    deleted = await delete_llm_calls(
+        session=db,
+        older_than_days=older_than_days,
+        ids=id_list,
+    )
+    return ApiResponse(data={"deleted": deleted})

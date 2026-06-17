@@ -24,6 +24,7 @@ from app.models.mysql_models import (
 from app.services.chapter_compat_service import resolve_legacy_chapter_id
 from app.services.system_settings_service import SystemSettingsService
 from app.services.text_cleaning import clean_block_text, normalize_whitespace
+from app.services.llm_call_recorder import LLMCallRecorder
 
 logger = get_logger(__name__)
 
@@ -652,9 +653,30 @@ class PDFStructureLLMClient:
     async def chat(self, prompt: str) -> str:
         if not self.is_available:
             raise RuntimeError("PDF structure LLM is not enabled or missing api_key/model")
-        return await asyncio.to_thread(self._chat_sync, prompt)
 
-    def _chat_sync(self, prompt: str) -> str:
+        messages = [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": prompt},
+        ]
+        params = {
+            "max_tokens": self.max_tokens,
+            "temperature": self.temperature,
+            "timeout_seconds": self.timeout_seconds,
+        }
+
+        async with LLMCallRecorder(
+            model=self.model,
+            called_by="pdf_structure_llm",
+            purpose="题目结构 LLM 兜底修复",
+            base_url=self.base_url or None,
+            request_messages=messages,
+            request_params=params,
+        ) as rec:
+            response_obj, text = await asyncio.to_thread(self._chat_sync, messages)
+            rec.record_response(response_text=text, response_obj=response_obj)
+            return text
+
+    def _chat_sync(self, messages):
         import openai
 
         previous_api_key = getattr(openai, "api_key", None)
@@ -666,15 +688,13 @@ class PDFStructureLLMClient:
         try:
             response = openai.ChatCompletion.create(
                 model=self.model,
-                messages=[
-                    {"role": "system", "content": self.system_prompt},
-                    {"role": "user", "content": prompt},
-                ],
+                messages=messages,
                 max_tokens=self.max_tokens,
                 temperature=self.temperature,
                 request_timeout=self.timeout_seconds,
             )
-            return response.choices[0].message.content.strip()
+            text = response.choices[0].message.content.strip()
+            return response, text
         finally:
             openai.api_key = previous_api_key
             openai.api_base = previous_api_base

@@ -282,21 +282,33 @@ class ChatService:
         """基于检索到的知识库内容生成回答"""
         try:
             import openai
-            openai.api_key = settings.OPENAI_API_KEY
+            import asyncio
+            from app.services.llm_call_recorder import LLMCallRecorder
 
             messages = [
                 {"role": "system", "content": RAG_SYSTEM_PROMPT.format(context=context)},
                 {"role": "user", "content": question}
             ]
 
-            response = openai.ChatCompletion.create(
+            async with LLMCallRecorder(
                 model=settings.OPENAI_MODEL,
-                messages=messages,
-                max_tokens=1500,
-                temperature=0.3
-            )
-
-            return response.choices[0].message.content.strip()
+                called_by="chat_service",
+                purpose="RAG 增强回答",
+                request_messages=messages,
+                request_params={"max_tokens": 1500, "temperature": 0.3},
+            ) as rec:
+                def _call():
+                    openai.api_key = settings.OPENAI_API_KEY
+                    return openai.ChatCompletion.create(
+                        model=settings.OPENAI_MODEL,
+                        messages=messages,
+                        max_tokens=1500,
+                        temperature=0.3,
+                    )
+                response = await asyncio.to_thread(_call)
+                text = response.choices[0].message.content.strip()
+                rec.record_response(response_text=text, response_obj=response)
+                return text
         except Exception as e:
             logger.error("LLM调用失败", error=str(e))
             # 降级：返回检索到的内容摘要
@@ -308,21 +320,33 @@ class ChatService:
         """直接调用LLM回答（无知识库上下文）"""
         try:
             import openai
-            openai.api_key = settings.OPENAI_API_KEY
+            import asyncio
+            from app.services.llm_call_recorder import LLMCallRecorder
 
             messages = [
                 {"role": "system", "content": "你是一个408计算机考研学习助手。请简洁准确地回答用户的问题。"},
                 {"role": "user", "content": question}
             ]
 
-            response = openai.ChatCompletion.create(
+            async with LLMCallRecorder(
                 model=settings.OPENAI_MODEL,
-                messages=messages,
-                max_tokens=1000,
-                temperature=0.5
-            )
-
-            return response.choices[0].message.content.strip()
+                called_by="chat_service",
+                purpose="直接问答（无 RAG）",
+                request_messages=messages,
+                request_params={"max_tokens": 1000, "temperature": 0.5},
+            ) as rec:
+                def _call():
+                    openai.api_key = settings.OPENAI_API_KEY
+                    return openai.ChatCompletion.create(
+                        model=settings.OPENAI_MODEL,
+                        messages=messages,
+                        max_tokens=1000,
+                        temperature=0.5,
+                    )
+                response = await asyncio.to_thread(_call)
+                text = response.choices[0].message.content.strip()
+                rec.record_response(response_text=text, response_obj=response)
+                return text
         except Exception as e:
             logger.error("LLM调用失败", error=str(e))
             return "抱歉，AI服务暂时不可用。请稍后再试。"
@@ -355,22 +379,35 @@ class ChatService:
         if context and context.get("has_knowledge"):
             try:
                 import openai
-                openai.api_key = settings.OPENAI_API_KEY
+                import asyncio
+                from app.services.llm_call_recorder import LLMCallRecorder
 
-                response = openai.ChatCompletion.create(
+                messages = [
+                    {"role": "system", "content": "基于用户的问题，生成3个相关的后续学习问题。只返回问题列表，每行一个。"},
+                    {"role": "user", "content": query}
+                ]
+
+                async with LLMCallRecorder(
                     model=settings.OPENAI_MODEL,
-                    messages=[
-                        {"role": "system", "content": "基于用户的问题，生成3个相关的后续学习问题。只返回问题列表，每行一个。"},
-                        {"role": "user", "content": query}
-                    ],
-                    max_tokens=200,
-                    temperature=0.7
-                )
-
-                content = response.choices[0].message.content.strip()
-                llm_suggestions = [s.strip() for s in content.split("\n") if s.strip()]
-                if len(llm_suggestions) >= 2:
-                    return llm_suggestions[:3]
+                    called_by="chat_service",
+                    purpose="生成建议问题",
+                    request_messages=messages,
+                    request_params={"max_tokens": 200, "temperature": 0.7},
+                ) as rec:
+                    def _call():
+                        openai.api_key = settings.OPENAI_API_KEY
+                        return openai.ChatCompletion.create(
+                            model=settings.OPENAI_MODEL,
+                            messages=messages,
+                            max_tokens=200,
+                            temperature=0.7,
+                        )
+                    response = await asyncio.to_thread(_call)
+                    content = response.choices[0].message.content.strip()
+                    rec.record_response(response_text=content, response_obj=response)
+                    llm_suggestions = [s.strip() for s in content.split("\n") if s.strip()]
+                    if len(llm_suggestions) >= 2:
+                        return llm_suggestions[:3]
             except Exception:
                 pass
 

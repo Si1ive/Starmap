@@ -7,12 +7,12 @@ Embedding 服务
 - 简单的文本预处理
 """
 
+import asyncio
 from typing import List, Optional
-
-import openai
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.services.llm_call_recorder import LLMCallRecorder
 
 logger = get_logger(__name__)
 
@@ -26,67 +26,61 @@ class EmbeddingService:
     """文本向量化服务"""
 
     def __init__(self):
+        import openai
         openai.api_key = settings.OPENAI_API_KEY
 
     async def embed_text(self, text: str) -> List[float]:
-        """
-        对单段文本生成 embedding
-
-        Args:
-            text: 待向量化文本
-
-        Returns:
-            1536 维浮点向量
-        """
         text = self._preprocess(text)
         if not text:
             return [0.0] * EMBEDDING_DIMENSION
 
-        try:
-            response = openai.Embedding.create(
-                input=[text],
-                model=EMBEDDING_MODEL,
+        import openai
+
+        async with LLMCallRecorder(
+            model=EMBEDDING_MODEL,
+            called_by="embedding_service",
+            purpose="单条文本向量化",
+            request_messages=[{"role": "input", "content": text}],
+            request_params={"batch_size": 1},
+        ) as rec:
+            response = await asyncio.to_thread(
+                openai.Embedding.create, input=[text], model=EMBEDDING_MODEL
+            )
+            rec.record_response(
+                response_text=f"<embedding: {EMBEDDING_DIMENSION}d>",
+                response_obj=response,
             )
             return response["data"][0]["embedding"]
-        except Exception as e:
-            logger.error("Embedding 生成失败", error=str(e), text_len=len(text))
-            raise
 
     async def embed_batch(self, texts: List[str]) -> List[List[float]]:
-        """
-        批量生成 embeddings
-
-        自动按 MAX_BATCH_SIZE 分批调用，保持顺序。
-
-        Args:
-            texts: 文本列表
-
-        Returns:
-            向量列表（与输入等长、等序）
-        """
+        import openai
         preprocessed = [self._preprocess(t) for t in texts]
         all_embeddings: List[List[float]] = []
 
         for i in range(0, len(preprocessed), MAX_BATCH_SIZE):
             batch = preprocessed[i : i + MAX_BATCH_SIZE]
-            # 替换空文本为占位符，避免 API 报错
             placeholders = [bool(t) for t in batch]
             batch = [t if t else " " for t in batch]
 
-            try:
-                response = openai.Embedding.create(
-                    input=batch,
-                    model=EMBEDDING_MODEL,
+            async with LLMCallRecorder(
+                model=EMBEDDING_MODEL,
+                called_by="embedding_service",
+                purpose=f"批量向量化（batch_size={len(batch)}）",
+                request_messages=[{"role": "input", "content": f"<{len(batch)} texts>"}],
+                request_params={"batch_size": len(batch), "batch_index": i // MAX_BATCH_SIZE},
+            ) as rec:
+                response = await asyncio.to_thread(
+                    openai.Embedding.create, input=batch, model=EMBEDDING_MODEL
+                )
+                rec.record_response(
+                    response_text=f"<{len(batch)} embeddings @{EMBEDDING_DIMENSION}d>",
+                    response_obj=response,
                 )
                 embeddings = [item["embedding"] for item in response["data"]]
-                # 对占位空文本返回零向量
                 for j, has_content in enumerate(placeholders):
                     if not has_content:
                         embeddings[j] = [0.0] * EMBEDDING_DIMENSION
                 all_embeddings.extend(embeddings)
-            except Exception as e:
-                logger.error("批量 Embedding 生成失败", batch_start=i, error=str(e))
-                raise
 
         return all_embeddings
 
