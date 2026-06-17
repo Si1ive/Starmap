@@ -1313,3 +1313,49 @@ class ApiCallStat(Base):
         Index("idx_api_stats_hour", "hour_bucket"),
         {"comment": "API 调用聚合统计"}
     )
+
+
+class ChatSession(Base):
+    """对话会话：记录每次对话上下文，独立于 Redis 缓存。"""
+    __tablename__ = "chat_sessions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, comment="session_id（前端透传）")
+    user_id: Mapped[Optional[str]] = mapped_column(String(64), comment="登录用户 ID（mock 时为 admin）")
+    title: Mapped[Optional[str]] = mapped_column(String(255), comment="会话标题（首条消息截断）")
+    first_message: Mapped[Optional[str]] = mapped_column(Text, comment="首条用户消息预览")
+    last_message: Mapped[Optional[str]] = mapped_column(Text, comment="最后一条助手消息预览")
+    message_count: Mapped[int] = mapped_column(Integer, default=0)
+    has_knowledge: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否走过 RAG")
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, comment="扩展元数据")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    __table_args__ = (
+        Index("idx_chat_sessions_user", "user_id"),
+        Index("idx_chat_sessions_updated", "updated_at"),
+        {"comment": "对话会话"}
+    )
+
+
+class ChatMessageRecord(Base):
+    """对话消息：每条 user/assistant 消息一行"""
+    __tablename__ = "chat_messages"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    role: Mapped[str] = mapped_column(
+        Enum("user", "assistant", "system"), nullable=False
+    )
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    citations: Mapped[Optional[list]] = mapped_column(JSON, comment="引用来源（知识点/题目 ID 列表）")
+    llm_call_id: Mapped[Optional[str]] = mapped_column(String(32), comment="关联 llm_call_logs.id")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_chat_messages_session", "session_id", "created_at"),
+        {"comment": "对话消息"}
+    )

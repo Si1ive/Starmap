@@ -134,45 +134,71 @@ class ChatService:
         content: str
     ) -> None:
         """
-        保存消息到会话历史
-        
-        Args:
-            session_id: 会话ID
-            role: 消息角色（user/assistant）
-            content: 消息内容
+        保存消息到会话历史（双写：Redis 短缓存 + MySQL 持久化）。
         """
         from datetime import datetime
-        
+
+        # 1) Redis 缓存（用于上下文检索）
         redis = await self._get_redis()
-        if not redis:
-            logger.debug("Redis不可用，跳过消息保存", session_id=session_id)
-            return
-        
+        if redis:
+            try:
+                data = await redis.get_session(session_id) or {
+                    "messages": [],
+                    "created_at": datetime.now().isoformat()
+                }
+                data["messages"].append({
+                    "role": role,
+                    "content": content,
+                    "timestamp": datetime.now().isoformat()
+                })
+                if len(data["messages"]) > self.MAX_HISTORY:
+                    data["messages"] = data["messages"][-self.MAX_HISTORY:]
+                data["updated_at"] = datetime.now().isoformat()
+                await redis.set_session(session_id, data)
+            except Exception as e:
+                logger.warning("Redis 消息保存失败", error=str(e), session_id=session_id)
+
+        # 2) MySQL 持久化（用于历史查询）
         try:
-            # 获取现有历史
-            data = await redis.get_session(session_id) or {
-                "messages": [],
-                "created_at": datetime.now().isoformat()
-            }
-            
-            # 添加新消息
-            data["messages"].append({
-                "role": role,
-                "content": content,
-                "timestamp": datetime.now().isoformat()
-            })
-            
-            # 限制历史长度
-            if len(data["messages"]) > self.MAX_HISTORY:
-                data["messages"] = data["messages"][-self.MAX_HISTORY:]
-            
-            data["updated_at"] = datetime.now().isoformat()
-            
-            # 保存到Redis
-            await redis.set_session(session_id, data)
-            logger.debug("消息已保存", session_id=session_id, role=role)
+            await self._persist_message_to_db(session_id, role, content)
         except Exception as e:
-            logger.warning("消息保存失败", error=str(e), session_id=session_id)
+            logger.warning("MySQL 消息持久化失败", error=str(e), session_id=session_id)
+
+    async def _persist_message_to_db(self, session_id: str, role: str, content: str) -> None:
+        from app.db.mysql import mysql_client
+        from app.models.mysql_models import ChatSession, ChatMessageRecord
+        from sqlalchemy import select
+
+        async with mysql_client.session() as session:
+            existing = (await session.execute(
+                select(ChatSession).where(ChatSession.id == session_id)
+            )).scalar_one_or_none()
+
+            preview = content[:200] if content else ""
+            if not existing:
+                title = preview[:80] if role == "user" else None
+                first_msg = preview if role == "user" else None
+                session.add(ChatSession(
+                    id=session_id,
+                    title=title,
+                    first_message=first_msg,
+                    last_message=preview,
+                    message_count=1,
+                ))
+            else:
+                existing.message_count = (existing.message_count or 0) + 1
+                existing.last_message = preview
+                if role == "user" and not existing.first_message:
+                    existing.first_message = preview
+                if not existing.title and role == "user":
+                    existing.title = preview[:80]
+
+            session.add(ChatMessageRecord(
+                session_id=session_id,
+                role=role,
+                content=content,
+            ))
+            await session.commit()
     
     # ========== 对话处理 ==========
 

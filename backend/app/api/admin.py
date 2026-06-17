@@ -1239,27 +1239,53 @@ async def crawler_logs_stream(
 
 @router.get("/conversations", response_model=ApiResponse)
 async def get_conversations(
-    page: int = 1,
-    page_size: int = 20,
-    q: Optional[str] = None
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    q: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
 ):
     """
-    获取对话记录列表
-    
-    TODO: 从数据库查询真实的对话记录。
+    分页查询对话会话列表。
+    支持按首条消息/标题模糊搜索。
     """
-    # 临时返回空列表
-    return ApiResponse(
-        code=200,
-        message="success",
-        data={
-            "items": [],
-            "total": 0,
-            "page": page,
-            "page_size": page_size,
-            "total_pages": 0
+    from app.models.mysql_models import ChatSession
+    from sqlalchemy import select, func, or_
+
+    query = select(ChatSession).order_by(ChatSession.updated_at.desc())
+    count_query = select(func.count(ChatSession.id))
+
+    if q:
+        like = f"%{q}%"
+        cond = or_(ChatSession.title.like(like), ChatSession.first_message.like(like))
+        query = query.where(cond)
+        count_query = count_query.where(cond)
+
+    total = (await db.execute(count_query)).scalar_one() or 0
+    rows = (await db.execute(
+        query.offset((page - 1) * page_size).limit(page_size)
+    )).scalars().all()
+
+    items = [
+        {
+            "id": s.id,
+            "title": s.title,
+            "first_message": s.first_message,
+            "last_message": s.last_message,
+            "message_count": int(s.message_count or 0),
+            "has_knowledge": bool(s.has_knowledge),
+            "created_at": s.created_at.isoformat() if s.created_at else None,
+            "updated_at": s.updated_at.isoformat() if s.updated_at else None,
         }
-    )
+        for s in rows
+    ]
+
+    return ApiResponse(data={
+        "items": items,
+        "total": int(total),
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (int(total) + page_size - 1) // page_size if total else 0,
+    })
 
 
 # ========== 系统监控相关 ==========
@@ -1669,60 +1695,66 @@ async def update_settings(
 # ========== 对话详情相关 ==========
 
 @router.get("/conversations/{conversation_id}", response_model=ApiResponse)
-async def get_conversation_detail(conversation_id: str):
+async def get_conversation_detail(
+    conversation_id: str,
+    db: AsyncSession = Depends(get_db),
+):
     """
-    获取对话详情
-    
-    返回指定对话的完整内容，包括消息列表。
+    获取对话详情：会话基本信息 + 完整消息列表。
     """
-    # 临时返回 mock 数据
-    return ApiResponse(
-        code=200,
-        message="success",
-        data={
-            "id": conversation_id,
-            "first_message": "周杰伦的妻子是谁？",
-            "messages": [
-                {
-                    "id": "msg_001",
-                    "role": "user",
-                    "content": "周杰伦的妻子是谁？",
-                    "timestamp": "2024-01-01T10:00:00Z",
-                    "sources": [],
-                },
-                {
-                    "id": "msg_002",
-                    "role": "assistant",
-                    "content": "周杰伦的妻子是昆凌（Hannah Quinlivan）。",
-                    "timestamp": "2024-01-01T10:00:05Z",
-                    "sources": [
-                        {"person_id": "person_002", "name": "昆凌", "relation": "妻子"}
-                    ],
-                },
-                {
-                    "id": "msg_003",
-                    "role": "user",
-                    "content": "他们什么时候结婚的？",
-                    "timestamp": "2024-01-01T10:00:30Z",
-                    "sources": [],
-                },
-                {
-                    "id": "msg_004",
-                    "role": "assistant",
-                    "content": "周杰伦和昆凌于2015年1月17日在英国举行婚礼。",
-                    "timestamp": "2024-01-01T10:00:35Z",
-                    "sources": [
-                        {"person_id": "person_001", "name": "周杰伦"},
-                        {"person_id": "person_002", "name": "昆凌"},
-                    ],
-                },
-            ],
-            "persons": ["周杰伦", "昆凌"],
-            "satisfaction": "good",
-            "created_at": "2024-01-01T10:00:00Z",
-            "updated_at": "2024-01-01T10:00:35Z",
-        }
-    )
+    from app.models.mysql_models import ChatSession, ChatMessageRecord
+    from sqlalchemy import select
+
+    chat_session = (await db.execute(
+        select(ChatSession).where(ChatSession.id == conversation_id)
+    )).scalar_one_or_none()
+    if not chat_session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    msgs = (await db.execute(
+        select(ChatMessageRecord)
+        .where(ChatMessageRecord.session_id == conversation_id)
+        .order_by(ChatMessageRecord.id)
+    )).scalars().all()
+
+    return ApiResponse(data={
+        "id": chat_session.id,
+        "title": chat_session.title,
+        "first_message": chat_session.first_message,
+        "last_message": chat_session.last_message,
+        "message_count": int(chat_session.message_count or 0),
+        "has_knowledge": bool(chat_session.has_knowledge),
+        "metadata_json": chat_session.metadata_json,
+        "created_at": chat_session.created_at.isoformat() if chat_session.created_at else None,
+        "updated_at": chat_session.updated_at.isoformat() if chat_session.updated_at else None,
+        "messages": [
+            {
+                "id": str(m.id),
+                "role": m.role,
+                "content": m.content,
+                "citations": m.citations or [],
+                "llm_call_id": m.llm_call_id,
+                "timestamp": m.created_at.isoformat() if m.created_at else None,
+            }
+            for m in msgs
+        ],
+    })
+
+
+@router.delete("/conversations/{conversation_id}", response_model=ApiResponse)
+async def delete_conversation(
+    conversation_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """删除会话及其所有消息。"""
+    from app.models.mysql_models import ChatSession
+    from sqlalchemy import delete as sa_delete
+
+    result = await db.execute(sa_delete(ChatSession).where(ChatSession.id == conversation_id))
+    await db.commit()
+    if not result.rowcount:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    return ApiResponse(data={"deleted": int(result.rowcount or 0)})
 
 # ========== P1: 用户管理相关 ==========
 
