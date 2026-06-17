@@ -387,14 +387,18 @@ class DocumentParseService:
             await self.db.delete(b)
 
         for block_data in blocks:
+            content_text = clean_block_text(block_data.content_text)
+            content_md = clean_block_text(block_data.content_md)
+            if content_md and content_md == content_text:
+                content_md = None
             block = DocumentBlock(
                 id=generate_id(),
                 document_id=document_id,
                 page_no=block_data.page_no,
                 block_type=block_data.block_type,
                 order_no=block_data.order_no,
-                content_text=block_data.content_text,
-                content_md=block_data.content_md,
+                content_text=content_text,
+                content_md=content_md,
                 bbox=block_data.bbox,
                 html_table=block_data.html_table,
                 latex=block_data.latex,

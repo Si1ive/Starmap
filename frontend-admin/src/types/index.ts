@@ -471,6 +471,8 @@ export interface ChapterDiagnosticSection extends ChapterDiagnosticNativeSection
 export interface ChapterDiagnostics {
   document_id: string
   document_title?: string
+  doc_type?: string
+  is_exam_doc?: boolean
   page_count: number
   block_count: number
   summary: {

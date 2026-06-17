@@ -23,6 +23,7 @@ from app.models.mysql_models import (
 )
 from app.services.chapter_compat_service import resolve_legacy_chapter_id
 from app.services.system_settings_service import SystemSettingsService
+from app.services.text_cleaning import clean_block_text, normalize_whitespace
 
 logger = get_logger(__name__)
 
@@ -54,42 +55,20 @@ def _get_option_label(option: Dict[str, Any]) -> str:
     return str(value).strip().upper()[:1]
 
 
+
+
 def clean_punctuation_subscript(text: str) -> str:
-    """
-    清理解析器误识别的标点符号
-    将 <sub>．</sub>、<sub>，</sub> 等错误格式替换为正确的标点
-    """
-    if not text:
-        return text
-
-    patterns = [
-        (r'<sub>\s*[．。]\s*</sub>', '。'),
-        (r'<sub>\s*[，,]\s*</sub>', '，'),
-        (r'<sub>\s*[；;]\s*</sub>', '；'),
-        (r'<sub>\s*[：:]\s*</sub>', '：'),
-        (r'<sub>\s*[！!]\s*</sub>', '！'),
-        (r'<sub>\s*[？?]\s*</sub>', '？'),
-        (r'<sub>\s*[、]\s*</sub>', '、'),
-    ]
-
-    cleaned = text
-    for pattern, replacement in patterns:
-        cleaned = re.sub(pattern, replacement, cleaned)
-
-    return cleaned
+    """兼容入口：转发到 text_cleaning.clean_block_text"""
+    return clean_block_text(text) or ""
 
 
-def clean_blocks_punctuation(blocks: List[DocumentBlock]) -> List[DocumentBlock]:
-    """
-    清理所有blocks中的标点错误
-    修改blocks的content_text和content_md字段
-    """
+def clean_blocks_punctuation(blocks):
+    """清理 blocks 的 content_text/content_md 字段"""
     for block in blocks:
         if block.content_text:
-            block.content_text = clean_punctuation_subscript(block.content_text)
+            block.content_text = clean_block_text(block.content_text)
         if block.content_md:
-            block.content_md = clean_punctuation_subscript(block.content_md)
-
+            block.content_md = clean_block_text(block.content_md)
     return blocks
 
 
@@ -1045,6 +1024,9 @@ class EntityExtractionService:
                 "message": "文档没有 blocks",
             }
 
+        # 2.5 清洗 <sub>/<sup> 标签和多余空白，知识点和题目两条路径共用
+        blocks = clean_blocks_punctuation(blocks)
+
         # 3. 获取 section 映射，用于确定章节和学科归属
         # page -> {chapter_id, subject_id}
         section_mappings = await self._get_section_mappings(document_id)
@@ -1309,10 +1291,9 @@ class EntityExtractionService:
         6. LLM兜底（可选）
         7. 保存题目和诊断报告
         """
-        # Step 1: 清洗blocks中的标点错误
-        blocks = clean_blocks_punctuation(blocks)
+        # Step 1: 标点 / 空白清洗已在 extract_entities 入口完成
         blocks = self._expand_blocks_with_embedded_question_starts(blocks)
-        logger.info(f"清洗标点完成，处理 {len(blocks)} 个blocks")
+        logger.info(f"展开内嵌题号完成，处理 {len(blocks)} 个blocks")
 
         # Step 2: 初步提取题目（转换为字典格式，不直接入库）
         raw_questions = await self._extract_questions_to_dict(

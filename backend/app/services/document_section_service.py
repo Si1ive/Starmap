@@ -16,6 +16,9 @@ from app.models.mysql_models import Document, DocumentBlock, DocumentSection
 
 logger = get_logger(__name__)
 
+# 试卷类文档没有原生章节结构（题目直接挂标准章节，不走标题树这一层）
+EXAM_DOC_TYPES = {"past_exam", "mock_exam"}
+
 # 常见标题模式
 HEADING_PATTERNS = [
     # 第X章 / 第X节 / 第X部分
@@ -170,6 +173,11 @@ class DocumentSectionService:
         document = result.scalar_one_or_none()
         if not document:
             raise ValueError(f"文档不存在: {document_id}")
+
+        if document.doc_type in EXAM_DOC_TYPES:
+            raise ValueError(
+                "试卷类文档没有原生章节结构，题目应直接挂到标准章节上，无需提取标题树"
+            )
 
         existing_sections_result = await self.db.execute(
             select(DocumentSection.id).where(DocumentSection.document_id == document_id).limit(1)

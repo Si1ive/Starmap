@@ -30,6 +30,9 @@ DIAG_QUESTION_CUE_RE = re.compile(
     r'给出|求|计算|证明|说明|分析|为什么|多少|哪个|哪些|如果|判断'
 )
 
+# 试卷类文档不走标题树/章节映射这一层
+EXAM_DOC_TYPES = {"past_exam", "mock_exam"}
+
 
 def generate_id() -> str:
     return uuid.uuid4().hex[:32]
@@ -272,6 +275,14 @@ class ChapterMappingService:
         Returns:
             映射结果统计
         """
+        document = await self.db.get(Document, document_id)
+        if not document:
+            raise ValueError(f"文档不存在: {document_id}")
+        if document.doc_type in EXAM_DOC_TYPES:
+            raise ValueError(
+                "试卷类文档没有标题树，章节映射不适用；试卷题目应在抽取时直接挂到标准章节"
+            )
+
         # 1. 获取文档的 sections
         sections_result = await self.db.execute(
             select(DocumentSection)
@@ -549,6 +560,8 @@ class ChapterMappingService:
         if not document:
             raise ValueError(f"文档不存在: {document_id}")
 
+        is_exam_doc = document.doc_type in EXAM_DOC_TYPES
+
         blocks_query = (
             select(DocumentBlock)
             .where(DocumentBlock.document_id == document_id)
@@ -630,7 +643,7 @@ class ChapterMappingService:
                 )
             extraction_mapping = self._resolve_page_mapping(current_page, accepted_page_mappings)
             page_entities = entity_index["pages"].get(current_page, {})
-            page_issues = self._page_issues(active_section, section_mapping, extraction_mapping)
+            page_issues = self._page_issues(active_section, section_mapping, extraction_mapping, is_exam_doc)
 
             page_items.append({
                 "page_no": current_page,
@@ -675,7 +688,7 @@ class ChapterMappingService:
 
                 extraction_mapping = self._resolve_page_mapping(block.page_no, accepted_page_mappings)
                 block_entities = entity_index["blocks"].get(block.id, {})
-                block_issues = self._block_issues(active_section, selected_mapping, extraction_mapping)
+                block_issues = self._block_issues(active_section, selected_mapping, extraction_mapping, is_exam_doc)
 
                 block_items.append({
                     "id": block.id,
@@ -711,6 +724,8 @@ class ChapterMappingService:
         return {
             "document_id": document.id,
             "document_title": document.title,
+            "doc_type": document.doc_type,
+            "is_exam_doc": is_exam_doc,
             "page_count": len(page_numbers),
             "block_count": len(blocks),
             "summary": {
@@ -977,7 +992,17 @@ class ChapterMappingService:
         active_section: Optional[Dict[str, Any]],
         section_mapping: Optional[Dict[str, Any]],
         extraction_mapping: Optional[Dict[str, Any]],
+        is_exam_doc: bool = False,
     ) -> List[Dict[str, str]]:
+        if is_exam_doc:
+            # 试卷类不应有原生章节，只关心是否有可用归属（学科+章节）
+            if not extraction_mapping:
+                return [{
+                    "code": "exam_no_chapter_mapping",
+                    "severity": "error",
+                    "message": "试卷类文档需要在抽取时显式指定学科或题目级章节归属",
+                }]
+            return []
         if not active_section:
             return [{
                 "code": "no_native_section",
@@ -991,7 +1016,16 @@ class ChapterMappingService:
         active_section: Optional[Dict[str, Any]],
         section_mapping: Optional[Dict[str, Any]],
         extraction_mapping: Optional[Dict[str, Any]],
+        is_exam_doc: bool = False,
     ) -> List[Dict[str, str]]:
+        if is_exam_doc:
+            if not extraction_mapping:
+                return [{
+                    "code": "exam_no_chapter_mapping",
+                    "severity": "warning",
+                    "message": "试卷类文档需要在抽取时显式指定学科",
+                }]
+            return []
         if not active_section:
             return [{
                 "code": "no_native_section",
