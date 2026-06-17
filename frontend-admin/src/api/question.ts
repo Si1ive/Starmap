@@ -42,3 +42,9 @@ export const updateQuestion = (
 ): Promise<ApiResponse<null>> => {
   return adminClient.put(`/questions/${id}`, data)
 }
+
+export const batchDeleteQuestions = (
+  ids: string[]
+): Promise<ApiResponse<{ deleted_count: number; requested_count: number }>> => {
+  return adminClient.post('/questions/batch-delete', { ids })
+}

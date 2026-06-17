@@ -6,6 +6,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getDocumentDetail, getDocumentSections, getSectionMappings, extractDocumentSections, mapDocumentChapters, extractDocumentEntities, getSubjects } from '@/api'
 import type { DataNode } from 'antd/es/tree'
 import PageAnalysis from './PageAnalysis'
+import ChapterDiagnostics from './ChapterDiagnostics'
 
 const reviewStatusConfig: Record<string, { color: string; text: string }> = {
   pending: { color: 'orange', text: '待审核' },
@@ -51,42 +52,52 @@ const DocumentDetailPage = () => {
   })
 
   const extractSectionsMut = useMutation({
-    mutationFn: () => extractDocumentSections(id!),
+    mutationFn: (force: boolean = false) => extractDocumentSections(id!, force),
     onSuccess: () => {
       message.success('标题树提取完成')
       queryClient.invalidateQueries({ queryKey: ['documentSections', id] })
       queryClient.invalidateQueries({ queryKey: ['sectionMappings', id] })
+      queryClient.invalidateQueries({ queryKey: ['chapterDiagnostics', id] })
     },
     onError: (err: any) => {
       const detail = err?.response?.data?.detail
       if (typeof detail === 'string' && detail.includes('无需重复提取')) {
         message.info(detail)
         queryClient.invalidateQueries({ queryKey: ['documentSections', id] })
+        queryClient.invalidateQueries({ queryKey: ['chapterDiagnostics', id] })
       }
     },
   })
 
   const mapChaptersMut = useMutation({
-    mutationFn: () => mapDocumentChapters(id!, selectedSubject || undefined),
+    mutationFn: (force: boolean = false) => mapDocumentChapters(id!, selectedSubject || undefined, force),
     onSuccess: () => {
       message.success('章节映射完成')
       queryClient.invalidateQueries({ queryKey: ['document', id] })
       queryClient.invalidateQueries({ queryKey: ['sectionMappings', id] })
+      queryClient.invalidateQueries({ queryKey: ['chapterDiagnostics', id] })
     },
     onError: (err: any) => {
       const detail = err?.response?.data?.detail
       if (typeof detail === 'string' && detail.includes('无需重复执行')) {
         message.info(detail)
         queryClient.invalidateQueries({ queryKey: ['sectionMappings', id] })
+        queryClient.invalidateQueries({ queryKey: ['chapterDiagnostics', id] })
       }
     },
   })
 
   const extractEntitiesMut = useMutation({
-    mutationFn: () => extractDocumentEntities(id!),
-    onSuccess: () => {
-      message.success(`抽取完成`)
+    mutationFn: () => extractDocumentEntities(id!, selectedSubject || document?.subject_id),
+    onSuccess: (res) => {
+      const result = res?.data
+      message.success(`抽取完成：知识点 ${result?.knowledge_count ?? 0}，题目 ${result?.question_count ?? 0}`)
       queryClient.invalidateQueries({ queryKey: ['document', id] })
+      queryClient.invalidateQueries({ queryKey: ['chapterDiagnostics', id] })
+    },
+    onError: (err: any) => {
+      const detail = err?.response?.data?.detail
+      message.error(typeof detail === 'string' ? detail : '抽取失败')
     },
   })
 
@@ -123,8 +134,10 @@ const DocumentDetailPage = () => {
     },
   ]
 
-  const extractSectionsTip = hasSections ? '该文档已经生成原生标题树，无需重复提取' : '从已解析的 blocks 中识别文档原始章节结构'
-  const mapChaptersTip = hasMappings ? '该文档已经完成章节映射，无需重复执行' : '将原生标题树映射到系统标准章节体系'
+  const extractSectionsTip = hasSections ? '删除当前标题树和章节映射后重新从 blocks 识别' : '从已解析的 blocks 中识别文档原始章节结构'
+  const mapChaptersTip = hasMappings ? '删除当前章节映射后重新匹配标准章节体系' : '将原生标题树映射到系统标准章节体系'
+  const extractSectionsButtonText = hasSections ? '重新提取标题树' : '提取标题树'
+  const mapChaptersButtonText = hasMappings ? '重新映射章节' : '映射到标准章节'
 
   return (
     <div>
@@ -158,10 +171,19 @@ const DocumentDetailPage = () => {
               <Button
                 icon={<NodeIndexOutlined />}
                 loading={extractSectionsMut.isPending}
-                disabled={hasSections}
-                onClick={() => extractSectionsMut.mutate()}
+                onClick={() => {
+                  if (hasSections) {
+                    Modal.confirm({
+                      title: '重新提取标题树',
+                      content: '将删除当前标题树和章节映射后重新生成，确认继续？',
+                      onOk: () => extractSectionsMut.mutate(true),
+                    })
+                  } else {
+                    extractSectionsMut.mutate(false)
+                  }
+                }}
               >
-                提取标题树
+                {extractSectionsButtonText}
               </Button>
             </Tooltip>
             <Select
@@ -176,10 +198,20 @@ const DocumentDetailPage = () => {
               <Button
                 type="primary"
                 loading={mapChaptersMut.isPending}
-                disabled={!hasSections || hasMappings}
-                onClick={() => mapChaptersMut.mutate()}
+                disabled={!hasSections}
+                onClick={() => {
+                  if (hasMappings) {
+                    Modal.confirm({
+                      title: '重新映射章节',
+                      content: '将删除当前章节映射后重新匹配标准章节，确认继续？',
+                      onOk: () => mapChaptersMut.mutate(true),
+                    })
+                  } else {
+                    mapChaptersMut.mutate(false)
+                  }
+                }}
               >
-                映射到标准章节
+                {mapChaptersButtonText}
               </Button>
             </Tooltip>
           </Space>
@@ -216,11 +248,21 @@ const DocumentDetailPage = () => {
                     </Button>
                   </div>
                   {mappings.length > 0 ? (
-                    <Table dataSource={mappings} columns={mappingColumns} rowKey="id" pagination={false} />
+                    <Table dataSource={mappings} columns={mappingColumns} rowKey="mapping_id" pagination={false} />
                   ) : (
                     <Empty description="暂无映射结果，请先映射到标准章节" />
                   )}
                 </>
+              ),
+            },
+            {
+              key: 'chapter-diagnostics',
+              label: '章节归属诊断',
+              children: (
+                <ChapterDiagnostics
+                  documentId={id!}
+                  totalPages={document?.page_count || document?.pages?.length || 0}
+                />
               ),
             },
             {

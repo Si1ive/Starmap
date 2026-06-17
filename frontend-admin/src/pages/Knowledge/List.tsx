@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Card, Table, Tag, Button, Input, Select, Space } from 'antd'
-import { EyeOutlined, EditOutlined } from '@ant-design/icons'
-import { useQuery } from '@tanstack/react-query'
-import { getKnowledgePoints, getSubjects, getChapters } from '@/api'
+import { Card, Table, Tag, Button, Input, Select, Space, Modal, message } from 'antd'
+import { DeleteOutlined, EyeOutlined, EditOutlined } from '@ant-design/icons'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { batchDeleteKnowledgePoints, getKnowledgePoints, getSubjects, getChapters } from '@/api'
 import type { KnowledgePoint } from '@/types'
 
 const difficultyConfig: Record<string, { color: string; text: string }> = {
@@ -21,6 +21,8 @@ const examFreqConfig: Record<string, { color: string; text: string }> = {
 
 const KnowledgeList = () => {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
   const [params, setParams] = useState<{
     page: number
     page_size: number
@@ -50,6 +52,31 @@ const KnowledgeList = () => {
   const total = data?.data?.total || 0
   const subjects = subjectsData?.data || []
   const chapters = chaptersData?.data || []
+
+  const batchDeleteMutation = useMutation({
+    mutationFn: batchDeleteKnowledgePoints,
+    onSuccess: (res) => {
+      message.success(`已删除 ${res.data?.deleted_count || 0} 个知识点`)
+      setSelectedRowKeys([])
+      queryClient.invalidateQueries({ queryKey: ['knowledgePoints'] })
+    },
+    onError: (err: any) => {
+      const detail = err?.response?.data?.detail
+      message.error(typeof detail === 'string' ? detail : '删除失败')
+    },
+  })
+
+  const handleBatchDelete = () => {
+    if (selectedRowKeys.length === 0) return
+    Modal.confirm({
+      title: '确认批量删除',
+      content: `确定要删除选中的 ${selectedRowKeys.length} 个知识点吗？删除后列表和检索中将不再展示。`,
+      okText: '删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: () => batchDeleteMutation.mutate(selectedRowKeys.map(String)),
+    })
+  }
 
   const columns = [
     {
@@ -142,6 +169,15 @@ const KnowledgeList = () => {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
         <h2 style={{ margin: 0 }}>知识点管理</h2>
+        <Button
+          danger
+          icon={<DeleteOutlined />}
+          disabled={selectedRowKeys.length === 0}
+          loading={batchDeleteMutation.isPending}
+          onClick={handleBatchDelete}
+        >
+          批量删除{selectedRowKeys.length ? ` (${selectedRowKeys.length})` : ''}
+        </Button>
       </div>
 
       <Card>
@@ -200,6 +236,11 @@ const KnowledgeList = () => {
           columns={columns}
           dataSource={points as any[]}
           rowKey="id"
+          rowSelection={{
+            selectedRowKeys,
+            onChange: setSelectedRowKeys,
+            preserveSelectedRowKeys: true,
+          }}
           loading={isLoading}
           size="small"
           scroll={{ x: 1200 }}

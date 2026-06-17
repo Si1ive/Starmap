@@ -1,12 +1,10 @@
 import { useParams, useNavigate } from 'react-router-dom'
-import { Card, Tag, Button, Descriptions, Spin, Space, Tabs, Typography } from 'antd'
+import { Card, Tag, Button, Descriptions, Spin, Space, Tabs } from 'antd'
 import { ArrowLeftOutlined, EditOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { getKnowledgePointDetail, getSubjects, getChapters } from '@/api'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-
-const { Paragraph } = Typography
 
 const difficultyConfig: Record<string, { color: string; text: string }> = {
   easy: { color: 'green', text: '简单' },

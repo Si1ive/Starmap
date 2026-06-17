@@ -259,7 +259,7 @@ export interface Question {
   chapter_id: string
   type: 'choice' | 'fill' | 'judge' | 'short_answer' | 'design' | 'analysis'
   content: string
-  options?: { key: string; text: string }[]
+  options?: { key?: string; label?: string; option_label?: string; text: string }[]
   answer: string
   explanation?: string
   difficulty: 'easy' | 'medium' | 'hard'
@@ -387,6 +387,114 @@ export interface SectionMapping {
   review_status: string
   review_notes?: string
   created_at?: string
+}
+
+export type ChapterDiagnosticStatus = 'ok' | 'warning' | 'error'
+
+export interface ChapterDiagnosticIssue {
+  code: string
+  severity: 'warning' | 'error'
+  message: string
+}
+
+export interface ChapterDiagnosticNativeSection {
+  id: string
+  title: string
+  section_path?: string
+  level: number
+  page_start?: number
+  page_end?: number
+  block_start_id?: string
+  block_end_id?: string
+  confidence?: number
+}
+
+export interface ChapterDiagnosticMapping {
+  mapping_id: string
+  section_id: string
+  section_title: string
+  section_path?: string
+  canonical_chapter_id: string
+  canonical_chapter_name: string
+  canonical_chapter_code?: string
+  subject_id: string
+  subject_name: string
+  mapping_type: string
+  confidence?: number
+  review_status: string
+  source: 'native_section' | 'section_range' | 'previous_page' | 'next_page'
+  fallback_distance: number
+}
+
+export interface ChapterDiagnosticExtracted {
+  knowledge_count: number
+  question_count: number
+}
+
+export interface ChapterDiagnosticPage {
+  page_no: number
+  block_count: number
+  question_start_count: number
+  option_block_count: number
+  native_section?: ChapterDiagnosticNativeSection | null
+  section_mapping?: ChapterDiagnosticMapping | null
+  extraction_mapping?: ChapterDiagnosticMapping | null
+  diagnostic_status: ChapterDiagnosticStatus
+  issues: ChapterDiagnosticIssue[]
+  extracted: ChapterDiagnosticExtracted
+}
+
+export interface ChapterDiagnosticBlock {
+  id: string
+  page_no: number
+  order_no: number
+  block_type: string
+  text_excerpt: string
+  text_length: number
+  signals: {
+    looks_like_question_start: boolean
+    looks_like_option: boolean
+    looks_like_heading: boolean
+  }
+  native_section?: ChapterDiagnosticNativeSection | null
+  section_mapping?: ChapterDiagnosticMapping | null
+  extraction_mapping?: ChapterDiagnosticMapping | null
+  diagnostic_status: ChapterDiagnosticStatus
+  issues: ChapterDiagnosticIssue[]
+  extracted: ChapterDiagnosticExtracted
+}
+
+export interface ChapterDiagnosticSection extends ChapterDiagnosticNativeSection {
+  mapping?: ChapterDiagnosticMapping | null
+}
+
+export interface ChapterDiagnostics {
+  document_id: string
+  document_title?: string
+  page_count: number
+  block_count: number
+  summary: {
+    total_pages: number
+    total_blocks: number
+    total_sections: number
+    total_mappings: number
+    accepted_mappings: number
+    rejected_mappings: number
+    unmapped_sections: number
+    pages_ok: number
+    pages_warning: number
+    pages_error: number
+    blocks_ok: number
+    blocks_warning: number
+    blocks_error: number
+    question_like_blocks: number
+    question_pages_without_stable_mapping: number
+    extracted_knowledge_count: number
+    extracted_question_count: number
+  }
+  pages: ChapterDiagnosticPage[]
+  blocks: ChapterDiagnosticBlock[]
+  sections: ChapterDiagnosticSection[]
 }
 
 // 审核项

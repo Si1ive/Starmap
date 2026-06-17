@@ -8,6 +8,7 @@ import type {
   CorpusDocument,
   DocumentSection,
   SectionMapping,
+  ChapterDiagnostics,
   ReviewItem,
   RelationReview,
   SearchResult,
@@ -63,6 +64,12 @@ export const deleteCorpusFile = (id: string): Promise<ApiResponse<{ file_id: str
   return adminClient.delete(`/corpus/files/${id}`)
 }
 
+export const batchDeleteCorpusFiles = (
+  ids: string[]
+): Promise<ApiResponse<{ deleted_count: number; requested_count: number }>> => {
+  return adminClient.post('/corpus/files/batch-delete', { ids })
+}
+
 // ========== 文档 ==========
 
 export const getDocumentDetail = (id: string): Promise<ApiResponse<CorpusDocument>> => {
@@ -73,13 +80,18 @@ export const getDocumentSections = (id: string, tree = false): Promise<ApiRespon
   return adminClient.get(`/corpus/documents/${id}/sections`, { params: { tree } })
 }
 
-export const extractDocumentSections = (id: string): Promise<ApiResponse<any>> => {
-  return adminClient.post(`/corpus/documents/${id}/extract-sections`)
+export const extractDocumentSections = (id: string, force = false): Promise<ApiResponse<any>> => {
+  return adminClient.post(`/corpus/documents/${id}/extract-sections`, null, {
+    params: force ? { force: true } : undefined,
+  })
 }
 
-export const mapDocumentChapters = (id: string, subjectId?: string): Promise<ApiResponse<any>> => {
+export const mapDocumentChapters = (id: string, subjectId?: string, force = false): Promise<ApiResponse<any>> => {
   return adminClient.post(`/corpus/documents/${id}/map-chapters`, null, {
-    params: subjectId ? { subject_id: subjectId } : undefined,
+    params: {
+      ...(subjectId ? { subject_id: subjectId } : {}),
+      ...(force ? { force: true } : {}),
+    },
   })
 }
 
@@ -87,8 +99,17 @@ export const getSectionMappings = (id: string, reviewStatus?: string): Promise<A
   return adminClient.get(`/corpus/documents/${id}/section-mappings`, { params: { review_status: reviewStatus } })
 }
 
-export const extractDocumentEntities = (id: string): Promise<ApiResponse<any>> => {
-  return adminClient.post(`/corpus/documents/${id}/extract-entities`)
+export const getDocumentChapterDiagnostics = (
+  id: string,
+  params?: { page_no?: number; include_blocks?: boolean }
+): Promise<ApiResponse<ChapterDiagnostics>> => {
+  return adminClient.get(`/corpus/documents/${id}/chapter-diagnostics`, { params })
+}
+
+export const extractDocumentEntities = (id: string, subjectId?: string): Promise<ApiResponse<any>> => {
+  return adminClient.post(`/corpus/documents/${id}/extract-entities`, null, {
+    params: subjectId ? { subject_id: subjectId } : undefined,
+  })
 }
 
 // ========== 标准章节 ==========

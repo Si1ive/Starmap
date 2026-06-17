@@ -95,11 +95,14 @@ const QuestionDetail = () => {
         </div>
         {question.options && question.options.length > 0 && (
           <div style={{ marginBottom: 16 }}>
-            {question.options.map((opt) => (
-              <div key={opt.key} style={{ marginBottom: 8, paddingLeft: 16 }}>
-                <strong>{opt.key}.</strong> {opt.text}
+            {question.options.map((opt, index) => {
+              const optionKey = opt.key || opt.label || opt.option_label || String.fromCharCode(65 + index)
+              return (
+              <div key={`${optionKey}-${index}`} style={{ marginBottom: 8, paddingLeft: 16 }}>
+                <strong>{optionKey}.</strong> {opt.text}
               </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </Card>

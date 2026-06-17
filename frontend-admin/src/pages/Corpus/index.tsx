@@ -41,6 +41,7 @@ import {
   getDownloadedFiles,
   registerCorpusFileByDownload,
   deleteCorpusFile,
+  batchDeleteCorpusFiles,
   uploadCorpusFiles,
 } from '@/api'
 import type { CorpusFile, DownloadedFile } from '@/types'
@@ -92,6 +93,7 @@ const CorpusPage = () => {
   const [pipelineOpen, setPipelineOpen] = useState(false)
   const [pipelineDocId, setPipelineDocId] = useState<string | null>(null)
   const [pipelineSteps, setPipelineSteps] = useState<Record<string, 'wait' | 'process' | 'finish' | 'error'>>({})
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
   const [form] = Form.useForm()
 
   const [params, setParams] = useState<{
@@ -132,6 +134,19 @@ const CorpusPage = () => {
     mutationFn: deleteCorpusFile,
     onSuccess: (res) => {
       message.success(`已删除：${res.data?.file_name}`)
+      queryClient.invalidateQueries({ queryKey: ['corpusFiles'] })
+    },
+    onError: (err: any) => {
+      const detail = err?.response?.data?.detail
+      message.error(detail || err.message || '删除失败')
+    },
+  })
+
+  const batchDeleteMutation = useMutation({
+    mutationFn: batchDeleteCorpusFiles,
+    onSuccess: (res) => {
+      message.success(`已删除 ${res.data?.deleted_count || 0} 个语料文件`)
+      setSelectedRowKeys([])
       queryClient.invalidateQueries({ queryKey: ['corpusFiles'] })
     },
     onError: (err: any) => {
@@ -268,6 +283,18 @@ const CorpusPage = () => {
       okType: 'danger',
       cancelText: '取消',
       onOk: () => deleteMutation.mutate(record.id),
+    })
+  }
+
+  const handleBatchDelete = () => {
+    if (selectedRowKeys.length === 0) return
+    Modal.confirm({
+      title: '确认批量删除',
+      content: `确定要删除选中的 ${selectedRowKeys.length} 个语料文件吗？此操作将同时删除关联的解析记录和文档数据，且无法恢复。`,
+      okText: '删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: () => batchDeleteMutation.mutate(selectedRowKeys.map(String)),
     })
   }
 
@@ -438,6 +465,15 @@ const CorpusPage = () => {
           </div>
         </div>
         <Space>
+          <Button
+            danger
+            icon={<DeleteOutlined />}
+            disabled={selectedRowKeys.length === 0}
+            loading={batchDeleteMutation.isPending}
+            onClick={handleBatchDelete}
+          >
+            批量删除{selectedRowKeys.length ? ` (${selectedRowKeys.length})` : ''}
+          </Button>
           <Button icon={<SyncOutlined />} onClick={() => queryClient.invalidateQueries({ queryKey: ['corpusFiles'] })}>
             刷新
           </Button>
@@ -495,6 +531,11 @@ const CorpusPage = () => {
           dataSource={files}
           columns={columns}
           rowKey="id"
+          rowSelection={{
+            selectedRowKeys,
+            onChange: setSelectedRowKeys,
+            preserveSelectedRowKeys: true,
+          }}
           loading={isLoading}
           scroll={{ x: 1000 }}
           pagination={{

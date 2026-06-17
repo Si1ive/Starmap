@@ -130,13 +130,15 @@ const AppSider = () => {
       collapsible
       collapsed={collapsed}
       style={{
-        overflow: 'auto',
+        overflow: 'hidden',
         height: '100vh',
         position: 'fixed',
         left: 0,
         top: 0,
         bottom: 0,
         zIndex: 100,
+        display: 'flex',
+        flexDirection: 'column',
       }}
     >
       <div
@@ -149,29 +151,31 @@ const AppSider = () => {
           fontSize: collapsed ? 16 : 20,
           fontWeight: 'bold',
           borderBottom: '1px solid rgba(255,255,255,0.1)',
+          flex: '0 0 64px',
         }}
       >
         {collapsed ? '408' : '408考研学习平台'}
       </div>
-      <Menu
-        theme="dark"
-        mode="inline"
-        selectedKeys={[selectedKey]}
-        defaultOpenKeys={collapsed ? [] : openKeys}
-        items={filteredItems}
-        onClick={({ key }) => navigate(key)}
-        style={{ borderRight: 0 }}
-      />
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', paddingBottom: 8 }}>
+        <Menu
+          theme="dark"
+          mode="inline"
+          selectedKeys={[selectedKey]}
+          defaultOpenKeys={collapsed ? [] : openKeys}
+          items={filteredItems}
+          onClick={({ key }) => navigate(key)}
+          style={{ borderRight: 0 }}
+        />
+      </div>
       <div
         style={{
-          position: 'absolute',
-          bottom: 0,
           width: '100%',
           padding: '16px',
           color: 'rgba(255,255,255,0.45)',
           fontSize: 12,
           textAlign: 'center',
           borderTop: '1px solid rgba(255,255,255,0.1)',
+          flex: '0 0 auto',
         }}
       >
         {collapsed ? '©' : '© 2026 StarMap'}

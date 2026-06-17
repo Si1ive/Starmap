@@ -330,6 +330,17 @@ class SystemSettingsService:
                 "max_tokens": 2000,
                 "system_prompt": "你是一个专业的408考研学习助手，擅长解释知识点、题目分析与学习规划。",
             },
+            "pdf_structure_llm": {
+                "enabled": False,
+                "provider": "openai_compatible",
+                "base_url": "",
+                "api_key": "",
+                "model": settings.OPENAI_MODEL,
+                "temperature": 0.1,
+                "max_tokens": 2000,
+                "timeout_seconds": 60,
+                "system_prompt": "你是一个PDF题目结构分析专家，负责判断跨页、跨列导致的题目拆分和选项缺失问题。",
+            },
             "search": {
                 "default_page_size": 20,
                 "max_results": 100,
@@ -390,6 +401,8 @@ class SystemSettingsService:
             return "PDF 解析器单活切换配置"
         if config_key == "llm":
             return "LLM 参数配置"
+        if config_key == "pdf_structure_llm":
+            return "PDF 文档结构解析 LLM 配置"
         if config_key == "search":
             return "搜索参数配置"
         if config_key == "crawler":

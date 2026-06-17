@@ -276,9 +276,9 @@ class SegmentService:
                 texts_to_embed.append(context_text)
 
             # option segment（选择题）
-            if q.options and q.type in ("single_choice", "multi_choice"):
+            if q.options and q.type in ("choice", "single_choice", "multi_choice", "multiple_choice"):
                 option_text = "\n".join(
-                    f"{opt.get('label', '')}. {opt.get('text', '')}"
+                    f"{opt.get('key') or opt.get('label') or opt.get('option_label') or ''}. {opt.get('text', '')}"
                     for opt in q.options
                     if isinstance(opt, dict)
                 )

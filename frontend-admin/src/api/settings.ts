@@ -20,6 +20,17 @@ export interface SystemSettings {
     max_tokens: number
     system_prompt: string
   }
+  pdf_structure_llm: {
+    enabled: boolean
+    provider: 'openai_compatible'
+    base_url: string
+    api_key: string
+    model: string
+    temperature: number
+    max_tokens: number
+    timeout_seconds: number
+    system_prompt: string
+  }
   search: {
     default_page_size: number
     max_results: number
@@ -87,6 +98,36 @@ export const getSettings = (): Promise<ApiResponse<SystemSettings>> => {
 
 export const updateSettings = (data: Partial<SystemSettings>): Promise<ApiResponse<SystemSettings>> => {
   return adminClient.put('/settings', data)
+}
+
+export interface PdfStructureLlmStatus {
+  enabled: boolean
+  provider: 'openai_compatible'
+  model: string
+  base_url: string
+  has_api_key: boolean
+  uses_env_api_key: boolean
+  is_available: boolean
+  issues: string[]
+}
+
+export interface PdfStructureLlmTestResult {
+  success: boolean
+  provider: string
+  model: string
+  base_url: string
+  reply?: string
+  error?: string
+}
+
+export const getPdfStructureLlmStatus = (): Promise<ApiResponse<PdfStructureLlmStatus>> => {
+  return adminClient.get('/settings/pdf-structure-llm/status')
+}
+
+export const testPdfStructureLlm = (
+  data: Partial<SystemSettings['pdf_structure_llm']>
+): Promise<ApiResponse<PdfStructureLlmTestResult>> => {
+  return adminClient.post('/settings/pdf-structure-llm/test', data, { timeout: 120000 })
 }
 
 export interface PdfParserSwitchHistoryItem {

@@ -36,6 +36,11 @@ const QuestionEdit = () => {
   const subjects = subjectsData?.data || []
   const chapters = chaptersData?.data || []
 
+  const normalizedOptions = (question?.options || []).map((opt: any, index: number) => ({
+    key: opt.key || opt.label || opt.option_label || String.fromCharCode(65 + index),
+    text: opt.text || '',
+  }))
+
   useEffect(() => {
     if (question) {
       setSelectedSubject(question.subject_id)
@@ -52,7 +57,7 @@ const QuestionEdit = () => {
         exam_year: question.exam_year,
         tags: question.tags,
         status: question.status,
-        options: question.options,
+        options: normalizedOptions,
       })
     }
   }, [question, form])

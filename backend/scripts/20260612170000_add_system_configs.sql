@@ -20,3 +20,22 @@ VALUES (
 )
 ON DUPLICATE KEY UPDATE
     description = VALUES(description);
+
+INSERT INTO system_configs (config_key, config_value, description)
+VALUES (
+    'pdf_structure_llm',
+    JSON_OBJECT(
+        'enabled', false,
+        'provider', 'openai_compatible',
+        'base_url', '',
+        'api_key', '',
+        'model', 'gpt-4',
+        'temperature', 0.1,
+        'max_tokens', 2000,
+        'timeout_seconds', 60,
+        'system_prompt', '你是一个PDF题目结构分析专家，负责判断跨页、跨列导致的题目拆分和选项缺失问题。'
+    ),
+    'PDF 文档结构解析 LLM 配置'
+)
+ON DUPLICATE KEY UPDATE
+    description = VALUES(description);

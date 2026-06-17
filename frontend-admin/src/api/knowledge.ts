@@ -57,6 +57,12 @@ export const updateKnowledgePoint = (
   return adminClient.put(`/knowledge/points/${id}`, data)
 }
 
+export const batchDeleteKnowledgePoints = (
+  ids: string[]
+): Promise<ApiResponse<{ deleted_count: number; requested_count: number }>> => {
+  return adminClient.post('/knowledge/points/batch-delete', { ids })
+}
+
 // ========== 旧版 PDF 入库接口 ==========
 
 export interface IngestPdfData {

@@ -6,11 +6,15 @@
 
 import re
 import uuid
-from typing import Dict, Any, List, Optional
+import asyncio
+from collections import Counter
+from types import SimpleNamespace
+from typing import Dict, Any, List, Optional, Tuple
 
 from sqlalchemy import select, and_, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.models.mysql_models import (
     Document, DocumentBlock, DocumentSection, DocumentSectionMapping,
@@ -18,12 +22,36 @@ from app.models.mysql_models import (
     EntitySourceLink, CanonicalChapter, RetrievalSegment
 )
 from app.services.chapter_compat_service import resolve_legacy_chapter_id
+from app.services.system_settings_service import SystemSettingsService
 
 logger = get_logger(__name__)
 
 
 def generate_id() -> str:
     return uuid.uuid4().hex[:32]
+
+
+OPTION_SEPARATOR_RE = re.compile(
+    r'(?:\s*(?:[.．、:：。]|<sub>\s*[.．、:：。]\s*</sub>)\s*|\s+)(?=\S)'
+)
+OPTION_MARKER_RE = re.compile(r'([A-H])(?:\s*(?:[.．、:：。]|<sub>\s*[.．、:：。]\s*</sub>)\s*|\s+)(?=\S)')
+OPTION_BLOCK_RE = re.compile(r'^\s*([A-H])(?:\s*(?:[.．、:：。]|<sub>\s*[.．、:：。]\s*</sub>)\s*|\s+)(?=\S)')
+CHOICE_BLANK_RE = re.compile(r'[（(]\s*(?:\)|）|_|　|\.{2,}|…{1,2})?\s*[）)]')
+QUESTION_NUMERIC_RE = re.compile(r'^\s*(\d{1,3})(?:\s*[.、．。]\s*|\s+)(?=\S)')
+EMBEDDED_QUESTION_NUMERIC_RE = re.compile(r'(?<!\d)(\d{1,3})(?:\s*[.、．。]\s*|\s+)(?=\S)')
+QUESTION_TITLE_RE = re.compile(r'^\s*第\s*([一二三四五六七八九十百千\d]+)\s*题')
+QUESTION_PAREN_RE = re.compile(r'^\s*[（(]\s*(\d{1,3})\s*[）)]\s*\S+')
+QUESTION_EXAMPLE_RE = re.compile(r'^\s*例\s*\d+')
+QUESTION_CUE_RE = re.compile(
+    r'[?？]|下列|以下|关于|若|设|已知|正确|错误|不是|可以|能够|应|属于|采用|'
+    r'给出|求|计算|证明|说明|分析|为什么|多少|哪个|哪些|如果|判断'
+)
+
+
+def _get_option_label(option: Dict[str, Any]) -> str:
+    """兼容 key/label/option_label 三种选项标识字段。"""
+    value = option.get("key") or option.get("label") or option.get("option_label") or ""
+    return str(value).strip().upper()[:1]
 
 
 def clean_punctuation_subscript(text: str) -> str:
@@ -100,7 +128,7 @@ class OptionIntegrityChecker:
             }
 
         # 提取选项标签
-        option_labels = sorted([opt.get('label', opt.get('option_label', '')) for opt in options if opt.get('label') or opt.get('option_label')])
+        option_labels = sorted([label for label in (_get_option_label(opt) for opt in options) if label])
 
         if not option_labels:
             return {
@@ -152,7 +180,7 @@ class QuestionNumberChecker:
 
     # 题号正则模式（按优先级）
     NUMBER_PATTERNS = [
-        (r'^(\d+)[.、．]\s*', 'arabic'),      # 1. 2. 3.
+        (r'^(\d{1,3})(?:\s*[.、．。]\s*|\s+)(?=\S)', 'arabic'),  # 1. / 1、 / 1 若
         (r'^[（(](\d+)[）)]\s*', 'paren'),    # (1) (2) (3)
         (r'^\[(\d+)\]\s*', 'bracket'),        # [1] [2] [3]
         (r'^例(\d+)', 'example'),              # 例1 例2
@@ -490,7 +518,7 @@ class RuleBasedFixer:
 
             # 检查next_q是否包含缺失的选项
             next_options = next_q.get('options', [])
-            next_labels = [opt.get('label', opt.get('option_label', '')) for opt in next_options]
+            next_labels = [_get_option_label(opt) for opt in next_options]
 
             # 如果next_q只包含缺失的选项（说明是被拆分的部分）
             if set(next_labels) == set(missing_labels):
@@ -502,7 +530,7 @@ class RuleBasedFixer:
             # 如果next_q包含部分缺失选项
             found_labels = set(next_labels) & set(missing_labels)
             if found_labels:
-                found_options = [opt for opt in next_options if opt.get('label', opt.get('option_label', '')) in found_labels]
+                found_options = [opt for opt in next_options if _get_option_label(opt) in found_labels]
                 return {
                     'source_index': start_idx + offset,
                     'options': found_options,
@@ -621,6 +649,58 @@ class RuleBasedFixer:
         return merged
 
 
+class PDFStructureLLMClient:
+    """PDF 结构解析专用 OpenAI 兼容客户端。"""
+
+    def __init__(self, config: Dict[str, Any]):
+        self.enabled = bool(config.get("enabled"))
+        self.provider = str(config.get("provider") or "openai_compatible")
+        self.base_url = str(config.get("base_url") or "").strip()
+        self.api_key = str(config.get("api_key") or settings.OPENAI_API_KEY or "").strip()
+        self.model = str(config.get("model") or settings.OPENAI_MODEL).strip()
+        self.temperature = float(config.get("temperature", 0.1))
+        self.max_tokens = int(config.get("max_tokens", 2000))
+        self.timeout_seconds = int(config.get("timeout_seconds", 60))
+        self.system_prompt = str(
+            config.get("system_prompt")
+            or "你是一个PDF题目结构分析专家，负责判断跨页、跨列导致的题目拆分和选项缺失问题。"
+        ).strip()
+
+    @property
+    def is_available(self) -> bool:
+        return self.enabled and self.provider == "openai_compatible" and bool(self.api_key and self.model)
+
+    async def chat(self, prompt: str) -> str:
+        if not self.is_available:
+            raise RuntimeError("PDF structure LLM is not enabled or missing api_key/model")
+        return await asyncio.to_thread(self._chat_sync, prompt)
+
+    def _chat_sync(self, prompt: str) -> str:
+        import openai
+
+        previous_api_key = getattr(openai, "api_key", None)
+        previous_api_base = getattr(openai, "api_base", None)
+        openai.api_key = self.api_key
+        if self.base_url:
+            openai.api_base = self.base_url.rstrip("/")
+
+        try:
+            response = openai.ChatCompletion.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": self.system_prompt},
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
+                request_timeout=self.timeout_seconds,
+            )
+            return response.choices[0].message.content.strip()
+        finally:
+            openai.api_key = previous_api_key
+            openai.api_base = previous_api_base
+
+
 class LLMFallbackFixer:
     """LLM兜底修复器"""
 
@@ -645,18 +725,25 @@ class LLMFallbackFixer:
         critical_issues = validation_report.get('summary', {}).get('critical_issues', [])
 
         # 只处理规则未修复的
-        unfixed_issues = [
-            iss for iss in critical_issues
-            if not questions[iss['question_index']].get('fixed_by_rule')
-        ]
+        unfixed_issues = []
+        for issue in critical_issues:
+            idx = issue.get("question_index")
+            if not isinstance(idx, int) or idx < 0 or idx >= len(questions):
+                logger.warning("LLM fallback skipped invalid issue index", issue=issue)
+                continue
+            if not questions[idx].get('fixed_by_rule'):
+                unfixed_issues.append(issue)
 
         if not unfixed_issues:
             return questions
 
         logger.info(f"LLM fallback for {len(unfixed_issues)} unfixed issues")
 
-        for issue in unfixed_issues:
+        for issue in sorted(unfixed_issues, key=lambda item: item.get("question_index", 0), reverse=True):
             idx = issue['question_index']
+            if idx < 0 or idx >= len(questions):
+                logger.warning("LLM fallback skipped stale issue index", issue=issue)
+                continue
 
             # 构造上下文
             context_start = max(0, idx - 2)
@@ -676,8 +763,7 @@ class LLMFallbackFixer:
                 # 应用LLM建议
                 fix_action = self._parse_llm_fix_result(llm_response)
                 if fix_action and fix_action.get('should_merge'):
-                    questions = self._apply_llm_fix(questions, idx, fix_action)
-                    questions[idx]['fixed_by_llm'] = True
+                    questions = self._apply_llm_fix(questions, idx, context_start, fix_action)
                     logger.info(f"LLM fixed question {idx}")
             except Exception as e:
                 logger.error(f"LLM fix failed for question {idx}: {e}")
@@ -697,7 +783,7 @@ class LLMFallbackFixer:
             marker = " ← 【目标】" if i == target_idx else ""
             stem = q.get('stem') or q.get('content', '')
             options = q.get('options', [])
-            options_text = ', '.join([f"{o.get('label', '')}. {o.get('text', '')[:20]}" for o in options])
+            options_text = ', '.join([f"{_get_option_label(o)}. {o.get('text', '')[:20]}" for o in options])
 
             formatted.append(f"""
 题目{i+1}{marker}:
@@ -725,6 +811,8 @@ class LLMFallbackFixer:
 2. 如果不完整，它应该与前面哪个题目合并？还是与后面的合并？
 3. 如果需要合并，请给出合并后的完整题目结构（题干+选项）
 
+merge_indices 使用上方上下文题目列表的 0 基索引，例如第一道题是 0，第二道题是 1。
+
 【输出格式】JSON:
 {{
   "is_complete": true/false,
@@ -749,6 +837,7 @@ class LLMFallbackFixer:
                 result = json.loads(json_match.group(0))
                 return {
                     'should_merge': result.get('should_merge', False),
+                    'merge_with': result.get('merge_with', 'none'),
                     'merge_indices': result.get('merge_indices', []),
                     'merged_question': result.get('merged_question')
                 }
@@ -762,6 +851,7 @@ class LLMFallbackFixer:
         self,
         questions: List[Dict[str, Any]],
         idx: int,
+        context_start: int,
         fix_action: Dict[str, Any]
     ) -> List[Dict[str, Any]]:
         """应用LLM的修复建议"""
@@ -769,18 +859,57 @@ class LLMFallbackFixer:
         if not merged_question:
             return questions
 
-        # 替换目标题目
-        questions[idx].update(merged_question)
-        questions[idx]['fixed_by_llm'] = True
+        merge_indices = fix_action.get('merge_indices', [])
+        global_indices: List[int] = []
+        if isinstance(merge_indices, list):
+            for rel_idx in merge_indices:
+                if isinstance(rel_idx, int):
+                    global_idx = context_start + rel_idx
+                    if 0 <= global_idx < len(questions):
+                        global_indices.append(global_idx)
+
+        if not global_indices:
+            merge_with = fix_action.get('merge_with')
+            if merge_with == 'previous' and idx > 0:
+                global_indices = [idx - 1, idx]
+            elif merge_with == 'next' and idx + 1 < len(questions):
+                global_indices = [idx, idx + 1]
+            else:
+                global_indices = [idx]
+
+        if idx not in global_indices:
+            global_indices.append(idx)
+
+        global_indices = sorted(set(global_indices))
+        keep_idx = global_indices[0]
+        merged_blocks = []
+        merged_block_ids = []
+        page_numbers = []
+        for global_idx in global_indices:
+            q = questions[global_idx]
+            merged_blocks.extend(q.get('blocks') or [])
+            merged_block_ids.extend(q.get('block_ids') or [])
+            if q.get('page_no') is not None:
+                page_numbers.append(q['page_no'])
+
+        # 替换保留题目，保留原始归属与来源信息
+        questions[keep_idx].update(merged_question)
+        if 'stem' in merged_question and 'content' not in merged_question:
+            questions[keep_idx]['content'] = merged_question['stem']
+        if 'content' in merged_question and 'stem' not in merged_question:
+            questions[keep_idx]['stem'] = merged_question['content']
+        if merged_blocks:
+            questions[keep_idx]['blocks'] = merged_blocks
+        if merged_block_ids:
+            questions[keep_idx]['block_ids'] = merged_block_ids
+        if page_numbers:
+            questions[keep_idx]['page_no'] = min(page_numbers)
+            questions[keep_idx]['page_range'] = f"{min(page_numbers)}-{max(page_numbers)}"
+        questions[keep_idx]['fixed_by_llm'] = True
 
         # 如果需要删除其他题目（合并的情况）
-        merge_indices = fix_action.get('merge_indices', [])
-        if len(merge_indices) > 1:
-            # 保留第一个索引的题目，删除其他
-            indices_to_remove = sorted(merge_indices[1:], reverse=True)
-            for remove_idx in indices_to_remove:
-                if 0 <= remove_idx < len(questions):
-                    del questions[remove_idx]
+        for remove_idx in sorted([i for i in global_indices if i != keep_idx], reverse=True):
+            del questions[remove_idx]
 
         return questions
 
@@ -873,6 +1002,7 @@ class EntityExtractionService:
         document_id: str,
         extract_knowledge: bool = True,
         extract_questions: bool = True,
+        fallback_subject_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         从文档中抽取实体
@@ -896,8 +1026,8 @@ class EntityExtractionService:
         if not document:
             raise ValueError(f"文档不存在: {document_id}")
 
-        # document.subject_id 仅作为 fallback
-        fallback_subject_id = document.subject_id
+        # document.subject_id 仅作为 fallback；前端可在试卷类文档中显式传入学科。
+        fallback_subject_id = fallback_subject_id or document.subject_id
 
         # 2. 获取 blocks
         blocks_result = await self.db.execute(
@@ -908,7 +1038,12 @@ class EntityExtractionService:
         blocks = blocks_result.scalars().all()
 
         if not blocks:
-            return {"knowledge_count": 0, "question_count": 0, "message": "文档没有 blocks"}
+            return {
+                "knowledge_count": 0,
+                "question_count": 0,
+                "question_diagnostic": None,
+                "message": "文档没有 blocks",
+            }
 
         # 3. 获取 section 映射，用于确定章节和学科归属
         # page -> {chapter_id, subject_id}
@@ -916,6 +1051,7 @@ class EntityExtractionService:
 
         knowledge_count = 0
         question_count = 0
+        question_diagnostic: Optional[Dict[str, Any]] = None
 
         # 4. 抽取知识点
         if extract_knowledge:
@@ -927,9 +1063,11 @@ class EntityExtractionService:
         # 5. 抽取题目
         if extract_questions:
             await self._cleanup_existing_entities(document_id, "question")
-            question_count = await self._extract_questions(
+            question_result = await self._extract_questions(
                 document_id, fallback_subject_id, blocks, section_mappings
             )
+            question_count = question_result["saved_count"]
+            question_diagnostic = question_result["diagnostic"]
 
         await self.db.commit()
 
@@ -944,6 +1082,7 @@ class EntityExtractionService:
             "document_id": document_id,
             "knowledge_count": knowledge_count,
             "question_count": question_count,
+            "question_diagnostic": question_diagnostic,
         }
 
     async def _get_section_mappings(self, document_id: str) -> Dict[int, Dict[str, Optional[str]]]:
@@ -981,6 +1120,25 @@ class EntityExtractionService:
                     page_chapter_map[page] = info
 
         return page_chapter_map
+
+    def _resolve_mapping_for_page(
+        self,
+        page_no: Optional[int],
+        section_mappings: Dict[int, Dict[str, Optional[str]]],
+    ) -> Optional[Dict[str, Optional[str]]]:
+        """按页码获取章节映射，缺精确页时回退到最近的前序映射，再回退到最近后序映射。"""
+        if page_no is None or not section_mappings:
+            return None
+        if page_no in section_mappings:
+            return section_mappings[page_no]
+
+        previous_pages = [page for page in section_mappings.keys() if page <= page_no]
+        if previous_pages:
+            return section_mappings[max(previous_pages)]
+        next_pages = [page for page in section_mappings.keys() if page > page_no]
+        if next_pages:
+            return section_mappings[min(next_pages)]
+        return None
 
     async def _cleanup_existing_entities(self, document_id: str, entity_type: str) -> None:
         """清理同一文档已抽取的实体，避免重复入库。"""
@@ -1064,7 +1222,7 @@ class EntityExtractionService:
     ) -> bool:
         """保存单个知识点"""
         # 从章节映射推断学科和章节（同一文档不同块可属于不同学科）
-        mapping_info = section_mappings.get(title_block.page_no)
+        mapping_info = self._resolve_mapping_for_page(title_block.page_no, section_mappings)
         primary_chapter_id = mapping_info["chapter_id"] if mapping_info else None
         subject_id = mapping_info["subject_id"] if mapping_info else fallback_subject_id
         legacy_chapter_id = mapping_info["legacy_chapter_id"] if mapping_info else None
@@ -1138,7 +1296,7 @@ class EntityExtractionService:
         fallback_subject_id: str,
         blocks: List[DocumentBlock],
         section_mappings: Dict[int, Dict[str, Optional[str]]],
-    ) -> int:
+    ) -> Dict[str, Any]:
         """
         抽取题目（带校验和修复）
 
@@ -1153,6 +1311,7 @@ class EntityExtractionService:
         """
         # Step 1: 清洗blocks中的标点错误
         blocks = clean_blocks_punctuation(blocks)
+        blocks = self._expand_blocks_with_embedded_question_starts(blocks)
         logger.info(f"清洗标点完成，处理 {len(blocks)} 个blocks")
 
         # Step 2: 初步提取题目（转换为字典格式，不直接入库）
@@ -1162,7 +1321,14 @@ class EntityExtractionService:
         logger.info(f"初步提取: {len(raw_questions)} 道题目")
 
         if not raw_questions:
-            return 0
+            diagnostic = self._build_question_extraction_diagnostic(
+                raw_questions=[],
+                final_questions=[],
+                validation_report={},
+                final_report={},
+                saved_results=[],
+            )
+            return {"saved_count": 0, "diagnostic": diagnostic}
 
         # Step 3: 综合校验
         validation_report = comprehensive_validation(raw_questions)
@@ -1183,10 +1349,19 @@ class EntityExtractionService:
         # Step 5: 重新校验
         validation_report_v2 = comprehensive_validation(questions)
 
-        # Step 6: LLM兜底（可选 - 目前暂不启用，因为需要LLM client配置）
-        # if validation_report_v2['summary']['critical_issues']:
-        #     llm_fixer = LLMFallbackFixer(llm_client)
-        #     questions = await llm_fixer.fix_remaining_issues(questions, validation_report_v2)
+        # Step 6: LLM兜底（可选，由配置中心的 pdf_structure_llm 独立控制）
+        if validation_report_v2['summary']['critical_issues']:
+            llm_client = await self._get_pdf_structure_llm_client()
+            if llm_client and llm_client.is_available:
+                llm_fixer = LLMFallbackFixer(llm_client)
+                questions = await llm_fixer.fix_remaining_issues(questions, validation_report_v2)
+            elif llm_client and llm_client.enabled:
+                logger.warning(
+                    "PDF结构解析LLM已启用但配置不完整，跳过LLM兜底",
+                    provider=llm_client.provider,
+                    model=llm_client.model,
+                    has_api_key=bool(llm_client.api_key),
+                )
 
         # Step 7: 最终验证
         final_report = comprehensive_validation(questions)
@@ -1202,13 +1377,41 @@ class EntityExtractionService:
         await self._save_diagnostic_report(document_id, diagnostic_report)
 
         # Step 9: 保存题目到数据库
-        question_count = 0
+        saved_results = []
         for question_dict in questions:
-            saved = await self._save_question_from_dict(question_dict)
-            if saved:
-                question_count += 1
+            saved, reason = await self._save_question_from_dict(question_dict)
+            saved_results.append({
+                "question_id": question_dict.get("id"),
+                "question_no": _extract_question_number_simple(question_dict),
+                "page_no": question_dict.get("page_no"),
+                "saved": saved,
+                "reason": reason,
+                "subject_id": question_dict.get("subject_id"),
+                "chapter_id": question_dict.get("chapter_id"),
+                "primary_chapter_id": question_dict.get("primary_chapter_id"),
+                "text_excerpt": self._question_text_excerpt(question_dict),
+            })
 
-        return question_count
+        question_count = sum(1 for item in saved_results if item["saved"])
+        diagnostic = self._build_question_extraction_diagnostic(
+            raw_questions=raw_questions,
+            final_questions=questions,
+            validation_report=validation_report,
+            final_report=final_report,
+            saved_results=saved_results,
+        )
+
+        return {"saved_count": question_count, "diagnostic": diagnostic}
+
+    async def _get_pdf_structure_llm_client(self) -> Optional[PDFStructureLLMClient]:
+        """读取 PDF 结构解析专用 LLM 配置。"""
+        try:
+            runtime_settings = await SystemSettingsService(self.db).load()
+            llm_config = runtime_settings.get("pdf_structure_llm", {})
+            return PDFStructureLLMClient(llm_config if isinstance(llm_config, dict) else {})
+        except Exception as e:
+            logger.warning("读取PDF结构解析LLM配置失败，跳过LLM兜底", error=str(e))
+            return None
 
     async def _extract_questions_to_dict(
         self,
@@ -1222,26 +1425,29 @@ class EntityExtractionService:
         用于后续的校验和修复
         """
         questions = []
-        question_markers = ['第', '题', '（', '(', 'A.', 'B.', 'C.', 'D.', '1.', '2.', '3.']
 
         current_question_blocks = []
+        current_question_start_kind: Optional[str] = None
         in_question = False
 
         for block in blocks:
             text = (block.content_text or "").strip()
 
             # 检测题目开始
-            is_question_start = False
-            if block.block_type in ('paragraph', 'heading'):
-                for marker in question_markers:
-                    if text.startswith(marker):
-                        is_question_start = True
-                        break
+            question_start_kind = self._question_start_kind(block)
+            is_question_start = question_start_kind is not None
+            if (
+                in_question
+                and question_start_kind == "paren"
+                and current_question_start_kind != "paren"
+            ):
+                # 综合题的（1）（2）（3）通常是当前大题的小问，不能把大题拆散。
+                is_question_start = False
 
             if is_question_start:
                 # 保存前一个题目
                 if in_question and current_question_blocks:
-                    q_dict = self._blocks_to_question_dict(
+                    q_dict = await self._blocks_to_question_dict(
                         document_id, fallback_subject_id, current_question_blocks, section_mappings
                     )
                     if q_dict:
@@ -1249,23 +1455,26 @@ class EntityExtractionService:
                     current_question_blocks = []
 
                 in_question = True
+                current_question_start_kind = question_start_kind
                 current_question_blocks.append(block)
             elif in_question:
-                if block.block_type in ('title', 'heading'):
+                is_option_continuation = bool(OPTION_BLOCK_RE.match(text))
+                if block.block_type in ('title', 'heading') and not is_option_continuation:
                     if current_question_blocks:
-                        q_dict = self._blocks_to_question_dict(
+                        q_dict = await self._blocks_to_question_dict(
                             document_id, fallback_subject_id, current_question_blocks, section_mappings
                         )
                         if q_dict:
                             questions.append(q_dict)
                         current_question_blocks = []
                     in_question = False
+                    current_question_start_kind = None
                 else:
                     current_question_blocks.append(block)
 
         # 保存最后一个题目
         if in_question and current_question_blocks:
-            q_dict = self._blocks_to_question_dict(
+            q_dict = await self._blocks_to_question_dict(
                 document_id, fallback_subject_id, current_question_blocks, section_mappings
             )
             if q_dict:
@@ -1273,7 +1482,118 @@ class EntityExtractionService:
 
         return questions
 
-    def _blocks_to_question_dict(
+    def _expand_blocks_with_embedded_question_starts(self, blocks: List[DocumentBlock]) -> List[DocumentBlock]:
+        """拆分同一文本块内粘连的多道题，常见于页级解析把 12 和 13 合在一个 block。"""
+        expanded: List[DocumentBlock] = []
+        for block in blocks:
+            expanded.extend(self._split_block_by_embedded_question_starts(block))
+        return expanded
+
+    def _split_block_by_embedded_question_starts(self, block: DocumentBlock) -> List[DocumentBlock]:
+        text = block.content_md or block.content_text or ""
+        if not text.strip() or block.block_type not in ("paragraph", "heading", "list"):
+            return [block]
+
+        first_number_match = QUESTION_NUMERIC_RE.match(text.strip())
+        if not first_number_match:
+            return [block]
+        expected_number = int(first_number_match.group(1)) + 1
+
+        split_positions = []
+        for match in EMBEDDED_QUESTION_NUMERIC_RE.finditer(text):
+            if match.start() == 0:
+                continue
+            if self._is_embedded_question_start(text, match, expected_number):
+                split_positions.append(match.start())
+                expected_number += 1
+
+        if not split_positions:
+            return [block]
+
+        boundaries = [0] + split_positions + [len(text)]
+        parts = []
+        for index, (start, end) in enumerate(zip(boundaries, boundaries[1:])):
+            part_text = text[start:end].strip()
+            if not part_text:
+                continue
+            parts.append(SimpleNamespace(
+                id=block.id,
+                document_id=block.document_id,
+                page_id=getattr(block, "page_id", None),
+                page_no=block.page_no,
+                block_type=block.block_type,
+                order_no=(block.order_no or 0) * 100 + index,
+                bbox=getattr(block, "bbox", None),
+                content_text=part_text,
+                content_md=part_text,
+                content_json=getattr(block, "content_json", None),
+                latex=getattr(block, "latex", None),
+                html_table=getattr(block, "html_table", None),
+                asset_id=getattr(block, "asset_id", None),
+                confidence=getattr(block, "confidence", None),
+                review_status=getattr(block, "review_status", None),
+            ))
+
+        return parts or [block]
+
+    def _is_embedded_question_start(self, text: str, match: re.Match, expected_number: int) -> bool:
+        try:
+            number = int(match.group(1))
+        except (TypeError, ValueError):
+            return False
+        if number != expected_number:
+            return False
+
+        prefix = text[:match.start()].strip()
+        suffix = text[match.start(): match.start() + 180].strip()
+        if len(prefix) < 30 or len(suffix) < 20:
+            return False
+        if not QUESTION_CUE_RE.search(suffix):
+            return False
+
+        previous_number_match = QUESTION_NUMERIC_RE.match(prefix)
+        if previous_number_match:
+            previous_number = int(previous_number_match.group(1))
+            if number <= previous_number:
+                return False
+
+        return True
+
+    def _is_question_start_block(self, block: DocumentBlock, in_question: bool = False) -> bool:
+        """判断 block 是否是题目起点，避免把 A/B/C/D 选项块误判为新题。"""
+        return self._question_start_kind(block) is not None
+
+    def _question_start_kind(self, block: DocumentBlock) -> Optional[str]:
+        """返回题目起点类型；None 表示不是题目起点。"""
+        text = (block.content_text or block.content_md or "").strip()
+        if not text or block.block_type not in ('paragraph', 'heading', 'list'):
+            return None
+
+        if OPTION_BLOCK_RE.match(text):
+            return None
+
+        if QUESTION_TITLE_RE.match(text) or QUESTION_EXAMPLE_RE.match(text):
+            return "title"
+
+        if QUESTION_PAREN_RE.match(text):
+            return "paren" if bool(QUESTION_CUE_RE.search(text)) or len(text) > 20 else None
+
+        numeric_match = QUESTION_NUMERIC_RE.match(text)
+        if numeric_match:
+            number = int(numeric_match.group(1))
+            if number > 200:
+                return None
+            if (
+                bool(QUESTION_CUE_RE.search(text))
+                or len(text) > 20
+                or block.block_type == 'heading'
+                or bool(OPTION_MARKER_RE.search(text))
+            ):
+                return "numeric"
+
+        return None
+
+    async def _blocks_to_question_dict(
         self,
         document_id: str,
         fallback_subject_id: str,
@@ -1285,11 +1605,17 @@ class EntityExtractionService:
             return None
 
         first_block = blocks[0]
-        mapping_info = section_mappings.get(first_block.page_no)
+        mapping_info = self._resolve_mapping_for_page(first_block.page_no, section_mappings)
 
         primary_chapter_id = mapping_info["chapter_id"] if mapping_info else None
         subject_id = mapping_info["subject_id"] if mapping_info else fallback_subject_id
         legacy_chapter_id = mapping_info["legacy_chapter_id"] if mapping_info else None
+        if not legacy_chapter_id:
+            legacy_chapter_id = await resolve_legacy_chapter_id(
+                self.db,
+                canonical_chapter_id=primary_chapter_id,
+                subject_id=subject_id,
+            )
 
         # 组合内容
         content_parts = []
@@ -1302,19 +1628,16 @@ class EntityExtractionService:
         if not content:
             return None
 
+        stem, options = self._split_question_stem_options(content)
+
         # 判断题型
         question_type = "short_answer"
-        if any(kw in content for kw in ['A.', 'B.', 'C.', 'D.', 'A、', 'B、', 'C、', 'D、']):
+        if options:
             question_type = "choice"
         elif '判断' in content[:50]:
             question_type = "judge"
         elif '填空' in content[:50]:
             question_type = "fill"
-
-        # 提取选项（简单实现）
-        options = []
-        if question_type == "choice":
-            options = self._extract_options_from_content(content)
 
         return {
             'id': generate_id(),
@@ -1324,8 +1647,8 @@ class EntityExtractionService:
             'primary_chapter_id': primary_chapter_id,
             'question_type': question_type,
             'type': question_type,
-            'content': content,
-            'stem': content,  # 简化处理，后续可优化
+            'content': stem if options else content,
+            'stem': stem if options else content,
             'options': options,
             'page_no': first_block.page_no,
             'block_ids': [b.id for b in blocks],
@@ -1333,67 +1656,422 @@ class EntityExtractionService:
             'raw_text': content,
         }
 
+    def _split_question_stem_options(self, content: str) -> tuple[str, List[Dict[str, str]]]:
+        """从题目全文中拆出题干和选项，选项文本不保留 A./A： 等标记。"""
+        if not content:
+            return "", []
+
+        matches = list(OPTION_MARKER_RE.finditer(content))
+        if not matches:
+            return content.strip(), []
+
+        option_sequence = self._find_best_option_sequence(content, matches)
+        if not option_sequence:
+            return content.strip(), []
+
+        options: List[Dict[str, str]] = []
+        seen_labels = set()
+        first_option_start = option_sequence[0].start(1)
+
+        for idx, match in enumerate(option_sequence):
+            label = match.group(1).upper()
+            if label in seen_labels:
+                continue
+
+            text_start = match.end()
+            text_end = len(content)
+            if idx + 1 < len(option_sequence):
+                text_end = option_sequence[idx + 1].start(1)
+
+            option_text = content[text_start:text_end].strip()
+            option_text = self._strip_leading_option_marker(option_text)
+            if not option_text:
+                continue
+
+            options.append({
+                "key": label,
+                "label": label,
+                "option_label": label,
+                "text": option_text,
+            })
+            seen_labels.add(label)
+
+        if len(options) < 2:
+            return content.strip(), []
+
+        stem = content[:first_option_start].strip() if first_option_start is not None else content.strip()
+        return stem or content.strip(), options
+
+    def _find_best_option_sequence(
+        self,
+        content: str,
+        matches: List[re.Match],
+    ) -> List[re.Match]:
+        """选出可信的连续选项序列，避免把题干中的 A/B/C/D 普通字母误判为选项。"""
+        best: List[re.Match] = []
+        best_score = -10_000
+
+        for start_idx, first_match in enumerate(matches):
+            first_label = first_match.group(1).upper()
+            if first_label not in {"A", "B"}:
+                continue
+            if not self._is_valid_option_marker_match(content, first_match):
+                continue
+            if not self._has_choice_stem_signal(content[:first_match.start(1)]):
+                continue
+
+            for sequence in self._candidate_option_sequences(content, matches, start_idx):
+                if len(sequence) < 2:
+                    continue
+                if not self._is_plausible_option_text(content[sequence[-1].end():], is_last=True):
+                    continue
+                score = self._score_option_sequence(content, sequence)
+                if score > best_score:
+                    best = sequence
+                    best_score = score
+
+        return best if len(best) >= 2 else []
+
+    def _candidate_option_sequences(
+        self,
+        content: str,
+        matches: List[re.Match],
+        start_idx: int,
+    ) -> List[List[re.Match]]:
+        """枚举从 A 开始的连续选项候选，处理选项文本里也出现 A/B/C/D 的情况。"""
+        results: List[List[re.Match]] = []
+        max_results = 256
+
+        def walk(sequence: List[re.Match], search_from: int, expected_ord: int) -> None:
+            if len(results) >= max_results:
+                return
+            results.append(sequence)
+            if len(sequence) >= 8 or expected_ord > ord("H"):
+                return
+
+            candidates_seen = 0
+            for next_idx in range(search_from, len(matches)):
+                next_match = matches[next_idx]
+                if ord(next_match.group(1).upper()) != expected_ord:
+                    continue
+                if not self._is_valid_option_marker_match(content, next_match):
+                    continue
+                if not self._is_plausible_option_text(
+                    content[sequence[-1].end():next_match.start(1)],
+                    is_last=False,
+                ):
+                    continue
+                walk(sequence + [next_match], next_idx + 1, expected_ord + 1)
+                candidates_seen += 1
+                if candidates_seen >= 8:
+                    break
+
+        first = matches[start_idx]
+        walk([first], start_idx + 1, ord(first.group(1).upper()) + 1)
+        return results
+
+    def _is_valid_option_marker_match(self, content: str, match: re.Match) -> bool:
+        """过滤明显不是选项标记的 A/B/C/D，例如 RISC 末尾 C 或 computer(A)。"""
+        label_start = match.start(1)
+        marker_text = content[label_start:match.end()]
+        has_explicit_punctuation = bool(re.search(r'[.．、:：。]|<sub>', marker_text))
+
+        previous_char = content[label_start - 1] if label_start > 0 else ""
+        if previous_char and previous_char.isascii() and previous_char.isalnum() and not has_explicit_punctuation:
+            return False
+
+        previous_nonspace = ""
+        for char in reversed(content[:label_start]):
+            if not char.isspace():
+                previous_nonspace = char
+                break
+        if previous_nonspace in "([{（【" and not has_explicit_punctuation:
+            return False
+
+        option_text_start = match.end()
+        while option_text_start < len(content) and content[option_text_start].isspace():
+            option_text_start += 1
+        if option_text_start < len(content) and content[option_text_start] in ")]}）】;；":
+            return False
+
+        return True
+
+    def _score_option_sequence(self, content: str, sequence: List[re.Match]) -> int:
+        """给候选选项序列打分；分数高表示更像真实 A/B/C/D 选项边界。"""
+        score = len(sequence) * 100
+        labels = [match.group(1).upper() for match in sequence]
+        if labels[:4] == ["A", "B", "C", "D"]:
+            score += 80
+
+        stem_tail = content[max(0, sequence[0].start(1) - 120):sequence[0].start(1)]
+        if CHOICE_BLANK_RE.search(stem_tail):
+            score += 30
+
+        option_texts = []
+        for idx, match in enumerate(sequence):
+            start = match.end()
+            end = sequence[idx + 1].start(1) if idx + 1 < len(sequence) else len(content)
+            option_texts.append(self._strip_leading_option_marker(content[start:end]))
+
+            marker_text = match.group(0)
+            if re.search(r'[.．、:：。]|<sub>', marker_text):
+                score += 4
+
+        for idx, option_text in enumerate(option_texts):
+            compact = re.sub(r'\s+', '', option_text)
+            if len(compact) < 2:
+                score -= 80
+            if len(compact) > 120 and idx + 1 < len(option_texts):
+                score -= min(60, (len(compact) - 120) // 3)
+            if re.match(r'^[的和与及、，。；:：]', option_text):
+                score -= 140
+            if re.match(r'^[A-H]\s+[A-H]\s+', option_text):
+                score += 10
+
+        return score
+
+    def _has_choice_stem_signal(self, stem: str) -> bool:
+        """题干必须像选择题，才能启用宽松的 A/B/C/D 选项识别。"""
+        stem = stem or ""
+        tail = stem[-120:]
+        if "下列问题" in tail or "以下问题" in tail:
+            return False
+        if CHOICE_BLANK_RE.search(stem):
+            return True
+        if any(keyword in tail for keyword in ("下列", "以下", "正确", "错误", "不是", "属于", "应采用", "哪种", "哪个", "哪些")):
+            return True
+        return False
+
+    def _has_choice_blank_near_option_start(self, stem: str) -> bool:
+        """只把 A 选项前最近的括号空位当作选择题信号，避免说明性括号误触发。"""
+        if not stem:
+            return False
+        tail = stem[-80:]
+        return bool(CHOICE_BLANK_RE.search(tail))
+
+    def _is_plausible_option_text(self, text: str, is_last: bool) -> bool:
+        """判断两个选项标记之间的文本是否像一个选项内容。"""
+        cleaned = self._strip_leading_option_marker(text)
+        compact = re.sub(r'\s+', '', cleaned)
+        if not compact:
+            return False
+        if len(compact) > 180 and not is_last:
+            return False
+        return True
+
+    def _strip_leading_option_marker(self, text: str, expected_label: Optional[str] = None) -> str:
+        """清理选项文本中重复出现的选项标记。"""
+        cleaned = (text or "").strip()
+        if expected_label:
+            cleaned = re.sub(
+                rf'^\s*{re.escape(expected_label.upper())}\s*(?:[.．、:：。]|<sub>\s*[.．、:：。]\s*</sub>)\s*',
+                '',
+                cleaned,
+            ).strip()
+        malformed_sub = re.match(r'^\s*<sub>\s*[.．、:：。]\s*', cleaned)
+        if malformed_sub:
+            cleaned = cleaned[malformed_sub.end():]
+            cleaned = re.sub(r'^([^<]{0,60})</sub>', r'\1', cleaned, count=1).strip()
+        return re.sub(r'^\s*[.．、:：。]\s*', '', cleaned).strip()
+
     def _extract_options_from_content(self, content: str) -> List[Dict[str, str]]:
         """从内容中提取选项"""
-        options = []
-        # 匹配 A. B. C. D. 或 A、B、C、D、格式
-        pattern = r'([A-E])[.、]\s*([^\n]+?)(?=\s*[A-E][.、]|\s*$)'
-        matches = re.findall(pattern, content, re.MULTILINE | re.DOTALL)
-
-        for label, text in matches:
-            options.append({
-                'label': label,
-                'text': text.strip(),
-                'option_label': label
-            })
-
+        _stem, options = self._split_question_stem_options(content)
         return options
 
-    async def _save_question_from_dict(self, question_dict: Dict[str, Any]) -> bool:
+    def _normalize_options(self, options: Optional[List[Dict[str, Any]]]) -> List[Dict[str, str]]:
+        """统一选择题选项结构，兼容前端 key/text 和校验器 label/text。"""
+        normalized: List[Dict[str, str]] = []
+        seen_labels = set()
+        for option in options or []:
+            label = _get_option_label(option)
+            text = str(option.get("text") or option.get("content") or "").strip()
+            text = self._strip_leading_option_marker(text, expected_label=label)
+            if not label or not text or label in seen_labels:
+                continue
+            normalized.append({
+                "key": label,
+                "label": label,
+                "option_label": label,
+                "text": text,
+            })
+            seen_labels.add(label)
+        return normalized
+
+    async def _save_question_from_dict(self, question_dict: Dict[str, Any]) -> Tuple[bool, str]:
         """从字典保存题目到数据库"""
-        try:
-            # 创建题目记录
-            question = Question(
-                id=question_dict['id'],
-                subject_id=question_dict['subject_id'],
-                chapter_id=question_dict['chapter_id'],
-                primary_chapter_id=question_dict.get('primary_chapter_id'),
-                source_document_id=question_dict['document_id'],
-                type=question_dict['question_type'],
-                content=question_dict['content'],
-                answer="",
-                review_status="pending",
+        subject_id = question_dict.get('subject_id')
+        legacy_chapter_id = question_dict.get('chapter_id')
+        primary_chapter_id = question_dict.get('primary_chapter_id')
+
+        if not legacy_chapter_id:
+            legacy_chapter_id = await resolve_legacy_chapter_id(
+                self.db,
+                canonical_chapter_id=primary_chapter_id,
+                subject_id=subject_id,
             )
-            self.db.add(question)
+            question_dict['chapter_id'] = legacy_chapter_id
 
-            # 创建章节关联
-            if question_dict.get('primary_chapter_id'):
-                link = QuestionChapterLink(
-                    question_id=question_dict['id'],
-                    canonical_chapter_id=question_dict['primary_chapter_id'],
-                    is_primary=True,
+        if not subject_id or not legacy_chapter_id:
+            logger.warning(
+                "题目缺少有效章节归属，跳过入库",
+                document_id=question_dict.get('document_id'),
+                question_id=question_dict.get('id'),
+                page_no=question_dict.get('page_no'),
+                subject_id=subject_id,
+                chapter_id=legacy_chapter_id,
+            )
+            if not subject_id and not legacy_chapter_id:
+                return False, "missing_subject_and_chapter"
+            if not subject_id:
+                return False, "missing_subject"
+            return False, "missing_legacy_chapter"
+
+        try:
+            async with self.db.begin_nested():
+                options = self._normalize_options(question_dict.get('options'))
+                question_content = (question_dict.get('stem') or question_dict.get('content') or "").strip()
+
+                # 创建题目记录
+                question = Question(
+                    id=question_dict['id'],
+                    subject_id=subject_id,
+                    chapter_id=legacy_chapter_id,
+                    primary_chapter_id=primary_chapter_id,
+                    source_document_id=question_dict['document_id'],
+                    type=question_dict['question_type'],
+                    content=question_content,
+                    options=options or None,
+                    answer="",
+                    question_no=str(_extract_question_number_simple(question_dict) or "") or None,
+                    review_status="pending",
                 )
-                self.db.add(link)
+                self.db.add(question)
 
-            # 创建来源引用
-            blocks = question_dict.get('blocks', [])
-            if blocks:
-                source_link = EntitySourceLink(
-                    entity_type="question",
-                    entity_id=question_dict['id'],
-                    document_id=question_dict['document_id'],
-                    page_start=blocks[0].page_no,
-                    page_end=blocks[-1].page_no,
-                    block_ids=question_dict.get('block_ids', []),
-                    excerpt_text=question_dict['content'][:500],
-                )
-                self.db.add(source_link)
+                # 创建章节关联
+                if primary_chapter_id:
+                    link = QuestionChapterLink(
+                        question_id=question_dict['id'],
+                        canonical_chapter_id=primary_chapter_id,
+                        is_primary=True,
+                    )
+                    self.db.add(link)
 
-            await self.db.flush()
-            return True
+                # 创建来源引用
+                blocks = question_dict.get('blocks', [])
+                if blocks:
+                    source_link = EntitySourceLink(
+                        entity_type="question",
+                        entity_id=question_dict['id'],
+                        document_id=question_dict['document_id'],
+                        page_start=blocks[0].page_no,
+                        page_end=blocks[-1].page_no,
+                        block_ids=question_dict.get('block_ids', []),
+                        excerpt_text=question_dict['content'][:500],
+                    )
+                    self.db.add(source_link)
+
+                await self.db.flush()
+            return True, "saved"
         except Exception as e:
             logger.error(f"保存题目失败: {e}")
-            return False
+            return False, "save_failed"
+
+    def _build_question_extraction_diagnostic(
+        self,
+        raw_questions: List[Dict[str, Any]],
+        final_questions: List[Dict[str, Any]],
+        validation_report: Dict[str, Any],
+        final_report: Dict[str, Any],
+        saved_results: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """构建可直接返回给前端的题目抽取诊断摘要。"""
+        save_reasons = Counter(item.get("reason") or "unknown" for item in saved_results)
+        raw_by_page = Counter(q.get("page_no") for q in raw_questions if q.get("page_no") is not None)
+        final_by_page = Counter(q.get("page_no") for q in final_questions if q.get("page_no") is not None)
+        saved_by_page = Counter(
+            item.get("page_no")
+            for item in saved_results
+            if item.get("saved") and item.get("page_no") is not None
+        )
+        skipped_by_page = Counter(
+            item.get("page_no")
+            for item in saved_results
+            if not item.get("saved") and item.get("page_no") is not None
+        )
+        page_numbers = sorted(set(raw_by_page) | set(final_by_page) | set(saved_by_page) | set(skipped_by_page))
+
+        return {
+            "raw_question_count": len(raw_questions),
+            "final_question_count": len(final_questions),
+            "saved_question_count": save_reasons.get("saved", 0),
+            "skipped_question_count": len(saved_results) - save_reasons.get("saved", 0),
+            "save_reasons": dict(save_reasons),
+            "by_page": [
+                {
+                    "page_no": page_no,
+                    "raw_question_count": raw_by_page.get(page_no, 0),
+                    "final_question_count": final_by_page.get(page_no, 0),
+                    "saved_question_count": saved_by_page.get(page_no, 0),
+                    "skipped_question_count": skipped_by_page.get(page_no, 0),
+                }
+                for page_no in page_numbers
+            ],
+            "numbering": self._question_numbering_summary(final_questions, final_report),
+            "validation": {
+                "initial_issue_count": validation_report.get("summary", {}).get("total_issues", 0),
+                "final_issue_count": final_report.get("summary", {}).get("total_issues", 0),
+                "initial_critical_issue_count": len(
+                    validation_report.get("summary", {}).get("critical_issues", [])
+                ),
+                "final_critical_issue_count": len(
+                    final_report.get("summary", {}).get("critical_issues", [])
+                ),
+            },
+            "unsaved_samples": [
+                item for item in saved_results
+                if not item.get("saved")
+            ][:20],
+        }
+
+    def _question_numbering_summary(
+        self,
+        questions: List[Dict[str, Any]],
+        final_report: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        numbers = [
+            number for number in (_extract_question_number_simple(question) for question in questions)
+            if number is not None
+        ]
+        duplicate_numbers = [
+            number for number, count in Counter(numbers).items()
+            if count > 1
+        ]
+        max_number = max(numbers, default=0)
+        number_set = set(numbers)
+        missing_numbers = (
+            [number for number in range(min(numbers), max_number + 1) if number not in number_set]
+            if numbers
+            else []
+        )
+
+        continuity = final_report.get("number_continuity", {})
+        return {
+            "numbered_question_count": len(numbers),
+            "unnumbered_question_count": len(questions) - len(numbers),
+            "min_number": min(numbers) if numbers else None,
+            "max_number": max_number or None,
+            "missing_numbers": missing_numbers,
+            "duplicate_numbers": sorted(duplicate_numbers),
+            "segment_count": len(continuity.get("segments", [])),
+        }
+
+    def _question_text_excerpt(self, question_dict: Dict[str, Any], limit: int = 120) -> str:
+        text = " ".join(
+            (question_dict.get("stem") or question_dict.get("content") or question_dict.get("raw_text") or "")
+            .split()
+        )
+        return text if len(text) <= limit else f"{text[:limit]}..."
 
     def _extract_fix_history(self, questions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """提取修复历史"""
@@ -1516,7 +2194,7 @@ class EntityExtractionService:
             return False
 
         first_block = blocks[0]
-        mapping_info = section_mappings.get(first_block.page_no)
+        mapping_info = self._resolve_mapping_for_page(first_block.page_no, section_mappings)
         primary_chapter_id = mapping_info["chapter_id"] if mapping_info else None
         subject_id = mapping_info["subject_id"] if mapping_info else fallback_subject_id
         legacy_chapter_id = mapping_info["legacy_chapter_id"] if mapping_info else None

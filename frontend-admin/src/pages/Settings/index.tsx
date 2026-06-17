@@ -1,8 +1,14 @@
 import { useEffect, useState } from 'react'
 import { Alert, Form, Input, InputNumber, Select, Switch, Button, Card, message, Tabs, Tag, Space, Table, Modal } from 'antd'
-import { SaveOutlined } from '@ant-design/icons'
+import { SaveOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getSettings, updateSettings, getPdfParserHistory } from '@/api'
+import {
+  getSettings,
+  updateSettings,
+  getPdfParserHistory,
+  getPdfStructureLlmStatus,
+  testPdfStructureLlm,
+} from '@/api'
 import type { SystemSettings } from '@/api/settings'
 
 const { TextArea } = Input
@@ -34,6 +40,26 @@ const Settings = () => {
   const { data: historyData, isLoading: historyLoading } = useQuery({
     queryKey: ['pdf-parser-history'],
     queryFn: () => getPdfParserHistory(1, 20),
+  })
+
+  const { data: pdfStructureLlmStatusData, isLoading: pdfStructureLlmStatusLoading } = useQuery({
+    queryKey: ['pdf-structure-llm-status'],
+    queryFn: getPdfStructureLlmStatus,
+  })
+
+  const testPdfStructureLlmMutation = useMutation({
+    mutationFn: testPdfStructureLlm,
+    onSuccess: (res) => {
+      if (res.code === 200 && res.data?.success) {
+        message.success(`测试成功：${res.data.reply || '已连通'}`)
+        queryClient.invalidateQueries({ queryKey: ['pdf-structure-llm-status'] })
+      } else {
+        message.error(res.data?.error || res.message || '测试失败')
+      }
+    },
+    onError: () => {
+      message.error('测试失败')
+    },
   })
 
   const handleSubmit = (values: Partial<SystemSettings>) => {
@@ -78,6 +104,7 @@ const Settings = () => {
   const parserSettings = data?.data?.pdf_parser
   const activeRuntimeStatus = parserSettings?.active_runtime_status
   const availableParsers = parserSettings?.available_parsers || []
+  const pdfStructureLlmStatus = pdfStructureLlmStatusData?.data
 
   const initialValues = data?.data || {
     llm: {
@@ -85,6 +112,17 @@ const Settings = () => {
       temperature: 0.7,
       max_tokens: 2000,
       system_prompt: '',
+    },
+    pdf_structure_llm: {
+      enabled: false,
+      provider: 'openai_compatible',
+      base_url: '',
+      api_key: '',
+      model: 'gpt-4',
+      temperature: 0.1,
+      max_tokens: 2000,
+      timeout_seconds: 60,
+      system_prompt: '你是一个PDF题目结构分析专家，负责判断跨页、跨列导致的题目拆分和选项缺失问题。',
     },
     search: {
       default_page_size: 20,
@@ -194,6 +232,91 @@ const Settings = () => {
 
               <Form.Item name={['llm', 'system_prompt']} label="系统提示词">
                 <TextArea rows={4} placeholder="输入系统提示词" />
+              </Form.Item>
+            </Card>
+          </TabPane>
+
+          <TabPane tab="PDF结构LLM" key="pdf-structure-llm">
+            <Card>
+              <div
+                style={{
+                  display: 'flex',
+                  gap: 12,
+                  justifyContent: 'space-between',
+                  alignItems: 'flex-start',
+                  marginBottom: 16,
+                  flexWrap: 'wrap',
+                }}
+              >
+                <Alert
+                  type={pdfStructureLlmStatus?.is_available ? 'success' : 'info'}
+                  showIcon
+                  style={{ flex: 1, minWidth: 280 }}
+                  message="该配置只用于 PDF 文档结构解析"
+                  description={
+                    pdfStructureLlmStatusLoading
+                      ? '正在读取后端配置状态...'
+                      : pdfStructureLlmStatus?.is_available
+                        ? `当前可用：${pdfStructureLlmStatus.model}，API Key 来源：${pdfStructureLlmStatus.uses_env_api_key ? '环境变量' : '配置中心'}`
+                        : (pdfStructureLlmStatus?.issues?.join('；') || '题目抽取中的复杂跨页、跨列、选项缺失场景会使用这里的 LLM 兜底；聊天、检索问答等后续功能仍使用独立配置。')
+                  }
+                />
+                <Button
+                  icon={<ThunderboltOutlined />}
+                  loading={testPdfStructureLlmMutation.isLoading}
+                  onClick={() => {
+                    const current = form.getFieldValue('pdf_structure_llm') || {}
+                    testPdfStructureLlmMutation.mutate(current)
+                  }}
+                >
+                  测试当前配置
+                </Button>
+              </div>
+
+              <Form.Item name={['pdf_structure_llm', 'enabled']} label="启用LLM兜底" valuePropName="checked">
+                <Switch />
+              </Form.Item>
+
+              <Form.Item name={['pdf_structure_llm', 'provider']} label="服务类型">
+                <Select>
+                  <Option value="openai_compatible">OpenAI 兼容接口</Option>
+                </Select>
+              </Form.Item>
+
+              <Form.Item
+                name={['pdf_structure_llm', 'base_url']}
+                label="Base URL"
+                tooltip="OpenAI 官方接口可留空；兼容服务填写类似 https://api.example.com/v1"
+              >
+                <Input placeholder="https://api.openai.com/v1" />
+              </Form.Item>
+
+              <Form.Item
+                name={['pdf_structure_llm', 'api_key']}
+                label="API Key"
+                tooltip="留空时后端使用 OPENAI_API_KEY 环境变量"
+              >
+                <Input.Password placeholder="留空使用环境变量；已保存密钥会显示为保留占位符" autoComplete="new-password" />
+              </Form.Item>
+
+              <Form.Item name={['pdf_structure_llm', 'model']} label="模型">
+                <Input placeholder="gpt-4o-mini" />
+              </Form.Item>
+
+              <Form.Item name={['pdf_structure_llm', 'temperature']} label="温度参数">
+                <InputNumber min={0} max={2} step={0.1} style={{ width: '100%' }} />
+              </Form.Item>
+
+              <Form.Item name={['pdf_structure_llm', 'max_tokens']} label="最大Token数">
+                <InputNumber min={100} max={8000} step={100} style={{ width: '100%' }} />
+              </Form.Item>
+
+              <Form.Item name={['pdf_structure_llm', 'timeout_seconds']} label="请求超时（秒）">
+                <InputNumber min={5} max={300} style={{ width: '100%' }} />
+              </Form.Item>
+
+              <Form.Item name={['pdf_structure_llm', 'system_prompt']} label="系统提示词">
+                <TextArea rows={4} placeholder="输入 PDF 结构解析专用系统提示词" />
               </Form.Item>
             </Card>
           </TabPane>

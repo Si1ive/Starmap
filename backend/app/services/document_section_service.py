@@ -38,9 +38,28 @@ LEVEL_KEYWORDS = {
     3: ['点', '小节', 'subsection'],
 }
 
+QUESTION_CUE_RE = re.compile(
+    r'[?？]|下列|以下|关于|若|设|已知|正确|错误|不是|可以|能够|应|属于|采用|'
+    r'给出|求|计算|证明|说明|分析|为什么|多少|哪个|哪些|如果|判断'
+)
+OPTION_MARKER_RE = re.compile(r'(^|[\n\r\t 　])[A-H]\s*[.．、:：]\s*\S+')
+
 
 def generate_id() -> str:
     return uuid.uuid4().hex[:32]
+
+
+def _looks_like_question_or_option(text: str) -> bool:
+    """过滤被解析器误标成 heading/title 的题目和选项。"""
+    if OPTION_MARKER_RE.match(text):
+        return True
+    if re.match(r'^\s*第\s*[一二三四五六七八九十百千\d]+\s*题', text):
+        return True
+    if re.match(r'^\s*[（(]\s*\d{1,3}\s*[）)]\s*\S+', text):
+        return bool(QUESTION_CUE_RE.search(text)) or len(text) > 30
+    if re.match(r'^\s*\d{1,3}\s*[.、．]\s*\S+', text):
+        return bool(QUESTION_CUE_RE.search(text)) or len(text) > 40 or bool(OPTION_MARKER_RE.search(text))
+    return False
 
 
 def _detect_heading_level(text: str, block_type: str) -> Optional[int]:
@@ -53,9 +72,13 @@ def _detect_heading_level(text: str, block_type: str) -> Optional[int]:
     text = text.strip()
     if not text:
         return None
+    if _looks_like_question_or_option(text):
+        return None
 
     # 如果 block_type 已经是 title/heading，优先使用
     if block_type in ('title', 'heading'):
+        if len(text) > 120:
+            return None
         # 根据内容判断层级
         # 第X章 -> level 1
         if re.match(r'^第[一二三四五六七八九十百千\d]+章', text):
@@ -130,7 +153,7 @@ class DocumentSectionService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def extract_sections(self, document_id: str) -> Dict[str, Any]:
+    async def extract_sections(self, document_id: str, force: bool = False) -> Dict[str, Any]:
         """
         从文档的 blocks 中提取标题树
 
@@ -151,7 +174,7 @@ class DocumentSectionService:
         existing_sections_result = await self.db.execute(
             select(DocumentSection.id).where(DocumentSection.document_id == document_id).limit(1)
         )
-        if existing_sections_result.scalar_one_or_none():
+        if existing_sections_result.scalar_one_or_none() and not force:
             raise ValueError("该文档已生成原生标题树，无需重复提取")
 
         # 2. 获取所有 blocks，按页码和顺序排列

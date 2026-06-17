@@ -7,6 +7,9 @@
 import json
 import os
 import asyncio
+import uuid
+import hashlib
+import base64
 from pathlib import Path
 from typing import Optional, List, Any, Literal
 from datetime import datetime
@@ -15,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, W
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, Response, FileResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func, or_, update
+from sqlalchemy import select, func, or_, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger, get_request_id
@@ -30,6 +33,8 @@ from app.models.mysql_models import DownloadedFile, CorpusFile, ParseRun, Docume
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["后台管理"])
+
+SECRET_KEEP_MASK = "__KEEP_EXISTING__"
 
 
 # ========== 认证相关 ==========
@@ -62,6 +67,11 @@ class ApiResponse(BaseModel):
     message: str = "success"
     data: Optional[Any] = None
     request_id: str = Field(default_factory=get_request_id)
+
+
+class BatchIdsRequest(BaseModel):
+    """批量 ID 请求"""
+    ids: List[str] = Field(..., min_length=1, max_length=500, description="待处理 ID 列表")
 
 
 # 模拟管理员数据（开发调试用）
@@ -1352,6 +1362,9 @@ async def get_settings(db: Optional[AsyncSession] = Depends(get_optional_db)):
     from app.services.system_settings_service import SystemSettingsService
 
     runtime_settings = await SystemSettingsService(db).load()
+    pdf_structure_llm = dict(runtime_settings["pdf_structure_llm"])
+    if pdf_structure_llm.get("api_key"):
+        pdf_structure_llm["api_key"] = SECRET_KEEP_MASK
     active_parser = runtime_settings["pdf_parser"]["active_parser"]
     parser_runtime_config = runtime_settings["pdf_parser"]
     available_parsers = []
@@ -1369,6 +1382,7 @@ async def get_settings(db: Optional[AsyncSession] = Depends(get_optional_db)):
         message="success",
         data={
             "llm": runtime_settings["llm"],
+            "pdf_structure_llm": pdf_structure_llm,
             "search": runtime_settings["search"],
             "crawler": runtime_settings["crawler"],
             "system": runtime_settings["system"],
@@ -1440,6 +1454,95 @@ async def get_pdf_parser_history(
     )
 
 
+@router.get("/settings/pdf-structure-llm/status", response_model=ApiResponse)
+async def get_pdf_structure_llm_status(db: AsyncSession = Depends(get_db)):
+    """获取 PDF 结构解析 LLM 配置状态，不发起外部请求。"""
+    from app.services.entity_extraction_service import PDFStructureLLMClient
+    from app.services.system_settings_service import SystemSettingsService
+
+    runtime_settings = await SystemSettingsService(db).load()
+    llm_config = runtime_settings.get("pdf_structure_llm", {})
+    client = PDFStructureLLMClient(llm_config if isinstance(llm_config, dict) else {})
+
+    issues = []
+    if not client.enabled:
+        issues.append("未启用 PDF 结构解析 LLM")
+    if client.provider != "openai_compatible":
+        issues.append("当前仅支持 OpenAI 兼容接口")
+    if not client.model:
+        issues.append("未配置模型")
+    if not client.api_key:
+        issues.append("未配置 API Key，且 OPENAI_API_KEY 环境变量为空")
+
+    return ApiResponse(data={
+        "enabled": client.enabled,
+        "provider": client.provider,
+        "model": client.model,
+        "base_url": client.base_url,
+        "has_api_key": bool(client.api_key),
+        "uses_env_api_key": bool(client.api_key) and not bool((llm_config or {}).get("api_key")),
+        "is_available": client.is_available,
+        "issues": issues,
+    })
+
+
+@router.post("/settings/pdf-structure-llm/test", response_model=ApiResponse)
+async def test_pdf_structure_llm(
+    data: Optional[dict] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """按当前表单或已保存配置测试 PDF 结构解析 LLM。"""
+    from app.services.entity_extraction_service import PDFStructureLLMClient
+    from app.services.system_settings_service import SystemSettingsService
+
+    runtime_service = SystemSettingsService(db)
+    current_settings = await runtime_service.load()
+    current_config = current_settings.get("pdf_structure_llm", {})
+    payload = dict(data or {})
+    if payload.get("api_key") == SECRET_KEEP_MASK:
+        payload["api_key"] = current_config.get("api_key", "")
+    merged_config = dict(current_config if isinstance(current_config, dict) else {})
+    merged_config.update(payload)
+
+    client = PDFStructureLLMClient(merged_config)
+    if not client.is_available:
+        return ApiResponse(
+            code=400,
+            message="PDF结构LLM配置不可用",
+            data={
+                "success": False,
+                "enabled": client.enabled,
+                "provider": client.provider,
+                "model": client.model,
+                "has_api_key": bool(client.api_key),
+                "error": "请确认已启用、模型和 API Key 已配置，且服务类型为 OpenAI 兼容接口。",
+            },
+        )
+
+    try:
+        reply = await client.chat("请只回复：PDF_STRUCTURE_LLM_OK")
+    except Exception as e:
+        return ApiResponse(
+            code=502,
+            message="PDF结构LLM测试失败",
+            data={
+                "success": False,
+                "provider": client.provider,
+                "model": client.model,
+                "base_url": client.base_url,
+                "error": str(e)[:500],
+            },
+        )
+
+    return ApiResponse(data={
+        "success": True,
+        "provider": client.provider,
+        "model": client.model,
+        "base_url": client.base_url,
+        "reply": reply[:200],
+    })
+
+
 @router.put("/settings", response_model=ApiResponse)
 async def update_settings(
     data: dict,
@@ -1463,6 +1566,9 @@ async def update_settings(
     user_agent = request.headers.get("User-Agent")
     current_settings = await runtime_service.load()
     payload = dict(data or {})
+    pdf_structure_llm_section = payload.get("pdf_structure_llm")
+    if isinstance(pdf_structure_llm_section, dict) and pdf_structure_llm_section.get("api_key") == SECRET_KEEP_MASK:
+        pdf_structure_llm_section["api_key"] = current_settings.get("pdf_structure_llm", {}).get("api_key", "")
     parser_section = payload.pop("pdf_parser", None) if isinstance(payload.get("pdf_parser"), dict) else None
     saved_runtime = await runtime_service.save_partial(payload) if payload else current_settings
 
@@ -1498,7 +1604,13 @@ async def update_settings(
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-    return ApiResponse(code=200, message="保存成功", data=saved_runtime)
+    response_runtime = dict(saved_runtime)
+    response_pdf_structure_llm = dict(response_runtime.get("pdf_structure_llm", {}))
+    if response_pdf_structure_llm.get("api_key"):
+        response_pdf_structure_llm["api_key"] = SECRET_KEEP_MASK
+    response_runtime["pdf_structure_llm"] = response_pdf_structure_llm
+
+    return ApiResponse(code=200, message="保存成功", data=response_runtime)
 
 
 
@@ -1628,58 +1740,182 @@ class UpdateUserRequest(BaseModel):
 
 
 @router.get("/users", response_model=ApiResponse)
-async def get_users():
+async def get_users(db: AsyncSession = Depends(get_db)):
     """获取用户列表"""
+    from app.models.mysql_models import AdminUser
+
+    result = await db.execute(select(AdminUser).order_by(AdminUser.created_at.desc()))
+    users = result.scalars().all()
+
     return ApiResponse(
         code=200,
         message="success",
-        data={"users": MOCK_USERS}
+        data={"users": [_admin_user_to_dict(user) for user in users]}
     )
 
 
 @router.post("/users", response_model=ApiResponse)
-async def create_user(req: CreateUserRequest):
+async def create_user(
+    req: CreateUserRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
     """创建用户"""
-    # Mock: 简单返回成功
-    new_user = {
-        "id": str(len(MOCK_USERS) + 1),
-        "username": req.username,
-        "email": req.email,
-        "role": req.role,
-        "permissions": req.permissions,
-        "is_active": req.is_active,
-        "last_login_at": None,
-        "created_at": datetime.now().strftime("%Y-%m-%d"),
-    }
-    MOCK_USERS.append(new_user)
-    return ApiResponse(code=200, message="创建成功", data={"user": new_user})
+    from app.models.mysql_models import AdminUser
+
+    existing = await db.scalar(
+        select(AdminUser).where(
+            or_(AdminUser.username == req.username, AdminUser.email == req.email)
+        )
+    )
+    if existing:
+        raise HTTPException(status_code=400, detail="用户名或邮箱已存在")
+
+    user = AdminUser(
+        id=uuid.uuid4().hex[:32],
+        username=req.username,
+        email=req.email,
+        password_hash=_hash_admin_password(req.password),
+        role=req.role,
+        permissions=req.permissions,
+        is_active=req.is_active,
+    )
+    db.add(user)
+    await _add_admin_audit_log(
+        db,
+        request,
+        action="admin_user_create",
+        resource_id=user.id,
+        new_values=_admin_user_to_dict(user),
+    )
+    await db.commit()
+
+    return ApiResponse(code=200, message="创建成功", data={"user": _admin_user_to_dict(user)})
 
 
 @router.put("/users/{user_id}", response_model=ApiResponse)
-async def update_user(user_id: str, req: UpdateUserRequest):
+async def update_user(
+    user_id: str,
+    req: UpdateUserRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
     """更新用户"""
-    for user in MOCK_USERS:
-        if user["id"] == user_id:
-            if req.email is not None:
-                user["email"] = req.email
-            if req.role is not None:
-                user["role"] = req.role
-            if req.permissions is not None:
-                user["permissions"] = req.permissions
-            if req.is_active is not None:
-                user["is_active"] = req.is_active
-            return ApiResponse(code=200, message="更新成功", data={"user": user})
-    raise HTTPException(status_code=404, detail="用户不存在")
+    from app.models.mysql_models import AdminUser
+
+    user = await db.get(AdminUser, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+
+    old_values = _admin_user_to_dict(user)
+
+    if req.email is not None and req.email != user.email:
+        existing = await db.scalar(
+            select(AdminUser).where(AdminUser.email == req.email, AdminUser.id != user_id)
+        )
+        if existing:
+            raise HTTPException(status_code=400, detail="邮箱已存在")
+        user.email = req.email
+    if req.role is not None:
+        user.role = req.role
+    if req.permissions is not None:
+        user.permissions = req.permissions
+    if req.is_active is not None:
+        user.is_active = req.is_active
+
+    await _add_admin_audit_log(
+        db,
+        request,
+        action="admin_user_update",
+        resource_id=user.id,
+        old_values=old_values,
+        new_values=_admin_user_to_dict(user),
+    )
+    await db.commit()
+    await db.refresh(user)
+
+    return ApiResponse(code=200, message="更新成功", data={"user": _admin_user_to_dict(user)})
 
 
 @router.delete("/users/{user_id}", response_model=ApiResponse)
-async def delete_user(user_id: str):
+async def delete_user(
+    user_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
     """删除用户"""
-    for i, user in enumerate(MOCK_USERS):
-        if user["id"] == user_id:
-            MOCK_USERS.pop(i)
-            return ApiResponse(code=200, message="删除成功")
-    raise HTTPException(status_code=404, detail="用户不存在")
+    from app.models.mysql_models import AdminUser
+
+    user = await db.get(AdminUser, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    if user.username == "admin":
+        raise HTTPException(status_code=400, detail="默认管理员不能删除")
+
+    old_values = _admin_user_to_dict(user)
+    await db.delete(user)
+    await _add_admin_audit_log(
+        db,
+        request,
+        action="admin_user_delete",
+        resource_id=user_id,
+        old_values=old_values,
+    )
+    await db.commit()
+
+    return ApiResponse(code=200, message="删除成功")
+
+
+def _admin_user_to_dict(user) -> dict:
+    return {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "role": user.role,
+        "permissions": user.permissions or [],
+        "is_active": bool(user.is_active),
+        "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
+        "created_at": user.created_at.isoformat() if user.created_at else None,
+    }
+
+
+async def _add_admin_audit_log(
+    db: AsyncSession,
+    request: Request,
+    action: str,
+    resource_id: str,
+    old_values: Optional[dict] = None,
+    new_values: Optional[dict] = None,
+) -> None:
+    from app.models.mysql_models import AuditLog
+
+    auth_header = request.headers.get("Authorization", "")
+    user_id: Optional[str] = None
+    if auth_header.startswith("Bearer mock_jwt_token_"):
+        user_id = auth_header.replace("Bearer mock_jwt_token_", "", 1)
+
+    db.add(AuditLog(
+        user_id=user_id,
+        action=action,
+        resource_type="admin_user",
+        resource_id=resource_id,
+        old_values=old_values,
+        new_values=new_values,
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("User-Agent"),
+    ))
+
+
+def _hash_admin_password(password: str) -> str:
+    """生成稳定的管理员密码哈希；当前用户管理不改变现有 mock 登录链路。"""
+    iterations = 260_000
+    salt = os.urandom(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+    return "pbkdf2_sha256${}${}${}".format(
+        iterations,
+        base64.b64encode(salt).decode("ascii"),
+        base64.b64encode(digest).decode("ascii"),
+    )
 
 
 # ========== 学科管理 ==========
@@ -1867,6 +2103,44 @@ async def update_knowledge_point(
     return ApiResponse(message="更新成功")
 
 
+@router.post("/knowledge/points/batch-delete", response_model=ApiResponse)
+async def batch_delete_knowledge_points(
+    req: BatchIdsRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """批量删除知识点（软删除）"""
+    from app.models.mysql_models import KnowledgePoint, RetrievalSegment
+
+    unique_ids = list(dict.fromkeys(req.ids))
+    result = await db.execute(
+        select(KnowledgePoint.id).where(
+            KnowledgePoint.id.in_(unique_ids),
+            KnowledgePoint.status != "deleted",
+        )
+    )
+    existing_ids = [row[0] for row in result.all()]
+    if not existing_ids:
+        raise HTTPException(status_code=404, detail="未找到可删除的知识点")
+
+    await db.execute(
+        update(KnowledgePoint)
+        .where(KnowledgePoint.id.in_(existing_ids))
+        .values(status="deleted")
+    )
+    await db.execute(
+        delete(RetrievalSegment).where(
+            RetrievalSegment.entity_type == "knowledge_point",
+            RetrievalSegment.entity_id.in_(existing_ids),
+        )
+    )
+    await db.commit()
+
+    return ApiResponse(
+        message="删除成功",
+        data={"deleted_count": len(existing_ids), "requested_count": len(unique_ids)}
+    )
+
+
 # ========== 题目管理 ==========
 
 @router.get("/questions", response_model=ApiResponse)
@@ -2000,6 +2274,44 @@ async def update_question(
 
     await db.commit()
     return ApiResponse(message="更新成功")
+
+
+@router.post("/questions/batch-delete", response_model=ApiResponse)
+async def batch_delete_questions(
+    req: BatchIdsRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """批量删除题目（软删除）"""
+    from app.models.mysql_models import Question, RetrievalSegment
+
+    unique_ids = list(dict.fromkeys(req.ids))
+    result = await db.execute(
+        select(Question.id).where(
+            Question.id.in_(unique_ids),
+            Question.status != "deleted",
+        )
+    )
+    existing_ids = [row[0] for row in result.all()]
+    if not existing_ids:
+        raise HTTPException(status_code=404, detail="未找到可删除的题目")
+
+    await db.execute(
+        update(Question)
+        .where(Question.id.in_(existing_ids))
+        .values(status="deleted")
+    )
+    await db.execute(
+        delete(RetrievalSegment).where(
+            RetrievalSegment.entity_type == "question",
+            RetrievalSegment.entity_id.in_(existing_ids),
+        )
+    )
+    await db.commit()
+
+    return ApiResponse(
+        message="删除成功",
+        data={"deleted_count": len(existing_ids), "requested_count": len(unique_ids)}
+    )
 
 
 # ========== PDF入库 ==========
@@ -2644,33 +2956,59 @@ async def parse_corpus_file(
     return ApiResponse(data=result)
 
 
+async def _delete_corpus_files_by_ids(
+    db: AsyncSession,
+    file_ids: List[str],
+) -> List[CorpusFile]:
+    unique_ids = list(dict.fromkeys(file_ids))
+    result = await db.execute(select(CorpusFile).where(CorpusFile.id.in_(unique_ids)))
+    corpus_files = result.scalars().all()
+    existing_ids = [item.id for item in corpus_files]
+    if not existing_ids:
+        return []
+
+    await db.execute(delete(ParseRun).where(ParseRun.corpus_file_id.in_(existing_ids)))
+    await db.execute(delete(Document).where(Document.corpus_file_id.in_(existing_ids)))
+    await db.execute(delete(CorpusFile).where(CorpusFile.id.in_(existing_ids)))
+    return corpus_files
+
+
 @router.delete("/corpus/files/{file_id}", response_model=ApiResponse)
 async def delete_corpus_file(
     file_id: str,
     db: AsyncSession = Depends(get_db),
 ):
     """删除语料文件记录"""
-    from sqlalchemy import delete
-
-    # 检查文件是否存在
-    result = await db.execute(select(CorpusFile).where(CorpusFile.id == file_id))
-    corpus_file = result.scalar_one_or_none()
-
-    if not corpus_file:
+    corpus_files = await _delete_corpus_files_by_ids(db, [file_id])
+    if not corpus_files:
         raise HTTPException(status_code=404, detail="语料文件不存在")
 
-    # 删除关联的解析任务（外键级联会自动删除，但显式删除更清晰）
-    await db.execute(delete(ParseRun).where(ParseRun.corpus_file_id == file_id))
+    await db.commit()
+    corpus_file = corpus_files[0]
 
-    # 删除关联的文档（通过 corpus_file_id 查找）
-    await db.execute(delete(Document).where(Document.corpus_file_id == file_id))
+    return ApiResponse(message="删除成功", data={"file_id": file_id, "file_name": corpus_file.file_name})
 
-    # 删除文件记录
-    await db.execute(delete(CorpusFile).where(CorpusFile.id == file_id))
+
+@router.post("/corpus/files/batch-delete", response_model=ApiResponse)
+async def batch_delete_corpus_files(
+    req: BatchIdsRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """批量删除语料文件记录"""
+    corpus_files = await _delete_corpus_files_by_ids(db, req.ids)
+    if not corpus_files:
+        raise HTTPException(status_code=404, detail="未找到可删除的语料文件")
 
     await db.commit()
 
-    return ApiResponse(message="删除成功", data={"file_id": file_id, "file_name": corpus_file.file_name})
+    return ApiResponse(
+        message="删除成功",
+        data={
+            "deleted_count": len(corpus_files),
+            "requested_count": len(set(req.ids)),
+            "items": [{"file_id": item.id, "file_name": item.file_name} for item in corpus_files],
+        },
+    )
 
 
 @router.get("/corpus/parse-runs", response_model=ApiResponse)
@@ -2926,6 +3264,7 @@ async def get_document_page_analysis(
 @router.post("/corpus/documents/{document_id}/extract-sections", response_model=ApiResponse)
 async def extract_document_sections(
     document_id: str,
+    force: bool = Query(False, description="是否强制重建已有标题树"),
     db: AsyncSession = Depends(get_db),
 ):
     """从文档中提取标题树"""
@@ -2933,7 +3272,7 @@ async def extract_document_sections(
 
     service = DocumentSectionService(db)
     try:
-        result = await service.extract_sections(document_id)
+        result = await service.extract_sections(document_id, force=force)
     except ValueError as e:
         detail = str(e)
         status_code = 404 if detail.startswith("文档不存在") else 400
@@ -2949,6 +3288,7 @@ async def map_document_chapters(
     document_id: str,
     subject_id: Optional[str] = Query(None, description="学科ID，不传则遍历所有学科匹配"),
     auto_approve_threshold: float = Query(0.90, description="自动通过阈值"),
+    force: bool = Query(False, description="是否强制重建已有章节映射"),
     db: AsyncSession = Depends(get_db),
 ):
     """将文档的 sections 映射到标准章节"""
@@ -2960,6 +3300,7 @@ async def map_document_chapters(
             document_id=document_id,
             subject_id=subject_id,
             auto_approve_threshold=auto_approve_threshold,
+            force=force,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -2984,11 +3325,39 @@ async def get_document_section_mappings(
     return ApiResponse(data=result)
 
 
+@router.get("/corpus/documents/{document_id}/chapter-diagnostics", response_model=ApiResponse)
+async def get_document_chapter_diagnostics(
+    document_id: str,
+    page_no: Optional[int] = Query(None, ge=1, description="只查看指定页"),
+    include_blocks: bool = Query(True, description="是否返回块级诊断明细"),
+    db: AsyncSession = Depends(get_db),
+):
+    """获取文档页级/块级章节归属诊断。"""
+    from app.services.chapter_mapping_service import ChapterMappingService
+
+    service = ChapterMappingService(db)
+    try:
+        result = await service.get_chapter_ownership_diagnostics(
+            document_id=document_id,
+            page_no=page_no,
+            include_blocks=include_blocks,
+        )
+    except ValueError as e:
+        detail = str(e)
+        status_code = 404 if detail.startswith("文档不存在") else 400
+        raise HTTPException(status_code=status_code, detail=detail)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"诊断失败: {str(e)[:200]}")
+
+    return ApiResponse(data=result)
+
+
 @router.post("/corpus/documents/{document_id}/extract-entities", response_model=ApiResponse)
 async def extract_document_entities(
     document_id: str,
     extract_knowledge: bool = Query(True, description="是否抽取知识点"),
     extract_questions: bool = Query(True, description="是否抽取题目"),
+    subject_id: Optional[str] = Query(None, description="章节映射不足时使用的兜底学科ID"),
     db: AsyncSession = Depends(get_db),
 ):
     """从文档中抽取知识点和题目"""
@@ -3000,6 +3369,7 @@ async def extract_document_entities(
             document_id=document_id,
             extract_knowledge=extract_knowledge,
             extract_questions=extract_questions,
+            fallback_subject_id=subject_id,
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
