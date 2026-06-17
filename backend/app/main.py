@@ -74,6 +74,28 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("Scrapy事件监听器初始化失败", error=str(e))
 
+    # 启动后台监控相关组件
+    try:
+        from app.services.db_log_sink import start_db_log_sink
+        await start_db_log_sink()
+        logger.info("服务日志 DB sink 启动成功")
+    except Exception as e:
+        logger.warning("服务日志 DB sink 启动失败", error=str(e))
+
+    try:
+        from app.services.system_metrics_collector import start_metrics_collector
+        await start_metrics_collector()
+        logger.info("系统资源采集器启动成功")
+    except Exception as e:
+        logger.warning("系统资源采集器启动失败", error=str(e))
+
+    try:
+        from app.middleware.api_stats import start_api_stats_flusher
+        await start_api_stats_flusher()
+        logger.info("API 统计 flusher 启动成功")
+    except Exception as e:
+        logger.warning("API 统计 flusher 启动失败", error=str(e))
+
     logger.info("408考研学习平台 API 启动完成")
     yield
 
@@ -91,6 +113,27 @@ async def lifespan(app: FastAPI):
         logger.info("Scrapy事件监听器已关闭")
     except Exception as e:
         logger.error("Scrapy事件监听器关闭失败", error=str(e))
+
+    try:
+        from app.middleware.api_stats import stop_api_stats_flusher
+        await stop_api_stats_flusher()
+        logger.info("API 统计 flusher 已关闭")
+    except Exception as e:
+        logger.error("API 统计 flusher 关闭失败", error=str(e))
+
+    try:
+        from app.services.system_metrics_collector import stop_metrics_collector
+        await stop_metrics_collector()
+        logger.info("系统资源采集器已关闭")
+    except Exception as e:
+        logger.error("系统资源采集器关闭失败", error=str(e))
+
+    try:
+        from app.services.db_log_sink import stop_db_log_sink
+        await stop_db_log_sink()
+        logger.info("服务日志 DB sink 已关闭")
+    except Exception as e:
+        logger.error("服务日志 DB sink 关闭失败", error=str(e))
 
     try:
         await mysql_client.close()
@@ -131,6 +174,10 @@ app.add_exception_handler(Exception, general_exception_handler)
 
 # 注册中间件
 app.add_middleware(ErrorHandlerMiddleware)
+
+# API 调用统计中间件（按 endpoint 聚合到 api_call_stats）
+from app.middleware.api_stats import APIStatsMiddleware
+app.add_middleware(APIStatsMiddleware)
 
 # CORS配置
 app.add_middleware(

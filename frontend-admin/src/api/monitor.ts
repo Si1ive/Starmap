@@ -1,8 +1,8 @@
 import adminClient from './client'
 import type { ApiResponse } from '@/types'
 
-export const getApiMonitor = (): Promise<ApiResponse<Record<string, unknown>>> => {
-  return adminClient.get('/monitor/api')
+export const getApiMonitor = (hours: number = 24): Promise<ApiResponse<Record<string, unknown>>> => {
+  return adminClient.get('/monitor/api', { params: { hours } })
 }
 
 export const getDatabaseMonitor = (): Promise<ApiResponse<Record<string, unknown>>> => {
@@ -85,4 +85,70 @@ export const deleteLLMCalls = (params: {
   ids?: string
 }): Promise<ApiResponse<{ deleted: number }>> => {
   return adminClient.delete('/monitor/llm-calls', { params })
+}
+
+// ===== 服务日志（替换原 errors 接口的能力） =====
+
+export interface ServiceLogItem {
+  id: number
+  level: string
+  logger_name?: string
+  event?: string
+  message?: string
+  request_id?: string
+  context?: Record<string, unknown>
+  traceback?: string
+  created_at: string
+}
+
+export const getServiceLogs = (params?: {
+  level?: string
+  logger_name?: string
+  keyword?: string
+  request_id?: string
+  start_time?: string
+  end_time?: string
+  page?: number
+  page_size?: number
+}): Promise<ApiResponse<{ total: number; page: number; page_size: number; items: ServiceLogItem[] }>> => {
+  return adminClient.get('/monitor/logs', { params })
+}
+
+export const getServiceLogStats = (hours: number = 24): Promise<ApiResponse<{
+  window_hours: number
+  by_level: Array<{ level: string; count: number }>
+  top_loggers: Array<{ logger: string; count: number }>
+}>> => {
+  return adminClient.get('/monitor/logs/stats', { params: { hours } })
+}
+
+export const deleteServiceLogs = (params: { older_than_days?: number; level?: string }): Promise<ApiResponse<{ deleted: number }>> => {
+  return adminClient.delete('/monitor/logs', { params })
+}
+
+export const archiveServiceLogs = (older_than_days: number): Promise<ApiResponse<{ archived: number; deleted: number; path: string | null }>> => {
+  return adminClient.post('/monitor/logs/archive', null, { params: { older_than_days } })
+}
+
+// ===== 系统资源 =====
+
+export interface SystemMetricSample {
+  cpu_percent: number
+  mem_used_mb: number
+  mem_total_mb: number
+  mem_percent: number
+  disk_used_gb: number
+  disk_total_gb: number
+  disk_percent: number
+  process_rss_mb: number
+  process_cpu_percent: number
+  sampled_at: string
+}
+
+export const getSystemMetrics = (hours: number = 24): Promise<ApiResponse<{
+  latest: SystemMetricSample | null
+  series: SystemMetricSample[]
+  window_hours: number
+}>> => {
+  return adminClient.get('/monitor/system', { params: { hours } })
 }

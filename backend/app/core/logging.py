@@ -62,7 +62,15 @@ def configure_logging() -> None:
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.stdlib.add_logger_name,
     ]
-    
+
+    # 把日志事件入队到 DB（异步 worker 批量入库；写库失败不影响主链路）
+    try:
+        from app.services.db_log_sink import db_log_processor
+        shared_processors.append(db_log_processor)
+    except Exception:
+        # 启动早期 db_log_sink 不可用时静默退化
+        pass
+
     if settings.DEBUG:
         # 开发环境：彩色控制台
         processors = shared_processors + [

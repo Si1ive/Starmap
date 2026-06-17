@@ -1,85 +1,100 @@
 import { useState } from 'react'
-import { Card, Table, Tag, Button, Modal, Descriptions, Select, Space, Input, Row, Col, Statistic, Badge } from 'antd'
-import { SearchOutlined, ExclamationCircleOutlined, WarningOutlined } from '@ant-design/icons'
-import { useQuery } from '@tanstack/react-query'
-import { getErrorLogs } from '@/api'
+import {
+  Card, Table, Tag, Space, Input, Select, Row, Col, Statistic, Button, Drawer, Descriptions,
+  Popconfirm, message, DatePicker,
+} from 'antd'
+import { type Dayjs } from 'dayjs'
+import {
+  ReloadOutlined, DeleteOutlined, CompressOutlined, EyeOutlined,
+  WarningOutlined, ExclamationCircleOutlined,
+} from '@ant-design/icons'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import {
+  getServiceLogs, getServiceLogStats, deleteServiceLogs, archiveServiceLogs,
+  type ServiceLogItem,
+} from '@/api'
 
-interface ErrorLog {
-  id: string
-  timestamp: string
-  level: 'error' | 'warning' | 'critical'
-  module: string
-  message: string
-  endpoint: string
-  stack_trace: string
-  request_id: string
-  user_id: string | null
-  resolved: boolean
-  count: number
+const { Search } = Input
+const { RangePicker } = DatePicker
+
+const levelColor: Record<string, string> = {
+  CRITICAL: '#a8071a',
+  ERROR: '#ff4d4f',
+  WARNING: '#fa8c16',
+  INFO: '#1890ff',
+  DEBUG: '#666',
 }
 
 const MonitorErrors = () => {
-  const [selectedLog, setSelectedLog] = useState<ErrorLog | null>(null)
-  const [filterLevel, setFilterLevel] = useState<string>('all')
-  const [filterModule, setFilterModule] = useState<string>('all')
-  const [filterResolved, setFilterResolved] = useState<string>('all')
-  const [searchText, setSearchText] = useState('')
+  const qc = useQueryClient()
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(50)
+  const [filters, setFilters] = useState<{ level?: string; logger_name?: string; keyword?: string; request_id?: string }>({ level: 'ERROR' })
+  const [dateRange, setDateRange] = useState<[Dayjs, Dayjs] | null>(null)
+  const [statsHours, setStatsHours] = useState(24)
+  const [detail, setDetail] = useState<ServiceLogItem | null>(null)
 
-  const { data } = useQuery({
-    queryKey: ['monitorErrors'],
-    queryFn: () => getErrorLogs(),
+  const params = {
+    page, page_size: pageSize, ...filters,
+    start_time: dateRange?.[0]?.toISOString(),
+    end_time: dateRange?.[1]?.toISOString(),
+  }
+
+  const { data: logsRes, refetch, isLoading } = useQuery({
+    queryKey: ['serviceLogs', params],
+    queryFn: () => getServiceLogs(params),
   })
 
-  const errorData = (data?.data || {}) as Record<string, any>
-
-  // 统计
-  const stats = (errorData.stats || {}) as Record<string, number>
-
-  // 错误列表
-  const rawLogs: ErrorLog[] = (errorData.logs || []) as ErrorLog[]
-
-  // 过滤
-  const filteredLogs = rawLogs.filter((log) => {
-    if (filterLevel !== 'all' && log.level !== filterLevel) return false
-    if (filterModule !== 'all' && log.module !== filterModule) return false
-    if (filterResolved === 'unresolved' && log.resolved) return false
-    if (filterResolved === 'resolved' && !log.resolved) return false
-    if (searchText && !log.message.toLowerCase().includes(searchText.toLowerCase())) return false
-    return true
+  const { data: statsRes } = useQuery({
+    queryKey: ['serviceLogStats', statsHours],
+    queryFn: () => getServiceLogStats(statsHours),
+    refetchInterval: 60000,
   })
+
+  const cleanMut = useMutation({
+    mutationFn: (older_than_days: number) => deleteServiceLogs({ older_than_days }),
+    onSuccess: (res) => {
+      message.success(`已清理 ${res.data?.deleted ?? 0} 条`)
+      qc.invalidateQueries({ queryKey: ['serviceLogs'] })
+      qc.invalidateQueries({ queryKey: ['serviceLogStats'] })
+    },
+    onError: () => message.error('清理失败'),
+  })
+
+  const archiveMut = useMutation({
+    mutationFn: (older_than_days: number) => archiveServiceLogs(older_than_days),
+    onSuccess: (res) => {
+      const data = res.data
+      message.success(`已归档 ${data?.archived ?? 0} 条到 ${data?.path ?? ''}`)
+      qc.invalidateQueries({ queryKey: ['serviceLogs'] })
+    },
+    onError: () => message.error('归档失败'),
+  })
+
+  const list = logsRes?.data
+  const stats = statsRes?.data
+
+  const totalByLevel = (lvl: string) => stats?.by_level.find((x) => x.level === lvl)?.count ?? 0
 
   const columns = [
     {
       title: '时间',
-      dataIndex: 'timestamp',
+      dataIndex: 'created_at',
       width: 170,
-      sorter: (a: ErrorLog, b: ErrorLog) => a.timestamp.localeCompare(b.timestamp),
+      render: (v: string) => v ? new Date(v).toLocaleString('zh-CN', { hour12: false }) : '-',
     },
     {
       title: '级别',
       dataIndex: 'level',
-      width: 90,
-      render: (level: string) => {
-        const config: Record<string, { color: string; text: string }> = {
-          critical: { color: '#ff4d4f', text: '严重' },
-          error: { color: '#ff7875', text: '错误' },
-          warning: { color: '#fa8c16', text: '警告' },
-        }
-        const c = config[level] || { color: 'default', text: level }
-        return <Tag color={c.color}>{c.text}</Tag>
-      },
-      filters: [
-        { text: '严重', value: 'critical' },
-        { text: '错误', value: 'error' },
-        { text: '警告', value: 'warning' },
-      ],
-      onFilter: (value: any, record: ErrorLog) => record.level === value,
+      width: 100,
+      render: (l: string) => <Tag color={levelColor[l] || 'default'}>{l}</Tag>,
     },
     {
-      title: '模块',
-      dataIndex: 'module',
-      width: 100,
-      render: (m: string) => <Tag>{m}</Tag>,
+      title: 'Logger',
+      dataIndex: 'logger_name',
+      width: 200,
+      ellipsis: true,
+      render: (v: string) => <span style={{ fontFamily: 'monospace', color: '#666' }}>{v || '-'}</span>,
     },
     {
       title: '消息',
@@ -87,182 +102,179 @@ const MonitorErrors = () => {
       ellipsis: true,
     },
     {
-      title: '接口',
-      dataIndex: 'endpoint',
-      width: 200,
+      title: 'Request ID',
+      dataIndex: 'request_id',
+      width: 180,
       ellipsis: true,
-    },
-    {
-      title: '次数',
-      dataIndex: 'count',
-      width: 70,
-      render: (v: number) => <Badge count={v} style={{ backgroundColor: v > 3 ? '#ff4d4f' : '#fa8c16' }} />,
-    },
-    {
-      title: '状态',
-      dataIndex: 'resolved',
-      width: 80,
-      render: (v: boolean) => v ? <Tag color="success">已解决</Tag> : <Tag color="error">未解决</Tag>,
+      render: (v: string) => v ? <span style={{ fontFamily: 'monospace', fontSize: 11 }}>{v}</span> : '-',
     },
     {
       title: '操作',
-      key: 'action',
-      width: 80,
-      render: (_: any, record: ErrorLog) => (
-        <Button type="link" size="small" onClick={() => setSelectedLog(record)}>
-          详情
-        </Button>
+      key: 'actions',
+      width: 70,
+      render: (_: unknown, r: ServiceLogItem) => (
+        <Button type="link" icon={<EyeOutlined />} size="small" onClick={() => setDetail(r)}>详情</Button>
       ),
     },
   ]
 
   return (
     <div>
-      <h2 style={{ marginBottom: 24 }}>错误日志</h2>
+      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h2 style={{ margin: 0 }}>服务日志</h2>
+        <Space>
+          <Select
+            value={statsHours}
+            style={{ width: 130 }}
+            onChange={setStatsHours}
+            options={[
+              { label: '近 1 小时', value: 1 },
+              { label: '近 24 小时', value: 24 },
+              { label: '近 7 天', value: 24 * 7 },
+              { label: '近 30 天', value: 24 * 30 },
+            ]}
+          />
+          <Button icon={<ReloadOutlined />} onClick={() => refetch()}>刷新</Button>
+          <Popconfirm
+            title="清理 7 天前的所有日志？"
+            onConfirm={() => cleanMut.mutate(7)}
+          >
+            <Button danger icon={<DeleteOutlined />} loading={cleanMut.isPending}>清理 7 天前</Button>
+          </Popconfirm>
+          <Popconfirm
+            title="把 30 天前的日志归档为 .ndjson.gz 后清库？"
+            onConfirm={() => archiveMut.mutate(30)}
+          >
+            <Button icon={<CompressOutlined />} loading={archiveMut.isPending}>归档 30 天前</Button>
+          </Popconfirm>
+        </Space>
+      </div>
 
-      {/* 统计卡片 */}
-      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+      {/* 级别统计 */}
+      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
         <Col xs={12} sm={6}>
           <Card size="small">
-            <Statistic
-              title="总错误数"
-              value={stats.total_errors}
-              valueStyle={{ color: '#ff4d4f' }}
-              prefix={<ExclamationCircleOutlined />}
-            />
+            <Statistic title="ERROR" value={totalByLevel('ERROR')} valueStyle={{ color: levelColor.ERROR }}
+              prefix={<WarningOutlined />} />
           </Card>
         </Col>
         <Col xs={12} sm={6}>
           <Card size="small">
-            <Statistic
-              title="总警告数"
-              value={stats.total_warnings}
-              valueStyle={{ color: '#fa8c16' }}
-              prefix={<WarningOutlined />}
-            />
+            <Statistic title="WARNING" value={totalByLevel('WARNING')} valueStyle={{ color: levelColor.WARNING }}
+              prefix={<ExclamationCircleOutlined />} />
           </Card>
         </Col>
         <Col xs={12} sm={6}>
           <Card size="small">
-            <Statistic
-              title="未解决"
-              value={stats.unresolved}
-              valueStyle={{ color: stats.unresolved > 0 ? '#ff4d4f' : '#52c41a' }}
-            />
+            <Statistic title="INFO" value={totalByLevel('INFO')} valueStyle={{ color: levelColor.INFO }} />
           </Card>
         </Col>
         <Col xs={12} sm={6}>
           <Card size="small">
-            <Statistic
-              title="今日新增"
-              value={stats.today_errors}
-            />
+            <Statistic title="近 24h 总数" value={stats?.by_level.reduce((s, x) => s + x.count, 0) ?? 0} />
           </Card>
         </Col>
       </Row>
 
-      {/* 过滤栏 */}
-      <Card style={{ marginBottom: 16 }}>
-        <Space wrap>
-          <Select
-            value={filterLevel}
-            onChange={setFilterLevel}
-            style={{ width: 120 }}
-            options={[
-              { label: '全部级别', value: 'all' },
-              { label: '严重', value: 'critical' },
-              { label: '错误', value: 'error' },
-              { label: '警告', value: 'warning' },
-            ]}
-          />
-          <Select
-            value={filterModule}
-            onChange={setFilterModule}
-            style={{ width: 120 }}
-            options={[
-              { label: '全部模块', value: 'all' },
-              { label: 'chat', value: 'chat' },
-              { label: 'crawler', value: 'crawler' },
-              { label: 'neo4j', value: 'neo4j' },
-              { label: 'redis', value: 'redis' },
-              { label: 'chromadb', value: 'chromadb' },
-              { label: 'auth', value: 'auth' },
-            ]}
-          />
-          <Select
-            value={filterResolved}
-            onChange={setFilterResolved}
-            style={{ width: 120 }}
-            options={[
-              { label: '全部状态', value: 'all' },
-              { label: '未解决', value: 'unresolved' },
-              { label: '已解决', value: 'resolved' },
-            ]}
-          />
-          <Input
-            placeholder="搜索错误消息"
-            prefix={<SearchOutlined />}
-            value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
-            style={{ width: 200 }}
-            allowClear
-          />
-        </Space>
-      </Card>
+      {/* Top loggers */}
+      {stats?.top_loggers && stats.top_loggers.length > 0 && (
+        <Card size="small" title="Top 10 Logger（按日志量）" style={{ marginBottom: 16 }}>
+          <Space wrap>
+            {stats.top_loggers.map((l) => (
+              <Tag key={l.logger} color="geekblue" onClick={() => setFilters({ ...filters, logger_name: l.logger })} style={{ cursor: 'pointer' }}>
+                {l.logger}: {l.count}
+              </Tag>
+            ))}
+          </Space>
+        </Card>
+      )}
 
-      {/* 错误列表 */}
-      <Card>
+      <Card
+        size="small"
+        title="日志明细"
+        extra={
+          <Space wrap>
+            <Select
+              value={filters.level}
+              allowClear
+              placeholder="级别"
+              style={{ width: 120 }}
+              onChange={(v) => setFilters({ ...filters, level: v })}
+              options={['ERROR', 'WARNING', 'INFO', 'DEBUG'].map((x) => ({ label: x, value: x }))}
+            />
+            <Input
+              placeholder="logger 名称"
+              allowClear
+              style={{ width: 200 }}
+              onChange={(e) => setFilters({ ...filters, logger_name: e.target.value || undefined })}
+            />
+            <Input
+              placeholder="Request ID"
+              allowClear
+              style={{ width: 200 }}
+              onChange={(e) => setFilters({ ...filters, request_id: e.target.value || undefined })}
+            />
+            <Search
+              placeholder="搜索消息"
+              allowClear
+              style={{ width: 200 }}
+              onSearch={(v) => setFilters({ ...filters, keyword: v || undefined })}
+            />
+            <RangePicker showTime onChange={(v) => setDateRange(v as any)} />
+          </Space>
+        }
+      >
         <Table
-          columns={columns}
-          dataSource={filteredLogs}
+          loading={isLoading}
           rowKey="id"
           size="small"
-          pagination={{ pageSize: 10, showSizeChanger: true, showTotal: (t) => `共 ${t} 条` }}
+          columns={columns}
+          dataSource={list?.items || []}
+          pagination={{
+            current: page,
+            pageSize,
+            total: list?.total || 0,
+            showSizeChanger: true,
+            onChange: (p, s) => { setPage(p); setPageSize(s) },
+          }}
         />
       </Card>
 
-      {/* 详情弹窗 */}
-      <Modal
-        title="错误详情"
-        open={!!selectedLog}
-        onCancel={() => setSelectedLog(null)}
-        footer={null}
-        width={700}
-      >
-        {selectedLog && (
-          <Descriptions column={2} bordered size="small">
-            <Descriptions.Item label="时间">{selectedLog.timestamp}</Descriptions.Item>
-            <Descriptions.Item label="级别">
-              <Tag color={selectedLog.level === 'critical' ? '#ff4d4f' : selectedLog.level === 'error' ? '#ff7875' : '#fa8c16'}>
-                {selectedLog.level === 'critical' ? '严重' : selectedLog.level === 'error' ? '错误' : '警告'}
-              </Tag>
-            </Descriptions.Item>
-            <Descriptions.Item label="模块">{selectedLog.module}</Descriptions.Item>
-            <Descriptions.Item label="接口">{selectedLog.endpoint}</Descriptions.Item>
-            <Descriptions.Item label="请求ID">{selectedLog.request_id}</Descriptions.Item>
-            <Descriptions.Item label="用户ID">{selectedLog.user_id || 'N/A'}</Descriptions.Item>
-            <Descriptions.Item label="出现次数">{selectedLog.count}</Descriptions.Item>
-            <Descriptions.Item label="状态">
-              {selectedLog.resolved ? <Tag color="success">已解决</Tag> : <Tag color="error">未解决</Tag>}
-            </Descriptions.Item>
-            <Descriptions.Item label="错误消息" span={2}>
-              <div style={{ color: '#ff4d4f', fontWeight: 'bold' }}>{selectedLog.message}</div>
-            </Descriptions.Item>
-            <Descriptions.Item label="堆栈跟踪" span={2}>
-              <pre style={{
-                background: '#f5f5f5',
-                padding: 12,
-                borderRadius: 4,
-                fontSize: 12,
-                maxHeight: 300,
-                overflow: 'auto',
-              }}>
-                {selectedLog.stack_trace}
-              </pre>
-            </Descriptions.Item>
-          </Descriptions>
+      <Drawer title="日志详情" open={!!detail} onClose={() => setDetail(null)} width={680}>
+        {detail && (
+          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+            <Descriptions column={2} size="small" bordered>
+              <Descriptions.Item label="ID">{detail.id}</Descriptions.Item>
+              <Descriptions.Item label="级别">
+                <Tag color={levelColor[detail.level] || 'default'}>{detail.level}</Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="时间">{new Date(detail.created_at).toLocaleString('zh-CN')}</Descriptions.Item>
+              <Descriptions.Item label="Logger">{detail.logger_name || '-'}</Descriptions.Item>
+              <Descriptions.Item label="Request ID" span={2}>{detail.request_id || '-'}</Descriptions.Item>
+              <Descriptions.Item label="Event" span={2}>{detail.event || '-'}</Descriptions.Item>
+              <Descriptions.Item label="消息" span={2}>
+                <pre style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{detail.message || '-'}</pre>
+              </Descriptions.Item>
+            </Descriptions>
+
+            {detail.context && Object.keys(detail.context).length > 0 && (
+              <Card size="small" title="上下文">
+                <pre style={{ background: '#f5f5f5', padding: 12, borderRadius: 4, fontSize: 12, maxHeight: 300, overflow: 'auto' }}>
+                  {JSON.stringify(detail.context, null, 2)}
+                </pre>
+              </Card>
+            )}
+
+            {detail.traceback && (
+              <Card size="small" title="Traceback">
+                <pre style={{ background: '#fff1f0', padding: 12, borderRadius: 4, fontSize: 12, maxHeight: 400, overflow: 'auto', whiteSpace: 'pre-wrap' }}>
+                  {detail.traceback}
+                </pre>
+              </Card>
+            )}
+          </Space>
         )}
-      </Modal>
+      </Drawer>
     </div>
   )
 }

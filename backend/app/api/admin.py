@@ -1265,88 +1265,139 @@ async def get_conversations(
 # ========== 系统监控相关 ==========
 
 @router.get("/monitor/api", response_model=ApiResponse)
-async def get_api_monitor():
-    """
-    获取 API 性能监控数据
-    
-    返回实时的 API 性能指标。
-    """
-    from app.core.monitoring import get_api_metrics
-    
-    metrics = await get_api_metrics()
-    
-    return ApiResponse(
-        code=200,
-        message="success",
-        data=metrics
-    )
+async def get_api_monitor(
+    hours: int = Query(24, ge=1, le=168),
+    db: AsyncSession = Depends(get_db),
+):
+    """API 性能监控数据：聚合 api_call_stats，返回延迟分布/接口排行/慢接口"""
+    from app.services.monitor_service import get_api_stats_overview
+    metrics = await get_api_stats_overview(db, hours=hours)
+    return ApiResponse(data=metrics)
 
 
 @router.get("/monitor/database", response_model=ApiResponse)
 async def get_database_monitor():
-    """
-    获取数据库监控数据
-    
-    返回各数据库连接状态和统计信息。
-    """
-    from app.core.monitoring import get_database_status
-    
-    status = await get_database_status()
-    
-    return ApiResponse(
-        code=200,
-        message="success",
-        data=status
-    )
+    """数据库连接状态：MySQL / Redis / Qdrant 探活"""
+    from app.services.monitor_service import get_database_status_extended
+    return ApiResponse(data=await get_database_status_extended())
 
 
 @router.get("/monitor/errors", response_model=ApiResponse)
 async def get_error_logs(
     level: Optional[str] = None,
-    page: int = 1,
-    page_size: int = 20,
-    db: AsyncSession = Depends(get_db)
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
+    keyword: Optional[str] = None,
+    logger_name: Optional[str] = None,
+    request_id: Optional[str] = None,
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
 ):
-    """
-    获取错误日志
-    
-    从数据库查询真实的错误日志。
-    """
-    from app.services.log_service import CrawlerLogService
-    
-    service = CrawlerLogService(db)
-    
-    # 查询 ERROR 和 WARNING 级别的日志
-    logs, total = await service.get_logs(
-        skip=(page - 1) * page_size,
-        limit=page_size,
+    """服务日志查询。默认返回 ERROR 级别，支持按级别 / logger / 关键字 / 时间过滤。"""
+    from app.services.monitor_service import query_service_logs
+    from datetime import datetime as _dt
+
+    def _parse_dt(s: Optional[str]) -> Optional[datetime]:
+        if not s:
+            return None
+        try:
+            return _dt.fromisoformat(s.replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    result = await query_service_logs(
+        session=db,
+        page=page,
+        page_size=page_size,
         level=level or "ERROR",
+        logger_name=logger_name,
+        keyword=keyword,
+        request_id=request_id,
+        start_time=_parse_dt(start_time),
+        end_time=_parse_dt(end_time),
     )
-    
-    items = []
-    for log in logs:
-        items.append({
-            "id": str(log.id),
-            "timestamp": log.created_at.isoformat() if log.created_at else None,
-            "level": log.level,
-            "service": "crawler",
-            "message": log.message,
-            "task_id": log.task_id,
-            "source_id": log.source_id,
-            "stage": log.stage,
-        })
-    
-    return ApiResponse(
-        code=200,
-        message="success",
-        data={
-            "items": items,
-            "total": total,
-            "page": page,
-            "page_size": page_size,
-            "total_pages": (total + page_size - 1) // page_size if total else 0
-        }
+    return ApiResponse(data=result)
+
+
+@router.get("/monitor/logs", response_model=ApiResponse)
+async def get_service_logs(
+    level: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=500),
+    keyword: Optional[str] = None,
+    logger_name: Optional[str] = None,
+    request_id: Optional[str] = None,
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """服务日志全量查询（含 INFO / DEBUG / WARNING / ERROR）"""
+    from app.services.monitor_service import query_service_logs
+    from datetime import datetime as _dt
+
+    def _parse_dt(s: Optional[str]) -> Optional[datetime]:
+        if not s:
+            return None
+        try:
+            return _dt.fromisoformat(s.replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    result = await query_service_logs(
+        session=db,
+        page=page,
+        page_size=page_size,
+        level=level,
+        logger_name=logger_name,
+        keyword=keyword,
+        request_id=request_id,
+        start_time=_parse_dt(start_time),
+        end_time=_parse_dt(end_time),
     )
+    return ApiResponse(data=result)
+
+
+@router.get("/monitor/logs/stats", response_model=ApiResponse)
+async def get_service_logs_stats(
+    hours: int = Query(24, ge=1, le=720),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services.monitor_service import get_service_log_stats
+    return ApiResponse(data=await get_service_log_stats(db, hours=hours))
+
+
+@router.delete("/monitor/logs", response_model=ApiResponse)
+async def delete_service_logs_endpoint(
+    older_than_days: Optional[int] = Query(None, ge=0, description="删除 N 天前的日志"),
+    level: Optional[str] = Query(None, description="可选限定级别"),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services.monitor_service import delete_service_logs
+    deleted = await delete_service_logs(db, older_than_days=older_than_days, level=level)
+    return ApiResponse(data={"deleted": deleted})
+
+
+@router.post("/monitor/logs/archive", response_model=ApiResponse)
+async def archive_service_logs_endpoint(
+    older_than_days: int = Query(30, ge=1, le=3650),
+    db: AsyncSession = Depends(get_db),
+):
+    """把 N 天前的服务日志导出到 .ndjson.gz 后清库"""
+    from app.services.monitor_service import archive_service_logs
+    return ApiResponse(data=await archive_service_logs(db, older_than_days=older_than_days))
+
+
+@router.get("/monitor/system", response_model=ApiResponse)
+async def get_system_metrics(
+    hours: int = Query(24, ge=1, le=168),
+    db: AsyncSession = Depends(get_db),
+):
+    """系统资源（CPU/内存/磁盘）：最新值 + 时序"""
+    from app.services.monitor_service import get_system_metrics_latest, get_system_metrics_series
+    latest = await get_system_metrics_latest(db)
+    series = await get_system_metrics_series(db, hours=hours)
+    return ApiResponse(data={"latest": latest, "series": series, "window_hours": hours})
 
 
 # ========== 系统配置相关 ==========
