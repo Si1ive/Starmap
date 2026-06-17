@@ -194,8 +194,9 @@ class DashboardStats(BaseModel):
 @router.get("/dashboard/stats", response_model=ApiResponse)
 async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
     """获取看板统计数据（408考研平台）"""
-    from app.models.mysql_models import Subject, Chapter, KnowledgePoint, Question
+    from app.models.mysql_models import Subject, Chapter, KnowledgePoint, Question, ChatSession
     from sqlalchemy import func
+    from datetime import datetime as _dt, time as _time
 
     subject_count = await db.scalar(
         select(func.count()).select_from(Subject).where(Subject.status == "active")
@@ -213,6 +214,11 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
         select(func.count()).select_from(Question).where(Question.status != "deleted")
     ) or 0
 
+    today_start = _dt.combine(_dt.utcnow().date(), _time.min)
+    today_chat_count = await db.scalar(
+        select(func.count()).select_from(ChatSession).where(ChatSession.created_at >= today_start)
+    ) or 0
+
     return ApiResponse(
         code=200,
         message="success",
@@ -221,7 +227,7 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
             "chapter_count": chapter_count,
             "knowledge_point_count": knowledge_point_count,
             "question_count": question_count,
-            "today_chat_count": 0
+            "today_chat_count": today_chat_count,
         }
     )
 
@@ -1758,52 +1764,6 @@ async def delete_conversation(
 
 # ========== P1: 用户管理相关 ==========
 
-MOCK_USERS = [
-    {
-        "id": "1",
-        "username": "admin",
-        "email": "admin@starmap.com",
-        "role": "super_admin",
-        "permissions": [
-            "dashboard:view", "person:manage", "work:manage",
-            "crawler:manage", "conversation:view", "monitor:view",
-            "settings:manage", "user:manage",
-        ],
-        "is_active": True,
-        "last_login_at": "2024-01-07 15:30:00",
-        "created_at": "2024-01-01",
-    },
-    {
-        "id": "2",
-        "username": "data_admin",
-        "email": "data@starmap.com",
-        "role": "data_admin",
-        "permissions": ["dashboard:view", "person:manage", "work:manage", "crawler:manage", "monitor:view"],
-        "is_active": True,
-        "last_login_at": "2024-01-06 10:00:00",
-        "created_at": "2024-01-02",
-    },
-    {
-        "id": "3",
-        "username": "operator1",
-        "email": "op1@starmap.com",
-        "role": "operator",
-        "permissions": ["dashboard:view", "conversation:view"],
-        "is_active": True,
-        "last_login_at": "2024-01-05 09:00:00",
-        "created_at": "2024-01-03",
-    },
-    {
-        "id": "4",
-        "username": "operator2",
-        "email": "op2@starmap.com",
-        "role": "operator",
-        "permissions": ["dashboard:view", "conversation:view"],
-        "is_active": False,
-        "last_login_at": None,
-        "created_at": "2024-01-04",
-    },
-]
 
 
 class CreateUserRequest(BaseModel):
