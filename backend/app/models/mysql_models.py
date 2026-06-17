@@ -1203,3 +1203,113 @@ class RetrievalSegment(Base):
         Index("idx_rs_segment_type", "segment_type"),
         {"comment": "检索单元表"}
     )
+
+
+
+# ===== 监控相关表 =====
+
+
+class LLMCallLog(Base):
+    """LLM 调用日志：记录每一次大模型调用的请求/响应/耗时/Token/成本"""
+    __tablename__ = "llm_call_logs"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(50), default="openai_compatible", comment="服务商")
+    base_url: Mapped[Optional[str]] = mapped_column(String(255), comment="API base url")
+    model: Mapped[str] = mapped_column(String(100), nullable=False, comment="模型名")
+    called_by: Mapped[Optional[str]] = mapped_column(String(100), comment="调用方标识，如 chat_service / pdf_structure")
+    purpose: Mapped[Optional[str]] = mapped_column(String(100), comment="调用用途说明")
+
+    request_messages: Mapped[Optional[dict]] = mapped_column(JSON, comment="请求 messages（截断后）")
+    request_params: Mapped[Optional[dict]] = mapped_column(JSON, comment="temperature/max_tokens 等参数")
+    response_text: Mapped[Optional[str]] = mapped_column(Text, comment="响应正文（截断）")
+    response_full: Mapped[Optional[dict]] = mapped_column(JSON, comment="完整响应 JSON（截断）")
+
+    prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cost_usd: Mapped[float] = mapped_column(DECIMAL(10, 6), default=0)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+
+    status: Mapped[str] = mapped_column(
+        Enum("success", "error", "timeout"),
+        default="success", comment="调用状态"
+    )
+    error_msg: Mapped[Optional[str]] = mapped_column(Text, comment="错误信息")
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_llm_calls_created_at", "created_at"),
+        Index("idx_llm_calls_status", "status"),
+        Index("idx_llm_calls_model", "model"),
+        Index("idx_llm_calls_called_by", "called_by"),
+        {"comment": "LLM 调用日志"}
+    )
+
+
+class ServiceLog(Base):
+    """后端服务日志：structlog 输出会被 sink 到这里供查询"""
+    __tablename__ = "service_logs"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    level: Mapped[str] = mapped_column(String(16), default="INFO", comment="日志级别")
+    logger_name: Mapped[Optional[str]] = mapped_column(String(120), comment="logger 名称（模块）")
+    event: Mapped[Optional[str]] = mapped_column(String(255), comment="事件名/简短描述")
+    message: Mapped[Optional[str]] = mapped_column(Text, comment="完整消息")
+    request_id: Mapped[Optional[str]] = mapped_column(String(64), comment="关联请求 ID")
+    context: Mapped[Optional[dict]] = mapped_column(JSON, comment="结构化上下文")
+    traceback: Mapped[Optional[str]] = mapped_column(Text, comment="异常堆栈（仅 ERROR）")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        Index("idx_service_logs_level_time", "level", "created_at"),
+        Index("idx_service_logs_logger", "logger_name"),
+        Index("idx_service_logs_request", "request_id"),
+        {"comment": "后端服务日志"}
+    )
+
+
+class SystemMetric(Base):
+    """系统资源采样：psutil 后台 task 每 10 秒一条"""
+    __tablename__ = "system_metrics"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    cpu_percent: Mapped[float] = mapped_column(DECIMAL(5, 2), default=0)
+    mem_used_mb: Mapped[float] = mapped_column(DECIMAL(10, 2), default=0)
+    mem_total_mb: Mapped[float] = mapped_column(DECIMAL(10, 2), default=0)
+    mem_percent: Mapped[float] = mapped_column(DECIMAL(5, 2), default=0)
+    disk_used_gb: Mapped[float] = mapped_column(DECIMAL(10, 2), default=0)
+    disk_total_gb: Mapped[float] = mapped_column(DECIMAL(10, 2), default=0)
+    disk_percent: Mapped[float] = mapped_column(DECIMAL(5, 2), default=0)
+    process_rss_mb: Mapped[float] = mapped_column(DECIMAL(10, 2), default=0)
+    process_cpu_percent: Mapped[float] = mapped_column(DECIMAL(5, 2), default=0)
+    sampled_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        {"comment": "系统资源采样"}
+    )
+
+
+class ApiCallStat(Base):
+    """API 调用统计：按 (endpoint, method, hour_bucket) 聚合"""
+    __tablename__ = "api_call_stats"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    endpoint: Mapped[str] = mapped_column(String(255), nullable=False, comment="路由路径")
+    method: Mapped[str] = mapped_column(String(10), nullable=False, comment="HTTP 方法")
+    hour_bucket: Mapped[datetime] = mapped_column(DateTime, nullable=False, comment="小时聚合桶")
+    call_count: Mapped[int] = mapped_column(Integer, default=0)
+    error_count: Mapped[int] = mapped_column(Integer, default=0)
+    total_latency_ms: Mapped[int] = mapped_column(BigInteger, default=0)
+    max_latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    p95_sample_ms: Mapped[int] = mapped_column(Integer, default=0, comment="近似P95（reservoir 采样）")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    __table_args__ = (
+        UniqueConstraint("endpoint", "method", "hour_bucket", name="uq_api_stats_bucket"),
+        Index("idx_api_stats_hour", "hour_bucket"),
+        {"comment": "API 调用聚合统计"}
+    )
