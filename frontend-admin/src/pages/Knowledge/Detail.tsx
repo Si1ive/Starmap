@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query'
 import { getKnowledgePointDetail, getSubjects, getChapters } from '@/api'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import EntityAssets from '@/components/EntityAssets'
 
 const difficultyConfig: Record<string, { color: string; text: string }> = {
   easy: { color: 'green', text: '简单' },
@@ -168,6 +169,15 @@ const KnowledgeDetail = () => {
                     暂无核心要点
                   </div>
                 )}
+              </Card>
+            ),
+          },
+          {
+            key: 'assets',
+            label: `图片/表格/公式 (${(point as any).assets?.length || 0})`,
+            children: (
+              <Card>
+                <EntityAssets assets={(point as any).assets || []} />
               </Card>
             ),
           },

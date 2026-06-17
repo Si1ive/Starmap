@@ -1359,3 +1359,33 @@ class ChatMessageRecord(Base):
         Index("idx_chat_messages_session", "session_id", "created_at"),
         {"comment": "对话消息"}
     )
+
+
+class EntityAssetLink(Base):
+    """实体（知识点 / 题目）与文档资产（figure / table / formula）的多对多关联"""
+    __tablename__ = "entity_asset_links"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    entity_type: Mapped[str] = mapped_column(
+        Enum("knowledge_point", "question"),
+        nullable=False
+    )
+    entity_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    asset_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("document_assets.id", ondelete="CASCADE"),
+        nullable=False
+    )
+    relation: Mapped[str] = mapped_column(
+        Enum("inline", "reference", "related"),
+        default="inline",
+        comment="inline=正文嵌入；reference=引用；related=相关"
+    )
+    sort_order: Mapped[int] = mapped_column(default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("entity_type", "entity_id", "asset_id", name="uq_entity_asset"),
+        Index("idx_entity_asset_entity", "entity_type", "entity_id"),
+        Index("idx_entity_asset_asset", "asset_id"),
+        {"comment": "实体-资产关联表"}
+    )

@@ -2113,14 +2113,17 @@ async def get_knowledge_points(
 
 @router.get("/knowledge/points/{point_id}", response_model=ApiResponse)
 async def get_knowledge_point_detail(point_id: str, db: AsyncSession = Depends(get_db)):
-    """获取知识点详情"""
+    """获取知识点详情（含关联资产）"""
     from app.models.mysql_models import KnowledgePoint
+    from app.services.entity_asset_service import get_entity_assets
     result = await db.execute(
         select(KnowledgePoint).where(KnowledgePoint.id == point_id)
     )
     point = result.scalar_one_or_none()
     if not point:
         raise HTTPException(status_code=404, detail="知识点不存在")
+
+    assets = await get_entity_assets(db, entity_type="knowledge_point", entity_id=point_id)
 
     return ApiResponse(data={
         "id": point.id,
@@ -2136,6 +2139,7 @@ async def get_knowledge_point_detail(point_id: str, db: AsyncSession = Depends(g
         "source": point.source,
         "source_page": point.source_page,
         "status": point.status,
+        "assets": assets,
         "created_at": point.created_at.isoformat() if point.created_at else None,
         "updated_at": point.updated_at.isoformat() if point.updated_at else None
     })
@@ -2285,14 +2289,17 @@ async def get_questions(
 
 @router.get("/questions/{question_id}", response_model=ApiResponse)
 async def get_question_detail(question_id: str, db: AsyncSession = Depends(get_db)):
-    """获取题目详情"""
+    """获取题目详情（含关联资产）"""
     from app.models.mysql_models import Question
+    from app.services.entity_asset_service import get_entity_assets
     result = await db.execute(
         select(Question).where(Question.id == question_id)
     )
     question = result.scalar_one_or_none()
     if not question:
         raise HTTPException(status_code=404, detail="题目不存在")
+
+    assets = await get_entity_assets(db, entity_type="question", entity_id=question_id)
 
     return ApiResponse(data={
         "id": question.id,
@@ -2309,6 +2316,7 @@ async def get_question_detail(question_id: str, db: AsyncSession = Depends(get_d
         "knowledge_point_ids": question.knowledge_point_ids,
         "tags": question.tags,
         "status": question.status,
+        "assets": assets,
         "created_at": question.created_at.isoformat() if question.created_at else None,
         "updated_at": question.updated_at.isoformat() if question.updated_at else None
     })
@@ -4081,3 +4089,47 @@ async def import_outline_from_document(
         ))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+
+# ===== 资产托管 =====
+
+@router.get("/assets/{asset_id}/file")
+async def serve_asset_file(asset_id: str, db: AsyncSession = Depends(get_db)):
+    """根据 asset_id 返回资产文件（图片）"""
+    from fastapi.responses import FileResponse
+    from app.models.mysql_models import DocumentAsset
+
+    asset = await db.get(DocumentAsset, asset_id)
+    if not asset:
+        raise HTTPException(status_code=404, detail="资产不存在")
+    if not asset.file_path:
+        raise HTTPException(status_code=404, detail="该资产无文件（可能是公式或表格 HTML）")
+
+    file_path = Path(asset.file_path)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail=f"文件不存在: {asset.file_path}")
+    return FileResponse(path=str(file_path))
+
+
+@router.get("/assets/{asset_id}", response_model=ApiResponse)
+async def get_asset_metadata(asset_id: str, db: AsyncSession = Depends(get_db)):
+    """获取资产元数据（不含二进制文件）"""
+    from app.models.mysql_models import DocumentAsset
+
+    asset = await db.get(DocumentAsset, asset_id)
+    if not asset:
+        raise HTTPException(status_code=404, detail="资产不存在")
+    return ApiResponse(data={
+        "id": asset.id,
+        "document_id": asset.document_id,
+        "page_no": asset.page_no,
+        "asset_type": asset.asset_type,
+        "file_path": asset.file_path,
+        "thumbnail_path": asset.thumbnail_path,
+        "caption_text": asset.caption_text,
+        "ocr_text": asset.ocr_text,
+        "bbox": asset.bbox,
+        "metadata": asset.metadata_json,
+        "file_url": f"/api/v1/admin/assets/{asset.id}/file" if asset.file_path else None,
+    })

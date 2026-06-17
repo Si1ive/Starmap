@@ -1179,6 +1179,12 @@ class EntityExtractionService:
                 )
             )
         )
+        # 清理资产关联
+        try:
+            from app.services.entity_asset_service import cleanup_entity_links
+            await cleanup_entity_links(self.db, entity_type=entity_type, entity_ids=entity_ids)
+        except Exception:
+            pass
         await self.db.execute(
             delete(RetrievalSegment).where(
                 and_(
@@ -1309,6 +1315,21 @@ class EntityExtractionService:
         self.db.add(source_link)
 
         await self.db.flush()
+
+        # 关联同页的图片/表格/公式资产
+        try:
+            from app.services.entity_asset_service import link_entity_assets_by_pages
+            pages = {b.page_no for b in [title_block, *content_blocks] if b.page_no is not None}
+            await link_entity_assets_by_pages(
+                self.db,
+                entity_type="knowledge_point",
+                entity_id=kp_id,
+                document_id=document_id,
+                page_numbers=pages,
+            )
+        except Exception as e:
+            logger.warning("知识点资产关联失败", knowledge_point_id=kp_id, error=str(e))
+
         return True
 
     async def _extract_questions(
@@ -1992,6 +2013,21 @@ class EntityExtractionService:
                     self.db.add(source_link)
 
                 await self.db.flush()
+
+                # 关联资产
+                if blocks:
+                    try:
+                        from app.services.entity_asset_service import link_entity_assets_by_pages
+                        pages = {b.page_no for b in blocks if b.page_no is not None}
+                        await link_entity_assets_by_pages(
+                            self.db,
+                            entity_type="question",
+                            entity_id=question_dict['id'],
+                            document_id=question_dict['document_id'],
+                            page_numbers=pages,
+                        )
+                    except Exception as e:
+                        logger.warning("题目资产关联失败", question_id=question_dict['id'], error=str(e))
             return True, "saved"
         except Exception as e:
             logger.error(f"保存题目失败: {e}")

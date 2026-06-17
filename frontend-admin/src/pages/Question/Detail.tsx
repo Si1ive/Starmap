@@ -3,6 +3,7 @@ import { Card, Tag, Button, Descriptions, Spin, Space } from 'antd'
 import { ArrowLeftOutlined, EditOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { getQuestionDetail, getSubjects, getChapters } from '@/api'
+import EntityAssets from '@/components/EntityAssets'
 
 const typeConfig: Record<string, { color: string; text: string }> = {
   choice: { color: 'blue', text: '选择题' },
@@ -135,6 +136,10 @@ const QuestionDetail = () => {
           </Descriptions.Item>
           <Descriptions.Item label="创建时间">{question.created_at || '-'}</Descriptions.Item>
         </Descriptions>
+      </Card>
+
+      <Card title={`图片/表格/公式 (${(question as any).assets?.length || 0})`} style={{ marginTop: 16 }}>
+        <EntityAssets assets={(question as any).assets || []} />
       </Card>
     </div>
   )

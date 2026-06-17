@@ -116,10 +116,10 @@ class DocumentParseService:
                 corpus_file, parse_run.id, parse_result
             )
 
-            # 5. 落库 pages、blocks、assets
+            # 5. 落库 pages、blocks、assets（assets 必须在 blocks 后，因为会读取 figure/table/formula block 二次注册）
             await self._persist_pages(document.id, parse_result.pages)
-            await self._persist_assets(document.id, parse_result.assets)
             await self._persist_blocks(document.id, parse_result.blocks)
+            await self._persist_assets(document.id, parse_result.assets)
 
             elapsed = time.time() - start_time
 
@@ -369,11 +369,44 @@ class DocumentParseService:
                 document_id=document_id,
                 page_no=asset_data.page_no,
                 asset_type=asset_data.asset_type or "figure",
-                file_path=asset_data.file_path or "",
+                file_path=asset_data.file_path or None,
                 caption_text=asset_data.caption_text,
                 bbox=asset_data.bbox,
+                metadata_json=getattr(asset_data, "metadata", None),
             )
             self.db.add(asset)
+
+        # 同步把 figure/table/formula block 也注册成 asset，让公式 LaTeX 和 HTML 表格也能被实体引用
+        from app.models.mysql_models import DocumentBlock as _Block
+        block_query = await self.db.execute(
+            select(_Block).where(
+                _Block.document_id == document_id,
+                _Block.block_type.in_(["figure", "table", "formula"]),
+            )
+        )
+        blocks_to_promote = block_query.scalars().all()
+        existing_pages = {(a.page_no, a.asset_type, (a.bbox or {}).get("x1") if a.bbox else None) for a in assets}
+        for b in blocks_to_promote:
+            key = (b.page_no, b.block_type, (b.bbox or {}).get("x1") if b.bbox else None)
+            if key in existing_pages:
+                continue  # 已有同位置同类型 asset
+            metadata = {}
+            if b.block_type == "table" and b.html_table:
+                metadata["html"] = b.html_table
+            if b.block_type == "formula" and b.latex:
+                metadata["latex"] = b.latex
+            if b.content_text:
+                metadata.setdefault("text", b.content_text)
+            self.db.add(DocumentAsset(
+                id=generate_id(),
+                document_id=document_id,
+                page_no=b.page_no,
+                asset_type=b.block_type,
+                file_path=None,
+                caption_text=b.content_text[:500] if b.content_text else None,
+                bbox=b.bbox,
+                metadata_json=metadata or None,
+            ))
 
         await self.db.flush()
 
