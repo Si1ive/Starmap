@@ -36,10 +36,16 @@ export interface OutlinePreviewItem {
 }
 
 export interface OutlinePreview {
-  format: 'json' | 'text'
+  format: 'json' | 'text' | 'document_sections'
   total_chapters: number
   max_depth: number
   chapters: OutlinePreviewItem[]
+}
+
+export interface OutlineUploadParseResult extends OutlinePreview {
+  corpus_file_id: string
+  document_id: string
+  file_name: string
 }
 
 export interface OutlineImportResult {
@@ -86,4 +92,17 @@ export const importOutlineFromDocument = (data: {
   set_default?: boolean
 }): Promise<ApiResponse<OutlineImportResult>> => {
   return adminClient.post('/outlines/import-from-document', data)
+}
+
+export const uploadParseOutline = (
+  file: File,
+  parserName?: string
+): Promise<ApiResponse<OutlineUploadParseResult>> => {
+  const formData = new FormData()
+  formData.append('file', file)
+  if (parserName) formData.append('parser_name', parserName)
+  return adminClient.post('/outlines/upload-parse', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 5 * 60 * 1000,
+  })
 }

@@ -1,19 +1,19 @@
 import { useState } from 'react'
 import {
   Card, Table, Tag, Button, Space, Modal, Form, Input, InputNumber, Select,
-  Switch, Upload, Tree, message, Tabs, Alert, Descriptions, Spin,
+  Switch, Upload, Tree, message, Alert, Descriptions, Spin,
 } from 'antd'
 import {
-  PlusOutlined, UploadOutlined, EyeOutlined, CheckCircleOutlined,
+  PlusOutlined, InboxOutlined, EyeOutlined, CheckCircleOutlined,
 } from '@ant-design/icons'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  listOutlines, getOutlineChapters, previewOutline, importOutline,
+  listOutlines, getOutlineChapters, uploadParseOutline, importOutlineFromDocument,
   getSubjects,
-  type OutlineSummary, type OutlineChapter, type OutlinePreview, type OutlinePreviewItem,
+  type OutlineSummary, type OutlineChapter, type OutlineUploadParseResult, type OutlinePreviewItem,
 } from '@/api'
 
-const { TextArea } = Input
+const { Dragger } = Upload
 
 const buildTreeNodes = (chapters: OutlinePreviewItem[] | OutlineChapter[]): any[] => {
   return chapters.map((c) => {
@@ -32,20 +32,24 @@ const OutlineList = () => {
   const qc = useQueryClient()
   const [importModalOpen, setImportModalOpen] = useState(false)
   const [form] = Form.useForm()
-  const [content, setContent] = useState('')
-  const [filename, setFilename] = useState('')
-  const [preview, setPreview] = useState<OutlinePreview | null>(null)
+  const [parsed, setParsed] = useState<OutlineUploadParseResult | null>(null)
   const [chapterDrawer, setChapterDrawer] = useState<{ outline: OutlineSummary | null; open: boolean }>({ outline: null, open: false })
 
   const { data: outlinesRes } = useQuery({ queryKey: ['outlines'], queryFn: listOutlines })
   const { data: subjectsRes } = useQuery({ queryKey: ['subjects'], queryFn: getSubjects })
 
-  const previewMut = useMutation({
-    mutationFn: () => previewOutline(content, filename),
+  const resetImport = () => {
+    setImportModalOpen(false)
+    form.resetFields()
+    setParsed(null)
+  }
+
+  const uploadMut = useMutation({
+    mutationFn: (file: File) => uploadParseOutline(file),
     onSuccess: (res) => {
       if (res.data) {
-        setPreview(res.data)
-        message.success(`已解析 ${res.data.total_chapters} 个章节，深度 ${res.data.max_depth}`)
+        setParsed(res.data)
+        message.success(`解析完成：识别 ${res.data.total_chapters} 个章节，深度 ${res.data.max_depth}`)
       }
     },
     onError: (err: any) => {
@@ -55,25 +59,19 @@ const OutlineList = () => {
 
   const importMut = useMutation({
     mutationFn: (values: any) =>
-      importOutline({
+      importOutlineFromDocument({
         subject_id: values.subject_id,
+        document_id: parsed!.document_id,
         name: values.name,
         year: values.year,
         version: values.version || 'v1.0',
-        description: values.description,
         set_default: !!values.set_default,
-        content,
-        filename,
       }),
     onSuccess: (res) => {
       const r = res.data
       message.success(`导入成功：新建 ${r?.created_chapters} 个，更新 ${r?.updated_chapters} 个`)
       qc.invalidateQueries({ queryKey: ['outlines'] })
-      setImportModalOpen(false)
-      form.resetFields()
-      setContent('')
-      setFilename('')
-      setPreview(null)
+      resetImport()
     },
     onError: (err: any) => message.error('导入失败：' + (err?.response?.data?.detail || err.message)),
   })
@@ -87,15 +85,14 @@ const OutlineList = () => {
   const outlines = outlinesRes?.data || []
   const subjects = subjectsRes?.data || []
 
-  const handleFileUpload = (file: File) => {
-    const reader = new FileReader()
-    reader.onload = (e) => {
-      const text = String(e.target?.result || '')
-      setContent(text)
-      setFilename(file.name)
-      message.success(`已读取 ${file.name}（${text.length} 字符）`)
+  const beforeUpload = (file: File) => {
+    const ext = file.name.split('.').pop()?.toLowerCase()
+    if (!ext || !['pdf', 'docx', 'pptx'].includes(ext)) {
+      message.error('仅支持 PDF / DOCX / PPTX 文件')
+      return Upload.LIST_IGNORE
     }
-    reader.readAsText(file, 'utf-8')
+    setParsed(null)
+    uploadMut.mutate(file)
     return false
   }
 
@@ -132,88 +129,80 @@ const OutlineList = () => {
         <Table dataSource={outlines} columns={columns} rowKey="id" pagination={false} size="small" />
       </Card>
 
-      {/* 导入大纲弹窗 */}
+      {/* 导入大纲弹窗：PDF 解析 → 标题树预览 → 入库 */}
       <Modal
-        title="导入大纲"
+        title="导入大纲（PDF 解析）"
         open={importModalOpen}
-        onCancel={() => setImportModalOpen(false)}
+        onCancel={resetImport}
         footer={null}
         width={900}
+        destroyOnClose
       >
-        <Tabs
-          items={[
-            {
-              key: 'paste',
-              label: '粘贴文本/JSON',
-              children: (
-                <Space direction="vertical" style={{ width: '100%' }} size="middle">
-                  <Alert
-                    type="info"
-                    message="支持两种格式"
-                    description={
-                      <div>
-                        <div>1. <b>JSON</b>：[{`{"name": "数据结构", "children": [...]}`}]</div>
-                        <div>2. <b>纯文本</b>：每行一章节，支持 1.1.1 / 第一章 / 一、 / (一) 等编号自动识别层级</div>
-                      </div>
-                    }
-                  />
-                  <Upload beforeUpload={handleFileUpload} showUploadList={false}
-                    accept=".txt,.md,.json">
-                    <Button icon={<UploadOutlined />}>从文件加载</Button>
-                  </Upload>
-                  {filename && <span style={{ color: '#666', fontSize: 12 }}>已加载：{filename}</span>}
-                  <TextArea
-                    rows={12}
-                    value={content}
-                    onChange={(e) => { setContent(e.target.value); setPreview(null) }}
-                    placeholder="粘贴大纲内容，或从上方加载文件…"
-                    style={{ fontFamily: 'monospace', fontSize: 13 }}
-                  />
-                  <Button onClick={() => previewMut.mutate()} loading={previewMut.isPending}
-                    disabled={!content.trim()}>解析预览</Button>
+        <Space direction="vertical" style={{ width: '100%' }} size="middle">
+          <Alert
+            type="info"
+            showIcon
+            message="上传大纲 PDF 自动解析"
+            description="系统会解析 PDF 的标题层级（章/节/条），生成大纲章节树。大纲走标题树识别，不经过题目的题干/选项分离逻辑。支持 PDF / DOCX / PPTX。"
+          />
 
-                  {preview && (
-                    <Card size="small" title={`预览（${preview.format}, 共 ${preview.total_chapters} 节, 深度 ${preview.max_depth}）`}>
-                      <Tree
-                        treeData={buildTreeNodes(preview.chapters)}
-                        defaultExpandAll={preview.total_chapters < 50}
-                        showLine
-                      />
-                    </Card>
-                  )}
+          <Dragger
+            beforeUpload={beforeUpload}
+            showUploadList={false}
+            accept=".pdf,.docx,.pptx"
+            disabled={uploadMut.isPending}
+          >
+            <p className="ant-upload-drag-icon"><InboxOutlined /></p>
+            <p className="ant-upload-text">点击或拖拽大纲文件到此处</p>
+            <p className="ant-upload-hint">解析较大文件可能需要数十秒，请耐心等待</p>
+          </Dragger>
 
-                  {preview && (
-                    <Card size="small" title="入库设置">
-                      <Form form={form} layout="vertical" onFinish={(v) => importMut.mutate(v)}>
-                        <Space>
-                          <Form.Item name="subject_id" label="学科" rules={[{ required: true }]} style={{ minWidth: 200 }}>
-                            <Select placeholder="选择学科" options={subjects.map((s: any) => ({ label: s.name, value: s.id }))} />
-                          </Form.Item>
-                          <Form.Item name="name" label="大纲名称" rules={[{ required: true }]} style={{ minWidth: 220 }}>
-                            <Input placeholder="如：2025 年 408 大纲" />
-                          </Form.Item>
-                          <Form.Item name="year" label="年份" rules={[{ required: true }]}>
-                            <InputNumber min={2000} max={2100} placeholder="2025" />
-                          </Form.Item>
-                          <Form.Item name="version" label="版本" initialValue="v1.0">
-                            <Input placeholder="v1.0" />
-                          </Form.Item>
-                          <Form.Item name="set_default" label="设为默认" valuePropName="checked">
-                            <Switch />
-                          </Form.Item>
-                        </Space>
-                        <Form.Item name="description" label="说明">
-                          <TextArea rows={2} placeholder="可选说明" />
-                        </Form.Item>
-                        <Button type="primary" htmlType="submit" loading={importMut.isPending}>确认导入</Button>
-                      </Form>
-                    </Card>
-                  )}
+          {uploadMut.isPending && (
+            <div style={{ textAlign: 'center', padding: 16 }}>
+              <Spin tip="正在解析文件并提取标题树…" />
+            </div>
+          )}
+
+          {parsed && (
+            <Card size="small" title={`标题树预览（${parsed.file_name}，共 ${parsed.total_chapters} 节，深度 ${parsed.max_depth}）`}>
+              {parsed.total_chapters === 0 ? (
+                <Alert type="warning" message="未识别到标题层级，请确认该文件含有章节标题结构" />
+              ) : (
+                <Tree
+                  treeData={buildTreeNodes(parsed.chapters)}
+                  defaultExpandAll={parsed.total_chapters < 50}
+                  showLine
+                  height={360}
+                />
+              )}
+            </Card>
+          )}
+
+          {parsed && parsed.total_chapters > 0 && (
+            <Card size="small" title="入库设置">
+              <Form form={form} layout="vertical" onFinish={(v) => importMut.mutate(v)}>
+                <Space wrap>
+                  <Form.Item name="subject_id" label="学科" rules={[{ required: true }]} style={{ minWidth: 200 }}>
+                    <Select placeholder="选择学科" options={subjects.map((s: any) => ({ label: s.name, value: s.id }))} />
+                  </Form.Item>
+                  <Form.Item name="name" label="大纲名称" rules={[{ required: true }]} style={{ minWidth: 220 }}>
+                    <Input placeholder="如：2025 年 408 大纲" />
+                  </Form.Item>
+                  <Form.Item name="year" label="年份" rules={[{ required: true }]}>
+                    <InputNumber min={2000} max={2100} placeholder="2025" />
+                  </Form.Item>
+                  <Form.Item name="version" label="版本" initialValue="v1.0">
+                    <Input placeholder="v1.0" />
+                  </Form.Item>
+                  <Form.Item name="set_default" label="设为默认" valuePropName="checked">
+                    <Switch />
+                  </Form.Item>
                 </Space>
-              ),
-            },
-          ]}
-        />
+                <Button type="primary" htmlType="submit" loading={importMut.isPending}>确认导入</Button>
+              </Form>
+            </Card>
+          )}
+        </Space>
       </Modal>
 
       {/* 章节查看 */}

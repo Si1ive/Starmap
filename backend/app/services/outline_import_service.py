@@ -345,18 +345,12 @@ class OutlineImportService:
                 updated += u
         return created, updated
 
-    async def import_from_document_sections(
-        self,
-        subject_id: str,
-        document_id: str,
-        outline_name: str,
-        year: int,
-        version: str = "v1.0",
-        set_default: bool = False,
-    ) -> Dict[str, Any]:
+    async def _load_document_sections_tree(self, document_id: str) -> List[Dict[str, Any]]:
         """
-        从已解析文档的标题树（document_sections）转换为大纲入库。
-        适合用户上传 PDF 大纲文件 → 解析器跑标题树 → 一键转大纲场景。
+        读取文档标题树（document_sections）并转成 chapters 树。
+
+        大纲走的是「标题树」这条路（document_section_service 的规则提取），
+        与题目抽取的「题干/选项分离 + LLM 兜底」机制完全不同。
         """
         sections = (await self.db.execute(
             select(DocumentSection)
@@ -366,7 +360,6 @@ class OutlineImportService:
         if not sections:
             raise ValueError("文档没有可用的标题树，请先执行『提取标题树』")
 
-        # 把扁平 sections 转成树
         chapters_tree: List[Dict[str, Any]] = []
         # 用栈维护父链：(level, children_list)
         stack: List[Tuple[int, List[Dict[str, Any]]]] = [(0, chapters_tree)]
@@ -387,6 +380,32 @@ class OutlineImportService:
 
         if not chapters_tree:
             raise ValueError("标题树解析后为空")
+        return chapters_tree
+
+    async def preview_from_document_sections(self, document_id: str) -> Dict[str, Any]:
+        """预览文档标题树转成的大纲章节树（不入库）。"""
+        chapters_tree = await self._load_document_sections_tree(document_id)
+        return {
+            "format": "document_sections",
+            "total_chapters": self._count_tree(chapters_tree),
+            "max_depth": self._max_depth(chapters_tree),
+            "chapters": chapters_tree,
+        }
+
+    async def import_from_document_sections(
+        self,
+        subject_id: str,
+        document_id: str,
+        outline_name: str,
+        year: int,
+        version: str = "v1.0",
+        set_default: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        从已解析文档的标题树（document_sections）转换为大纲入库。
+        适合用户上传 PDF 大纲文件 → 解析器跑标题树 → 一键转大纲场景。
+        """
+        chapters_tree = await self._load_document_sections_tree(document_id)
 
         # 转成 import_outline 同样的入库流程
         existing_outline = (await self.db.execute(

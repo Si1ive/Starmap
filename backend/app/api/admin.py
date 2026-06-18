@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Optional, List, Any, Literal
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, WebSocket, WebSocketDisconnect, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, WebSocket, WebSocketDisconnect, UploadFile, File, Form
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, Response, FileResponse
 from pydantic import BaseModel, Field
@@ -4049,6 +4049,98 @@ async def import_outline_from_document(
         ))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/outlines/document/{document_id}/preview", response_model=ApiResponse)
+async def preview_outline_from_document(document_id: str, db: AsyncSession = Depends(get_db)):
+    """预览某文档标题树转成的大纲章节树（不入库）。"""
+    from app.services.outline_import_service import OutlineImportService
+    service = OutlineImportService(db)
+    try:
+        return ApiResponse(data=await service.preview_from_document_sections(document_id))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/outlines/upload-parse", response_model=ApiResponse)
+async def upload_parse_outline(
+    file: UploadFile = File(...),
+    parser_name: Optional[str] = Form(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    上传大纲 PDF 并一步走完「注册 → 解析 → 提取标题树」，返回 document_id + 章节树预览。
+
+    大纲走的是标题树（document_section_service 规则提取）这条路，
+    刻意不经过题目抽取的「题干/选项分离 + LLM 兜底」机制。
+    确认预览后，前端再调 /outlines/import-from-document 携带 document_id 入库。
+    """
+    from app.services.corpus_service import CorpusService, SUPPORTED_EXTENSIONS
+    from app.services.document_parse_service import DocumentParseService
+    from app.services.document_section_service import DocumentSectionService
+    from app.services.document_parsers import ParserUnavailableError
+    from app.services.outline_import_service import OutlineImportService
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="文件名为空")
+    ext = Path(file.filename).suffix.lstrip(".").lower()
+    if ext not in SUPPORTED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的文件类型: {ext}，仅支持 {', '.join(sorted(SUPPORTED_EXTENSIONS))}",
+        )
+
+    # 1) 保存并注册（doc_type 默认 other，非试卷类，可走标题树提取）
+    upload_dir = Path(__file__).parent.parent.parent / "uploads"
+    upload_dir.mkdir(exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    file_path = upload_dir / f"{timestamp}_{file.filename}"
+    file_path.write_bytes(await file.read())
+
+    corpus_service = CorpusService(db)
+    reg = await corpus_service.register_single_file(
+        file_path=str(file_path),
+        batch_label=f"outline-{timestamp}",
+    )
+    corpus_file_id = reg["corpus_file_id"]
+
+    # 2) 解析（已解析则复用既有 document，避免重复跑解析器）
+    parse_service = DocumentParseService(db)
+    document_id: Optional[str] = None
+    if not reg["is_new"]:
+        existing_doc = await parse_service._get_document_by_corpus_file_id(corpus_file_id)
+        if existing_doc:
+            document_id = existing_doc.id
+
+    if document_id is None:
+        try:
+            parse_result = await parse_service.parse_document(corpus_file_id)
+            document_id = parse_result["document_id"]
+        except ParserUnavailableError as e:
+            raise HTTPException(status_code=503, detail=str(e))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    # 3) 提取标题树（规则路径，force 覆盖旧结果）
+    section_service = DocumentSectionService(db)
+    try:
+        await section_service.extract_sections(document_id, force=True)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # 4) 预览章节树（不入库）
+    outline_service = OutlineImportService(db)
+    try:
+        preview = await outline_service.preview_from_document_sections(document_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return ApiResponse(data={
+        "corpus_file_id": corpus_file_id,
+        "document_id": document_id,
+        "file_name": file.filename,
+        **preview,
+    })
 
 
 
