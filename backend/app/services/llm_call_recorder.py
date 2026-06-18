@@ -368,7 +368,7 @@ def _log_to_summary(row: LLMCallLog) -> Dict[str, Any]:
         "cost_usd": float(row.cost_usd or 0),
         "latency_ms": int(row.latency_ms or 0),
         "error_msg": row.error_msg,
-        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "created_at": (row.created_at.isoformat() + "Z") if row.created_at else None,
     }
 
 

@@ -1279,8 +1279,8 @@ async def get_conversations(
             "last_message": s.last_message,
             "message_count": int(s.message_count or 0),
             "has_knowledge": bool(s.has_knowledge),
-            "created_at": s.created_at.isoformat() if s.created_at else None,
-            "updated_at": s.updated_at.isoformat() if s.updated_at else None,
+            "created_at": (s.created_at.isoformat() + "Z") if s.created_at else None,
+            "updated_at": (s.updated_at.isoformat() + "Z") if s.updated_at else None,
         }
         for s in rows
     ]
@@ -1731,8 +1731,8 @@ async def get_conversation_detail(
         "message_count": int(chat_session.message_count or 0),
         "has_knowledge": bool(chat_session.has_knowledge),
         "metadata_json": chat_session.metadata_json,
-        "created_at": chat_session.created_at.isoformat() if chat_session.created_at else None,
-        "updated_at": chat_session.updated_at.isoformat() if chat_session.updated_at else None,
+        "created_at": (chat_session.created_at.isoformat() + "Z") if chat_session.created_at else None,
+        "updated_at": (chat_session.updated_at.isoformat() + "Z") if chat_session.updated_at else None,
         "messages": [
             {
                 "id": str(m.id),
@@ -1740,7 +1740,7 @@ async def get_conversation_detail(
                 "content": m.content,
                 "citations": m.citations or [],
                 "llm_call_id": m.llm_call_id,
-                "timestamp": m.created_at.isoformat() if m.created_at else None,
+                "timestamp": (m.created_at.isoformat() + "Z") if m.created_at else None,
             }
             for m in msgs
         ],

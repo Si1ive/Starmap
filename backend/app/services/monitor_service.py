@@ -25,6 +25,13 @@ from app.models.mysql_models import (
 logger = get_logger(__name__)
 
 
+def _iso_utc(dt: Optional[datetime]) -> Optional[str]:
+    """把 utcnow 写入的 naive datetime 序列化成带 Z 的 ISO 8601，前端按 UTC 解析。"""
+    if dt is None:
+        return None
+    return dt.isoformat() + "Z"
+
+
 # ===== 服务日志 =====
 
 
@@ -81,7 +88,7 @@ async def query_service_logs(
                 "request_id": r.request_id,
                 "context": r.context,
                 "traceback": r.traceback,
-                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "created_at": _iso_utc(r.created_at),
             }
             for r in rows
         ],
@@ -164,7 +171,7 @@ async def archive_service_logs(
                 "request_id": r.request_id,
                 "context": r.context,
                 "traceback": r.traceback,
-                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "created_at": _iso_utc(r.created_at),
             }, ensure_ascii=False) + "\n")
 
     # 归档完成才清库（至少导出成功了）
@@ -224,7 +231,7 @@ def _metric_to_dict(row: SystemMetric) -> Dict[str, Any]:
         "disk_percent": float(row.disk_percent or 0),
         "process_rss_mb": float(row.process_rss_mb or 0),
         "process_cpu_percent": float(row.process_cpu_percent or 0),
-        "sampled_at": row.sampled_at.isoformat() if row.sampled_at else None,
+        "sampled_at": _iso_utc(row.sampled_at),
     }
 
 
@@ -250,7 +257,7 @@ async def get_api_stats_overview(session: AsyncSession, hours: int = 24) -> Dict
     # 每小时桶时序
     qps_by_hour: Dict[str, int] = {}
     for r in rows:
-        key = r.hour_bucket.isoformat() if r.hour_bucket else "unknown"
+        key = _iso_utc(r.hour_bucket) or "unknown"
         qps_by_hour[key] = qps_by_hour.get(key, 0) + int(r.call_count or 0)
     qps_trend = [{"date": k, "count": v} for k, v in sorted(qps_by_hour.items())]
 
