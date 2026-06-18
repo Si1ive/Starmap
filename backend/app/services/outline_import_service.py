@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.models.mysql_models import (
-    ExamOutline, CanonicalChapter, Subject, DocumentSection,
+    ExamOutline, CanonicalChapter, Subject, DocumentSection, ExamOutlineSubject,
 )
 
 logger = get_logger(__name__)
@@ -458,6 +458,218 @@ class OutlineImportService:
             "source_document_id": document_id,
         }
 
+    async def _upsert_outline_meta(
+        self, name: str, year: int, version: str,
+        description: Optional[str], set_default: bool,
+    ) -> ExamOutline:
+        """按 year+version upsert 大纲元信息，处理 is_default 互斥。"""
+        outline = (await self.db.execute(
+            select(ExamOutline).where(
+                ExamOutline.year == year, ExamOutline.version == version
+            )
+        )).scalar_one_or_none()
+        if outline:
+            outline.name = name
+            outline.description = description or outline.description
+            outline.status = "active"
+        else:
+            outline = ExamOutline(
+                id=_gen_id(), name=name, year=year, version=version,
+                description=description,
+                release_date=date.today(), effective_date=date.today(),
+                status="active", is_default=set_default,
+            )
+            self.db.add(outline)
+            await self.db.flush()
+        if set_default:
+            others = (await self.db.execute(
+                select(ExamOutline).where(ExamOutline.id != outline.id, ExamOutline.is_default == True)
+            )).scalars().all()
+            for o in others:
+                o.is_default = False
+            outline.is_default = True
+        return outline
+
+    async def import_from_llm_result(
+        self,
+        llm_result: Dict[str, Any],
+        name: str,
+        year: int,
+        version: str = "v1.0",
+        description: Optional[str] = None,
+        set_default: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        把 OutlineLLMService.split_outline 的多门课结果整体入库。
+
+        llm_result: {"subjects": [{subject_id, subject_name, exam_objective,
+                                    chapters: [...]}]}
+        - upsert ExamOutline
+        - 每门课 upsert 一条 exam_outline_subjects（存考察目标）
+        - 每门课章节树挂到对应 subject_id + outline_id（description 一并入库）
+        """
+        subjects = llm_result.get("subjects") or []
+        if not subjects:
+            raise ValueError("LLM 拆分结果为空，无法入库")
+
+        outline = await self._upsert_outline_meta(name, year, version, description, set_default)
+
+        total_created = 0
+        total_updated = 0
+        subject_summaries: List[Dict[str, Any]] = []
+        for subj in subjects:
+            subject_id = subj.get("subject_id")
+            chapters = subj.get("chapters") or []
+            if not subject_id or not chapters:
+                continue
+
+            # upsert 考察目标关联
+            link = (await self.db.execute(
+                select(ExamOutlineSubject).where(
+                    ExamOutlineSubject.outline_id == outline.id,
+                    ExamOutlineSubject.subject_id == subject_id,
+                )
+            )).scalar_one_or_none()
+            chapter_count = self._count_tree(chapters)
+            if link:
+                link.exam_objective = subj.get("exam_objective") or link.exam_objective
+                link.chapter_count = chapter_count
+                link.guidance_status = "pending"
+            else:
+                link = ExamOutlineSubject(
+                    id=_gen_id(),
+                    outline_id=outline.id,
+                    subject_id=subject_id,
+                    exam_objective=subj.get("exam_objective"),
+                    chapter_count=chapter_count,
+                    guidance_status="pending",
+                )
+                self.db.add(link)
+                await self.db.flush()
+
+            created, updated = await self._upsert_chapters(
+                subject_id=subject_id,
+                outline_id=outline.id,
+                chapters=chapters,
+                parent_id=None,
+                level=1,
+            )
+            total_created += created
+            total_updated += updated
+            subject_summaries.append({
+                "subject_id": subject_id,
+                "subject_name": subj.get("subject_name"),
+                "chapter_count": chapter_count,
+                "created": created,
+                "updated": updated,
+            })
+
+        await self.db.commit()
+        return {
+            "outline_id": outline.id,
+            "outline_name": outline.name,
+            "year": outline.year,
+            "version": outline.version,
+            "created_chapters": total_created,
+            "updated_chapters": total_updated,
+            "subjects": subject_summaries,
+        }
+
+    async def generate_guidance_for_subject(
+        self, outline_id: str, subject_id: str, batch_size: int = 15,
+    ) -> Dict[str, Any]:
+        """
+        为某门课的所有章节批量生成复习指导（exam_guidance）。
+
+        结合该门课的考察目标，按 batch_size 分组调 LLM，逐节点写回 CanonicalChapter。
+        单组失败不影响其他组；全部失败才标记 failed。
+        """
+        from app.services.outline_llm_service import OutlineLLMService
+
+        link = (await self.db.execute(
+            select(ExamOutlineSubject).where(
+                ExamOutlineSubject.outline_id == outline_id,
+                ExamOutlineSubject.subject_id == subject_id,
+            )
+        )).scalar_one_or_none()
+        if not link:
+            raise ValueError("该大纲下不存在此科目的考察目标记录")
+
+        chapters = (await self.db.execute(
+            select(CanonicalChapter).where(
+                CanonicalChapter.outline_id == outline_id,
+                CanonicalChapter.subject_id == subject_id,
+            ).order_by(CanonicalChapter.level, CanonicalChapter.sort_order)
+        )).scalars().all()
+        if not chapters:
+            raise ValueError("该科目下没有章节，无法生成复习指导")
+
+        llm_service = OutlineLLMService(self.db)
+        client = await llm_service._get_client()
+        if not client.is_available:
+            raise ValueError("大纲拆分 LLM 未启用或缺少配置，请在系统设置 -> outline_llm 配置后重试")
+
+        link.guidance_status = "generating"
+        await self.db.commit()
+
+        objective = link.exam_objective or ""
+        by_id = {c.id: c for c in chapters}
+        updated = 0
+        any_success = False
+        any_fail = False
+
+        for i in range(0, len(chapters), batch_size):
+            batch = chapters[i:i + batch_size]
+            items = [
+                {"id": c.id, "code": c.outline_code or "", "name": c.name,
+                 "points": (c.description or "")[:500]}
+                for c in batch
+            ]
+            prompt = self._build_guidance_prompt(objective, items)
+            try:
+                from app.services.outline_llm_service import _extract_json
+                text = await client.chat(prompt, purpose="大纲章节复习指导生成")
+                data = _extract_json(text)
+                guidance_map = data.get("guidance") if isinstance(data, dict) else data
+                if isinstance(guidance_map, list):
+                    guidance_map = {g.get("id"): g.get("guidance") for g in guidance_map if isinstance(g, dict)}
+                if not isinstance(guidance_map, dict):
+                    raise ValueError("复习指导返回格式不正确")
+                for cid, guidance in guidance_map.items():
+                    chapter = by_id.get(cid)
+                    if chapter and guidance:
+                        chapter.exam_guidance = str(guidance).strip()
+                        updated += 1
+                any_success = True
+                await self.db.commit()
+            except Exception as e:
+                any_fail = True
+                logger.warning("复习指导某批生成失败", outline_id=outline_id,
+                               subject_id=subject_id, batch_start=i, error=str(e))
+
+        link.guidance_status = "done" if any_success and not any_fail else ("failed" if not any_success else "done")
+        await self.db.commit()
+
+        return {
+            "outline_id": outline_id,
+            "subject_id": subject_id,
+            "guidance_status": link.guidance_status,
+            "updated_chapters": updated,
+            "total_chapters": len(chapters),
+        }
+
+    @staticmethod
+    def _build_guidance_prompt(objective: str, items: List[Dict[str, Any]]) -> str:
+        chapters_json = json.dumps(items, ensure_ascii=False, indent=2)
+        return (
+            "你是408考研复习规划专家。下面是一门课的考察目标，以及若干章节（含原文考点）。\n"
+            "请结合考察目标，为每个章节生成简洁的『复习指导』（重点内容 + 复习方向，2-4 句），"
+            "帮助考生抓住该章重点。\n\n"
+            f"考察目标：\n{objective or '（未提供，按通用408要求）'}\n\n"
+            f"章节列表（JSON，id 是章节标识）：\n{chapters_json}\n\n"
+            "只输出 JSON，格式：{\"guidance\": {\"<章节id>\": \"复习指导文本\", ...}}，不要任何解释。"
+        )
+
     @staticmethod
     def _count_tree(chapters: List[Dict[str, Any]]) -> int:
         n = 0
@@ -497,13 +709,18 @@ async def list_outlines(session: AsyncSession) -> List[Dict[str, Any]]:
     ]
 
 
-async def get_outline_chapters(session: AsyncSession, outline_id: str) -> List[Dict[str, Any]]:
-    """以树结构返回大纲下所有章节"""
-    rows = (await session.execute(
+async def get_outline_chapters(
+    session: AsyncSession, outline_id: str, subject_id: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """以树结构返回大纲下所有章节（可按 subject_id 过滤）。含原文考点 description + 复习指导 exam_guidance。"""
+    query = (
         select(CanonicalChapter)
         .where(CanonicalChapter.outline_id == outline_id)
         .order_by(CanonicalChapter.level, CanonicalChapter.sort_order)
-    )).scalars().all()
+    )
+    if subject_id:
+        query = query.where(CanonicalChapter.subject_id == subject_id)
+    rows = (await session.execute(query)).scalars().all()
 
     by_id = {r.id: {
         "id": r.id,
@@ -512,7 +729,10 @@ async def get_outline_chapters(session: AsyncSession, outline_id: str) -> List[D
         "outline_code": r.outline_code,
         "level": r.level,
         "parent_id": r.parent_id,
+        "subject_id": r.subject_id,
         "sort_order": r.sort_order,
+        "description": r.description,
+        "exam_guidance": r.exam_guidance,
         "children": [],
     } for r in rows}
 
@@ -523,3 +743,24 @@ async def get_outline_chapters(session: AsyncSession, outline_id: str) -> List[D
         else:
             roots.append(node)
     return roots
+
+
+async def get_outline_subjects(session: AsyncSession, outline_id: str) -> List[Dict[str, Any]]:
+    """返回某大纲下各门课的考察目标 + 指导生成状态。"""
+    rows = (await session.execute(
+        select(ExamOutlineSubject, Subject)
+        .join(Subject, Subject.id == ExamOutlineSubject.subject_id)
+        .where(ExamOutlineSubject.outline_id == outline_id)
+        .order_by(Subject.sort_order)
+    )).all()
+    return [
+        {
+            "subject_id": link.subject_id,
+            "subject_name": subject.name,
+            "subject_code": subject.code,
+            "exam_objective": link.exam_objective,
+            "guidance_status": link.guidance_status,
+            "chapter_count": link.chapter_count,
+        }
+        for link, subject in rows
+    ]

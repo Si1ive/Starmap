@@ -1,0 +1,322 @@
+"""
+大纲 LLM 拆分服务
+
+把 MinerU/Docling 解析出的大纲 markdown，用 LLM 拆成结构化的章节树：
+- 四门课（数据结构/计组/操作系统/计网）先按科目名粗切，再逐门细拆
+- 每门课产出：考察目标（exam_objective）+ 多层章节树（每节点含 name/outline_code/description）
+- 复习指导（exam_guidance）不在这一步生成，入库后另行批量触发
+
+与题目抽取的「题干/选项分离 + 兜底」机制完全无关，是独立的大纲处理路径。
+"""
+
+import asyncio
+import json
+import re
+from typing import Any, Dict, List, Optional, Tuple
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import settings
+from app.core.logging import get_logger
+from app.models.mysql_models import Document, Subject
+from app.services.llm_call_recorder import LLMCallRecorder
+from app.services.system_settings_service import SystemSettingsService
+
+logger = get_logger(__name__)
+
+# 科目名 → code 的别名映射，用于在 markdown 里定位课程边界。
+# key 是出现在大纲文本中的可能写法，value 是 subjects.code。
+SUBJECT_ALIASES: Dict[str, str] = {
+    "数据结构": "data_structure",
+    "计算机组成原理": "computer_organization",
+    "计算机组成": "computer_organization",
+    "计组": "computer_organization",
+    "操作系统": "operating_system",
+    "计算机网络": "computer_network",
+    "计网": "computer_network",
+}
+
+
+class OutlineLLMClient:
+    """大纲拆分专用 OpenAI 兼容客户端（复用 pdf_structure_llm 的调用模式）。"""
+
+    def __init__(self, config: Dict[str, Any]):
+        self.enabled = bool(config.get("enabled"))
+        self.provider = str(config.get("provider") or "openai_compatible")
+        self.base_url = str(config.get("base_url") or "").strip()
+        self.api_key = str(config.get("api_key") or settings.OPENAI_API_KEY or "").strip()
+        self.model = str(config.get("model") or settings.OPENAI_MODEL).strip()
+        self.temperature = float(config.get("temperature", 0.2))
+        self.max_tokens = int(config.get("max_tokens", 4000))
+        self.timeout_seconds = int(config.get("timeout_seconds", 120))
+        self.system_prompt = str(
+            config.get("system_prompt")
+            or "你是408考研大纲解析专家，负责把大纲文本拆成结构化章节树。"
+        ).strip()
+
+    @property
+    def is_available(self) -> bool:
+        return self.enabled and self.provider == "openai_compatible" and bool(self.api_key and self.model)
+
+    async def chat(self, prompt: str, purpose: str) -> str:
+        if not self.is_available:
+            raise RuntimeError("大纲拆分 LLM 未启用或缺少 api_key/model，请在系统设置 -> outline_llm 配置")
+
+        messages = [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": prompt},
+        ]
+        params = {
+            "max_tokens": self.max_tokens,
+            "temperature": self.temperature,
+            "timeout_seconds": self.timeout_seconds,
+        }
+        async with LLMCallRecorder(
+            model=self.model,
+            called_by="outline_llm",
+            purpose=purpose,
+            base_url=self.base_url or None,
+            request_messages=messages,
+            request_params=params,
+        ) as rec:
+            response_obj, text = await asyncio.to_thread(self._chat_sync, messages)
+            rec.record_response(response_text=text, response_obj=response_obj)
+            return text
+
+    def _chat_sync(self, messages):
+        import openai
+
+        previous_api_key = getattr(openai, "api_key", None)
+        previous_api_base = getattr(openai, "api_base", None)
+        openai.api_key = self.api_key
+        if self.base_url:
+            openai.api_base = self.base_url.rstrip("/")
+        try:
+            response = openai.ChatCompletion.create(
+                model=self.model,
+                messages=messages,
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
+                request_timeout=self.timeout_seconds,
+            )
+            text = response.choices[0].message.content.strip()
+            return response, text
+        finally:
+            openai.api_key = previous_api_key
+            openai.api_base = previous_api_base
+
+
+def _extract_json(text: str) -> Any:
+    """从 LLM 返回里抠出 JSON（容忍 ```json 包裹 / 前后噪声）。"""
+    if not text:
+        raise ValueError("LLM 返回为空")
+    cleaned = text.strip()
+    # 去掉 ```json ... ``` 包裹
+    fence = re.search(r"```(?:json)?\s*(.*?)```", cleaned, re.DOTALL | re.IGNORECASE)
+    if fence:
+        cleaned = fence.group(1).strip()
+    # 退而求其次：截取首个 { 到末个 }
+    if not cleaned.startswith("{"):
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            cleaned = cleaned[start:end + 1]
+    return json.loads(cleaned)
+
+
+def _normalize_chapters(raw: Any) -> List[Dict[str, Any]]:
+    """递归清洗 LLM 输出的章节树：name 必填，保留 outline_code/description/children。"""
+    result: List[Dict[str, Any]] = []
+    if not isinstance(raw, list):
+        return result
+    for idx, node in enumerate(raw):
+        if not isinstance(node, dict):
+            continue
+        name = str(node.get("name") or node.get("title") or "").strip()
+        if not name:
+            continue
+        children = _normalize_chapters(node.get("children") or [])
+        result.append({
+            "name": name[:200],
+            "outline_code": (str(node.get("outline_code")).strip()[:50] if node.get("outline_code") else None),
+            "description": (str(node.get("description")).strip() if node.get("description") else None),
+            "sort_order": idx,
+            "children": children,
+        })
+    return result
+
+
+def _count_tree(chapters: List[Dict[str, Any]]) -> int:
+    n = 0
+    for c in chapters:
+        n += 1
+        n += _count_tree(c.get("children") or [])
+    return n
+
+
+def _max_depth(chapters: List[Dict[str, Any]], current: int = 1) -> int:
+    if not chapters:
+        return 0
+    return max(
+        _max_depth(c.get("children") or [], current + 1) or current
+        for c in chapters
+    )
+
+
+_SPLIT_PROMPT = """下面是一门课《{subject_name}》的考试大纲文本。请把它拆成结构化 JSON。
+
+要求：
+1. 先识别这门课开头的「考察目标」（概括性的整门课要求，通常三四句话），放进 exam_objective。
+2. 再把后续内容拆成多层级章节树 chapters。层级用嵌套 children 表达（如 一 / (一) / 1. / (1) 这样的层级关系）。
+3. 每个章节节点：
+   - name：章节标题（去掉前面的编号），必填
+   - outline_code：原始编号（如 "1.1.1" / "一" / "(一)"），没有就 null
+   - description：该节点对应的考点正文原文（大纲里列的具体考点），没有就 null
+   - children：子章节数组，没有就空数组
+4. 不要生成复习建议或重点分析，只忠实还原大纲结构和原文考点。
+5. 只输出 JSON，不要任何解释文字。
+
+输出格式：
+{{"exam_objective": "……", "chapters": [{{"name": "...", "outline_code": "...", "description": "...", "children": [...]}}]}}
+
+大纲文本：
+---
+{content}
+---"""
+
+
+class OutlineLLMService:
+    """大纲 LLM 拆分服务"""
+
+    def __init__(self, db: AsyncSession):
+        self.db = db
+
+    async def _get_client(self) -> OutlineLLMClient:
+        runtime_settings = await SystemSettingsService(self.db).load()
+        cfg = runtime_settings.get("outline_llm", {})
+        return OutlineLLMClient(cfg if isinstance(cfg, dict) else {})
+
+    async def _load_subjects(self) -> Dict[str, Subject]:
+        """code → Subject。"""
+        rows = (await self.db.execute(select(Subject))).scalars().all()
+        return {s.code: s for s in rows}
+
+    def _segment_by_subject(self, markdown: str) -> List[Tuple[str, int, int]]:
+        """
+        在 markdown 里按科目名定位课程边界，返回 [(subject_code, start, end), ...]。
+        找不到边界返回空列表（交给调用方降级）。
+        """
+        hits: List[Tuple[int, str]] = []  # (pos, code)
+        for alias, code in SUBJECT_ALIASES.items():
+            for m in re.finditer(re.escape(alias), markdown):
+                hits.append((m.start(), code))
+        if not hits:
+            return []
+        hits.sort()
+        # 每门课取首次出现位置作为段落起点（去重 code，保留最早）
+        first_pos: Dict[str, int] = {}
+        for pos, code in hits:
+            if code not in first_pos:
+                first_pos[code] = pos
+        # 至少识别到 2 门课才认为粗切有效
+        if len(first_pos) < 2:
+            return []
+        ordered = sorted(first_pos.items(), key=lambda kv: kv[1])  # [(code, pos)]
+        segments: List[Tuple[str, int, int]] = []
+        for i, (code, pos) in enumerate(ordered):
+            end = ordered[i + 1][1] if i + 1 < len(ordered) else len(markdown)
+            segments.append((code, pos, end))
+        return segments
+
+    async def split_outline(self, document_id: str) -> Dict[str, Any]:
+        """
+        拆分大纲文档，返回四门课结构（不入库）：
+        {subjects: [{subject_id, subject_code, subject_name, exam_objective,
+                     total_chapters, max_depth, chapters}]}
+        """
+        document = (await self.db.execute(
+            select(Document).where(Document.id == document_id)
+        )).scalar_one_or_none()
+        if not document:
+            raise ValueError(f"文档不存在: {document_id}")
+
+        markdown = (document.document_markdown or "").strip()
+        if not markdown:
+            raise ValueError("文档没有可用的 markdown，请先确认解析成功")
+
+        client = await self._get_client()
+        if not client.is_available:
+            raise ValueError("大纲拆分 LLM 未启用或缺少配置，请在系统设置 -> outline_llm 配置后重试")
+
+        subjects_by_code = await self._load_subjects()
+        segments = self._segment_by_subject(markdown)
+
+        results: List[Dict[str, Any]] = []
+        if segments:
+            # 逐门课细拆
+            for code, start, end in segments:
+                subject = subjects_by_code.get(code)
+                if not subject:
+                    continue
+                seg_text = markdown[start:end].strip()
+                parsed = await self._split_one_subject(client, subject.name, seg_text)
+                results.append(self._pack_subject_result(subject, parsed))
+        else:
+            # 降级：整篇喂一次，让 LLM 自己分四门课
+            logger.warning("大纲粗切未命中科目边界，降级整篇拆分", document_id=document_id)
+            results = await self._split_whole(client, markdown, subjects_by_code)
+
+        if not results:
+            raise ValueError("LLM 拆分未产出任何科目，请检查大纲内容或 LLM 配置")
+
+        return {"document_id": document_id, "subjects": results}
+
+    async def _split_one_subject(
+        self, client: OutlineLLMClient, subject_name: str, content: str
+    ) -> Dict[str, Any]:
+        """拆单门课，返回 {exam_objective, chapters}。解析失败重试一次。"""
+        prompt = _SPLIT_PROMPT.format(subject_name=subject_name, content=content[:60000])
+        last_err: Optional[Exception] = None
+        for attempt in range(2):
+            try:
+                text = await client.chat(prompt, purpose=f"大纲拆分-{subject_name}")
+                data = _extract_json(text)
+                chapters = _normalize_chapters(data.get("chapters") or [])
+                if not chapters:
+                    raise ValueError("拆分结果章节为空")
+                return {
+                    "exam_objective": (str(data.get("exam_objective")).strip() if data.get("exam_objective") else None),
+                    "chapters": chapters,
+                }
+            except Exception as e:  # JSON 解析/校验失败重试
+                last_err = e
+                logger.warning("大纲单科拆分失败，准备重试", subject=subject_name, attempt=attempt, error=str(e))
+        raise ValueError(f"《{subject_name}》大纲拆分失败: {last_err}")
+
+    async def _split_whole(
+        self, client: OutlineLLMClient, markdown: str, subjects_by_code: Dict[str, Subject]
+    ) -> List[Dict[str, Any]]:
+        """降级路径：粗切失败时，按已知四门课各喂整篇让 LLM 抽取对应部分。"""
+        results: List[Dict[str, Any]] = []
+        for code, subject in subjects_by_code.items():
+            try:
+                parsed = await self._split_one_subject(client, subject.name, markdown)
+                results.append(self._pack_subject_result(subject, parsed))
+            except ValueError as e:
+                logger.warning("降级拆分某科失败，跳过", subject=subject.name, error=str(e))
+        return results
+
+    @staticmethod
+    def _pack_subject_result(subject: Subject, parsed: Dict[str, Any]) -> Dict[str, Any]:
+        chapters = parsed["chapters"]
+        return {
+            "subject_id": subject.id,
+            "subject_code": subject.code,
+            "subject_name": subject.name,
+            "exam_objective": parsed.get("exam_objective"),
+            "total_chapters": _count_tree(chapters),
+            "max_depth": _max_depth(chapters),
+            "chapters": chapters,
+        }
+

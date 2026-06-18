@@ -901,6 +901,39 @@ class ExamOutline(Base):
     )
 
 
+class ExamOutlineSubject(Base):
+    """大纲-科目关联表：存某门课在该版大纲下的考察目标 + 复习指导生成状态"""
+    __tablename__ = "exam_outline_subjects"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="关联ID")
+    outline_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("exam_outlines.id", ondelete="CASCADE"),
+        nullable=False, comment="所属大纲ID"
+    )
+    subject_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("subjects.id", ondelete="CASCADE"),
+        nullable=False, comment="所属学科ID"
+    )
+    exam_objective: Mapped[Optional[str]] = mapped_column(Text, comment="该门课考察目标原文（概括性，三四句）")
+    guidance_status: Mapped[str] = mapped_column(
+        Enum("pending", "generating", "done", "failed"),
+        default="pending",
+        comment="复习指导批量生成状态"
+    )
+    chapter_count: Mapped[int] = mapped_column(default=0, comment="该门课章节数")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    __table_args__ = (
+        Index("idx_outline_subject_outline", "outline_id"),
+        Index("idx_outline_subject_subject", "subject_id"),
+        UniqueConstraint("outline_id", "subject_id", name="uk_outline_subject"),
+        {"comment": "大纲-科目关联表（考察目标）"}
+    )
+
+
 class CanonicalChapter(Base):
     """标准章节表 - 学科的标准章节体系（考试大纲章节）"""
     __tablename__ = "canonical_chapters"
@@ -923,7 +956,8 @@ class CanonicalChapter(Base):
     code: Mapped[Optional[str]] = mapped_column(String(50), comment="章节编码，如 CH1.2")
     outline_code: Mapped[Optional[str]] = mapped_column(String(50), comment="大纲中的编号，如：1.1.1、一、(一)")
     aliases: Mapped[Optional[List[str]]] = mapped_column(JSON, comment="别名列表")
-    description: Mapped[Optional[str]] = mapped_column(Text, comment="章节描述")
+    description: Mapped[Optional[str]] = mapped_column(Text, comment="章节描述（大纲原文考点）")
+    exam_guidance: Mapped[Optional[str]] = mapped_column(Text, comment="LLM 生成的复习指导（重点内容/复习方向）")
     sort_order: Mapped[int] = mapped_column(default=0, comment="排序序号")
     status: Mapped[str] = mapped_column(
         Enum("active", "inactive"),

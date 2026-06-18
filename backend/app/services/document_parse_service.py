@@ -29,6 +29,7 @@ from app.services.document_parsers import (
     choose_parser,
 )
 from app.services.system_settings_service import SystemSettingsService
+from app.services.text_cleaning import clean_block_text
 
 logger = get_logger(__name__)
 

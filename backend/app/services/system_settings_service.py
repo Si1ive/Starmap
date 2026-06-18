@@ -341,6 +341,20 @@ class SystemSettingsService:
                 "timeout_seconds": 60,
                 "system_prompt": "你是一个PDF题目结构分析专家，负责判断跨页、跨列导致的题目拆分和选项缺失问题。",
             },
+            "outline_llm": {
+                "enabled": False,
+                "provider": "openai_compatible",
+                "base_url": "",
+                "api_key": "",
+                "model": settings.OPENAI_MODEL,
+                "temperature": 0.2,
+                "max_tokens": 4000,
+                "timeout_seconds": 120,
+                "system_prompt": (
+                    "你是408考研大纲解析专家。负责把考试大纲文本拆分成结构化的章节树，"
+                    "并区分『考察目标』（概括性的整门课要求）、『章节标题』（多层级）和『考点正文』。"
+                ),
+            },
             "search": {
                 "default_page_size": 20,
                 "max_results": 100,
@@ -403,6 +417,8 @@ class SystemSettingsService:
             return "LLM 参数配置"
         if config_key == "pdf_structure_llm":
             return "PDF 文档结构解析 LLM 配置"
+        if config_key == "outline_llm":
+            return "大纲拆分 LLM 配置"
         if config_key == "search":
             return "搜索参数配置"
         if config_key == "crawler":

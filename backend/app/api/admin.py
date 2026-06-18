@@ -11,7 +11,7 @@ import uuid
 import hashlib
 import base64
 from pathlib import Path
-from typing import Optional, List, Any, Literal
+from typing import Optional, List, Any, Literal, Dict
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, WebSocket, WebSocketDisconnect, UploadFile, File, Form
@@ -3985,6 +3985,16 @@ class OutlineFromDocumentRequest(BaseModel):
     set_default: bool = False
 
 
+class OutlineFromLLMRequest(BaseModel):
+    """携带 LLM 拆分结果整体入库（四门课一次入）。"""
+    name: str = Field(..., min_length=1, max_length=200)
+    year: int = Field(..., ge=2000, le=2100)
+    version: Optional[str] = "v1.0"
+    description: Optional[str] = None
+    set_default: bool = False
+    subjects: List[Dict[str, Any]] = Field(..., min_length=1)
+
+
 @router.get("/outlines", response_model=ApiResponse)
 async def list_outlines_endpoint(db: AsyncSession = Depends(get_db)):
     """列出所有大纲"""
@@ -3993,10 +4003,21 @@ async def list_outlines_endpoint(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/outlines/{outline_id}/chapters", response_model=ApiResponse)
-async def get_outline_chapters_endpoint(outline_id: str, db: AsyncSession = Depends(get_db)):
-    """获取大纲下章节树"""
+async def get_outline_chapters_endpoint(
+    outline_id: str,
+    subject_id: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """获取大纲下章节树（含原文考点 description + 复习指导 exam_guidance，可按 subject_id 过滤）"""
     from app.services.outline_import_service import get_outline_chapters
-    return ApiResponse(data=await get_outline_chapters(db, outline_id))
+    return ApiResponse(data=await get_outline_chapters(db, outline_id, subject_id=subject_id))
+
+
+@router.get("/outlines/{outline_id}/subjects", response_model=ApiResponse)
+async def get_outline_subjects_endpoint(outline_id: str, db: AsyncSession = Depends(get_db)):
+    """获取大纲下各门课的考察目标 + 复习指导生成状态"""
+    from app.services.outline_import_service import get_outline_subjects
+    return ApiResponse(data=await get_outline_subjects(db, outline_id))
 
 
 @router.post("/outlines/preview", response_model=ApiResponse)
@@ -4062,6 +4083,40 @@ async def preview_outline_from_document(document_id: str, db: AsyncSession = Dep
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.post("/outlines/import-from-llm", response_model=ApiResponse)
+async def import_outline_from_llm(request: OutlineFromLLMRequest, db: AsyncSession = Depends(get_db)):
+    """把 LLM 拆分出的四门课结果整体入库（含考察目标 + 多层章节树 + 原文考点）。"""
+    from app.services.outline_import_service import OutlineImportService
+    service = OutlineImportService(db)
+    try:
+        return ApiResponse(data=await service.import_from_llm_result(
+            llm_result={"subjects": request.subjects},
+            name=request.name,
+            year=request.year,
+            version=request.version or "v1.0",
+            description=request.description,
+            set_default=request.set_default,
+        ))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post(
+    "/outlines/{outline_id}/subjects/{subject_id}/generate-guidance",
+    response_model=ApiResponse,
+)
+async def generate_outline_guidance(
+    outline_id: str, subject_id: str, db: AsyncSession = Depends(get_db)
+):
+    """为某门课的所有章节批量生成复习指导（结合考察目标，写回 exam_guidance）。"""
+    from app.services.outline_import_service import OutlineImportService
+    service = OutlineImportService(db)
+    try:
+        return ApiResponse(data=await service.generate_guidance_for_subject(outline_id, subject_id))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.post("/outlines/upload-parse", response_model=ApiResponse)
 async def upload_parse_outline(
     file: UploadFile = File(...),
@@ -4069,17 +4124,18 @@ async def upload_parse_outline(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    上传大纲 PDF 并一步走完「注册 → 解析 → 提取标题树」，返回 document_id + 章节树预览。
+    上传大纲 PDF 并一步走完「注册 → 解析 → LLM 拆分」，返回 document_id + 四门课预览。
 
-    大纲走的是标题树（document_section_service 规则提取）这条路，
-    刻意不经过题目抽取的「题干/选项分离 + LLM 兜底」机制。
-    确认预览后，前端再调 /outlines/import-from-document 携带 document_id 入库。
+    大纲走的是 LLM 拆分这条路（OutlineLLMService）：MinerU 全解析出 markdown，
+    再让 LLM 按四门课粗切 + 逐门细拆出考察目标 + 多层章节树。
+    刻意不经过题目抽取的「题干/选项分离 + LLM 兜底」机制，也不再走正则标题树。
+    确认预览后，前端再调 /outlines/import-from-llm 携带拆分结果入库。
     """
     from app.services.corpus_service import CorpusService, SUPPORTED_EXTENSIONS
     from app.services.document_parse_service import DocumentParseService
-    from app.services.document_section_service import DocumentSectionService
     from app.services.document_parsers import ParserUnavailableError
-    from app.services.outline_import_service import OutlineImportService
+    from app.services.outline_llm_service import OutlineLLMService
+    from app.models.mysql_models import DocumentBlock
 
     if not file.filename:
         raise HTTPException(status_code=400, detail="文件名为空")
@@ -4104,42 +4160,46 @@ async def upload_parse_outline(
     )
     corpus_file_id = reg["corpus_file_id"]
 
-    # 2) 解析（已解析则复用既有 document，避免重复跑解析器）
+    # 2) 解析（已解析且有 block 则复用既有 document，避免重复跑解析器）
     parse_service = DocumentParseService(db)
     document_id: Optional[str] = None
+    parse_mode = "primary"
     if not reg["is_new"]:
         existing_doc = await parse_service._get_document_by_corpus_file_id(corpus_file_id)
         if existing_doc:
-            document_id = existing_doc.id
+            block_count = (await db.execute(
+                select(func.count()).select_from(DocumentBlock)
+                .where(DocumentBlock.document_id == existing_doc.id)
+            )).scalar_one()
+            if block_count > 0:
+                document_id = existing_doc.id
+            else:
+                # 上次解析中断留下的空文档（0 block），需重新解析覆盖
+                parse_mode = "retry"
 
     if document_id is None:
         try:
-            parse_result = await parse_service.parse_document(corpus_file_id)
+            parse_result = await parse_service.parse_document(corpus_file_id, parse_mode=parse_mode)
             document_id = parse_result["document_id"]
         except ParserUnavailableError as e:
             raise HTTPException(status_code=503, detail=str(e))
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-    # 3) 提取标题树（规则路径，force 覆盖旧结果）
-    section_service = DocumentSectionService(db)
+    # 3) LLM 拆分（四门课粗切 + 逐门细拆，不入库）
+    llm_service = OutlineLLMService(db)
     try:
-        await section_service.extract_sections(document_id, force=True)
+        split = await llm_service.split_outline(document_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
-    # 4) 预览章节树（不入库）
-    outline_service = OutlineImportService(db)
-    try:
-        preview = await outline_service.preview_from_document_sections(document_id)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
     return ApiResponse(data={
         "corpus_file_id": corpus_file_id,
         "document_id": document_id,
         "file_name": file.filename,
-        **preview,
+        "subjects": split["subjects"],
     })
 
 

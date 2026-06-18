@@ -68,3 +68,7 @@ htmlcov/
 *.bak
 *.tmp
 downloads/
+
+# Uploads (user-uploaded files)
+backend/uploads/
+uploads/
