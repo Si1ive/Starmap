@@ -1473,6 +1473,7 @@ async def get_settings(db: Optional[AsyncSession] = Depends(get_optional_db)):
             "pdf_structure_llm": masked_llm["pdf_structure_llm"],
             "outline_llm": masked_llm["outline_llm"],
             "embedding": masked_llm["embedding"],
+            "doc_meta_llm": masked_llm["doc_meta_llm"],
             "pdf_parser": {
                 "active_parser": active_parser,
                 "service_mode": runtime_settings["pdf_parser"]["service_mode"],
@@ -1544,7 +1545,7 @@ async def get_pdf_parser_history(
 def _build_llm_client(kind: str, config: dict):
     """按配置块 kind 构造对应客户端。embedding 返回 EmbeddingService，其余返回 BaseLLMClient 子类。"""
     from app.services.llm_client import (
-        ChatLLMClient, PDFStructureLLMClient, OutlineLLMClient,
+        ChatLLMClient, PDFStructureLLMClient, OutlineLLMClient, DocMetaLLMClient,
     )
     if kind == "llm":
         return ChatLLMClient(config)
@@ -1552,6 +1553,8 @@ def _build_llm_client(kind: str, config: dict):
         return PDFStructureLLMClient(config)
     if kind == "outline_llm":
         return OutlineLLMClient(config)
+    if kind == "doc_meta_llm":
+        return DocMetaLLMClient(config)
     if kind == "embedding":
         from app.services.embedding_service import EmbeddingService
         return EmbeddingService(config)

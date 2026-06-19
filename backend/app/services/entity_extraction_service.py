@@ -34,6 +34,40 @@ def generate_id() -> str:
     return uuid.uuid4().hex[:32]
 
 
+# 题干年份/真题标记探测：匹配【2019】(2019)（2019）[2019] 2019年 等
+STEM_YEAR_RE = re.compile(r'[\[【(（]?\s*((?:19|20)\d{2})\s*(?:年)?\s*[\]】)）]?')
+STEM_REAL_EXAM_RE = re.compile(r'真题|考研真题|历年|统考')
+
+
+def _detect_stem_year(text: str) -> Optional[int]:
+    """从题干前部探测年份（仅扫前 30 字，避免命中题目正文里的年份数字）。"""
+    head = (text or "")[:30]
+    m = STEM_YEAR_RE.search(head)
+    if m:
+        year = int(m.group(1))
+        if 1990 <= year <= 2099:
+            return year
+    return None
+
+
+def _build_question_tags(
+    question_type: str, exam_year: Optional[int], is_real: bool
+) -> List[str]:
+    """结构化标签：题型 + 真题/课后习题 + 年份。"""
+    type_label = {
+        "choice": "选择题", "fill": "填空题", "judge": "判断题",
+        "short_answer": "简答题", "design": "设计题", "analysis": "分析题",
+    }.get(question_type, "")
+    tags: List[str] = []
+    if type_label:
+        tags.append(type_label)
+    tags.append("真题" if is_real else "课后习题")
+    if exam_year:
+        tags.append(str(exam_year))
+    return tags
+
+
+
 OPTION_SEPARATOR_RE = re.compile(
     r'(?:\s*(?:[.．、:：。]|<sub>\s*[.．、:：。]\s*</sub>)\s*|\s+)(?=\S)'
 )
@@ -958,6 +992,15 @@ class EntityExtractionService:
         # document.subject_id 仅作为 fallback；前端可在试卷类文档中显式传入学科。
         fallback_subject_id = fallback_subject_id or document.subject_id
 
+        # 1.5 提取文档级来源元信息（年份/真题/机构/试卷名），广播到题目
+        from app.services.document_meta_service import DocumentMetaService
+        try:
+            self._doc_meta = await DocumentMetaService(self.db).extract_and_store_meta(document_id)
+        except Exception as e:
+            logger.warning("文档元信息提取失败，题目来源将留空", document_id=document_id, error=str(e))
+            self._doc_meta = {}
+        self._doc_type = document.doc_type or "other"
+
         # 2. 获取 blocks
         blocks_result = await self.db.execute(
             select(DocumentBlock)
@@ -993,6 +1036,7 @@ class EntityExtractionService:
         knowledge_count = 0
         question_count = 0
         question_diagnostic: Optional[Dict[str, Any]] = None
+        question_unassigned: List[Dict[str, Any]] = []
 
         # 4. 抽取知识点 — 只用被分类为 knowledge / heading 的 block
         if extract_knowledge:
@@ -1018,6 +1062,18 @@ class EntityExtractionService:
             )
             question_count = question_result["saved_count"]
             question_diagnostic = question_result["diagnostic"]
+            question_unassigned = question_result.get("unassigned", [])
+
+        # 跨页归属加固：找出未被任何 section 覆盖的页码（标题漏检/映射失败的信号）
+        all_pages = sorted({b.page_no for b in blocks if b.page_no is not None})
+        covered_pages = set(section_mappings.keys())
+        uncovered_pages = [p for p in all_pages if p not in covered_pages]
+        if uncovered_pages:
+            logger.warning(
+                "存在未被章节映射覆盖的页码，题目/知识点将依赖前后回退归属",
+                document_id=document_id,
+                uncovered_pages=uncovered_pages,
+            )
 
         await self.db.commit()
 
@@ -1034,6 +1090,9 @@ class EntityExtractionService:
             "question_count": question_count,
             "question_diagnostic": question_diagnostic,
             "block_classification": classification_stats,
+            "doc_meta": getattr(self, "_doc_meta", {}) or {},
+            "unassigned_questions": question_unassigned,
+            "uncovered_pages": uncovered_pages,
         }
 
     async def _get_section_mappings(self, document_id: str) -> Dict[int, Dict[str, Optional[str]]]:
@@ -1299,7 +1358,7 @@ class EntityExtractionService:
                 final_report={},
                 saved_results=[],
             )
-            return {"saved_count": 0, "diagnostic": diagnostic}
+            return {"saved_count": 0, "diagnostic": diagnostic, "unassigned": []}
 
         # Step 3: 综合校验
         validation_report = comprehensive_validation(raw_questions)
@@ -1364,6 +1423,19 @@ class EntityExtractionService:
             })
 
         question_count = sum(1 for item in saved_results if item["saved"])
+        # 未归属（缺学科/章节）题目：无法入库（subject_id/chapter_id 为 NOT NULL），
+        # 但聚合页码 + 摘要冒泡到结果，供前端人工指认。
+        unassigned = [
+            {
+                "page_no": item.get("page_no"),
+                "question_no": item.get("question_no"),
+                "reason": item.get("reason"),
+                "text_excerpt": item.get("text_excerpt"),
+            }
+            for item in saved_results
+            if not item["saved"]
+            and item.get("reason") in ("missing_subject_and_chapter", "missing_subject", "missing_legacy_chapter")
+        ]
         diagnostic = self._build_question_extraction_diagnostic(
             raw_questions=raw_questions,
             final_questions=questions,
@@ -1372,7 +1444,7 @@ class EntityExtractionService:
             saved_results=saved_results,
         )
 
-        return {"saved_count": question_count, "diagnostic": diagnostic}
+        return {"saved_count": question_count, "diagnostic": diagnostic, "unassigned": unassigned}
 
     async def _get_pdf_structure_llm_client(self) -> Optional[PDFStructureLLMClient]:
         """读取 PDF 结构解析专用 LLM 配置。"""
@@ -1610,6 +1682,30 @@ class EntityExtractionService:
         elif '填空' in content[:50]:
             question_type = "fill"
 
+        # 题目级来源/年份：题干优先，缺则继承文档级
+        doc_meta = getattr(self, "_doc_meta", {}) or {}
+        doc_type = getattr(self, "_doc_type", "other")
+        stem_year = _detect_stem_year(content)
+        if stem_year:
+            exam_year = stem_year
+            source = f"{stem_year}年真题"
+            paper_name = doc_meta.get("source_label") or None
+        elif doc_meta.get("exam_year"):
+            exam_year = doc_meta.get("exam_year")
+            source = doc_meta.get("source_label") or None
+            paper_name = doc_meta.get("paper_name") or doc_meta.get("source_label") or None
+        else:
+            # 课本无年份标记 → 课后习题（带机构）
+            exam_year = 0
+            inst = doc_meta.get("institution")
+            if doc_type == "textbook":
+                source = f"课后习题（{inst}）" if inst else "课后习题"
+            else:
+                source = doc_meta.get("source_label") or (inst or None)
+            paper_name = doc_meta.get("paper_name") or doc_meta.get("source_label") or None
+
+        tags = _build_question_tags(question_type, exam_year, bool(stem_year))
+
         return {
             'id': generate_id(),
             'document_id': document_id,
@@ -1625,6 +1721,11 @@ class EntityExtractionService:
             'block_ids': [b.id for b in blocks],
             'blocks': blocks,
             'raw_text': content,
+            'source': source,
+            'exam_year': int(exam_year or 0),
+            'exam_scope': doc_meta.get("exam_scope"),
+            'paper_name': paper_name,
+            'tags': tags,
         }
 
     def _split_question_stem_options(self, content: str) -> tuple[str, List[Dict[str, str]]]:
@@ -1903,6 +2004,10 @@ class EntityExtractionService:
                 options = self._normalize_options(question_dict.get('options'))
                 question_content = (question_dict.get('stem') or question_dict.get('content') or "").strip()
 
+                # 关键词标签：题型/真题/年份结构化标签 + 主题术语
+                tags = question_dict.get('tags') or None
+                topic_terms = self._extract_topic_terms(question_content, question_content) or None
+
                 # 创建题目记录
                 question = Question(
                     id=question_dict['id'],
@@ -1914,6 +2019,12 @@ class EntityExtractionService:
                     content=question_content,
                     options=options or None,
                     answer="",
+                    source=(question_dict.get('source') or None),
+                    exam_year=int(question_dict.get('exam_year') or 0),
+                    exam_scope=(question_dict.get('exam_scope') or None),
+                    paper_name=(question_dict.get('paper_name') or None),
+                    tags=tags,
+                    topic_terms=topic_terms,
                     question_no=str(_extract_question_number_simple(question_dict) or "") or None,
                     review_status="pending",
                 )

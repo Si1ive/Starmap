@@ -10,6 +10,8 @@
 """
 
 import asyncio
+import json
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.config import settings
@@ -17,6 +19,22 @@ from app.core.logging import get_logger
 from app.services.llm_call_recorder import LLMCallRecorder
 
 logger = get_logger(__name__)
+
+
+def extract_json_block(text: str) -> Any:
+    """从 LLM 返回里抠出 JSON（容忍 ```json 包裹 / 前后噪声）。"""
+    if not text:
+        raise ValueError("LLM 返回为空")
+    cleaned = text.strip()
+    fence = re.search(r"```(?:json)?\s*(.*?)```", cleaned, re.DOTALL | re.IGNORECASE)
+    if fence:
+        cleaned = fence.group(1).strip()
+    if not cleaned.startswith("{") and not cleaned.startswith("["):
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            cleaned = cleaned[start:end + 1]
+    return json.loads(cleaned)
 
 
 class BaseLLMClient:
@@ -124,3 +142,13 @@ class ChatLLMClient(BaseLLMClient):
     called_by = "chat_service"
     default_system_prompt = "你是一个专业的408考研学习助手，擅长解释知识点、题目分析与学习规划。"
     default_temperature = 0.7
+
+
+class DocMetaLLMClient(BaseLLMClient):
+    called_by = "doc_meta_llm"
+    default_system_prompt = (
+        "你是408考研资料元信息提取专家。从试卷/课本首页文本中识别"
+        "年份、是真题还是模拟题、来源/辅导机构、试卷名等信息。"
+    )
+    default_temperature = 0.1
+    default_purpose = "文档级元信息提取"

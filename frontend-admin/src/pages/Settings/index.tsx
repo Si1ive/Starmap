@@ -315,6 +315,10 @@ const Settings = () => {
             <LlmConfigTab kind="outline_llm" form={form} intro="该配置用于大纲 PDF 的四门课拆分与考察目标/章节树抽取" />
           </TabPane>
 
+          <TabPane tab="文档元信息 LLM" key="doc-meta-llm">
+            <LlmConfigTab kind="doc_meta_llm" form={form} intro="该配置用于从试卷/课本首页提取来源信息（年份/真题/机构/试卷名），规则未命中时兜底" />
+          </TabPane>
+
           <TabPane tab="向量化" key="embedding">
             <EmbeddingConfigTab form={form} />
           </TabPane>
