@@ -24,7 +24,7 @@ from app.models.mysql_models import (
     KnowledgePointChapterLink, QuestionChapterLink,
     EntitySourceLink, Document
 )
-from app.services.embedding_service import get_embedding_service
+from app.services.embedding_service import get_embedding_service_from_settings
 
 logger = get_logger(__name__)
 
@@ -42,8 +42,14 @@ class SegmentService:
 
     def __init__(self, db: AsyncSession):
         self.db = db
-        self.embedding = get_embedding_service()
+        self.embedding = None  # 惰性加载：首次用时从系统设置读 embedding 配置
         self.qdrant = qdrant_manager
+
+    async def _ensure_embedding(self):
+        """惰性构造 embedding 服务（按系统设置的 embedding 配置）。"""
+        if self.embedding is None:
+            self.embedding = await get_embedding_service_from_settings(self.db)
+        return self.embedding
 
     # ========== 知识点 segment ==========
 
@@ -141,6 +147,7 @@ class SegmentService:
 
         # 5. 批量生成 embeddings
         logger.info("开始生成 embeddings", count=len(texts_to_embed))
+        await self._ensure_embedding()
         embeddings = await self.embedding.embed_batch(texts_to_embed)
 
         # 6. 写入 MySQL + Qdrant
@@ -298,6 +305,7 @@ class SegmentService:
 
         # 批量 embedding
         logger.info("开始生成题目 embeddings", count=len(texts_to_embed))
+        await self._ensure_embedding()
         embeddings = await self.embedding.embed_batch(texts_to_embed)
 
         # 写入
@@ -360,8 +368,9 @@ class SegmentService:
         rebuild: bool = False,
     ) -> Dict[str, Any]:
         """构建全部 segments（知识点 + 题目）"""
-        # 确保 Qdrant collections 存在
-        self.qdrant.init_default_collections()
+        # 确保 Qdrant collections 存在（维度跟随 embedding 配置）
+        await self._ensure_embedding()
+        self.qdrant.init_default_collections(vector_size=self.embedding.dimension)
 
         kp_result = await self.build_knowledge_segments(
             subject_id=subject_id,

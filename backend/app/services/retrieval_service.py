@@ -20,7 +20,7 @@ from app.models.mysql_models import (
     RetrievalSegment, KnowledgePoint, Question,
     KnowledgeRelation, EntitySourceLink, Document
 )
-from app.services.embedding_service import get_embedding_service
+from app.services.embedding_service import get_embedding_service_from_settings
 
 logger = get_logger(__name__)
 
@@ -81,8 +81,13 @@ class RetrievalService:
 
     def __init__(self, db: AsyncSession):
         self.db = db
-        self.embedding = get_embedding_service()
+        self.embedding = None  # 惰性加载：首次用时从系统设置读 embedding 配置
         self.qdrant = qdrant_manager
+
+    async def _ensure_embedding(self):
+        if self.embedding is None:
+            self.embedding = await get_embedding_service_from_settings(self.db)
+        return self.embedding
 
     async def search(
         self,
@@ -111,6 +116,7 @@ class RetrievalService:
             return []
 
         # 生成 query embedding
+        await self._ensure_embedding()
         query_vector = await self.embedding.embed_text(query)
 
         # 构建 Qdrant 过滤条件

@@ -27,6 +27,9 @@ from app.services.document_parsers import inspect_parser_health
 
 logger = get_logger(__name__)
 
+# 四个"对话型/向量型"LLM 配置块的 key，供 admin 遍历做 api_key 脱敏与泛化端点路由。
+LLM_CONFIG_KEYS = ("llm", "pdf_structure_llm", "outline_llm", "embedding")
+
 
 class SystemSettingsService:
     """系统设置读写服务"""
@@ -325,9 +328,14 @@ class SystemSettingsService:
     def _default_settings() -> Dict[str, Any]:
         return {
             "llm": {
+                "enabled": False,
+                "provider": "openai_compatible",
+                "base_url": "",
+                "api_key": "",
                 "model": settings.OPENAI_MODEL,
                 "temperature": 0.7,
                 "max_tokens": 2000,
+                "timeout_seconds": 60,
                 "system_prompt": "你是一个专业的408考研学习助手，擅长解释知识点、题目分析与学习规划。",
             },
             "pdf_structure_llm": {
@@ -355,47 +363,14 @@ class SystemSettingsService:
                     "并区分『考察目标』（概括性的整门课要求）、『章节标题』（多层级）和『考点正文』。"
                 ),
             },
-            "search": {
-                "default_page_size": 20,
-                "max_results": 100,
-                "similarity_threshold": 0.8,
-                "weights": {
-                    "name": 1.0,
-                    "category": 0.8,
-                    "relation": 0.6,
-                },
-                "cache_ttl": 300,
-            },
-            "crawler": {
-                "request_interval": 1.0,
-                "max_concurrency": 5,
-                "timeout": 30,
-                "user_agents": [],
-                "proxy": None,
-                "max_concurrent": 5,
-                "request_delay": 1.0,
-                "request_timeout": 30,
-                "max_retries": 3,
-                "retry_delay": 2.0,
-                "user_agent": "408-Platform/1.0",
-                "proxy_enabled": False,
-                "proxy_url": "",
-                "respect_robots_txt": True,
-                "auto_detect_encoding": True,
-                "follow_redirects": True,
-                "max_redirects": 5,
-                "max_depth": 3,
-                "dedup_enabled": True,
-                "storage_batch_size": 100,
-                "log_level": settings.LOG_LEVEL,
-                "data_sources": [],
-            },
-            "system": {
-                "name": settings.APP_NAME,
-                "logo": None,
-                "announcement": "",
-                "maintenance_mode": False,
-                "log_level": settings.LOG_LEVEL,
+            "embedding": {
+                "enabled": False,
+                "provider": "openai_compatible",
+                "base_url": "",
+                "api_key": "",
+                "model": "text-embedding-ada-002",
+                "dimension": 1536,
+                "timeout_seconds": 60,
             },
             "pdf_parser": {
                 "active_parser": "mineru",
@@ -414,15 +389,11 @@ class SystemSettingsService:
         if config_key == "pdf_parser":
             return "PDF 解析器单活切换配置"
         if config_key == "llm":
-            return "LLM 参数配置"
+            return "问答 LLM 配置"
         if config_key == "pdf_structure_llm":
             return "PDF 文档结构解析 LLM 配置"
         if config_key == "outline_llm":
             return "大纲拆分 LLM 配置"
-        if config_key == "search":
-            return "搜索参数配置"
-        if config_key == "crawler":
-            return "爬虫运行配置"
-        if config_key == "system":
-            return "系统基础配置"
+        if config_key == "embedding":
+            return "向量化 Embedding 配置"
         return "系统配置"

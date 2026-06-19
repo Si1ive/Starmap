@@ -25,6 +25,7 @@ from app.services.chapter_compat_service import resolve_legacy_chapter_id
 from app.services.system_settings_service import SystemSettingsService
 from app.services.text_cleaning import clean_block_text, normalize_whitespace
 from app.services.llm_call_recorder import LLMCallRecorder
+from app.services.llm_client import PDFStructureLLMClient
 
 logger = get_logger(__name__)
 
@@ -627,77 +628,6 @@ class RuleBasedFixer:
         merged['options'] = q1.get('options', []) + q2.get('options', [])
         merged['page_range'] = f"{q1.get('page_no')}-{q2.get('page_no')}"
         return merged
-
-
-class PDFStructureLLMClient:
-    """PDF 结构解析专用 OpenAI 兼容客户端。"""
-
-    def __init__(self, config: Dict[str, Any]):
-        self.enabled = bool(config.get("enabled"))
-        self.provider = str(config.get("provider") or "openai_compatible")
-        self.base_url = str(config.get("base_url") or "").strip()
-        self.api_key = str(config.get("api_key") or settings.OPENAI_API_KEY or "").strip()
-        self.model = str(config.get("model") or settings.OPENAI_MODEL).strip()
-        self.temperature = float(config.get("temperature", 0.1))
-        self.max_tokens = int(config.get("max_tokens", 2000))
-        self.timeout_seconds = int(config.get("timeout_seconds", 60))
-        self.system_prompt = str(
-            config.get("system_prompt")
-            or "你是一个PDF题目结构分析专家，负责判断跨页、跨列导致的题目拆分和选项缺失问题。"
-        ).strip()
-
-    @property
-    def is_available(self) -> bool:
-        return self.enabled and self.provider == "openai_compatible" and bool(self.api_key and self.model)
-
-    async def chat(self, prompt: str) -> str:
-        if not self.is_available:
-            raise RuntimeError("PDF structure LLM is not enabled or missing api_key/model")
-
-        messages = [
-            {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": prompt},
-        ]
-        params = {
-            "max_tokens": self.max_tokens,
-            "temperature": self.temperature,
-            "timeout_seconds": self.timeout_seconds,
-        }
-
-        async with LLMCallRecorder(
-            model=self.model,
-            called_by="pdf_structure_llm",
-            purpose="题目结构 LLM 兜底修复",
-            base_url=self.base_url or None,
-            request_messages=messages,
-            request_params=params,
-        ) as rec:
-            response_obj, text = await asyncio.to_thread(self._chat_sync, messages)
-            rec.record_response(response_text=text, response_obj=response_obj)
-            return text
-
-    def _chat_sync(self, messages):
-        import openai
-
-        previous_api_key = getattr(openai, "api_key", None)
-        previous_api_base = getattr(openai, "api_base", None)
-        openai.api_key = self.api_key
-        if self.base_url:
-            openai.api_base = self.base_url.rstrip("/")
-
-        try:
-            response = openai.ChatCompletion.create(
-                model=self.model,
-                messages=messages,
-                max_tokens=self.max_tokens,
-                temperature=self.temperature,
-                request_timeout=self.timeout_seconds,
-            )
-            text = response.choices[0].message.content.strip()
-            return response, text
-        finally:
-            openai.api_key = previous_api_key
-            openai.api_base = previous_api_base
 
 
 class LLMFallbackFixer:

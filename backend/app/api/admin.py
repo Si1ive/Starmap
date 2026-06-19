@@ -1442,12 +1442,17 @@ async def get_settings(db: Optional[AsyncSession] = Depends(get_optional_db)):
     返回当前系统配置，优先读取数据库持久化内容。
     """
     from app.services.document_parsers import get_supported_parser_names, inspect_parser_health
-    from app.services.system_settings_service import SystemSettingsService
+    from app.services.system_settings_service import SystemSettingsService, LLM_CONFIG_KEYS
 
     runtime_settings = await SystemSettingsService(db).load()
-    pdf_structure_llm = dict(runtime_settings["pdf_structure_llm"])
-    if pdf_structure_llm.get("api_key"):
-        pdf_structure_llm["api_key"] = SECRET_KEEP_MASK
+    # 对所有 LLM 配置块统一脱敏 api_key
+    masked_llm: Dict[str, Any] = {}
+    for key in LLM_CONFIG_KEYS:
+        block = dict(runtime_settings.get(key, {}) or {})
+        if block.get("api_key"):
+            block["api_key"] = SECRET_KEEP_MASK
+        masked_llm[key] = block
+
     active_parser = runtime_settings["pdf_parser"]["active_parser"]
     parser_runtime_config = runtime_settings["pdf_parser"]
     available_parsers = []
@@ -1459,16 +1464,15 @@ async def get_settings(db: Optional[AsyncSession] = Depends(get_optional_db)):
         (item for item in available_parsers if item["is_active"]),
         None,
     )
-    
+
     return ApiResponse(
         code=200,
         message="success",
         data={
-            "llm": runtime_settings["llm"],
-            "pdf_structure_llm": pdf_structure_llm,
-            "search": runtime_settings["search"],
-            "crawler": runtime_settings["crawler"],
-            "system": runtime_settings["system"],
+            "llm": masked_llm["llm"],
+            "pdf_structure_llm": masked_llm["pdf_structure_llm"],
+            "outline_llm": masked_llm["outline_llm"],
+            "embedding": masked_llm["embedding"],
             "pdf_parser": {
                 "active_parser": active_parser,
                 "service_mode": runtime_settings["pdf_parser"]["service_mode"],
@@ -1537,19 +1541,61 @@ async def get_pdf_parser_history(
     )
 
 
-@router.get("/settings/pdf-structure-llm/status", response_model=ApiResponse)
-async def get_pdf_structure_llm_status(db: AsyncSession = Depends(get_db)):
-    """获取 PDF 结构解析 LLM 配置状态，不发起外部请求。"""
-    from app.services.entity_extraction_service import PDFStructureLLMClient
-    from app.services.system_settings_service import SystemSettingsService
+def _build_llm_client(kind: str, config: dict):
+    """按配置块 kind 构造对应客户端。embedding 返回 EmbeddingService，其余返回 BaseLLMClient 子类。"""
+    from app.services.llm_client import (
+        ChatLLMClient, PDFStructureLLMClient, OutlineLLMClient,
+    )
+    if kind == "llm":
+        return ChatLLMClient(config)
+    if kind == "pdf_structure_llm":
+        return PDFStructureLLMClient(config)
+    if kind == "outline_llm":
+        return OutlineLLMClient(config)
+    if kind == "embedding":
+        from app.services.embedding_service import EmbeddingService
+        return EmbeddingService(config)
+    raise HTTPException(status_code=400, detail=f"未知的 LLM 配置块: {kind}")
+
+
+@router.get("/settings/llm/{kind}/status", response_model=ApiResponse)
+async def get_llm_status(kind: str, db: AsyncSession = Depends(get_db)):
+    """获取指定 LLM 配置块状态，不发起外部请求。kind ∈ llm/pdf_structure_llm/outline_llm/embedding。"""
+    from app.services.system_settings_service import SystemSettingsService, LLM_CONFIG_KEYS
+
+    if kind not in LLM_CONFIG_KEYS:
+        raise HTTPException(status_code=400, detail=f"未知的 LLM 配置块: {kind}")
 
     runtime_settings = await SystemSettingsService(db).load()
-    llm_config = runtime_settings.get("pdf_structure_llm", {})
-    client = PDFStructureLLMClient(llm_config if isinstance(llm_config, dict) else {})
+    config = runtime_settings.get(kind, {}) or {}
 
+    if kind == "embedding":
+        from app.services.embedding_service import EmbeddingService
+        svc = EmbeddingService(config)
+        has_key = bool(svc.api_key)
+        issues = []
+        if not bool(config.get("enabled")):
+            issues.append("未启用向量化配置")
+        if not svc.model:
+            issues.append("未配置模型")
+        if not has_key:
+            issues.append("未配置 API Key，且 OPENAI_API_KEY 环境变量为空")
+        return ApiResponse(data={
+            "enabled": bool(config.get("enabled")),
+            "provider": str(config.get("provider") or "openai_compatible"),
+            "model": svc.model,
+            "base_url": svc.base_url,
+            "dimension": svc.dimension,
+            "has_api_key": has_key,
+            "uses_env_api_key": has_key and not bool(config.get("api_key")),
+            "is_available": bool(config.get("enabled")) and bool(svc.model and has_key),
+            "issues": issues,
+        })
+
+    client = _build_llm_client(kind, config if isinstance(config, dict) else {})
     issues = []
     if not client.enabled:
-        issues.append("未启用 PDF 结构解析 LLM")
+        issues.append("未启用该 LLM")
     if client.provider != "openai_compatible":
         issues.append("当前仅支持 OpenAI 兼容接口")
     if not client.model:
@@ -1563,66 +1609,73 @@ async def get_pdf_structure_llm_status(db: AsyncSession = Depends(get_db)):
         "model": client.model,
         "base_url": client.base_url,
         "has_api_key": bool(client.api_key),
-        "uses_env_api_key": bool(client.api_key) and not bool((llm_config or {}).get("api_key")),
+        "uses_env_api_key": bool(client.api_key) and not bool((config or {}).get("api_key")),
         "is_available": client.is_available,
         "issues": issues,
     })
 
 
-@router.post("/settings/pdf-structure-llm/test", response_model=ApiResponse)
-async def test_pdf_structure_llm(
+@router.post("/settings/llm/{kind}/test", response_model=ApiResponse)
+async def test_llm(
+    kind: str,
     data: Optional[dict] = None,
     db: AsyncSession = Depends(get_db),
 ):
-    """按当前表单或已保存配置测试 PDF 结构解析 LLM。"""
-    from app.services.entity_extraction_service import PDFStructureLLMClient
-    from app.services.system_settings_service import SystemSettingsService
+    """按当前表单或已保存配置测试指定 LLM 配置块的连通性。"""
+    from app.services.system_settings_service import SystemSettingsService, LLM_CONFIG_KEYS
+
+    if kind not in LLM_CONFIG_KEYS:
+        raise HTTPException(status_code=400, detail=f"未知的 LLM 配置块: {kind}")
 
     runtime_service = SystemSettingsService(db)
     current_settings = await runtime_service.load()
-    current_config = current_settings.get("pdf_structure_llm", {})
+    current_config = current_settings.get(kind, {})
     payload = dict(data or {})
     if payload.get("api_key") == SECRET_KEEP_MASK:
         payload["api_key"] = current_config.get("api_key", "")
     merged_config = dict(current_config if isinstance(current_config, dict) else {})
     merged_config.update(payload)
 
-    client = PDFStructureLLMClient(merged_config)
+    if kind == "embedding":
+        from app.services.embedding_service import EmbeddingService
+        svc = EmbeddingService(merged_config)
+        if not (svc.model and svc.api_key):
+            return ApiResponse(code=400, message="向量化配置不可用", data={
+                "success": False, "model": svc.model, "has_api_key": bool(svc.api_key),
+                "error": "请确认模型和 API Key 已配置（或设置 OPENAI_API_KEY 环境变量）。",
+            })
+        try:
+            vec = await svc.embed_text("连通性测试")
+        except Exception as e:
+            return ApiResponse(code=502, message="向量化测试失败", data={
+                "success": False, "model": svc.model, "base_url": svc.base_url,
+                "error": str(e)[:500],
+            })
+        return ApiResponse(data={
+            "success": True, "model": svc.model, "base_url": svc.base_url,
+            "dimension": len(vec), "configured_dimension": svc.dimension,
+            "dimension_match": len(vec) == svc.dimension,
+        })
+
+    client = _build_llm_client(kind, merged_config)
     if not client.is_available:
-        return ApiResponse(
-            code=400,
-            message="PDF结构LLM配置不可用",
-            data={
-                "success": False,
-                "enabled": client.enabled,
-                "provider": client.provider,
-                "model": client.model,
-                "has_api_key": bool(client.api_key),
-                "error": "请确认已启用、模型和 API Key 已配置，且服务类型为 OpenAI 兼容接口。",
-            },
-        )
+        return ApiResponse(code=400, message="LLM 配置不可用", data={
+            "success": False, "enabled": client.enabled, "provider": client.provider,
+            "model": client.model, "has_api_key": bool(client.api_key),
+            "error": "请确认已启用、模型和 API Key 已配置，且服务类型为 OpenAI 兼容接口。",
+        })
 
     try:
-        reply = await client.chat("请只回复：PDF_STRUCTURE_LLM_OK")
+        reply = await client.chat("请只回复：LLM_OK", purpose="配置连通性测试")
     except Exception as e:
-        return ApiResponse(
-            code=502,
-            message="PDF结构LLM测试失败",
-            data={
-                "success": False,
-                "provider": client.provider,
-                "model": client.model,
-                "base_url": client.base_url,
-                "error": str(e)[:500],
-            },
-        )
+        return ApiResponse(code=502, message="LLM 测试失败", data={
+            "success": False, "provider": client.provider, "model": client.model,
+            "base_url": client.base_url, "error": str(e)[:500],
+        })
 
     return ApiResponse(data={
-        "success": True,
-        "provider": client.provider,
-        "model": client.model,
-        "base_url": client.base_url,
-        "reply": reply[:200],
+        "success": True, "provider": client.provider, "model": client.model,
+        "base_url": client.base_url, "reply": reply[:200],
     })
 
 
@@ -1637,7 +1690,7 @@ async def update_settings(
     
     所有顶级 section 统一落库；PDF 解析器切换额外记录审计日志。
     """
-    from app.services.system_settings_service import SystemSettingsService
+    from app.services.system_settings_service import SystemSettingsService, LLM_CONFIG_KEYS
 
     runtime_service = SystemSettingsService(db)
     auth_header = request.headers.get("Authorization", "")
@@ -1649,9 +1702,11 @@ async def update_settings(
     user_agent = request.headers.get("User-Agent")
     current_settings = await runtime_service.load()
     payload = dict(data or {})
-    pdf_structure_llm_section = payload.get("pdf_structure_llm")
-    if isinstance(pdf_structure_llm_section, dict) and pdf_structure_llm_section.get("api_key") == SECRET_KEEP_MASK:
-        pdf_structure_llm_section["api_key"] = current_settings.get("pdf_structure_llm", {}).get("api_key", "")
+    # 所有 LLM 配置块：api_key 为脱敏占位符时回填已保存的真实值
+    for key in LLM_CONFIG_KEYS:
+        section = payload.get(key)
+        if isinstance(section, dict) and section.get("api_key") == SECRET_KEEP_MASK:
+            section["api_key"] = current_settings.get(key, {}).get("api_key", "")
     parser_section = payload.pop("pdf_parser", None) if isinstance(payload.get("pdf_parser"), dict) else None
     saved_runtime = await runtime_service.save_partial(payload) if payload else current_settings
 
@@ -1688,10 +1743,12 @@ async def update_settings(
             raise HTTPException(status_code=400, detail=str(e))
 
     response_runtime = dict(saved_runtime)
-    response_pdf_structure_llm = dict(response_runtime.get("pdf_structure_llm", {}))
-    if response_pdf_structure_llm.get("api_key"):
-        response_pdf_structure_llm["api_key"] = SECRET_KEEP_MASK
-    response_runtime["pdf_structure_llm"] = response_pdf_structure_llm
+    # 所有 LLM 配置块：响应里脱敏 api_key
+    for key in LLM_CONFIG_KEYS:
+        block = dict(response_runtime.get(key, {}) or {})
+        if block.get("api_key"):
+            block["api_key"] = SECRET_KEEP_MASK
+            response_runtime[key] = block
 
     return ApiResponse(code=200, message="保存成功", data=response_runtime)
 

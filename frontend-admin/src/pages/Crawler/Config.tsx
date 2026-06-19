@@ -23,7 +23,7 @@ const CrawlerConfig = () => {
     },
   })
 
-  const settings = (data?.data?.crawler || {}) as Record<string, any>
+  const settings = (((data?.data as any)?.crawler) || {}) as Record<string, any>
 
   useEffect(() => {
     form.setFieldsValue({
@@ -56,7 +56,7 @@ const CrawlerConfig = () => {
           ...settings,
           ...values,
         },
-      })
+      } as any)
     })
   }
 

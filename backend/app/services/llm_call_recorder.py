@@ -40,8 +40,8 @@ DEFAULT_PRICING: Dict[str, Dict[str, float]] = {
     "qwen-max": {"prompt": 0.0024, "completion": 0.0096},
 }
 
-MAX_PROMPT_PERSIST_LEN = 4000   # request_messages 单条文本上限
-MAX_RESPONSE_PERSIST_LEN = 8000 # response_text 上限
+MAX_PROMPT_PERSIST_LEN = 20000   # request_messages 单条文本上限（够看清输入构造）
+MAX_RESPONSE_PERSIST_LEN = 20000 # response_text 上限（够看清输出是否符合预期）
 
 
 def _generate_id() -> str:

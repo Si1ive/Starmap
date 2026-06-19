@@ -9,7 +9,6 @@
 与题目抽取的「题干/选项分离 + 兜底」机制完全无关，是独立的大纲处理路径。
 """
 
-import asyncio
 import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -17,10 +16,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.core.logging import get_logger
 from app.models.mysql_models import Document, Subject
-from app.services.llm_call_recorder import LLMCallRecorder
+from app.services.llm_client import BaseLLMClient
 from app.services.system_settings_service import SystemSettingsService
 
 logger = get_logger(__name__)
@@ -38,73 +36,19 @@ SUBJECT_ALIASES: Dict[str, str] = {
 }
 
 
-class OutlineLLMClient:
-    """大纲拆分专用 OpenAI 兼容客户端（复用 pdf_structure_llm 的调用模式）。"""
+class OutlineLLMClient(BaseLLMClient):
+    """大纲拆分专用客户端：继承 BaseLLMClient，覆盖默认温度/token/超时。"""
+
+    called_by = "outline_llm"
+    default_system_prompt = "你是408考研大纲解析专家，负责把大纲文本拆成结构化章节树。"
+    default_temperature = 0.2
 
     def __init__(self, config: Dict[str, Any]):
-        self.enabled = bool(config.get("enabled"))
-        self.provider = str(config.get("provider") or "openai_compatible")
-        self.base_url = str(config.get("base_url") or "").strip()
-        self.api_key = str(config.get("api_key") or settings.OPENAI_API_KEY or "").strip()
-        self.model = str(config.get("model") or settings.OPENAI_MODEL).strip()
-        self.temperature = float(config.get("temperature", 0.2))
+        config = config or {}
+        super().__init__(config)
+        # 大纲拆分文本长，token/超时给更大默认值
         self.max_tokens = int(config.get("max_tokens", 4000))
         self.timeout_seconds = int(config.get("timeout_seconds", 120))
-        self.system_prompt = str(
-            config.get("system_prompt")
-            or "你是408考研大纲解析专家，负责把大纲文本拆成结构化章节树。"
-        ).strip()
-
-    @property
-    def is_available(self) -> bool:
-        return self.enabled and self.provider == "openai_compatible" and bool(self.api_key and self.model)
-
-    async def chat(self, prompt: str, purpose: str) -> str:
-        if not self.is_available:
-            raise RuntimeError("大纲拆分 LLM 未启用或缺少 api_key/model，请在系统设置 -> outline_llm 配置")
-
-        messages = [
-            {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": prompt},
-        ]
-        params = {
-            "max_tokens": self.max_tokens,
-            "temperature": self.temperature,
-            "timeout_seconds": self.timeout_seconds,
-        }
-        async with LLMCallRecorder(
-            model=self.model,
-            called_by="outline_llm",
-            purpose=purpose,
-            base_url=self.base_url or None,
-            request_messages=messages,
-            request_params=params,
-        ) as rec:
-            response_obj, text = await asyncio.to_thread(self._chat_sync, messages)
-            rec.record_response(response_text=text, response_obj=response_obj)
-            return text
-
-    def _chat_sync(self, messages):
-        import openai
-
-        previous_api_key = getattr(openai, "api_key", None)
-        previous_api_base = getattr(openai, "api_base", None)
-        openai.api_key = self.api_key
-        if self.base_url:
-            openai.api_base = self.base_url.rstrip("/")
-        try:
-            response = openai.ChatCompletion.create(
-                model=self.model,
-                messages=messages,
-                max_tokens=self.max_tokens,
-                temperature=self.temperature,
-                request_timeout=self.timeout_seconds,
-            )
-            text = response.choices[0].message.content.strip()
-            return response, text
-        finally:
-            openai.api_key = previous_api_key
-            openai.api_base = previous_api_base
 
 
 def _extract_json(text: str) -> Any:

@@ -6,14 +6,190 @@ import {
   getSettings,
   updateSettings,
   getPdfParserHistory,
-  getPdfStructureLlmStatus,
-  testPdfStructureLlm,
+  getLlmStatus,
+  testLlm,
 } from '@/api'
-import type { SystemSettings } from '@/api/settings'
+import type { SystemSettings, LlmKind, LlmConfig, EmbeddingConfig } from '@/api/settings'
 
 const { TextArea } = Input
 const { Option } = Select
 const { TabPane } = Tabs
+
+// 对话型 LLM 配置 Tab（问答 / 题目结构 / 大纲拆分共用）
+const LlmConfigTab = ({
+  kind,
+  form,
+  intro,
+}: {
+  kind: Exclude<LlmKind, 'embedding'>
+  form: any
+  intro: string
+}) => {
+  const queryClient = useQueryClient()
+  const { data: statusData, isLoading: statusLoading } = useQuery({
+    queryKey: ['llm-status', kind],
+    queryFn: () => getLlmStatus(kind),
+    refetchOnWindowFocus: false,
+  })
+  const status = statusData?.data
+
+  const testMutation = useMutation({
+    mutationFn: (cfg: Partial<LlmConfig>) => testLlm(kind, cfg),
+    onSuccess: (res) => {
+      if (res.code === 200 && res.data?.success) {
+        message.success(`测试成功：${res.data.reply || '已连通'}`)
+        queryClient.invalidateQueries({ queryKey: ['llm-status', kind] })
+      } else {
+        message.error(res.data?.error || res.message || '测试失败')
+      }
+    },
+    onError: () => message.error('测试失败'),
+  })
+
+  return (
+    <Card>
+      <div style={{ display: 'flex', gap: 12, justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap' }}>
+        <Alert
+          type={status?.is_available ? 'success' : 'info'}
+          showIcon
+          style={{ flex: 1, minWidth: 280 }}
+          message={intro}
+          description={
+            statusLoading
+              ? '正在读取后端配置状态...'
+              : status?.is_available
+                ? `当前可用：${status.model}，API Key 来源：${status.uses_env_api_key ? '环境变量' : '配置中心'}`
+                : (status?.issues?.join('；') || '配置后点击右侧"测试当前配置"验证连通性。')
+          }
+        />
+        <Button
+          icon={<ThunderboltOutlined />}
+          loading={testMutation.isLoading}
+          onClick={() => testMutation.mutate(form.getFieldValue(kind) || {})}
+        >
+          测试当前配置
+        </Button>
+      </div>
+
+      <Form.Item name={[kind, 'enabled']} label="启用" valuePropName="checked">
+        <Switch />
+      </Form.Item>
+      <Form.Item name={[kind, 'provider']} label="服务类型">
+        <Select>
+          <Option value="openai_compatible">OpenAI 兼容接口</Option>
+        </Select>
+      </Form.Item>
+      <Form.Item name={[kind, 'base_url']} label="Base URL" tooltip="OpenAI 官方接口可留空；兼容服务填写类似 https://api.example.com/v1">
+        <Input placeholder="https://api.openai.com/v1" />
+      </Form.Item>
+      <Form.Item name={[kind, 'api_key']} label="API Key" tooltip="留空时后端使用 OPENAI_API_KEY 环境变量">
+        <Input.Password placeholder="留空使用环境变量；已保存密钥会显示为保留占位符" autoComplete="new-password" />
+      </Form.Item>
+      <Form.Item name={[kind, 'model']} label="模型">
+        <Input placeholder="如 deepseek-chat / gpt-4o-mini / qwen-plus" />
+      </Form.Item>
+      <Form.Item name={[kind, 'temperature']} label="温度参数">
+        <InputNumber min={0} max={2} step={0.1} style={{ width: '100%' }} />
+      </Form.Item>
+      <Form.Item name={[kind, 'max_tokens']} label="最大Token数">
+        <InputNumber min={100} max={32000} step={100} style={{ width: '100%' }} />
+      </Form.Item>
+      <Form.Item name={[kind, 'timeout_seconds']} label="请求超时（秒）">
+        <InputNumber min={5} max={600} style={{ width: '100%' }} />
+      </Form.Item>
+      <Form.Item name={[kind, 'system_prompt']} label="系统提示词">
+        <TextArea rows={4} placeholder="输入该用途专用的系统提示词" />
+      </Form.Item>
+    </Card>
+  )
+}
+
+// 向量化（embedding）配置 Tab
+const EmbeddingConfigTab = ({ form }: { form: any }) => {
+  const queryClient = useQueryClient()
+  const { data: statusData, isLoading: statusLoading } = useQuery({
+    queryKey: ['llm-status', 'embedding'],
+    queryFn: () => getLlmStatus('embedding'),
+    refetchOnWindowFocus: false,
+  })
+  const status = statusData?.data
+
+  const testMutation = useMutation({
+    mutationFn: (cfg: Partial<EmbeddingConfig>) => testLlm('embedding', cfg),
+    onSuccess: (res) => {
+      if (res.code === 200 && res.data?.success) {
+        const d = res.data
+        const dimMsg = d.dimension_match
+          ? `维度 ${d.dimension} 与配置一致`
+          : `实际维度 ${d.dimension} 与配置 ${d.configured_dimension} 不一致，请修正`
+        if (d.dimension_match) message.success(`测试成功：${dimMsg}`)
+        else message.warning(`已连通，但${dimMsg}`)
+        queryClient.invalidateQueries({ queryKey: ['llm-status', 'embedding'] })
+      } else {
+        message.error(res.data?.error || res.message || '测试失败')
+      }
+    },
+    onError: () => message.error('测试失败'),
+  })
+
+  return (
+    <Card>
+      <Alert
+        type="warning"
+        showIcon
+        style={{ marginBottom: 16 }}
+        message="修改向量化模型或维度需重建向量库"
+        description="切换 embedding 模型通常会改变向量维度。维度变化后必须重建 Qdrant collection 并重新生成全部历史向量，否则检索会失效或报错。本页只保存配置，不会自动重灌，请在重新构建 segment 时生效。"
+      />
+      <div style={{ display: 'flex', gap: 12, justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap' }}>
+        <Alert
+          type={status?.is_available ? 'success' : 'info'}
+          showIcon
+          style={{ flex: 1, minWidth: 280 }}
+          message="该配置用于知识点/题目文本向量化与检索"
+          description={
+            statusLoading
+              ? '正在读取后端配置状态...'
+              : status?.is_available
+                ? `当前可用：${status.model}（${status.dimension} 维），API Key 来源：${status.uses_env_api_key ? '环境变量' : '配置中心'}`
+                : (status?.issues?.join('；') || '配置后点击"测试当前配置"验证连通性与维度。')
+          }
+        />
+        <Button
+          icon={<ThunderboltOutlined />}
+          loading={testMutation.isLoading}
+          onClick={() => testMutation.mutate(form.getFieldValue('embedding') || {})}
+        >
+          测试当前配置
+        </Button>
+      </div>
+
+      <Form.Item name={['embedding', 'enabled']} label="启用" valuePropName="checked">
+        <Switch />
+      </Form.Item>
+      <Form.Item name={['embedding', 'provider']} label="服务类型">
+        <Select>
+          <Option value="openai_compatible">OpenAI 兼容接口</Option>
+        </Select>
+      </Form.Item>
+      <Form.Item name={['embedding', 'base_url']} label="Base URL">
+        <Input placeholder="https://api.openai.com/v1" />
+      </Form.Item>
+      <Form.Item name={['embedding', 'api_key']} label="API Key" tooltip="留空时后端使用 OPENAI_API_KEY 环境变量">
+        <Input.Password placeholder="留空使用环境变量；已保存密钥会显示为保留占位符" autoComplete="new-password" />
+      </Form.Item>
+      <Form.Item name={['embedding', 'model']} label="模型">
+        <Input placeholder="如 text-embedding-3-small / bge-m3 / text-embedding-v3" />
+      </Form.Item>
+      <Form.Item name={['embedding', 'dimension']} label="向量维度" tooltip="必须与所选模型实际输出维度一致。ada-002/3-small=1536，bge-m3=1024">
+        <InputNumber min={64} max={8192} step={1} style={{ width: '100%' }} />
+      </Form.Item>
+      <Form.Item name={['embedding', 'timeout_seconds']} label="请求超时（秒）">
+        <InputNumber min={5} max={600} style={{ width: '100%' }} />
+      </Form.Item>
+    </Card>
+  )
+}
 
 const Settings = () => {
   const [form] = Form.useForm()
@@ -23,6 +199,8 @@ const Settings = () => {
   const { data, isLoading } = useQuery({
     queryKey: ['settings'],
     queryFn: getSettings,
+    // 切到别的窗口再切回来时不要自动重拉，否则会用服务端旧值覆盖未保存的输入
+    refetchOnWindowFocus: false,
   })
 
   const mutation = useMutation({
@@ -31,6 +209,7 @@ const Settings = () => {
       message.success('保存成功')
       queryClient.invalidateQueries({ queryKey: ['settings'] })
       queryClient.invalidateQueries({ queryKey: ['pdf-parser-history'] })
+      queryClient.invalidateQueries({ queryKey: ['llm-status'] })
     },
     onError: () => {
       message.error('保存失败')
@@ -40,26 +219,6 @@ const Settings = () => {
   const { data: historyData, isLoading: historyLoading } = useQuery({
     queryKey: ['pdf-parser-history'],
     queryFn: () => getPdfParserHistory(1, 20),
-  })
-
-  const { data: pdfStructureLlmStatusData, isLoading: pdfStructureLlmStatusLoading } = useQuery({
-    queryKey: ['pdf-structure-llm-status'],
-    queryFn: getPdfStructureLlmStatus,
-  })
-
-  const testPdfStructureLlmMutation = useMutation({
-    mutationFn: testPdfStructureLlm,
-    onSuccess: (res) => {
-      if (res.code === 200 && res.data?.success) {
-        message.success(`测试成功：${res.data.reply || '已连通'}`)
-        queryClient.invalidateQueries({ queryKey: ['pdf-structure-llm-status'] })
-      } else {
-        message.error(res.data?.error || res.message || '测试失败')
-      }
-    },
-    onError: () => {
-      message.error('测试失败')
-    },
   })
 
   const handleSubmit = (values: Partial<SystemSettings>) => {
@@ -104,77 +263,8 @@ const Settings = () => {
   const parserSettings = data?.data?.pdf_parser
   const activeRuntimeStatus = parserSettings?.active_runtime_status
   const availableParsers = parserSettings?.available_parsers || []
-  const pdfStructureLlmStatus = pdfStructureLlmStatusData?.data
 
-  const initialValues = data?.data || {
-    llm: {
-      model: 'gpt-4',
-      temperature: 0.7,
-      max_tokens: 2000,
-      system_prompt: '',
-    },
-    pdf_structure_llm: {
-      enabled: false,
-      provider: 'openai_compatible',
-      base_url: '',
-      api_key: '',
-      model: 'gpt-4',
-      temperature: 0.1,
-      max_tokens: 2000,
-      timeout_seconds: 60,
-      system_prompt: '你是一个PDF题目结构分析专家，负责判断跨页、跨列导致的题目拆分和选项缺失问题。',
-    },
-    search: {
-      default_page_size: 20,
-      max_results: 100,
-      similarity_threshold: 0.8,
-      weights: {
-        name: 1.0,
-        category: 0.8,
-        relation: 0.6,
-      },
-      cache_ttl: 300,
-    },
-    crawler: {
-      request_interval: 1.0,
-      max_concurrency: 5,
-      timeout: 30,
-      user_agents: [],
-      max_concurrent: 5,
-      request_delay: 1.0,
-      request_timeout: 30,
-      max_retries: 3,
-      retry_delay: 2.0,
-      user_agent: '408-Platform/1.0',
-      proxy_enabled: false,
-      proxy_url: '',
-      respect_robots_txt: true,
-      auto_detect_encoding: true,
-      follow_redirects: true,
-      max_redirects: 5,
-      max_depth: 3,
-      dedup_enabled: true,
-      storage_batch_size: 100,
-      log_level: 'INFO',
-      data_sources: [],
-      proxy: '',
-    },
-    system: {
-      name: '408考研学习平台',
-      maintenance_mode: false,
-      log_level: 'INFO',
-    },
-    pdf_parser: {
-      active_parser: 'mineru',
-      service_mode: 'single_active',
-      service_switch_notes: '',
-      deployment_target: 'local',
-      local_service_endpoint: 'http://localhost:8090',
-      remote_service_endpoint: '',
-      request_timeout_seconds: 600,
-      processing_window_size: 1,
-    },
-  }
+  const initialValues = data?.data
 
   useEffect(() => {
     if (data?.data) {
@@ -213,177 +303,20 @@ const Settings = () => {
 
       <Form form={form} layout="vertical" onFinish={handleSubmit} initialValues={initialValues}>
         <Tabs activeKey={activeTab} onChange={setActiveTab}>
-          <TabPane tab="LLM配置" key="llm">
-            <Card>
-              <Form.Item name={['llm', 'model']} label="模型选择">
-                <Select>
-                  <Option value="gpt-4">GPT-4</Option>
-                  <Option value="gpt-3.5-turbo">GPT-3.5 Turbo</Option>
-                </Select>
-              </Form.Item>
-
-              <Form.Item name={['llm', 'temperature']} label="温度参数">
-                <InputNumber min={0} max={2} step={0.1} style={{ width: '100%' }} />
-              </Form.Item>
-
-              <Form.Item name={['llm', 'max_tokens']} label="最大Token数">
-                <InputNumber min={100} max={8000} step={100} style={{ width: '100%' }} />
-              </Form.Item>
-
-              <Form.Item name={['llm', 'system_prompt']} label="系统提示词">
-                <TextArea rows={4} placeholder="输入系统提示词" />
-              </Form.Item>
-            </Card>
+          <TabPane tab="问答 LLM" key="llm">
+            <LlmConfigTab kind="llm" form={form} intro="该配置用于学生问答（RAG 增强回答与建议问题）" />
           </TabPane>
 
-          <TabPane tab="PDF结构LLM" key="pdf-structure-llm">
-            <Card>
-              <div
-                style={{
-                  display: 'flex',
-                  gap: 12,
-                  justifyContent: 'space-between',
-                  alignItems: 'flex-start',
-                  marginBottom: 16,
-                  flexWrap: 'wrap',
-                }}
-              >
-                <Alert
-                  type={pdfStructureLlmStatus?.is_available ? 'success' : 'info'}
-                  showIcon
-                  style={{ flex: 1, minWidth: 280 }}
-                  message="该配置只用于 PDF 文档结构解析"
-                  description={
-                    pdfStructureLlmStatusLoading
-                      ? '正在读取后端配置状态...'
-                      : pdfStructureLlmStatus?.is_available
-                        ? `当前可用：${pdfStructureLlmStatus.model}，API Key 来源：${pdfStructureLlmStatus.uses_env_api_key ? '环境变量' : '配置中心'}`
-                        : (pdfStructureLlmStatus?.issues?.join('；') || '题目抽取中的复杂跨页、跨列、选项缺失场景会使用这里的 LLM 兜底；聊天、检索问答等后续功能仍使用独立配置。')
-                  }
-                />
-                <Button
-                  icon={<ThunderboltOutlined />}
-                  loading={testPdfStructureLlmMutation.isLoading}
-                  onClick={() => {
-                    const current = form.getFieldValue('pdf_structure_llm') || {}
-                    testPdfStructureLlmMutation.mutate(current)
-                  }}
-                >
-                  测试当前配置
-                </Button>
-              </div>
-
-              <Form.Item name={['pdf_structure_llm', 'enabled']} label="启用LLM兜底" valuePropName="checked">
-                <Switch />
-              </Form.Item>
-
-              <Form.Item name={['pdf_structure_llm', 'provider']} label="服务类型">
-                <Select>
-                  <Option value="openai_compatible">OpenAI 兼容接口</Option>
-                </Select>
-              </Form.Item>
-
-              <Form.Item
-                name={['pdf_structure_llm', 'base_url']}
-                label="Base URL"
-                tooltip="OpenAI 官方接口可留空；兼容服务填写类似 https://api.example.com/v1"
-              >
-                <Input placeholder="https://api.openai.com/v1" />
-              </Form.Item>
-
-              <Form.Item
-                name={['pdf_structure_llm', 'api_key']}
-                label="API Key"
-                tooltip="留空时后端使用 OPENAI_API_KEY 环境变量"
-              >
-                <Input.Password placeholder="留空使用环境变量；已保存密钥会显示为保留占位符" autoComplete="new-password" />
-              </Form.Item>
-
-              <Form.Item name={['pdf_structure_llm', 'model']} label="模型">
-                <Input placeholder="gpt-4o-mini" />
-              </Form.Item>
-
-              <Form.Item name={['pdf_structure_llm', 'temperature']} label="温度参数">
-                <InputNumber min={0} max={2} step={0.1} style={{ width: '100%' }} />
-              </Form.Item>
-
-              <Form.Item name={['pdf_structure_llm', 'max_tokens']} label="最大Token数">
-                <InputNumber min={100} max={8000} step={100} style={{ width: '100%' }} />
-              </Form.Item>
-
-              <Form.Item name={['pdf_structure_llm', 'timeout_seconds']} label="请求超时（秒）">
-                <InputNumber min={5} max={300} style={{ width: '100%' }} />
-              </Form.Item>
-
-              <Form.Item name={['pdf_structure_llm', 'system_prompt']} label="系统提示词">
-                <TextArea rows={4} placeholder="输入 PDF 结构解析专用系统提示词" />
-              </Form.Item>
-            </Card>
+          <TabPane tab="题目结构 LLM" key="pdf-structure-llm">
+            <LlmConfigTab kind="pdf_structure_llm" form={form} intro="该配置只用于题目抽取中跨页/跨列/选项缺失的 LLM 兜底修复" />
           </TabPane>
 
-          <TabPane tab="搜索配置" key="search">
-            <Card>
-              <Form.Item name={['search', 'default_page_size']} label="默认分页大小">
-                <InputNumber min={10} max={100} style={{ width: '100%' }} />
-              </Form.Item>
-
-              <Form.Item name={['search', 'max_results']} label="最大返回结果数">
-                <InputNumber min={10} max={500} style={{ width: '100%' }} />
-              </Form.Item>
-
-              <Form.Item name={['search', 'similarity_threshold']} label="相似度阈值">
-                <InputNumber min={0} max={1} step={0.05} style={{ width: '100%' }} />
-              </Form.Item>
-
-              <Form.Item name={['search', 'cache_ttl']} label="缓存TTL（秒）">
-                <InputNumber min={60} max={3600} style={{ width: '100%' }} />
-              </Form.Item>
-            </Card>
+          <TabPane tab="大纲拆分 LLM" key="outline-llm">
+            <LlmConfigTab kind="outline_llm" form={form} intro="该配置用于大纲 PDF 的四门课拆分与考察目标/章节树抽取" />
           </TabPane>
 
-          <TabPane tab="爬虫配置" key="crawler">
-            <Card>
-              <Form.Item name={['crawler', 'request_interval']} label="请求间隔（秒）">
-                <InputNumber min={0.5} max={10} step={0.5} style={{ width: '100%' }} />
-              </Form.Item>
-
-              <Form.Item name={['crawler', 'max_concurrency']} label="最大并发数">
-                <InputNumber min={1} max={20} style={{ width: '100%' }} />
-              </Form.Item>
-
-              <Form.Item name={['crawler', 'timeout']} label="超时时间（秒）">
-                <InputNumber min={5} max={120} style={{ width: '100%' }} />
-              </Form.Item>
-
-              <Form.Item name={['crawler', 'proxy']} label="代理服务器">
-                <Input placeholder="http://proxy.example.com:8080" />
-              </Form.Item>
-            </Card>
-          </TabPane>
-
-          <TabPane tab="系统设置" key="system">
-            <Card>
-              <Form.Item name={['system', 'name']} label="系统名称">
-                <Input />
-              </Form.Item>
-
-              <Form.Item name={['system', 'announcement']} label="公告内容">
-                <TextArea rows={3} placeholder="输入系统公告" />
-              </Form.Item>
-
-              <Form.Item name={['system', 'maintenance_mode']} label="维护模式" valuePropName="checked">
-                <Switch />
-              </Form.Item>
-
-              <Form.Item name={['system', 'log_level']} label="日志级别">
-                <Select>
-                  <Option value="DEBUG">DEBUG</Option>
-                  <Option value="INFO">INFO</Option>
-                  <Option value="WARNING">WARNING</Option>
-                  <Option value="ERROR">ERROR</Option>
-                </Select>
-              </Form.Item>
-            </Card>
+          <TabPane tab="向量化" key="embedding">
+            <EmbeddingConfigTab form={form} />
           </TabPane>
 
           <TabPane tab="PDF解析器" key="pdf-parser">
@@ -422,12 +355,7 @@ const Settings = () => {
                 {availableParsers.map((item) => (
                   <div
                     key={item.parser_name}
-                    style={{
-                      border: '1px solid #f0f0f0',
-                      borderRadius: 8,
-                      padding: 12,
-                      marginBottom: 8,
-                    }}
+                    style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 12, marginBottom: 8 }}
                   >
                     <Space wrap>
                       <strong>{item.parser_name}</strong>
@@ -436,12 +364,8 @@ const Settings = () => {
                       {getParserStatusTag(item.health_status)}
                       {item.is_active ? <Tag color="blue">当前激活</Tag> : null}
                     </Space>
-                    <div style={{ marginTop: 8, color: '#666' }}>
-                      服务地址：{item.service_endpoint || '-'}
-                    </div>
-                    <div style={{ marginTop: 4, color: '#666' }}>
-                      最近检查：{formatCheckTime(item.checked_at)}
-                    </div>
+                    <div style={{ marginTop: 8, color: '#666' }}>服务地址：{item.service_endpoint || '-'}</div>
+                    <div style={{ marginTop: 4, color: '#666' }}>最近检查：{formatCheckTime(item.checked_at)}</div>
                     {item.error_detail ? (
                       <div style={{ marginTop: 6, color: '#cf1322' }}>{item.error_detail}</div>
                     ) : null}
@@ -490,10 +414,7 @@ const Settings = () => {
                 }
               </Form.Item>
 
-              <Form.Item
-                name={['pdf_parser', 'request_timeout_seconds']}
-                label="解析请求超时（秒）"
-              >
+              <Form.Item name={['pdf_parser', 'request_timeout_seconds']} label="解析请求超时（秒）">
                 <InputNumber min={5} max={600} style={{ width: '100%' }} />
               </Form.Item>
 

@@ -229,11 +229,20 @@ class ChatService:
         # 检索相关知识点
         sources = []
         context_parts = []
+        llm_config = {}
 
         try:
             from app.services.retrieval_service import RetrievalService
+            from app.services.system_settings_service import SystemSettingsService
 
             async with mysql_client.session() as db:
+                # 读取问答 LLM 配置（与大纲/题目结构/向量化各自独立）
+                try:
+                    runtime_settings = await SystemSettingsService(db).load()
+                    llm_config = runtime_settings.get("llm", {}) or {}
+                except Exception as cfg_err:
+                    logger.warning("读取问答 LLM 配置失败，回退环境变量", error=str(cfg_err))
+
                 retrieval_service = RetrievalService(db)
                 results = await retrieval_service.search_with_relations(
                     query=request.message,
@@ -274,23 +283,28 @@ class ChatService:
         except Exception as e:
             logger.warning("检索服务异常，降级为直接回答", error=str(e))
 
+        # 构造问答 LLM 客户端（不可用时各生成方法回退 env 直连）
+        from app.services.llm_client import ChatLLMClient
+        chat_client = ChatLLMClient(llm_config)
+
         # 生成回答
         if context_parts:
             # RAG模式：基于知识库回答
             context = "\n\n---\n\n".join(context_parts)
             response_message = await self._generate_rag_answer(
-                request.message, context
+                request.message, context, client=chat_client
             )
         else:
             # 降级模式：直接调用LLM
             response_message = await self._generate_direct_answer(
-                request.message
+                request.message, client=chat_client
             )
 
         # 生成建议问题
         suggestions = await self.generate_suggestions(
             request.message,
-            context={"has_knowledge": bool(context_parts)}
+            context={"has_knowledge": bool(context_parts)},
+            client=chat_client,
         )
 
         # 保存助手消息
@@ -304,17 +318,24 @@ class ChatService:
             suggestions=suggestions
         )
 
-    async def _generate_rag_answer(self, question: str, context: str) -> str:
+    async def _generate_rag_answer(self, question: str, context: str, client=None) -> str:
         """基于检索到的知识库内容生成回答"""
+        system_prompt = RAG_SYSTEM_PROMPT.format(context=context)
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": question},
+        ]
+        # 优先走系统配置的问答 LLM
+        if client is not None and client.is_available:
+            try:
+                return await client.chat_messages(messages, purpose="RAG 增强回答")
+            except Exception as e:
+                logger.warning("配置的问答 LLM 调用失败，回退环境变量", error=str(e))
+
         try:
             import openai
             import asyncio
             from app.services.llm_call_recorder import LLMCallRecorder
-
-            messages = [
-                {"role": "system", "content": RAG_SYSTEM_PROMPT.format(context=context)},
-                {"role": "user", "content": question}
-            ]
 
             async with LLMCallRecorder(
                 model=settings.OPENAI_MODEL,
@@ -342,17 +363,22 @@ class ChatService:
                 return f"根据知识库找到以下相关内容：\n\n{context[:1000]}\n\n（注意：AI生成服务暂时不可用，以上为原始知识库内容）"
             return "抱歉，暂时无法回答您的问题。请稍后再试。"
 
-    async def _generate_direct_answer(self, question: str) -> str:
+    async def _generate_direct_answer(self, question: str, client=None) -> str:
         """直接调用LLM回答（无知识库上下文）"""
+        messages = [
+            {"role": "system", "content": "你是一个408计算机考研学习助手。请简洁准确地回答用户的问题。"},
+            {"role": "user", "content": question}
+        ]
+        if client is not None and client.is_available:
+            try:
+                return await client.chat_messages(messages, purpose="直接问答（无 RAG）")
+            except Exception as e:
+                logger.warning("配置的问答 LLM 调用失败，回退环境变量", error=str(e))
+
         try:
             import openai
             import asyncio
             from app.services.llm_call_recorder import LLMCallRecorder
-
-            messages = [
-                {"role": "system", "content": "你是一个408计算机考研学习助手。请简洁准确地回答用户的问题。"},
-                {"role": "user", "content": question}
-            ]
 
             async with LLMCallRecorder(
                 model=settings.OPENAI_MODEL,
@@ -380,7 +406,8 @@ class ChatService:
     async def generate_suggestions(
         self,
         query: str,
-        context: Optional[dict] = None
+        context: Optional[dict] = None,
+        client=None,
     ) -> List[str]:
         """
         生成建议问题
@@ -390,6 +417,7 @@ class ChatService:
         Args:
             query: 当前查询
             context: 上下文信息
+            client: 可选的问答 LLM 客户端
 
         Returns:
             List[str]: 建议问题列表
@@ -403,15 +431,25 @@ class ChatService:
 
         # 如果有知识库上下文，生成更具体的建议
         if context and context.get("has_knowledge"):
+            messages = [
+                {"role": "system", "content": "基于用户的问题，生成3个相关的后续学习问题。只返回问题列表，每行一个。"},
+                {"role": "user", "content": query}
+            ]
+            # 优先走配置的问答 LLM
+            if client is not None and client.is_available:
+                try:
+                    content = await client.chat_messages(messages, purpose="生成建议问题")
+                    llm_suggestions = [s.strip() for s in content.split("\n") if s.strip()]
+                    if len(llm_suggestions) >= 2:
+                        return llm_suggestions[:3]
+                    return suggestions
+                except Exception:
+                    return suggestions
+
             try:
                 import openai
                 import asyncio
                 from app.services.llm_call_recorder import LLMCallRecorder
-
-                messages = [
-                    {"role": "system", "content": "基于用户的问题，生成3个相关的后续学习问题。只返回问题列表，每行一个。"},
-                    {"role": "user", "content": query}
-                ]
 
                 async with LLMCallRecorder(
                     model=settings.OPENAI_MODEL,
