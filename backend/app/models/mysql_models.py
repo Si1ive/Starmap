@@ -455,6 +455,11 @@ class KnowledgePoint(Base):
     tags: Mapped[Optional[List[str]]] = mapped_column(JSON, comment="标签列表")
     key_points: Mapped[Optional[List[str]]] = mapped_column(JSON, comment="要点列表")
     related_point_ids: Mapped[Optional[List[str]]] = mapped_column(JSON, comment="关联知识点ID")
+    summary: Mapped[Optional[str]] = mapped_column(Text, comment="LLM 一句话摘要（向量召回用）")
+    enrich_status: Mapped[str] = mapped_column(
+        Enum("pending", "enriching", "done", "failed"),
+        default="pending", comment="LLM 富化状态"
+    )
     source: Mapped[Optional[str]] = mapped_column(String(100), comment="来源，如 王道2025/第3章")
     source_page: Mapped[Optional[str]] = mapped_column(String(20), comment="来源页码")
     crawl_task_id: Mapped[Optional[str]] = mapped_column(String(32), comment="关联爬取任务ID")
@@ -542,6 +547,18 @@ class Question(Base):
     topic_terms: Mapped[Optional[List[str]]] = mapped_column(JSON, comment="主题术语列表")
     knowledge_point_ids: Mapped[Optional[List[str]]] = mapped_column(JSON, comment="关联知识点ID")
     tags: Mapped[Optional[List[str]]] = mapped_column(JSON, comment="标签")
+    answer_source: Mapped[str] = mapped_column(
+        Enum("none", "extracted", "llm", "manual"),
+        default="none", comment="答案来源：none未填/extracted原卷抽取/llm生成/manual人工"
+    )
+    explanation_source: Mapped[str] = mapped_column(
+        Enum("none", "extracted", "llm", "manual"),
+        default="none", comment="解析来源"
+    )
+    enrich_status: Mapped[str] = mapped_column(
+        Enum("pending", "enriching", "done", "failed"),
+        default="pending", comment="LLM 富化状态"
+    )
     review_status: Mapped[str] = mapped_column(
         Enum("pending", "approved", "rejected"),
         default="pending", comment="审核状态"
@@ -1116,6 +1133,36 @@ class QuestionChapterLink(Base):
         Index("idx_qcl_question", "question_id"),
         Index("idx_qcl_chapter", "canonical_chapter_id"),
         {"comment": "题目与章节关联表"}
+    )
+
+
+class QuestionKnowledgeLink(Base):
+    """题目与知识点关联表 - 支撑「查题反查知识点」双向反查"""
+    __tablename__ = "question_knowledge_links"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="关联ID")
+    question_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("questions.id", ondelete="CASCADE"),
+        nullable=False, comment="题目ID"
+    )
+    knowledge_point_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("knowledge_points.id", ondelete="CASCADE"),
+        nullable=False, comment="知识点ID"
+    )
+    relevance: Mapped[float] = mapped_column(
+        DECIMAL(5, 4), default=0, comment="关联强度 0-1"
+    )
+    source: Mapped[str] = mapped_column(
+        Enum("llm", "vector", "rule", "manual"),
+        default="llm", comment="关联来源：llm考点标识/vector向量召回/rule规则/manual人工"
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("question_id", "knowledge_point_id", name="uk_q_kp_link"),
+        Index("idx_qkl_question", "question_id"),
+        Index("idx_qkl_kp", "knowledge_point_id"),
+        {"comment": "题目与知识点关联表"}
     )
 
 

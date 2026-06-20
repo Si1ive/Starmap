@@ -28,7 +28,7 @@ from app.services.document_parsers import inspect_parser_health
 logger = get_logger(__name__)
 
 # 四个"对话型/向量型"LLM 配置块的 key，供 admin 遍历做 api_key 脱敏与泛化端点路由。
-LLM_CONFIG_KEYS = ("llm", "pdf_structure_llm", "outline_llm", "embedding", "doc_meta_llm")
+LLM_CONFIG_KEYS = ("llm", "pdf_structure_llm", "outline_llm", "embedding", "doc_meta_llm", "enrich_llm")
 
 
 class SystemSettingsService:
@@ -386,6 +386,20 @@ class SystemSettingsService:
                     "年份、是真题还是模拟题、来源/辅导机构、试卷名等信息，只输出 JSON。"
                 ),
             },
+            "enrich_llm": {
+                "enabled": False,
+                "provider": "openai_compatible",
+                "base_url": "",
+                "api_key": "",
+                "model": settings.OPENAI_MODEL,
+                "temperature": 0.3,
+                "max_tokens": 2000,
+                "timeout_seconds": 120,
+                "system_prompt": (
+                    "你是408考研内容富化专家。为题目生成参考答案与解析、标识所考知识点，"
+                    "为知识点生成摘要/别名/要点。只输出 JSON，不要解释。"
+                ),
+            },
             "pdf_parser": {
                 "active_parser": "mineru",
                 "service_mode": "single_active",
@@ -412,4 +426,6 @@ class SystemSettingsService:
             return "向量化 Embedding 配置"
         if config_key == "doc_meta_llm":
             return "文档元信息提取 LLM 配置"
+        if config_key == "enrich_llm":
+            return "语料富化增强 LLM 配置"
         return "系统配置"

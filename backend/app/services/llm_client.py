@@ -152,3 +152,13 @@ class DocMetaLLMClient(BaseLLMClient):
     )
     default_temperature = 0.1
     default_purpose = "文档级元信息提取"
+
+
+class EnrichLLMClient(BaseLLMClient):
+    called_by = "enrich_llm"
+    default_system_prompt = (
+        "你是408考研内容富化专家。负责为题目生成参考答案与解析、标识所考知识点，"
+        "为知识点生成摘要/别名/要点。只输出 JSON，不要解释。"
+    )
+    default_temperature = 0.3
+    default_purpose = "语料富化增强"
