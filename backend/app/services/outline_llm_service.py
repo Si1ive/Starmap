@@ -177,7 +177,9 @@ class OutlineLLMService:
         """
         拆分大纲文档，返回四门课结构（不入库）：
         {subjects: [{subject_id, subject_code, subject_name, exam_objective,
-                     total_chapters, max_depth, chapters}]}
+                     total_chapters, max_depth, chapters, error?}]}
+
+        重要：每个科目失败不影响其他科目，失败的科目会在 result 中标记 error 字段。
         """
         document = (await self.db.execute(
             select(Document).where(Document.id == document_id)
@@ -198,14 +200,28 @@ class OutlineLLMService:
 
         results: List[Dict[str, Any]] = []
         if segments:
-            # 逐门课细拆
+            # 逐门课细拆（捕获每个科目的异常，不中断流程）
             for code, start, end in segments:
                 subject = subjects_by_code.get(code)
                 if not subject:
                     continue
                 seg_text = markdown[start:end].strip()
-                parsed = await self._split_one_subject(client, subject.name, seg_text)
-                results.append(self._pack_subject_result(subject, parsed))
+                try:
+                    parsed = await self._split_one_subject(client, subject.name, seg_text)
+                    results.append(self._pack_subject_result(subject, parsed))
+                except Exception as e:
+                    # 单个科目失败，记录错误但不中断
+                    logger.warning("大纲拆分某科目失败，标记为失败但继续处理其他科目",
+                                   subject=subject.name, error=str(e))
+                    results.append({
+                        "subject_id": subject.id,
+                        "subject_code": subject.code,
+                        "subject_name": subject.name,
+                        "error": str(e),
+                        "total_chapters": 0,
+                        "max_depth": 0,
+                        "chapters": [],
+                    })
         else:
             # 降级：整篇喂一次，让 LLM 自己分四门课
             logger.warning("大纲粗切未命中科目边界，降级整篇拆分", document_id=document_id)

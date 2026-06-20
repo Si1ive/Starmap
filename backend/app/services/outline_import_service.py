@@ -503,68 +503,103 @@ class OutlineImportService:
         把 OutlineLLMService.split_outline 的多门课结果整体入库。
 
         llm_result: {"subjects": [{subject_id, subject_name, exam_objective,
-                                    chapters: [...]}]}
+                                    chapters: [...], error?: str}]}
         - upsert ExamOutline
         - 每门课 upsert 一条 exam_outline_subjects（存考察目标）
         - 每门课章节树挂到对应 subject_id + outline_id（description 一并入库）
+
+        重要改进：
+        - 如果某个科目有 error 字段或 chapters 为空，跳过该科目但不影响其他科目
+        - 部分成功时仍然入库，返回 partial=True 标识
         """
         subjects = llm_result.get("subjects") or []
         if not subjects:
             raise ValueError("LLM 拆分结果为空，无法入库")
+
+        # 过滤出有效科目（有 chapters 且无 error）
+        valid_subjects = [s for s in subjects if s.get("chapters") and not s.get("error")]
+        failed_subjects = [s for s in subjects if s.get("error") or not s.get("chapters")]
+
+        if not valid_subjects:
+            # 全部科目都失败
+            error_summary = "; ".join([f"{s.get('subject_name')}: {s.get('error', '章节为空')}" for s in failed_subjects])
+            raise ValueError(f"所有科目拆分均失败，无法入库。错误: {error_summary}")
 
         outline = await self._upsert_outline_meta(name, year, version, description, set_default)
 
         total_created = 0
         total_updated = 0
         subject_summaries: List[Dict[str, Any]] = []
-        for subj in subjects:
+
+        # 处理成功的科目
+        for subj in valid_subjects:
             subject_id = subj.get("subject_id")
             chapters = subj.get("chapters") or []
             if not subject_id or not chapters:
                 continue
 
-            # upsert 考察目标关联
-            link = (await self.db.execute(
-                select(ExamOutlineSubject).where(
-                    ExamOutlineSubject.outline_id == outline.id,
-                    ExamOutlineSubject.subject_id == subject_id,
-                )
-            )).scalar_one_or_none()
-            chapter_count = self._count_tree(chapters)
-            if link:
-                link.exam_objective = subj.get("exam_objective") or link.exam_objective
-                link.chapter_count = chapter_count
-                link.guidance_status = "pending"
-            else:
-                link = ExamOutlineSubject(
-                    id=_gen_id(),
-                    outline_id=outline.id,
-                    subject_id=subject_id,
-                    exam_objective=subj.get("exam_objective"),
-                    chapter_count=chapter_count,
-                    guidance_status="pending",
-                )
-                self.db.add(link)
-                await self.db.flush()
+            try:
+                # upsert 考察目标关联
+                link = (await self.db.execute(
+                    select(ExamOutlineSubject).where(
+                        ExamOutlineSubject.outline_id == outline.id,
+                        ExamOutlineSubject.subject_id == subject_id,
+                    )
+                )).scalar_one_or_none()
+                chapter_count = self._count_tree(chapters)
+                if link:
+                    link.exam_objective = subj.get("exam_objective") or link.exam_objective
+                    link.chapter_count = chapter_count
+                    link.guidance_status = "pending"
+                else:
+                    link = ExamOutlineSubject(
+                        id=_gen_id(),
+                        outline_id=outline.id,
+                        subject_id=subject_id,
+                        exam_objective=subj.get("exam_objective"),
+                        chapter_count=chapter_count,
+                        guidance_status="pending",
+                    )
+                    self.db.add(link)
+                    await self.db.flush()
 
-            created, updated = await self._upsert_chapters(
-                subject_id=subject_id,
-                outline_id=outline.id,
-                chapters=chapters,
-                parent_id=None,
-                level=1,
-            )
-            total_created += created
-            total_updated += updated
+                created, updated = await self._upsert_chapters(
+                    subject_id=subject_id,
+                    outline_id=outline.id,
+                    chapters=chapters,
+                    parent_id=None,
+                    level=1,
+                )
+                total_created += created
+                total_updated += updated
+                subject_summaries.append({
+                    "subject_id": subject_id,
+                    "subject_name": subj.get("subject_name"),
+                    "chapter_count": chapter_count,
+                    "created": created,
+                    "updated": updated,
+                    "status": "success",
+                })
+            except Exception as e:
+                logger.error("入库某科目章节树时失败", subject_id=subject_id, error=str(e))
+                subject_summaries.append({
+                    "subject_id": subject_id,
+                    "subject_name": subj.get("subject_name"),
+                    "status": "failed",
+                    "error": str(e),
+                })
+
+        # 记录失败的科目
+        for subj in failed_subjects:
             subject_summaries.append({
-                "subject_id": subject_id,
+                "subject_id": subj.get("subject_id"),
                 "subject_name": subj.get("subject_name"),
-                "chapter_count": chapter_count,
-                "created": created,
-                "updated": updated,
+                "status": "failed",
+                "error": subj.get("error", "章节为空"),
             })
 
         await self.db.commit()
+
         return {
             "outline_id": outline.id,
             "outline_name": outline.name,
@@ -573,6 +608,10 @@ class OutlineImportService:
             "created_chapters": total_created,
             "updated_chapters": total_updated,
             "subjects": subject_summaries,
+            "partial": len(failed_subjects) > 0,  # 标识是否部分成功
+            "total_subjects": len(subjects),
+            "successful_subjects": len([s for s in subject_summaries if s.get("status") == "success"]),
+            "failed_subjects": len(failed_subjects),
         }
 
     async def generate_guidance_for_subject(

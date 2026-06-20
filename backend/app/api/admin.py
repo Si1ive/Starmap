@@ -4234,18 +4234,30 @@ async def preview_outline_from_document(document_id: str, db: AsyncSession = Dep
 
 @router.post("/outlines/import-from-llm", response_model=ApiResponse)
 async def import_outline_from_llm(request: OutlineFromLLMRequest, db: AsyncSession = Depends(get_db)):
-    """把 LLM 拆分出的四门课结果整体入库（含考察目标 + 多层章节树 + 原文考点）。"""
+    """
+    把 LLM 拆分出的四门课结果整体入库（含考察目标 + 多层章节树 + 原文考点）。
+
+    改进：支持部分成功，如果某些科目失败但其他成功，仍然入库成功的部分。
+    返回 partial=true 标识部分成功。
+    """
     from app.services.outline_import_service import OutlineImportService
     service = OutlineImportService(db)
     try:
-        return ApiResponse(data=await service.import_from_llm_result(
+        result = await service.import_from_llm_result(
             llm_result={"subjects": request.subjects},
             name=request.name,
             year=request.year,
             version=request.version or "v1.0",
             description=request.description,
             set_default=request.set_default,
-        ))
+        )
+        # 如果是部分成功，返回 200 但带 warning 标识
+        if result.get("partial"):
+            return ApiResponse(
+                data=result,
+                message=f"部分成功：{result['successful_subjects']}/{result['total_subjects']} 个科目入库成功"
+            )
+        return ApiResponse(data=result)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -4349,6 +4361,78 @@ async def upload_parse_outline(
         "document_id": document_id,
         "file_name": file.filename,
         "subjects": split["subjects"],
+    })
+
+
+@router.get("/outlines/runs/{run_id}", response_model=ApiResponse)
+async def get_outline_run_detail(run_id: str, db: AsyncSession = Depends(get_db)):
+    """获取大纲入库任务详情（用于进度轮询）"""
+    from app.models.mysql_models import OutlineIngestionRun
+
+    run = await db.get(OutlineIngestionRun, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    progress = 0
+    if run.total_subjects > 0:
+        progress = round((run.processed_subjects / run.total_subjects) * 100, 1)
+
+    return ApiResponse(data={
+        "id": run.id,
+        "document_id": run.document_id,
+        "outline_id": run.outline_id,
+        "outline_name": run.outline_name,
+        "year": run.year,
+        "version": run.version,
+        "status": run.status,
+        "progress": progress,
+        "total_subjects": run.total_subjects,
+        "processed_subjects": run.processed_subjects,
+        "successful_subjects": run.successful_subjects,
+        "current_subject_name": run.current_subject_name,
+        "created_chapters": run.created_chapters,
+        "updated_chapters": run.updated_chapters,
+        "error_detail": run.error_detail,
+        "result_summary": run.result_summary,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+    })
+
+
+@router.get("/outlines/runs", response_model=ApiResponse)
+async def list_outline_runs(
+    document_id: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 20,
+    db: AsyncSession = Depends(get_db)
+):
+    """列出大纲入库任务（支持按 document_id 和 status 过滤）"""
+    from app.models.mysql_models import OutlineIngestionRun
+
+    query = select(OutlineIngestionRun).order_by(OutlineIngestionRun.created_at.desc()).limit(limit)
+    if document_id:
+        query = query.where(OutlineIngestionRun.document_id == document_id)
+    if status:
+        query = query.where(OutlineIngestionRun.status == status)
+
+    runs = (await db.execute(query)).scalars().all()
+
+    return ApiResponse(data={
+        "items": [
+            {
+                "id": r.id,
+                "document_id": r.document_id,
+                "outline_id": r.outline_id,
+                "outline_name": r.outline_name,
+                "status": r.status,
+                "progress": round((r.processed_subjects / r.total_subjects * 100), 1) if r.total_subjects > 0 else 0,
+                "total_subjects": r.total_subjects,
+                "successful_subjects": r.successful_subjects,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in runs
+        ]
     })
 
 

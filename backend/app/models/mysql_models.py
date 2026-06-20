@@ -951,6 +951,53 @@ class ExamOutlineSubject(Base):
     )
 
 
+class OutlineIngestionRun(Base):
+    """大纲入库任务执行记录"""
+    __tablename__ = "outline_ingestion_runs"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="任务ID")
+    document_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("documents.id", ondelete="CASCADE"),
+        nullable=False, comment="源文档ID"
+    )
+    outline_id: Mapped[Optional[str]] = mapped_column(String(32), comment="生成的大纲ID（成功后填充）")
+    outline_name: Mapped[Optional[str]] = mapped_column(String(200), comment="大纲名称")
+    year: Mapped[Optional[int]] = mapped_column(Integer, comment="年份")
+    version: Mapped[Optional[str]] = mapped_column(String(20), comment="版本")
+
+    status: Mapped[str] = mapped_column(
+        Enum("pending", "processing", "done", "partial", "failed"),
+        default="pending",
+        nullable=False,
+        comment="任务状态：partial=部分成功"
+    )
+
+    total_subjects: Mapped[int] = mapped_column(default=0, comment="总科目数")
+    processed_subjects: Mapped[int] = mapped_column(default=0, comment="已处理科目数")
+    successful_subjects: Mapped[int] = mapped_column(default=0, comment="成功处理科目数")
+    current_subject_name: Mapped[Optional[str]] = mapped_column(String(100), comment="当前处理科目")
+
+    created_chapters: Mapped[int] = mapped_column(default=0, comment="总共创建章节数")
+    updated_chapters: Mapped[int] = mapped_column(default=0, comment="总共更新章节数")
+
+    error_detail: Mapped[Optional[str]] = mapped_column(Text, comment="错误详情")
+    result_summary: Mapped[Optional[dict]] = mapped_column(JSON, comment="各科目处理结果摘要")
+
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    __table_args__ = (
+        Index("idx_outline_run_document", "document_id"),
+        Index("idx_outline_run_status", "status"),
+        Index("idx_outline_run_created", "created_at"),
+        {"comment": "大纲入库任务执行记录"}
+    )
+
+
 class CanonicalChapter(Base):
     """标准章节表 - 学科的标准章节体系（考试大纲章节）"""
     __tablename__ = "canonical_chapters"
@@ -974,6 +1021,8 @@ class CanonicalChapter(Base):
     outline_code: Mapped[Optional[str]] = mapped_column(String(50), comment="大纲中的编号，如：1.1.1、一、(一)")
     aliases: Mapped[Optional[List[str]]] = mapped_column(JSON, comment="别名列表")
     description: Mapped[Optional[str]] = mapped_column(Text, comment="章节描述（大纲原文考点）")
+    enhanced_description: Mapped[Optional[str]] = mapped_column(Text, comment="LLM 增强描述（2-3句，含考法/易混点/核心内容，用于向量检索）")
+    keywords: Mapped[Optional[List[str]]] = mapped_column(JSON, comment="关键词标签（别名、英文名、相关术语，用于精确匹配）")
     exam_guidance: Mapped[Optional[str]] = mapped_column(Text, comment="LLM 生成的复习指导（重点内容/复习方向）")
     sort_order: Mapped[int] = mapped_column(default=0, comment="排序序号")
     status: Mapped[str] = mapped_column(
