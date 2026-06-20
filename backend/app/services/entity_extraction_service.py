@@ -1037,6 +1037,7 @@ class EntityExtractionService:
         question_count = 0
         question_diagnostic: Optional[Dict[str, Any]] = None
         question_unassigned: List[Dict[str, Any]] = []
+        answer_linked = 0
 
         # 4. 抽取知识点 — 只用被分类为 knowledge / heading 的 block
         if extract_knowledge:
@@ -1063,6 +1064,12 @@ class EntityExtractionService:
             question_count = question_result["saved_count"]
             question_diagnostic = question_result["diagnostic"]
             question_unassigned = question_result.get("unassigned", [])
+            # 5.1 PDF 自带答案区回连：扫描"参考答案"段，按题号写回 answer（标 extracted）
+            try:
+                answer_linked = await self._extract_and_link_answers(document_id, blocks)
+            except Exception as e:
+                logger.warning("PDF 答案区回连失败，跳过", document_id=document_id, error=str(e))
+                answer_linked = 0
 
         # 跨页归属加固：找出未被任何 section 覆盖的页码（标题漏检/映射失败的信号）
         all_pages = sorted({b.page_no for b in blocks if b.page_no is not None})
@@ -1093,6 +1100,7 @@ class EntityExtractionService:
             "doc_meta": getattr(self, "_doc_meta", {}) or {},
             "unassigned_questions": question_unassigned,
             "uncovered_pages": uncovered_pages,
+            "answer_linked": answer_linked,
         }
 
     async def _get_section_mappings(self, document_id: str) -> Dict[int, Dict[str, Optional[str]]]:
@@ -2169,6 +2177,78 @@ class EntityExtractionService:
             .split()
         )
         return text if len(text) <= limit else f"{text[:limit]}..."
+
+    async def _extract_and_link_answers(
+        self, document_id: str, blocks: List[DocumentBlock]
+    ) -> int:
+        """
+        PDF 自带答案区回连：扫描"参考答案/答案"段，按题号把答案写回已入库题目。
+
+        策略：
+        1. 定位答案区起点——出现"参考答案/答案/答案与解析/答案速查"等标题的 block 之后的内容。
+        2. 在答案区文本里用正则抓 `题号 + 答案` 形式：
+           - 客观题：`1. B` / `1、B` / `1．BCD` / `(1) B`
+           - 兼容一行多题：`1.B 2.C 3.D`
+        3. 按 question_no 匹配本文档已入库的 Question，写 answer + answer_source="extracted"。
+           已有 extracted 答案的不覆盖；LLM 答案此处也不覆盖（extracted 优先级最高，仅在为空时写）。
+
+        返回成功回连的题目数。
+        """
+        # 收集本文档题目：question_no -> Question
+        rows = (await self.db.execute(
+            select(Question).where(Question.source_document_id == document_id)
+        )).scalars().all()
+        by_no: Dict[str, Question] = {}
+        for q in rows:
+            if q.question_no:
+                by_no[str(q.question_no).strip()] = q
+        if not by_no:
+            return 0
+
+        # 定位答案区：找到含答案标题的 block，从其后开始拼接文本
+        answer_header_re = re.compile(r'(参考答案|答案与解析|答案速查|答案及解析|^\s*答案\s*$)')
+        text_parts: List[str] = []
+        in_answer_zone = False
+        for b in blocks:
+            t = (b.content_text or b.content_md or "").strip()
+            if not t:
+                continue
+            if not in_answer_zone and answer_header_re.search(t):
+                in_answer_zone = True
+                # 标题行后面可能紧跟答案，去掉标题词本身
+                tail = answer_header_re.sub(" ", t).strip()
+                if tail:
+                    text_parts.append(tail)
+                continue
+            if in_answer_zone:
+                text_parts.append(t)
+        if not in_answer_zone:
+            return 0
+
+        answer_text = "\n".join(text_parts)
+        # 抓 `题号<分隔> 答案`，答案为 A-D 字母（含多选 ABCD）或"对/错/√/×/正确/错误"
+        pair_re = re.compile(
+            r'(?<!\d)(\d{1,3})\s*[.．、:：)）]\s*'
+            r'([A-Da-d]{1,4}|对|错|正确|错误|√|×|T|F|是|否)'
+        )
+        linked = 0
+        for m in pair_re.finditer(answer_text):
+            no = m.group(1).strip()
+            ans = m.group(2).strip().upper()
+            q = by_no.get(no)
+            if not q:
+                continue
+            # extracted 永不被覆盖；仅当当前答案为空时写入
+            if (q.answer or "").strip():
+                continue
+            q.answer = ans
+            q.answer_source = "extracted"
+            linked += 1
+
+        if linked:
+            await self.db.flush()
+            logger.info("PDF 答案区回连完成", document_id=document_id, linked=linked)
+        return linked
 
     def _extract_fix_history(self, questions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """提取修复历史"""
