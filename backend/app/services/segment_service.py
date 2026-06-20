@@ -107,11 +107,21 @@ class SegmentService:
 
         for kp in kps:
             chapter_ids = chapter_map.get(kp.id, [])
+            # 结构化富化字段
+            kp_meta = {
+                "difficulty": kp.difficulty,
+                "tags": kp.tags or [],
+                "aliases": kp.aliases or [],
+                "exam_frequency": kp.exam_frequency,
+            }
 
             # title segment
             title_text = kp.title
             if kp.topic_terms:
                 title_text += " " + " ".join(kp.topic_terms)
+            # 别名也并入 title segment，提升召回
+            if kp.aliases:
+                title_text += " " + " ".join(kp.aliases)
 
             segments_to_create.append({
                 "entity_type": "knowledge_point",
@@ -124,12 +134,15 @@ class SegmentService:
                 "subject_id": kp.subject_id,
                 "chapter_ids": chapter_ids,
                 "topic_terms": kp.topic_terms,
+                "meta": kp_meta,
             })
             texts_to_embed.append(title_text)
 
             # content segment（内容不为空时生成）
             if kp.content:
-                context_text = f"{kp.title}\n\n{kp.content}"
+                # 富化后的 summary 拼进语义载体，提升召回
+                summary_prefix = f"{kp.summary}\n\n" if getattr(kp, "summary", None) else ""
+                context_text = f"{kp.title}\n\n{summary_prefix}{kp.content}"
                 segments_to_create.append({
                     "entity_type": "knowledge_point",
                     "entity_id": kp.id,
@@ -142,6 +155,7 @@ class SegmentService:
                     "subject_id": kp.subject_id,
                     "chapter_ids": chapter_ids,
                     "topic_terms": kp.topic_terms,
+                    "meta": kp_meta,
                 })
                 texts_to_embed.append(context_text)
 
@@ -172,6 +186,7 @@ class SegmentService:
                 subject_id=seg_data.get("subject_id"),
                 chapter_ids=seg_data.get("chapter_ids"),
                 topic_terms=seg_data.get("topic_terms"),
+                metadata_json=seg_data.get("meta"),
                 qdrant_point_id=qdrant_point_id,
             )
             self.db.add(segment)
@@ -186,6 +201,7 @@ class SegmentService:
                 "chapter_ids": seg_data.get("chapter_ids", []),
                 "topic_terms": seg_data.get("topic_terms", []),
                 "content_preview": seg_data["content_text"][:200],
+                **(seg_data.get("meta") or {}),
             }
 
             qdrant_points.append(
@@ -246,6 +262,18 @@ class SegmentService:
 
         for q in questions:
             chapter_ids = chapter_map.get(q.id, [])
+            # 结构化富化字段：随每个 segment 落到 metadata_json + Qdrant payload，供结构化过滤
+            q_meta = {
+                "exam_year": q.exam_year or 0,
+                "exam_scope": q.exam_scope,
+                "source": q.source,
+                "paper_name": q.paper_name,
+                "difficulty": q.difficulty,
+                "question_type": q.type,
+                "tags": q.tags or [],
+                "answer_source": q.answer_source,
+                "knowledge_point_ids": q.knowledge_point_ids or [],
+            }
 
             # title segment（题干）
             title_text = q.content or ""
@@ -262,6 +290,7 @@ class SegmentService:
                 "subject_id": q.subject_id,
                 "chapter_ids": chapter_ids,
                 "topic_terms": q.topic_terms,
+                "meta": q_meta,
             })
             texts_to_embed.append(title_text)
 
@@ -279,6 +308,7 @@ class SegmentService:
                     "subject_id": q.subject_id,
                     "chapter_ids": chapter_ids,
                     "topic_terms": q.topic_terms,
+                    "meta": q_meta,
                 })
                 texts_to_embed.append(context_text)
 
@@ -300,6 +330,7 @@ class SegmentService:
                         "subject_id": q.subject_id,
                         "chapter_ids": chapter_ids,
                         "topic_terms": q.topic_terms,
+                        "meta": q_meta,
                     })
                     texts_to_embed.append(option_text)
 
@@ -316,6 +347,7 @@ class SegmentService:
             seg_id = _gen_id()
             qdrant_point_id = _gen_qdrant_id()
 
+            seg_meta = seg_data.get("meta") or {}
             segment = RetrievalSegment(
                 id=seg_id,
                 entity_type=seg_data["entity_type"],
@@ -329,6 +361,7 @@ class SegmentService:
                 subject_id=seg_data.get("subject_id"),
                 chapter_ids=seg_data.get("chapter_ids"),
                 topic_terms=seg_data.get("topic_terms"),
+                metadata_json=seg_meta or None,
                 qdrant_point_id=qdrant_point_id,
             )
             self.db.add(segment)
@@ -342,6 +375,13 @@ class SegmentService:
                 "chapter_ids": seg_data.get("chapter_ids", []),
                 "topic_terms": seg_data.get("topic_terms", []),
                 "content_preview": seg_data["content_text"][:200],
+                # 结构化富化字段，供 Qdrant payload 过滤
+                "exam_year": seg_meta.get("exam_year", 0),
+                "exam_scope": seg_meta.get("exam_scope"),
+                "difficulty": seg_meta.get("difficulty"),
+                "question_type": seg_meta.get("question_type"),
+                "tags": seg_meta.get("tags", []),
+                "answer_source": seg_meta.get("answer_source"),
             }
 
             qdrant_points.append(

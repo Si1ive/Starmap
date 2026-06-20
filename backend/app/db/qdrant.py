@@ -9,7 +9,10 @@ Phase 3: 完整的 dense/sparse hybrid 检索。
 from typing import Any, Dict, List, Optional
 
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue
+from qdrant_client.models import (
+    Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue,
+    PayloadSchemaType,
+)
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -105,10 +108,38 @@ class QdrantManager:
             logger.error("Qdrant collection 创建失败", name=name, error=str(e))
             raise
 
+    # 需要建 payload 索引的字段 → 索引类型（用于结构化过滤）
+    _PAYLOAD_INDEXES = {
+        "subject_id": PayloadSchemaType.KEYWORD,
+        "chapter_ids": PayloadSchemaType.KEYWORD,
+        "segment_type": PayloadSchemaType.KEYWORD,
+        "exam_scope": PayloadSchemaType.KEYWORD,
+        "difficulty": PayloadSchemaType.KEYWORD,
+        "question_type": PayloadSchemaType.KEYWORD,
+        "tags": PayloadSchemaType.KEYWORD,
+        "answer_source": PayloadSchemaType.KEYWORD,
+        "exam_year": PayloadSchemaType.INTEGER,
+    }
+
+    def ensure_payload_indexes(self, name: str) -> None:
+        """为 collection 建结构化过滤所需的 payload 索引（已存在则忽略）。"""
+        for field, schema in self._PAYLOAD_INDEXES.items():
+            try:
+                self._client.create_payload_index(
+                    collection_name=name,
+                    field_name=field,
+                    field_schema=schema,
+                )
+            except Exception as e:
+                # 已存在或并发创建时 Qdrant 报错，可安全忽略
+                logger.debug("payload 索引创建跳过", collection=name, field=field, error=str(e))
+
     def init_default_collections(self, vector_size: int = 1536) -> None:
-        """初始化默认 collections"""
+        """初始化默认 collections + payload 索引"""
         self.ensure_collection(self.COLLECTION_KNOWLEDGE_SEGMENTS, vector_size)
         self.ensure_collection(self.COLLECTION_QUESTION_SEGMENTS, vector_size)
+        self.ensure_payload_indexes(self.COLLECTION_KNOWLEDGE_SEGMENTS)
+        self.ensure_payload_indexes(self.COLLECTION_QUESTION_SEGMENTS)
 
     def collection_info(self, name: str) -> Optional[Dict[str, Any]]:
         """获取 collection 信息"""
