@@ -1143,6 +1143,14 @@ class KnowledgePointChapterLink(Base):
         nullable=False, comment="标准章节ID"
     )
     is_primary: Mapped[bool] = mapped_column(default=False, comment="是否主章节")
+    relevance: Mapped[float] = mapped_column(
+        DECIMAL(5, 4), nullable=False, server_default="1.0000", comment="关联度 [0,1]"
+    )
+    source: Mapped[str] = mapped_column(
+        Enum("existing", "document_mapping", "vector_search", "manual"),
+        nullable=False, server_default="manual", comment="关联来源"
+    )
+    created_by: Mapped[Optional[str]] = mapped_column(String(50), comment="创建方式（system/user）")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     # relationships
@@ -1171,6 +1179,14 @@ class QuestionChapterLink(Base):
         nullable=False, comment="标准章节ID"
     )
     is_primary: Mapped[bool] = mapped_column(default=False, comment="是否主章节")
+    relevance: Mapped[float] = mapped_column(
+        DECIMAL(5, 4), nullable=False, server_default="1.0000", comment="关联度 [0,1]"
+    )
+    source: Mapped[str] = mapped_column(
+        Enum("existing", "document_mapping", "vector_search", "manual"),
+        nullable=False, server_default="manual", comment="关联来源"
+    )
+    created_by: Mapped[Optional[str]] = mapped_column(String(50), comment="创建方式（system/user）")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     # relationships
