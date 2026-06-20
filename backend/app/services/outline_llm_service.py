@@ -70,7 +70,7 @@ def _extract_json(text: str) -> Any:
 
 
 def _normalize_chapters(raw: Any) -> List[Dict[str, Any]]:
-    """递归清洗 LLM 输出的章节树：name 必填，保留 outline_code/description/children。"""
+    """递归清洗 LLM 输出的章节树：name 必填，保留 outline_code/description/enhanced_description/keywords/children。"""
     result: List[Dict[str, Any]] = []
     if not isinstance(raw, list):
         return result
@@ -81,10 +81,26 @@ def _normalize_chapters(raw: Any) -> List[Dict[str, Any]]:
         if not name:
             continue
         children = _normalize_chapters(node.get("children") or [])
+
+        # 处理 enhanced_description
+        enhanced_desc = node.get("enhanced_description")
+        if enhanced_desc:
+            enhanced_desc = str(enhanced_desc).strip()[:1000]  # 限制长度
+
+        # 处理 keywords
+        keywords = node.get("keywords")
+        if keywords:
+            if isinstance(keywords, list):
+                keywords = [str(k).strip() for k in keywords if k][:50]  # 最多50个关键词
+            else:
+                keywords = None
+
         result.append({
             "name": name[:200],
             "outline_code": (str(node.get("outline_code")).strip()[:50] if node.get("outline_code") else None),
             "description": (str(node.get("description")).strip() if node.get("description") else None),
+            "enhanced_description": enhanced_desc,
+            "keywords": keywords,
             "sort_order": idx,
             "children": children,
         })
@@ -117,12 +133,34 @@ _SPLIT_PROMPT = """下面是一门课《{subject_name}》的考试大纲文本�
    - name：章节标题（去掉前面的编号），必填
    - outline_code：原始编号（如 "1.1.1" / "一" / "(一)"），没有就 null
    - description：该节点对应的考点正文原文（大纲里列的具体考点），没有就 null
+   - enhanced_description：对该知识点的增强描述（2-3句话，包含：核心内容概括、常见考法、易混淆概念），用于帮助题目和知识点建立关联，必填
+   - keywords：关键词标签列表（别名、英文名、相关术语、典型例题关键词），用于精确匹配，必填
    - children：子章节数组，没有就空数组
-4. 不要生成复习建议或重点分析，只忠实还原大纲结构和原文考点。
-5. 只输出 JSON，不要任何解释文字。
+4. 增强描述示例：
+   - 节点 "哈希表" 的 enhanced_description: "哈希表是基于哈希函数的键值对存储结构。常考冲突解决方法（链地址法、开放寻址法）、哈希函数设计、装填因子分析。易混淆：线性探测 vs 二次探测。"
+   - 节点 "哈希表" 的 keywords: ["散列表", "Hash Table", "冲突解决", "链地址法", "开放寻址", "线性探测", "二次探测", "装填因子"]
+5. 关键词标签原则：
+   - 包含中英文名称
+   - 包含同义词/别名（如"散列表"="哈希表"）
+   - 包含该节点下的核心术语（如哈希表下的"链地址法"）
+   - 包含典型考题中可能出现的关键词
+6. 不要生成复习建议或重点分析，只忠实还原大纲结构并增强每个节点。
+7. 只输出 JSON，不要任何解释文字。
 
 输出格式：
-{{"exam_objective": "……", "chapters": [{{"name": "...", "outline_code": "...", "description": "...", "children": [...]}}]}}
+{{
+  "exam_objective": "……",
+  "chapters": [
+    {{
+      "name": "哈希表",
+      "outline_code": "1.5",
+      "description": "大纲原文...",
+      "enhanced_description": "哈希表是基于哈希函数的键值对存储结构。常考冲突解决方法...",
+      "keywords": ["散列表", "Hash Table", "冲突解决", "链地址法"],
+      "children": [...]
+    }}
+  ]
+}}
 
 大纲文本：
 ---
