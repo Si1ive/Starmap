@@ -220,6 +220,165 @@ class SegmentService:
         logger.info("知识点 segments 构建完成", count=created)
         return {"segments_count": created, "knowledge_points_count": len(kps)}
 
+    # ========== 大纲章节 segment ==========
+
+    async def build_canonical_chapter_segments(
+        self,
+        subject_id: Optional[str] = None,
+        outline_id: Optional[str] = None,
+        rebuild: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        为大纲章节（CanonicalChapter）构建 segments
+
+        每个章节生成 1~2 个 segment：
+        - title segment: 标题 + keywords（用于精确匹配）
+        - content segment: enhanced_description + description（用于语义检索）
+
+        使用增强字段提升与题目/知识点的匹配准确率。
+
+        Args:
+            subject_id: 学科筛选
+            outline_id: 大纲筛选
+            rebuild: 是否先删除旧 segments 再重建
+
+        Returns:
+            构建统计
+        """
+        from app.models.mysql_models import CanonicalChapter
+
+        # 1. 查询大纲章节
+        query = select(CanonicalChapter).where(CanonicalChapter.status == "active")
+        if subject_id:
+            query = query.where(CanonicalChapter.subject_id == subject_id)
+        if outline_id:
+            query = query.where(CanonicalChapter.outline_id == outline_id)
+
+        result = await self.db.execute(query)
+        chapters = result.scalars().all()
+
+        if not chapters:
+            return {"segments_count": 0, "message": "没有可用的大纲章节"}
+
+        # 2. 如需重建，先删除旧 segments
+        if rebuild:
+            chapter_ids = [ch.id for ch in chapters]
+            await self._delete_segments("canonical_chapter", chapter_ids)
+
+        # 3. 构建 segments 并收集待 embedding 文本
+        segments_to_create: List[Dict[str, Any]] = []
+        texts_to_embed: List[str] = []
+
+        for chapter in chapters:
+            # 结构化元数据
+            chapter_meta = {
+                "level": chapter.level,
+                "outline_code": chapter.outline_code,
+                "aliases": chapter.aliases or [],
+            }
+
+            # title segment: 标题 + keywords（提升精确匹配）
+            title_text = chapter.name
+            if chapter.keywords:
+                title_text += " " + " ".join(chapter.keywords)
+            if chapter.aliases:
+                title_text += " " + " ".join(chapter.aliases)
+
+            segments_to_create.append({
+                "entity_type": "canonical_chapter",
+                "entity_id": chapter.id,
+                "segment_type": "title",
+                "content_text": title_text,
+                "content_md": f"# {chapter.name}",
+                "sparse_text": title_text,
+                "subject_id": chapter.subject_id,
+                "chapter_ids": [chapter.id],  # 大纲章节自己作为 chapter_id
+                "meta": chapter_meta,
+            })
+            texts_to_embed.append(title_text)
+
+            # content segment: enhanced_description + description（提升语义匹配）
+            if chapter.enhanced_description or chapter.description:
+                content_parts = []
+                if chapter.enhanced_description:
+                    content_parts.append(chapter.enhanced_description)
+                if chapter.description:
+                    content_parts.append(chapter.description)
+
+                content_text = "\n\n".join(content_parts)
+                context_text = f"{chapter.name}\n\n{content_text}"
+
+                segments_to_create.append({
+                    "entity_type": "canonical_chapter",
+                    "entity_id": chapter.id,
+                    "segment_type": "content",
+                    "content_text": content_text,
+                    "content_md": content_text,
+                    "sparse_text": f"{chapter.name} {content_text}",
+                    "context_text": context_text,
+                    "subject_id": chapter.subject_id,
+                    "chapter_ids": [chapter.id],
+                    "meta": chapter_meta,
+                })
+                texts_to_embed.append(context_text)
+
+        # 4. 批量生成 embeddings
+        logger.info("开始生成大纲章节 embeddings", count=len(texts_to_embed))
+        await self._ensure_embedding()
+        embeddings = await self.embedding.embed_batch(texts_to_embed)
+
+        # 5. 写入 MySQL + Qdrant
+        created = 0
+        qdrant_points: List[PointStruct] = []
+
+        for seg_data, vector in zip(segments_to_create, embeddings):
+            seg_id = _gen_id()
+            qdrant_point_id = _gen_qdrant_id()
+
+            # MySQL
+            segment = RetrievalSegment(
+                id=seg_id,
+                entity_type=seg_data["entity_type"],
+                entity_id=seg_data["entity_id"],
+                segment_type=seg_data["segment_type"],
+                content_text=seg_data["content_text"],
+                content_md=seg_data.get("content_md"),
+                sparse_text=seg_data.get("sparse_text"),
+                context_text=seg_data.get("context_text"),
+                subject_id=seg_data.get("subject_id"),
+                chapter_ids=seg_data.get("chapter_ids"),
+                metadata_json=seg_data.get("meta"),
+                qdrant_point_id=qdrant_point_id,
+            )
+            self.db.add(segment)
+
+            # Qdrant payload
+            collection = qdrant_manager.COLLECTION_KNOWLEDGE_SEGMENTS  # 大纲章节用知识库 collection
+            payload = {
+                "segment_id": seg_id,
+                "entity_id": seg_data["entity_id"],
+                "entity_type": "canonical_chapter",
+                "segment_type": seg_data["segment_type"],
+                "subject_id": seg_data.get("subject_id"),
+                "chapter_ids": seg_data.get("chapter_ids") or [],
+            }
+
+            qdrant_points.append(
+                PointStruct(id=qdrant_point_id, vector=vector, payload=payload)
+            )
+            created += 1
+
+        # 批量写入 Qdrant
+        if qdrant_points:
+            self.qdrant.upsert_points(
+                qdrant_manager.COLLECTION_KNOWLEDGE_SEGMENTS, qdrant_points
+            )
+
+        await self.db.commit()
+
+        logger.info("大纲章节 segments 构建完成", count=created)
+        return {"segments_count": created, "chapters_count": len(chapters)}
+
     # ========== 题目 segment ==========
 
     async def build_question_segments(
@@ -443,9 +602,10 @@ class SegmentService:
         old_segments = result.scalars().all()
 
         # 收集 Qdrant point IDs 按 collection 分组
+        # canonical_chapter 和 knowledge_point 都用 KNOWLEDGE_SEGMENTS collection
         collection = (
             qdrant_manager.COLLECTION_KNOWLEDGE_SEGMENTS
-            if entity_type == "knowledge_point"
+            if entity_type in ("knowledge_point", "canonical_chapter")
             else qdrant_manager.COLLECTION_QUESTION_SEGMENTS
         )
         qdrant_ids = [s.qdrant_point_id for s in old_segments if s.qdrant_point_id]
