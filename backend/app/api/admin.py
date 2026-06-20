@@ -3891,6 +3891,9 @@ class SearchRequest(BaseModel):
     entity_type: Optional[str] = Field(None, description="实体类型过滤")
     mode: str = Field("hybrid", description="检索模式: dense/sparse/hybrid")
     limit: int = Field(10, ge=1, le=50, description="返回数量")
+    filters: Optional[Dict[str, Any]] = Field(
+        None, description="结构化过滤: exam_year/exam_scope/difficulty/question_type/answer_source/tags"
+    )
 
 
 @router.post("/search", response_model=ApiResponse)
@@ -3914,6 +3917,7 @@ async def search_knowledge(
         entity_type=request.entity_type,
         mode=request.mode,
         limit=request.limit,
+        filters=request.filters,
     )
 
     return ApiResponse(data={
@@ -3944,6 +3948,69 @@ async def search_with_relations(
         limit=request.limit,
     )
 
+    return ApiResponse(data=result)
+
+
+# ========== 富化与关系构建 ==========
+
+
+@router.post("/enrichment/document/{document_id}", response_model=ApiResponse)
+async def enrich_document_entities(document_id: str, db: AsyncSession = Depends(get_db)):
+    """批量富化某文档下所有已审核的题目和知识点（答案/解析/考点回连 + 知识点增强）。"""
+    from app.services.enrichment_service import EnrichmentService
+
+    service = EnrichmentService(db)
+    try:
+        result = await service.enrich_document(document_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"富化失败: {str(e)[:200]}")
+    return ApiResponse(data=result)
+
+
+@router.post("/enrichment/question/{question_id}", response_model=ApiResponse)
+async def enrich_single_question(question_id: str, db: AsyncSession = Depends(get_db)):
+    """富化单道题目。"""
+    from app.services.enrichment_service import EnrichmentService
+
+    service = EnrichmentService(db)
+    try:
+        result = await service.enrich_question(question_id)
+        await db.commit()
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return ApiResponse(data=result)
+
+
+@router.post("/enrichment/knowledge/{kp_id}", response_model=ApiResponse)
+async def enrich_single_knowledge(kp_id: str, db: AsyncSession = Depends(get_db)):
+    """富化单个知识点。"""
+    from app.services.enrichment_service import EnrichmentService
+
+    service = EnrichmentService(db)
+    try:
+        result = await service.enrich_knowledge_point(kp_id)
+        await db.commit()
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return ApiResponse(data=result)
+
+
+@router.post("/relations/build", response_model=ApiResponse)
+async def build_knowledge_relations(
+    subject_id: Optional[str] = None,
+    knowledge_point_ids: Optional[List[str]] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """构建知识点关系（规则 + 语义相似度边）。"""
+    from app.services.relation_service import RelationService
+
+    service = RelationService(db)
+    try:
+        result = await service.build_relations(
+            subject_id=subject_id, knowledge_point_ids=knowledge_point_ids
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"关系构建失败: {str(e)[:200]}")
     return ApiResponse(data=result)
 
 

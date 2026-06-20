@@ -97,6 +97,7 @@ class RetrievalService:
         entity_type: Optional[str] = None,
         mode: str = "hybrid",
         limit: int = 10,
+        filters: Optional[Dict[str, Any]] = None,
     ) -> List[RetrievalResult]:
         """
         统一检索入口
@@ -108,6 +109,7 @@ class RetrievalService:
             entity_type: "knowledge_point" / "question" / None(both)
             mode: "dense" / "sparse" / "hybrid"
             limit: 返回数量
+            filters: 结构化过滤，支持 exam_year/exam_scope/difficulty/question_type/answer_source/tags
 
         Returns:
             按相关性排序的检索结果列表
@@ -120,7 +122,7 @@ class RetrievalService:
         query_vector = await self.embedding.embed_text(query)
 
         # 构建 Qdrant 过滤条件
-        qdrant_filter = self._build_filter(subject_id, chapter_ids)
+        qdrant_filter = self._build_filter(subject_id, chapter_ids, filters)
 
         # 确定要搜索的 collections
         collections = self._get_collections(entity_type)
@@ -233,11 +235,55 @@ class RetrievalService:
                     source_document_id=seg.document_id,
                 ))
 
+        # Step 4: 双向扩展——查到的知识点带出关联题目（QuestionKnowledgeLink）
+        linked_questions: List[Dict[str, Any]] = []
+        try:
+            linked_questions = await self._get_linked_questions(primary_ids, limit=limit)
+        except Exception as e:
+            logger.warning("知识点关联题目扩展失败，跳过", error=str(e))
+
         return {
             "primary_results": [r.to_dict() for r in primary],
             "related_results": [r.to_dict() for r in related_results[:limit]],
             "relations": relation_details[:10],
+            "linked_questions": linked_questions,
         }
+
+    async def _get_linked_questions(
+        self, knowledge_point_ids: List[str], limit: int = 5
+    ) -> List[Dict[str, Any]]:
+        """根据知识点反查关联题目（QuestionKnowledgeLink），按 relevance 降序。"""
+        if not knowledge_point_ids:
+            return []
+        from app.models.mysql_models import QuestionKnowledgeLink
+        rows = (await self.db.execute(
+            select(QuestionKnowledgeLink, Question)
+            .join(Question, QuestionKnowledgeLink.question_id == Question.id)
+            .where(
+                QuestionKnowledgeLink.knowledge_point_id.in_(knowledge_point_ids),
+                Question.status != "deleted",
+            )
+            .order_by(QuestionKnowledgeLink.relevance.desc())
+            .limit(limit * 3)
+        )).all()
+        seen: set = set()
+        out: List[Dict[str, Any]] = []
+        for link, q in rows:
+            if q.id in seen:
+                continue
+            seen.add(q.id)
+            out.append({
+                "question_id": q.id,
+                "content": (q.content or "")[:200],
+                "question_no": q.question_no,
+                "exam_year": q.exam_year,
+                "source": q.source,
+                "relevance": float(link.relevance or 0),
+                "via_knowledge_point_id": link.knowledge_point_id,
+            })
+            if len(out) >= limit:
+                break
+        return out
 
     # ========== 内部方法 ==========
 
@@ -245,8 +291,9 @@ class RetrievalService:
         self,
         subject_id: Optional[str],
         chapter_ids: Optional[List[str]],
+        filters: Optional[Dict[str, Any]] = None,
     ) -> Optional[Filter]:
-        """构建 Qdrant 过滤条件"""
+        """构建 Qdrant 过滤条件。filters 支持结构化富化维度过滤。"""
         conditions = []
 
         if subject_id:
@@ -264,6 +311,18 @@ class RetrievalService:
                     match=MatchAny(any=chapter_ids),
                 )
             )
+
+        # 结构化富化维度（题目 payload 才有：exam_year/exam_scope/difficulty/question_type/answer_source）
+        f = filters or {}
+        # 精确匹配字段
+        for key in ("exam_year", "exam_scope", "difficulty", "question_type", "answer_source"):
+            val = f.get(key)
+            if val is not None and val != "":
+                conditions.append(FieldCondition(key=key, match=MatchValue(value=val)))
+        # 数组任意匹配字段
+        tags = f.get("tags")
+        if tags:
+            conditions.append(FieldCondition(key="tags", match=MatchAny(any=list(tags))))
 
         if not conditions:
             return None
