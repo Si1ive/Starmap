@@ -40,6 +40,7 @@ export interface SystemSettings {
   pdf_structure_llm: LlmConfig
   outline_llm: LlmConfig
   doc_meta_llm: LlmConfig
+  enrich_llm: LlmConfig
   embedding: EmbeddingConfig
   pdf_parser: {
     active_parser: 'docling' | 'mineru'
@@ -56,7 +57,7 @@ export interface SystemSettings {
 }
 
 // 对话型 LLM 配置块的 kind
-export type LlmKind = 'llm' | 'pdf_structure_llm' | 'outline_llm' | 'doc_meta_llm' | 'embedding'
+export type LlmKind = 'llm' | 'pdf_structure_llm' | 'outline_llm' | 'doc_meta_llm' | 'enrich_llm' | 'embedding'
 
 export const getSettings = (): Promise<ApiResponse<SystemSettings>> => {
   return adminClient.get('/settings')

@@ -319,6 +319,10 @@ const Settings = () => {
             <LlmConfigTab kind="doc_meta_llm" form={form} intro="该配置用于从试卷/课本首页提取来源信息（年份/真题/机构/试卷名），规则未命中时兜底" />
           </TabPane>
 
+          <TabPane tab="富化 LLM" key="enrich-llm">
+            <LlmConfigTab kind="enrich_llm" form={form} intro="该配置用于审核通过后富化题目/知识点：生成答案与解析、标识所考知识点、生成知识点摘要" />
+          </TabPane>
+
           <TabPane tab="向量化" key="embedding">
             <EmbeddingConfigTab form={form} />
           </TabPane>

@@ -2325,6 +2325,18 @@ async def get_question_detail(question_id: str, db: AsyncSession = Depends(get_d
 
     assets = await get_entity_assets(db, entity_type="question", entity_id=question_id)
 
+    # 所考知识点（含名称），供"查题反查知识点"展示
+    from app.models.mysql_models import QuestionKnowledgeLink, KnowledgePoint
+    kp_rows = (await db.execute(
+        select(KnowledgePoint.id, KnowledgePoint.title, QuestionKnowledgeLink.relevance)
+        .join(QuestionKnowledgeLink, QuestionKnowledgeLink.knowledge_point_id == KnowledgePoint.id)
+        .where(QuestionKnowledgeLink.question_id == question_id)
+        .order_by(QuestionKnowledgeLink.relevance.desc())
+    )).all()
+    knowledge_points = [
+        {"id": r[0], "title": r[1], "relevance": float(r[2] or 0)} for r in kp_rows
+    ]
+
     return ApiResponse(data={
         "id": question.id,
         "subject_id": question.subject_id,
@@ -2334,10 +2346,16 @@ async def get_question_detail(question_id: str, db: AsyncSession = Depends(get_d
         "options": question.options,
         "answer": question.answer,
         "explanation": question.explanation,
+        "answer_source": question.answer_source,
+        "explanation_source": question.explanation_source,
+        "enrich_status": question.enrich_status,
         "difficulty": question.difficulty,
         "source": question.source,
         "exam_year": question.exam_year,
+        "exam_scope": question.exam_scope,
+        "paper_name": question.paper_name,
         "knowledge_point_ids": question.knowledge_point_ids,
+        "knowledge_points": knowledge_points,
         "tags": question.tags,
         "status": question.status,
         "assets": assets,

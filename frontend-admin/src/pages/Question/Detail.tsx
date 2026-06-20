@@ -20,6 +20,14 @@ const difficultyConfig: Record<string, { color: string; text: string }> = {
   hard: { color: 'red', text: '困难' },
 }
 
+// 答案/解析来源标识
+const sourceTag = (src?: string) => {
+  if (src === 'extracted') return <Tag color="green">原卷</Tag>
+  if (src === 'llm') return <Tag color="purple">AI 生成</Tag>
+  if (src === 'manual') return <Tag color="blue">人工</Tag>
+  return null
+}
+
 const QuestionDetail = () => {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -110,17 +118,42 @@ const QuestionDetail = () => {
 
       <Card title="答案与解析" style={{ marginBottom: 16 }}>
         <Descriptions bordered column={1}>
-          <Descriptions.Item label="标准答案">
-            <div style={{ fontWeight: 'bold', color: '#52c41a' }}>{question.answer}</div>
+          <Descriptions.Item label={
+            <span>标准答案 {sourceTag(question.answer_source)}</span>
+          }>
+            <div style={{ fontWeight: 'bold', color: '#52c41a' }}>{question.answer || '（未填充）'}</div>
           </Descriptions.Item>
           {question.explanation && (
-            <Descriptions.Item label="解析">
+            <Descriptions.Item label={
+              <span>解析 {sourceTag(question.explanation_source)}</span>
+            }>
               <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>
                 {question.explanation}
               </div>
             </Descriptions.Item>
           )}
         </Descriptions>
+      </Card>
+
+      <Card title="所考知识点" style={{ marginBottom: 16 }}>
+        {question.knowledge_points && question.knowledge_points.length > 0 ? (
+          <Space wrap>
+            {question.knowledge_points.map((kp) => (
+              <Tag
+                key={kp.id}
+                color="blue"
+                style={{ cursor: 'pointer' }}
+                onClick={() => navigate(`/admin/knowledge/${kp.id}`)}
+              >
+                {kp.title}（{(kp.relevance * 100).toFixed(0)}%）
+              </Tag>
+            ))}
+          </Space>
+        ) : (
+          <span style={{ color: '#999' }}>
+            暂无关联知识点{question.enrich_status === 'pending' ? '（待审核后自动富化）' : ''}
+          </span>
+        )}
       </Card>
 
       <Card title="基本信息">

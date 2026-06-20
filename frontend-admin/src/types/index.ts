@@ -262,10 +262,16 @@ export interface Question {
   options?: { key?: string; label?: string; option_label?: string; text: string }[]
   answer: string
   explanation?: string
+  answer_source?: 'none' | 'extracted' | 'llm' | 'manual'
+  explanation_source?: 'none' | 'extracted' | 'llm' | 'manual'
+  enrich_status?: 'pending' | 'enriching' | 'done' | 'failed'
   difficulty: 'easy' | 'medium' | 'hard'
   source?: string
   exam_year?: number
+  exam_scope?: string
+  paper_name?: string
   knowledge_point_ids?: string[]
+  knowledge_points?: { id: string; title: string; relevance: number }[]
   tags?: string[]
   status: 'active' | 'pending' | 'deleted'
   created_at?: string
