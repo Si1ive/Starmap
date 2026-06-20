@@ -755,7 +755,7 @@ async def list_outlines(session: AsyncSession) -> List[Dict[str, Any]]:
 async def get_outline_chapters(
     session: AsyncSession, outline_id: str, subject_id: Optional[str] = None
 ) -> List[Dict[str, Any]]:
-    """以树结构返回大纲下所有章节（可按 subject_id 过滤）。含原文考点 description + 复习指导 exam_guidance。"""
+    """以树结构返回大纲下所有章节（可按 subject_id 过滤）。含原文考点 description + 增强字段 + 复习指导 exam_guidance。"""
     query = (
         select(CanonicalChapter)
         .where(CanonicalChapter.outline_id == outline_id)
@@ -775,6 +775,8 @@ async def get_outline_chapters(
         "subject_id": r.subject_id,
         "sort_order": r.sort_order,
         "description": r.description,
+        "enhanced_description": r.enhanced_description,
+        "keywords": r.keywords,
         "exam_guidance": r.exam_guidance,
         "children": [],
     } for r in rows}
