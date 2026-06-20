@@ -310,6 +310,8 @@ class OutlineImportService:
                 chapter.code = data.get("code") or chapter.code
                 chapter.aliases = data.get("aliases") or chapter.aliases
                 chapter.description = data.get("description") or chapter.description
+                chapter.enhanced_description = data.get("enhanced_description") or chapter.enhanced_description
+                chapter.keywords = data.get("keywords") or chapter.keywords
                 chapter.sort_order = data.get("sort_order", idx)
                 chapter.status = "active"
                 updated += 1
@@ -325,6 +327,8 @@ class OutlineImportService:
                     outline_code=data.get("outline_code"),
                     aliases=data.get("aliases"),
                     description=data.get("description"),
+                    enhanced_description=data.get("enhanced_description"),
+                    keywords=data.get("keywords"),
                     sort_order=data.get("sort_order", idx),
                     status="active",
                 )
