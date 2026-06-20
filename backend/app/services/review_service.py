@@ -124,12 +124,23 @@ class ReviewService:
 
         # 审核通过 → 自动富化（LLM 生成摘要/别名/要点）。未配置 enrich_llm 时优雅降级，不阻塞审核。
         enrich_result = None
+        chapter_link_result = None
         if review_status == "approved":
             try:
                 from app.services.enrichment_service import EnrichmentService
                 enrich_result = await EnrichmentService(self.db).enrich_knowledge_point(knowledge_point_id)
             except Exception as e:
                 logger.warning("知识点审核后富化失败，不影响审核", knowledge_point_id=knowledge_point_id, error=str(e))
+
+            # 自动关联大纲章节（富化后执行，利用富化生成的 summary 提升匹配准确率）
+            try:
+                from app.services.chapter_link_service import ChapterLinkService
+                chapter_link_result = await ChapterLinkService(self.db).link_knowledge_point_to_chapters(knowledge_point_id)
+                logger.info("知识点自动关联章节", knowledge_point_id=knowledge_point_id,
+                           linked_count=chapter_link_result.get("linked_count", 0),
+                           strategy=chapter_link_result.get("strategy_used"))
+            except Exception as e:
+                logger.warning("知识点自动关联章节失败，不影响审核", knowledge_point_id=knowledge_point_id, error=str(e))
 
         logger.info(
             "知识点审核完成",
@@ -141,6 +152,7 @@ class ReviewService:
             "id": knowledge_point_id,
             "review_status": review_status,
             "enrich": enrich_result,
+            "chapter_link": chapter_link_result,
         }
 
     # ========== 题目审核 ==========
@@ -243,12 +255,23 @@ class ReviewService:
 
         # 审核通过 → 自动富化（答案/解析 + 考点回连知识点）。未配置 enrich_llm 时优雅降级。
         enrich_result = None
+        chapter_link_result = None
         if review_status == "approved":
             try:
                 from app.services.enrichment_service import EnrichmentService
                 enrich_result = await EnrichmentService(self.db).enrich_question(question_id)
             except Exception as e:
                 logger.warning("题目审核后富化失败，不影响审核", question_id=question_id, error=str(e))
+
+            # 自动关联大纲章节
+            try:
+                from app.services.chapter_link_service import ChapterLinkService
+                chapter_link_result = await ChapterLinkService(self.db).link_question_to_chapters(question_id)
+                logger.info("题目自动关联章节", question_id=question_id,
+                           linked_count=chapter_link_result.get("linked_count", 0),
+                           strategy=chapter_link_result.get("strategy_used"))
+            except Exception as e:
+                logger.warning("题目自动关联章节失败，不影响审核", question_id=question_id, error=str(e))
 
         logger.info(
             "题目审核完成",
@@ -260,6 +283,7 @@ class ReviewService:
             "id": question_id,
             "review_status": review_status,
             "enrich": enrich_result,
+            "chapter_link": chapter_link_result,
         }
 
     # ========== 关系审核 ==========
