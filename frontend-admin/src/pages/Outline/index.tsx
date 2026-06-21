@@ -1,15 +1,15 @@
 import { useState } from 'react'
 import {
   Card, Table, Tag, Button, Space, Modal, Form, Input, InputNumber,
-  Switch, Upload, Tree, message, Alert, Descriptions, Spin, Tabs, Typography,
+  Switch, Upload, Tree, message, Alert, Descriptions, Spin, Tabs, Typography, Popconfirm,
 } from 'antd'
 import {
-  PlusOutlined, InboxOutlined, EyeOutlined, CheckCircleOutlined, BulbOutlined,
+  PlusOutlined, InboxOutlined, EyeOutlined, CheckCircleOutlined, BulbOutlined, DeleteOutlined,
 } from '@ant-design/icons'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   listOutlines, getOutlineChapters, getOutlineSubjects, uploadParseOutline,
-  importOutlineFromLLM, generateOutlineGuidance,
+  importOutlineFromLLM, generateOutlineGuidance, deleteOutline,
   type OutlineSummary, type OutlineChapter, type OutlineUploadParseResult,
   type OutlinePreviewItem, type OutlineSubjectInfo,
 } from '@/api'
@@ -111,6 +111,15 @@ const OutlineList = () => {
     onError: (err: any) => message.error('生成失败：' + (err?.response?.data?.detail || err.message)),
   })
 
+  const deleteMut = useMutation({
+    mutationFn: (outlineId: string) => deleteOutline(outlineId),
+    onSuccess: (res) => {
+      message.success(`已删除大纲《${res.data?.outline_name}》及其 ${res.data?.deleted_chapters} 个章节`)
+      qc.invalidateQueries({ queryKey: ['outlines'] })
+    },
+    onError: (err: any) => message.error('删除失败：' + (err?.response?.data?.detail || err.message)),
+  })
+
   const outlines = outlinesRes?.data || []
 
   const beforeUpload = (file: File) => {
@@ -138,10 +147,23 @@ const OutlineList = () => {
       render: (v: string) => v ? new Date(v).toLocaleString('zh-CN') : '-',
     },
     {
-      title: '操作', key: 'actions', width: 120,
+      title: '操作', key: 'actions', width: 180,
       render: (_: unknown, r: OutlineSummary) => (
-        <Button type="link" icon={<EyeOutlined />}
-          onClick={() => setChapterDrawer({ outline: r, open: true })}>查看章节</Button>
+        <Space>
+          <Button type="link" size="small" icon={<EyeOutlined />}
+            onClick={() => setChapterDrawer({ outline: r, open: true })}>查看章节</Button>
+          <Popconfirm
+            title="确认删除此大纲？"
+            description={`将删除《${r.name}》及其所有章节，此操作不可恢复！`}
+            onConfirm={() => deleteMut.mutate(r.id)}
+            okText="确认删除"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+          >
+            <Button type="link" size="small" danger icon={<DeleteOutlined />}
+              loading={deleteMut.isPending && deleteMut.variables === r.id}>删除</Button>
+          </Popconfirm>
+        </Space>
       ),
     },
   ]

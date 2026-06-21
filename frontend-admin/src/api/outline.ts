@@ -135,3 +135,12 @@ export const uploadParseOutline = (
     timeout: 10 * 60 * 1000,
   })
 }
+
+export const deleteOutline = (outlineId: string): Promise<ApiResponse<{
+  outline_id: string
+  outline_name: string
+  deleted_chapters: number
+  message: string
+}>> => {
+  return adminClient.delete(`/outlines/${outlineId}`)
+}
