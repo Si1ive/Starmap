@@ -101,8 +101,6 @@ def _extract_json(text: str) -> Any:
         if "Unterminated string" in error_msg:
             # 尝试在末尾添加闭合引号和大括号
             if not cleaned.endswith('}'):
-                # 找到最后一个未闭合的引号位置
-                import re
                 # 尝试补全：添加 " 和 }]}
                 attempts = [
                     cleaned + '"}}]',
