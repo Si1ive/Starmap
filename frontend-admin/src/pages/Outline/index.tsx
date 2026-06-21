@@ -15,7 +15,7 @@ import {
 } from '@/api'
 
 const { Dragger } = Upload
-const { Paragraph, Text: AntText } = Typography
+const { Paragraph, Text } = Typography
 
 const buildTreeNodes = (chapters: OutlinePreviewItem[] | OutlineChapter[]): any[] => {
   return chapters.map((c, i) => {
@@ -28,7 +28,7 @@ const buildTreeNodes = (chapters: OutlinePreviewItem[] | OutlineChapter[]): any[
       title: (
         <span>
           {title}
-          {desc ? <AntText type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>· 考点</AntText> : null}
+          {desc ? <Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>· 考点</Text> : null}
           {guidance ? <Tag color="gold" style={{ marginLeft: 8, fontSize: 11 }}>复习指导</Tag> : null}
         </span>
       ),
@@ -208,9 +208,25 @@ const OutlineList = () => {
           </Dragger>
 
           {uploadMut.isPending && (
-            <div style={{ textAlign: 'center', padding: 16 }}>
-              <Spin tip="正在解析文件并用 LLM 拆分四门课…" />
-            </div>
+            <Card>
+              <Space direction="vertical" style={{ width: '100%', textAlign: 'center' }} size="large">
+                <Spin size="large" />
+                <div>
+                  <h3 style={{ marginBottom: 8 }}>正在处理大纲文件...</h3>
+                  <Space direction="vertical" size="small">
+                    <Text type="secondary">✓ 步骤 1/3: 文件上传</Text>
+                    <Text type="secondary">⏳ 步骤 2/3: MinerU 解析 PDF（约 1-2 分钟）</Text>
+                    <Text type="secondary">⏳ 步骤 3/3: LLM 拆分四门课（约 2-5 分钟）</Text>
+                  </Space>
+                </div>
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="请耐心等待"
+                  description="整个过程可能需要 3-7 分钟，请不要关闭此窗口。如遇超时，可能是内容过长，系统会自动重试。"
+                />
+              </Space>
+            </Card>
           )}
 
           {parsed && (parsed.subjects?.length || 0) > 0 && (
