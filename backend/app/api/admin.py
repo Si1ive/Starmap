@@ -4262,6 +4262,46 @@ async def import_outline_from_llm(request: OutlineFromLLMRequest, db: AsyncSessi
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.get("/outlines/runs/{run_id}", response_model=ApiResponse)
+async def get_outline_ingestion_progress(run_id: str, db: AsyncSession = Depends(get_db)):
+    """
+    查询大纲入库任务进度
+
+    返回:
+    {
+        "run_id": "...",
+        "status": "running / completed / partial_success / failed",
+        "outline_name": "2024年408统考大纲",
+        "total_subjects": 4,
+        "processed_subjects": 2,
+        "current_subject": "数据结构",
+        "created_at": "...",
+        "completed_at": "...",
+        "error_message": null
+    }
+    """
+    from app.models.mysql_models import OutlineIngestionRun
+
+    run = await db.get(OutlineIngestionRun, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    return ApiResponse(data={
+        "run_id": run.id,
+        "status": run.status,
+        "outline_id": run.outline_id,
+        "outline_name": run.outline_name,
+        "year": run.year,
+        "version": run.version,
+        "total_subjects": run.total_subjects,
+        "processed_subjects": run.processed_subjects,
+        "current_subject": run.current_subject,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        "error_message": run.error_message,
+    })
+
+
 @router.post(
     "/outlines/{outline_id}/subjects/{subject_id}/generate-guidance",
     response_model=ApiResponse,

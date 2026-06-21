@@ -515,10 +515,25 @@ class OutlineImportService:
         重要改进：
         - 如果某个科目有 error 字段或 chapters 为空，跳过该科目但不影响其他科目
         - 部分成功时仍然入库，返回 partial=True 标识
+        - 创建 OutlineIngestionRun 记录任务进度
         """
+        from app.models.mysql_models import OutlineIngestionRun
+
         subjects = llm_result.get("subjects") or []
         if not subjects:
             raise ValueError("LLM 拆分结果为空，无法入库")
+
+        # 创建任务记录
+        run = OutlineIngestionRun(
+            id=_gen_id(),
+            outline_name=name,
+            year=year,
+            version=version,
+            total_subjects=len(subjects),
+            status="running",
+        )
+        self.db.add(run)
+        await self.db.flush()
 
         # 过滤出有效科目（有 chapters 且无 error）
         valid_subjects = [s for s in subjects if s.get("chapters") and not s.get("error")]
@@ -527,20 +542,31 @@ class OutlineImportService:
         if not valid_subjects:
             # 全部科目都失败
             error_summary = "; ".join([f"{s.get('subject_name')}: {s.get('error', '章节为空')}" for s in failed_subjects])
+            run.status = "failed"
+            run.error_message = f"所有科目拆分均失败。错误: {error_summary}"
+            run.completed_at = datetime.utcnow()
+            await self.db.commit()
             raise ValueError(f"所有科目拆分均失败，无法入库。错误: {error_summary}")
 
         outline = await self._upsert_outline_meta(name, year, version, description, set_default)
+        run.outline_id = outline.id
 
         total_created = 0
         total_updated = 0
         subject_summaries: List[Dict[str, Any]] = []
+        processed_count = 0
 
         # 处理成功的科目
         for subj in valid_subjects:
             subject_id = subj.get("subject_id")
+            subject_name = subj.get("subject_name")
             chapters = subj.get("chapters") or []
             if not subject_id or not chapters:
                 continue
+
+            # 更新当前处理科目
+            run.current_subject = subject_name
+            await self.db.flush()
 
             try:
                 # upsert 考察目标关联
@@ -576,9 +602,15 @@ class OutlineImportService:
                 )
                 total_created += created
                 total_updated += updated
+                processed_count += 1
+
+                # 更新进度
+                run.processed_subjects = processed_count
+                await self.db.flush()
+
                 subject_summaries.append({
                     "subject_id": subject_id,
-                    "subject_name": subj.get("subject_name"),
+                    "subject_name": subject_name,
                     "chapter_count": chapter_count,
                     "created": created,
                     "updated": updated,
@@ -588,7 +620,7 @@ class OutlineImportService:
                 logger.error("入库某科目章节树时失败", subject_id=subject_id, error=str(e))
                 subject_summaries.append({
                     "subject_id": subject_id,
-                    "subject_name": subj.get("subject_name"),
+                    "subject_name": subject_name,
                     "status": "failed",
                     "error": str(e),
                 })
@@ -601,6 +633,14 @@ class OutlineImportService:
                 "status": "failed",
                 "error": subj.get("error", "章节为空"),
             })
+
+        # 更新任务状态
+        run.processed_subjects = len(valid_subjects)
+        if len(failed_subjects) > 0:
+            run.status = "partial_success"
+        else:
+            run.status = "completed"
+        run.completed_at = datetime.utcnow()
 
         await self.db.commit()
 
@@ -616,6 +656,7 @@ class OutlineImportService:
             "total_subjects": len(subjects),
             "successful_subjects": len([s for s in subject_summaries if s.get("status") == "success"]),
             "failed_subjects": len(failed_subjects),
+            "run_id": run.id,  # 返回任务 ID
         }
 
     async def generate_guidance_for_subject(
