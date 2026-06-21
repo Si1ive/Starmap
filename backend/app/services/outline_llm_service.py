@@ -273,8 +273,25 @@ class OutlineLLMService:
     async def _split_one_subject(
         self, client: OutlineLLMClient, subject_name: str, content: str
     ) -> Dict[str, Any]:
-        """拆单门课，返回 {exam_objective, chapters}。解析失败重试一次。"""
-        prompt = _SPLIT_PROMPT.format(subject_name=subject_name, content=content[:60000])
+        """
+        拆单门课，返回 {exam_objective, chapters}。
+
+        改进: 如果内容超过 40000 字符，按章节分块处理，避免超时。
+        解析失败重试一次。
+        """
+        # 如果内容较短，直接处理
+        if len(content) <= 40000:
+            return await self._split_one_subject_direct(client, subject_name, content)
+
+        # 内容过长，按一级章节分块处理
+        logger.info("科目内容过长，按章节分块处理", subject=subject_name, length=len(content))
+        return await self._split_one_subject_chunked(client, subject_name, content)
+
+    async def _split_one_subject_direct(
+        self, client: OutlineLLMClient, subject_name: str, content: str
+    ) -> Dict[str, Any]:
+        """直接处理单门课（内容不超过 40000 字符）"""
+        prompt = _SPLIT_PROMPT.format(subject_name=subject_name, content=content[:40000])
         last_err: Optional[Exception] = None
         for attempt in range(2):
             try:
@@ -291,6 +308,99 @@ class OutlineLLMService:
                 last_err = e
                 logger.warning("大纲单科拆分失败，准备重试", subject=subject_name, attempt=attempt, error=str(e))
         raise ValueError(f"《{subject_name}》大纲拆分失败: {last_err}")
+
+    async def _split_one_subject_chunked(
+        self, client: OutlineLLMClient, subject_name: str, content: str
+    ) -> Dict[str, Any]:
+        """
+        分块处理单门课（内容超过 40000 字符）
+
+        策略:
+        1. 先用前 5000 字符提取考察目标
+        2. 按一级章节标题分块（每块最多 30000 字符）
+        3. 每块单独调用 LLM 拆分
+        4. 合并结果
+        """
+        # 1. 提取考察目标（只看前部分）
+        header = content[:5000]
+        objective_prompt = f"""请从以下《{subject_name}》大纲片段中提取"考察目标"部分。
+
+内容：
+{header}
+
+只输出 JSON：{{"exam_objective": "考察目标文本"}}
+如果找不到，返回 {{"exam_objective": null}}"""
+
+        exam_objective = None
+        try:
+            text = await client.chat(objective_prompt, purpose=f"提取考察目标-{subject_name}")
+            data = _extract_json(text)
+            exam_objective = data.get("exam_objective")
+        except Exception as e:
+            logger.warning("提取考察目标失败，继续处理", subject=subject_name, error=str(e))
+
+        # 2. 按一级章节分块
+        chunks = self._split_into_chapter_chunks(content, max_chunk_size=30000)
+        logger.info("按章节分块", subject=subject_name, chunks=len(chunks))
+
+        # 3. 每块单独拆分
+        all_chapters = []
+        for i, chunk in enumerate(chunks):
+            chunk_prompt = f"""请拆分以下《{subject_name}》大纲片段（第 {i+1}/{len(chunks)} 块）。
+
+{chunk[:30000]}
+
+只输出 JSON 数组：{{"chapters": [...]}}
+"""
+            try:
+                text = await client.chat(chunk_prompt, purpose=f"大纲拆分-{subject_name}-块{i+1}")
+                data = _extract_json(text)
+                chapters = _normalize_chapters(data.get("chapters") or [])
+                all_chapters.extend(chapters)
+            except Exception as e:
+                logger.warning("某块拆分失败，跳过", subject=subject_name, chunk=i+1, error=str(e))
+
+        if not all_chapters:
+            raise ValueError(f"《{subject_name}》所有块拆分均失败")
+
+        return {
+            "exam_objective": exam_objective,
+            "chapters": all_chapters,
+        }
+
+    def _split_into_chapter_chunks(self, content: str, max_chunk_size: int = 30000) -> List[str]:
+        """
+        按一级章节标题分块
+
+        策略: 寻找 "第X章"、"一、"、"1." 等一级标题，在此处切分
+        """
+        lines = content.split('\n')
+        chunks = []
+        current_chunk = []
+        current_size = 0
+
+        import re
+        # 一级标题模式（第X章、一、、1.）
+        chapter_pattern = re.compile(r'^\s*(?:第[一二三四五六七八九十百千万零\d]+章|[一二三四五六七八九十]+\s*[、.]|\d+\s*[、.])')
+
+        for line in lines:
+            line_size = len(line) + 1  # +1 for newline
+
+            # 如果是一级标题 且 当前块已有内容 且 加上这行会超过限制
+            if chapter_pattern.match(line) and current_chunk and (current_size + line_size > max_chunk_size):
+                # 保存当前块
+                chunks.append('\n'.join(current_chunk))
+                current_chunk = [line]
+                current_size = line_size
+            else:
+                current_chunk.append(line)
+                current_size += line_size
+
+        # 保存最后一块
+        if current_chunk:
+            chunks.append('\n'.join(current_chunk))
+
+        return chunks if chunks else [content]
 
     async def _split_whole(
         self, client: OutlineLLMClient, markdown: str, subjects_by_code: Dict[str, Subject]
