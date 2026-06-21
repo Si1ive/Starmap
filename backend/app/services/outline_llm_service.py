@@ -52,21 +52,62 @@ class OutlineLLMClient(BaseLLMClient):
 
 
 def _extract_json(text: str) -> Any:
-    """从 LLM 返回里抠出 JSON（容忍 ```json 包裹 / 前后噪声）。"""
+    """
+    从 LLM 返回里抠出 JSON（容忍 ```json 包裹 / 前后噪声 / 单引号 / 尾部逗号）。
+
+    增强容错:
+    1. 移除 markdown 代码块
+    2. 查找 { } 边界
+    3. 修复常见 JSON 错误（单引号、尾部逗号、注释）
+    4. 解析并返回
+    """
     if not text:
         raise ValueError("LLM 返回为空")
     cleaned = text.strip()
+
     # 去掉 ```json ... ``` 包裹
     fence = re.search(r"```(?:json)?\s*(.*?)```", cleaned, re.DOTALL | re.IGNORECASE)
     if fence:
         cleaned = fence.group(1).strip()
+
     # 退而求其次：截取首个 { 到末个 }
-    if not cleaned.startswith("{"):
+    if not cleaned.startswith("{") and not cleaned.startswith("["):
         start = cleaned.find("{")
+        if start == -1:
+            start = cleaned.find("[")
         end = cleaned.rfind("}")
+        if end == -1:
+            end = cleaned.rfind("]")
         if start != -1 and end != -1 and end > start:
             cleaned = cleaned[start:end + 1]
-    return json.loads(cleaned)
+
+    # 修复常见 JSON 错误
+    # 1. 移除注释（// 和 /* */）
+    cleaned = re.sub(r'//.*?$', '', cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r'/\*.*?\*/', '', cleaned, flags=re.DOTALL)
+
+    # 2. 修复尾部逗号（,} 和 ,]）
+    cleaned = re.sub(r',\s*}', '}', cleaned)
+    cleaned = re.sub(r',\s*]', ']', cleaned)
+
+    # 3. 尝试修复单引号（Python json 不支持单引号）
+    # 注意：这个简单替换可能误伤字符串内容中的单引号，但聊胜于无
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError as e:
+        # 尝试用 ast.literal_eval（支持单引号）
+        import ast
+        try:
+            # 只在看起来像 Python 字典/列表时才尝试
+            if cleaned.startswith('{') or cleaned.startswith('['):
+                result = ast.literal_eval(cleaned)
+                # 转回 JSON 兼容格式（递归处理可能的嵌套）
+                return json.loads(json.dumps(result))
+        except Exception:
+            pass
+
+        # 都失败了，抛出原始错误
+        raise ValueError(f"JSON 解析失败: {str(e)[:200]}。原始文本前 500 字符: {text[:500]}")
 
 
 def _normalize_chapters(raw: Any) -> List[Dict[str, Any]]:
