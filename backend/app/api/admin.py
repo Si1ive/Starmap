@@ -4302,6 +4302,51 @@ async def get_outline_ingestion_progress(run_id: str, db: AsyncSession = Depends
     })
 
 
+@router.delete("/outlines/{outline_id}", response_model=ApiResponse)
+async def delete_outline(outline_id: str, db: AsyncSession = Depends(get_db)):
+    """
+    删除大纲及其所有关联数据
+
+    删除内容:
+    - ExamOutline 记录
+    - ExamOutlineSubject 关联
+    - CanonicalChapter 所有章节（级联删除会自动清理关联表）
+    """
+    from app.models.mysql_models import ExamOutline, ExamOutlineSubject, CanonicalChapter
+
+    outline = await db.get(ExamOutline, outline_id)
+    if not outline:
+        raise HTTPException(status_code=404, detail="大纲不存在")
+
+    # 统计删除数量
+    chapters_count = await db.scalar(
+        select(func.count()).select_from(CanonicalChapter).where(
+            CanonicalChapter.outline_id == outline_id
+        )
+    )
+
+    # 删除章节（级联删除会自动清理 chapter links 等）
+    await db.execute(
+        delete(CanonicalChapter).where(CanonicalChapter.outline_id == outline_id)
+    )
+
+    # 删除科目关联
+    await db.execute(
+        delete(ExamOutlineSubject).where(ExamOutlineSubject.outline_id == outline_id)
+    )
+
+    # 删除大纲
+    await db.delete(outline)
+    await db.commit()
+
+    return ApiResponse(data={
+        "outline_id": outline_id,
+        "outline_name": outline.name,
+        "deleted_chapters": chapters_count,
+        "message": "大纲已删除"
+    })
+
+
 @router.post(
     "/outlines/{outline_id}/subjects/{subject_id}/generate-guidance",
     response_model=ApiResponse,

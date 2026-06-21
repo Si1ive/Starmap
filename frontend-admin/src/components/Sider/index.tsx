@@ -1,5 +1,6 @@
 import { useNavigate, useLocation } from 'react-router-dom'
 import { Layout, Menu } from 'antd'
+import { useState, useEffect } from 'react'
 import {
   DashboardOutlined,
   BookOutlined,
@@ -124,9 +125,21 @@ const AppSider = () => {
 
   // 获取当前选中的菜单key和展开的子菜单key
   const selectedKey = location.pathname
-  const openKeys = ['/admin/crawler-group', '/admin/monitor-group', '/admin/settings-group', '/admin/review-group'].filter(
+  const defaultOpenKeys = ['/admin/crawler-group', '/admin/monitor-group', '/admin/settings-group', '/admin/review-group'].filter(
     (key) => location.pathname.startsWith(key.replace('-group', '').replace('/admin/settings-group', '/admin/settings'))
   )
+
+  // 使用 state 管理展开的菜单（受控组件）
+  const [openKeys, setOpenKeys] = useState<string[]>(collapsed ? [] : defaultOpenKeys)
+
+  // collapsed 变化时重置 openKeys
+  useEffect(() => {
+    if (collapsed) {
+      setOpenKeys([])
+    } else {
+      setOpenKeys(defaultOpenKeys)
+    }
+  }, [collapsed, location.pathname])
 
   return (
     <Sider
@@ -165,7 +178,8 @@ const AppSider = () => {
           theme="dark"
           mode="inline"
           selectedKeys={[selectedKey]}
-          defaultOpenKeys={collapsed ? [] : openKeys}
+          openKeys={openKeys}
+          onOpenChange={setOpenKeys}
           items={filteredItems}
           onClick={({ key }) => navigate(key)}
           style={{ borderRight: 0 }}
