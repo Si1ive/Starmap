@@ -441,7 +441,6 @@ class OutlineLLMService:
         current_chunk = []
         current_size = 0
 
-        import re
         # 一级标题模式（第X章、一、、1.）
         chapter_pattern = re.compile(r'^\s*(?:第[一二三四五六七八九十百千万零\d]+章|[一二三四五六七八九十]+\s*[、.]|\d+\s*[、.])')
 
