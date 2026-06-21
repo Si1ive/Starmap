@@ -147,7 +147,7 @@ const AppSider = () => {
       collapsible
       collapsed={collapsed}
       style={{
-        overflow: 'hidden',
+        overflow: 'auto',
         height: '100vh',
         position: 'fixed',
         left: 0,

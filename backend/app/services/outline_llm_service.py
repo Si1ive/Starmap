@@ -90,24 +90,47 @@ def _extract_json(text: str) -> Any:
     cleaned = re.sub(r',\s*}', '}', cleaned)
     cleaned = re.sub(r',\s*]', ']', cleaned)
 
-    # 3. 尝试修复单引号（Python json 不支持单引号）
-    # 注意：这个简单替换可能误伤字符串内容中的单引号，但聊胜于无
+    # 3. 尝试标准 JSON 解析
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError as e:
-        # 尝试用 ast.literal_eval（支持单引号）
+        # 错误位置信息
+        error_msg = str(e)
+
+        # 4. 如果是 "Unterminated string"，尝试修复截断的字符串
+        if "Unterminated string" in error_msg:
+            # 尝试在末尾添加闭合引号和大括号
+            if not cleaned.endswith('}'):
+                # 找到最后一个未闭合的引号位置
+                import re
+                # 尝试补全：添加 " 和 }]}
+                attempts = [
+                    cleaned + '"}}]',
+                    cleaned + '"}]',
+                    cleaned + '"]}',
+                    cleaned + '"}',
+                    cleaned + '}]',
+                    cleaned + ']',
+                ]
+                for attempt in attempts:
+                    try:
+                        return json.loads(attempt)
+                    except:
+                        continue
+
+        # 5. 尝试用 ast.literal_eval（支持单引号）
         import ast
         try:
-            # 只在看起来像 Python 字典/列表时才尝试
             if cleaned.startswith('{') or cleaned.startswith('['):
                 result = ast.literal_eval(cleaned)
-                # 转回 JSON 兼容格式（递归处理可能的嵌套）
+                # 转回 JSON 兼容格式
                 return json.loads(json.dumps(result))
         except Exception:
             pass
 
-        # 都失败了，抛出原始错误
-        raise ValueError(f"JSON 解析失败: {str(e)[:200]}。原始文本前 500 字符: {text[:500]}")
+        # 都失败了，记录详细错误并抛出
+        logger.error("JSON 解析失败", error=error_msg, text_preview=text[:1000])
+        raise ValueError(f"JSON 解析失败: {error_msg[:200]}。原始文本前 500 字符: {text[:500]}")
 
 
 def _normalize_chapters(raw: Any) -> List[Dict[str, Any]]:
