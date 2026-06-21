@@ -9,6 +9,7 @@
 与题目抽取的「题干/选项分离 + 兜底」机制完全无关，是独立的大纲处理路径。
 """
 
+import ast
 import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -99,25 +100,37 @@ def _extract_json(text: str) -> Any:
 
         # 4. 如果是 "Unterminated string"，尝试修复截断的字符串
         if "Unterminated string" in error_msg:
-            # 尝试在末尾添加闭合引号和大括号
-            if not cleaned.endswith('}'):
-                # 尝试补全：添加 " 和 }]}
-                attempts = [
-                    cleaned + '"}}]',
-                    cleaned + '"}]',
-                    cleaned + '"]}',
-                    cleaned + '"}',
-                    cleaned + '}]',
-                    cleaned + ']',
-                ]
-                for attempt in attempts:
-                    try:
-                        return json.loads(attempt)
-                    except:
-                        continue
+            # 策略：尝试各种可能的闭合组合
+            attempts = [
+                # 数组内字符串截断 (keywords: ["data...)
+                cleaned + '"]}}]',
+                cleaned + '"]}]',
+                cleaned + '"],\n      "children": []\n    }\n  ]\n}',
+                # 对象属性值截断
+                cleaned + '",\n      "children": []\n    }\n  ]\n}',
+                cleaned + '"\n          }\n        }\n      ]\n    }\n  ]\n}',
+                cleaned + '"}]}]}}]',
+                cleaned + '"}}]',
+                cleaned + '"}]',
+                cleaned + '"]}',
+                cleaned + '"}}}',
+                cleaned + '"}}',
+                cleaned + '"}',
+                cleaned + '"]',
+                cleaned + '}]',
+                cleaned + '}}}',
+                cleaned + '}}',
+                cleaned + ']',
+            ]
+            for i, attempt in enumerate(attempts):
+                try:
+                    result = json.loads(attempt)
+                    logger.info("JSON 补全成功", strategy_index=i, added=attempt[len(cleaned):30])
+                    return result
+                except:
+                    continue
 
         # 5. 尝试用 ast.literal_eval（支持单引号）
-        import ast
         try:
             if cleaned.startswith('{') or cleaned.startswith('['):
                 result = ast.literal_eval(cleaned)
