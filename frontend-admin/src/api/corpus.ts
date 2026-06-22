@@ -46,10 +46,18 @@ export const getCorpusFileDetail = (id: string): Promise<ApiResponse<CorpusFile 
   return adminClient.get(`/corpus/files/${id}`)
 }
 
-export const parseCorpusFile = (id: string, req?: ParseCorpusFileRequest): Promise<ApiResponse<any>> => {
+export const parseCorpusFile = (id: string, req?: ParseCorpusFileRequest): Promise<ApiResponse<{
+  run_id: string
+  status: string
+  corpus_file_id: string
+}>> => {
   return adminClient.post(`/corpus/files/${id}/parse`, req, {
     timeout: 15 * 60 * 1000,
   })
+}
+
+export const getParseRunDetail = (runId: string): Promise<ApiResponse<ParseRun>> => {
+  return adminClient.get(`/corpus/parse-runs/${runId}`)
 }
 
 export const registerCorpusFile = (file_path: string, batch_label?: string): Promise<ApiResponse<{ corpus_file_id: string; status: string; is_new: boolean }>> => {

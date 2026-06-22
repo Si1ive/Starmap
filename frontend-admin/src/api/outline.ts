@@ -50,10 +50,56 @@ export interface OutlineSubjectSplit {
 }
 
 export interface OutlineUploadParseResult {
+  run_id: string
   corpus_file_id: string
-  document_id: string
   file_name: string
-  subjects: OutlineSubjectSplit[]
+  status: string
+}
+
+export interface OutlineRunDetail {
+  id: string
+  document_id: string
+  outline_id?: string
+  outline_name?: string
+  file_name?: string
+  status: string
+  current_stage?: string
+  stage_detail?: string
+  progress: number
+  total_subjects: number
+  processed_subjects: number
+  successful_subjects: number
+  current_subject_name?: string
+  created_chapters: number
+  updated_chapters: number
+  error_detail?: string
+  result_summary?: { subjects: OutlineSubjectSplit[] }
+  started_at?: string
+  completed_at?: string
+  created_at?: string
+}
+
+// 大纲任务列表中的条目（与 OutlineRunDetail 子集对齐）
+export interface OutlineRunListItem {
+  id: string
+  document_id?: string
+  outline_id?: string
+  outline_name?: string
+  file_name?: string
+  status: string
+  current_stage?: string
+  stage_detail?: string
+  progress: number
+  total_subjects: number
+  processed_subjects: number
+  successful_subjects: number
+  current_subject_name?: string
+  created_chapters: number
+  updated_chapters: number
+  error_detail?: string
+  started_at?: string
+  completed_at?: string
+  created_at?: string
 }
 
 export interface OutlineSubjectInfo {
@@ -134,6 +180,25 @@ export const uploadParseOutline = (
     headers: { 'Content-Type': 'multipart/form-data' },
     timeout: 10 * 60 * 1000,
   })
+}
+
+export const getOutlineRunDetail = (runId: string): Promise<ApiResponse<OutlineRunDetail>> => {
+  return adminClient.get(`/outlines/runs/${runId}`)
+}
+
+export const listOutlineRuns = (params?: {
+  status?: string
+  limit?: number
+}): Promise<ApiResponse<{ items: OutlineRunListItem[] }>> => {
+  return adminClient.get('/outlines/runs', { params })
+}
+
+export const deleteOutlineRun = (runId: string): Promise<ApiResponse<{ run_id: string }>> => {
+  return adminClient.delete(`/outlines/runs/${runId}`)
+}
+
+export const batchDeleteOutlineRuns = (ids: string[]): Promise<ApiResponse<{ deleted_count: number; requested_count: number }>> => {
+  return adminClient.post('/outlines/runs/batch-delete', { ids })
 }
 
 export const deleteOutline = (outlineId: string): Promise<ApiResponse<{

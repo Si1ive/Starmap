@@ -342,10 +342,16 @@ export interface CorpusDocument {
 export interface ParseRun {
   id: string
   corpus_file_id: string
+  document_id?: string
   parser_name: DocumentParserName
   parser_version?: string
   parse_mode?: ParseMode
   status: string
+  current_stage?: string
+  current_page?: number
+  total_pages?: number
+  stage_detail?: string
+  progress?: number
   page_count?: number
   block_count?: number
   asset_count?: number
