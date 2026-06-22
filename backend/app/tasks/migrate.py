@@ -104,14 +104,19 @@ class MigrationManager:
                 # 执行迁移脚本
                 await session.execute(text(sql_content))
                 await session.commit()
-                
+
                 execution_time = int((time.time() - start_time) * 1000)
-                
-                # 记录迁移
+
+                # 记录迁移（upsert：避免之前失败记录占用 version 唯一键导致重复键错误）
                 await session.execute(
                     text(f"""
                         INSERT INTO {MIGRATION_TABLE} (version, description, execution_time_ms, success)
                         VALUES (:version, :description, :execution_time, TRUE)
+                        ON DUPLICATE KEY UPDATE
+                            description = VALUES(description),
+                            execution_time_ms = VALUES(execution_time_ms),
+                            success = TRUE,
+                            executed_at = CURRENT_TIMESTAMP
                     """),
                     {
                         "version": version,
@@ -120,19 +125,23 @@ class MigrationManager:
                     }
                 )
                 await session.commit()
-                
+
                 logger.info(f"Executed migration {version} in {execution_time}ms")
                 return True
-                
+
             except Exception as e:
                 await session.rollback()
-                
-                # 记录失败
+
+                # 记录失败（upsert：同上）
                 try:
                     await session.execute(
                         text(f"""
                             INSERT INTO {MIGRATION_TABLE} (version, description, success)
                             VALUES (:version, :description, FALSE)
+                            ON DUPLICATE KEY UPDATE
+                                description = VALUES(description),
+                                success = FALSE,
+                                executed_at = CURRENT_TIMESTAMP
                         """),
                         {
                             "version": version,
@@ -142,7 +151,7 @@ class MigrationManager:
                     await session.commit()
                 except:
                     pass
-                
+
                 logger.error(f"Failed to execute migration {version}: {e}")
                 return False
 
