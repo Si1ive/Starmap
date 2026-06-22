@@ -48,19 +48,94 @@ class OutlineLLMClient(BaseLLMClient):
         config = config or {}
         super().__init__(config)
         # 大纲拆分文本长，token/超时给更大默认值
-        self.max_tokens = int(config.get("max_tokens", 4000))
-        self.timeout_seconds = int(config.get("timeout_seconds", 120))
+        self.max_tokens = int(config.get("max_tokens", 16000))
+        self.timeout_seconds = int(config.get("timeout_seconds", 180))
+
+
+def _repair_truncated_json(s: str) -> str:
+    """
+    修复被截断的 JSON：扫描一遍源串，追踪字符串状态和括号栈。
+    当截断点在字符串内部时，回退到该字符串开始前最后一个完整元素的位置，
+    丢弃残缺的半截值，然后关闭所有开放括号。
+
+    核心修复：解决了截断在 array 元素字符串中间时产生的悬挂逗号问题。
+    例如 ["val1", "val2" ← 截断 → 回退到 ["val1" → 补 "]" → ["val1"]（合法）
+    """
+    stack: List[str] = []          # 括号栈
+    in_string = False
+    escape = False
+    expecting_value = False        # 紧跟 ':' 后在等值
+
+    # 记录上一个 "安全截断点"：最近一次完成一个完整值/键之后的位置
+    last_safe = 0
+
+    i = 0
+    length = len(s)
+    while i < length:
+        ch = s[i]
+        if escape:
+            escape = False
+            i += 1
+            continue
+        if in_string:
+            if ch == '\\':
+                escape = True
+            elif ch == '"':
+                in_string = False
+                expecting_value = False
+                # 一个完整字符串刚结束，从此处往后都是安全的
+                last_safe = i + 1
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            i += 1
+            continue
+        if ch in '[{':
+            stack.append(ch)
+            expecting_value = False
+            last_safe = i + 1
+        elif ch in ']}':
+            if stack:
+                stack.pop()
+            expecting_value = False
+            last_safe = i + 1
+        elif ch == ':':
+            expecting_value = True
+            last_safe = i + 1
+        elif ch == ',':
+            expecting_value = False
+            last_safe = i + 1
+        elif ch in ' \t\n\r':
+            pass
+        else:  # 数字 / 字面量字符
+            expecting_value = False
+        i += 1
+
+    # 如果截断在一个未闭合的字符串内，回退到 last_safe（丢弃半截值），
+    # 并重置 in_string（半截值已丢弃，不再处于字符串内）
+    if in_string and last_safe < length:
+        result = s[:last_safe]
+        in_string = False
+    else:
+        result = s
+
+    # 如果':'后没有值，补 null
+    if expecting_value and not in_string:
+        result += ' null'
+
+    # 关闭所有开放括号
+    while stack:
+        result += ']' if stack.pop() == '[' else '}'
+
+    # 清理悬挂逗号: ",]" → "]"，",}" → "}"
+    result = re.sub(r',(\s*[\]}])', r'\1', result)
+    return result
 
 
 def _extract_json(text: str) -> Any:
     """
-    从 LLM 返回里抠出 JSON（容忍 ```json 包裹 / 前后噪声 / 单引号 / 尾部逗号）。
-
-    增强容错:
-    1. 移除 markdown 代码块
-    2. 查找 { } 边界
-    3. 修复常见 JSON 错误（单引号、尾部逗号、注释）
-    4. 解析并返回
+    从 LLM 返回里抠出 JSON（容忍 ```json 包裹 / 前后噪声 / 单引号 / 尾部逗号 / 截断）。
     """
     if not text:
         raise ValueError("LLM 返回为空")
@@ -82,64 +157,41 @@ def _extract_json(text: str) -> Any:
         if start != -1 and end != -1 and end > start:
             cleaned = cleaned[start:end + 1]
 
-    # 修复常见 JSON 错误
-    # 1. 移除注释（// 和 /* */）
+    # 移除注释 (// 和 /* */)
     cleaned = re.sub(r'//.*?$', '', cleaned, flags=re.MULTILINE)
     cleaned = re.sub(r'/\*.*?\*/', '', cleaned, flags=re.DOTALL)
 
-    # 2. 修复尾部逗号（,} 和 ,]）
+    # 修复尾部逗号
     cleaned = re.sub(r',\s*}', '}', cleaned)
     cleaned = re.sub(r',\s*]', ']', cleaned)
 
-    # 3. 尝试标准 JSON 解析
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError as e:
-        # 错误位置信息
         error_msg = str(e)
 
-        # 4. 如果是 "Unterminated string"，尝试修复截断的字符串
-        if "Unterminated string" in error_msg:
-            # 策略：尝试各种可能的闭合组合
-            attempts = [
-                # 数组内字符串截断 (keywords: ["data...)
-                cleaned + '"]}}]',
-                cleaned + '"]}]',
-                cleaned + '"],\n      "children": []\n    }\n  ]\n}',
-                # 对象属性值截断
-                cleaned + '",\n      "children": []\n    }\n  ]\n}',
-                cleaned + '"\n          }\n        }\n      ]\n    }\n  ]\n}',
-                cleaned + '"}]}]}}]',
-                cleaned + '"}}]',
-                cleaned + '"}]',
-                cleaned + '"]}',
-                cleaned + '"}}}',
-                cleaned + '"}}',
-                cleaned + '"}',
-                cleaned + '"]',
-                cleaned + '}]',
-                cleaned + '}}}',
-                cleaned + '}}',
-                cleaned + ']',
-            ]
-            for i, attempt in enumerate(attempts):
-                try:
-                    result = json.loads(attempt)
-                    logger.info("JSON 补全成功", strategy_index=i, added=attempt[len(cleaned):30])
-                    return result
-                except:
-                    continue
+        # 截断修复：基于括号栈和字符串状态智能补全
+        if "Unterminated string" in error_msg or "Expecting" in error_msg:
+            try:
+                repaired = _repair_truncated_json(cleaned)
+                result = json.loads(repaired)
+                logger.info(
+                    "JSON 截断修复成功",
+                    added_len=len(repaired) - len(cleaned),
+                    added_tail=repaired[len(cleaned):][:50],
+                )
+                return result
+            except json.JSONDecodeError:
+                pass
 
-        # 5. 尝试用 ast.literal_eval（支持单引号）
+        # 兜底：ast.literal_eval（支持单引号字典字面量）
         try:
             if cleaned.startswith('{') or cleaned.startswith('['):
                 result = ast.literal_eval(cleaned)
-                # 转回 JSON 兼容格式
                 return json.loads(json.dumps(result))
         except Exception:
             pass
 
-        # 都失败了，记录详细错误并抛出
         logger.error("JSON 解析失败", error=error_msg, text_preview=text[:1000])
         raise ValueError(f"JSON 解析失败: {error_msg[:200]}。原始文本前 500 字符: {text[:500]}")
 
@@ -338,6 +390,87 @@ class OutlineLLMService:
         else:
             # 降级：整篇喂一次，让 LLM 自己分四门课
             logger.warning("大纲粗切未命中科目边界，降级整篇拆分", document_id=document_id)
+            results = await self._split_whole(client, markdown, subjects_by_code)
+
+        if not results:
+            raise ValueError("LLM 拆分未产出任何科目，请检查大纲内容或 LLM 配置")
+
+        return {"document_id": document_id, "subjects": results}
+
+    async def split_outline_with_progress(self, run_id: str, document_id: str) -> Dict[str, Any]:
+        """
+        拆分大纲文档并更新 OutlineIngestionRun 的进度（用于异步后台任务）
+
+        与 split_outline 的区别：
+        1. 接收 run_id，在处理每门课时更新 run.current_subject_name / processed_subjects
+        2. 返回相同的结构，但过程中实时写入进度到 DB
+        """
+        from app.models.mysql_models import OutlineIngestionRun
+
+        document = (await self.db.execute(
+            select(Document).where(Document.id == document_id)
+        )).scalar_one_or_none()
+        if not document:
+            raise ValueError(f"文档不存在: {document_id}")
+
+        markdown = (document.document_markdown or "").strip()
+        if not markdown:
+            raise ValueError("文档没有可用的 markdown，请先确认解析成功")
+
+        client = await self._get_client()
+        if not client.is_available:
+            raise ValueError("大纲拆分 LLM 未启用或缺少配置，请在系统设置 -> outline_llm 配置后重试")
+
+        subjects_by_code = await self._load_subjects()
+        segments = self._segment_by_subject(markdown)
+
+        # 获取 run 记录
+        run = await self.db.get(OutlineIngestionRun, run_id)
+        if not run:
+            raise ValueError(f"OutlineIngestionRun 不存在: {run_id}")
+
+        results: List[Dict[str, Any]] = []
+        if segments:
+            run.total_subjects = len(segments)
+            await self.db.commit()
+
+            # 逐门课细拆，每门完成后更新进度
+            for idx, (code, start, end) in enumerate(segments):
+                subject = subjects_by_code.get(code)
+                if not subject:
+                    continue
+
+                # 更新当前处理的科目
+                run.current_subject_name = subject.name
+                run.processed_subjects = idx
+                run.stage_detail = f"正在拆分《{subject.name}》({idx+1}/{len(segments)})..."
+                await self.db.commit()
+
+                seg_text = markdown[start:end].strip()
+                try:
+                    parsed = await self._split_one_subject(client, subject.name, seg_text)
+                    results.append(self._pack_subject_result(subject, parsed))
+                    run.successful_subjects = len(results)
+                except Exception as e:
+                    logger.warning("大纲拆分某科目失败，标记为失败但继续处理其他科目",
+                                   subject=subject.name, error=str(e))
+                    results.append({
+                        "subject_id": subject.id,
+                        "subject_code": subject.code,
+                        "subject_name": subject.name,
+                        "error": str(e),
+                        "total_chapters": 0,
+                        "max_depth": 0,
+                        "chapters": [],
+                    })
+
+                run.processed_subjects = idx + 1
+                await self.db.commit()
+        else:
+            # 降级：整篇喂一次，让 LLM 自己分四门课
+            logger.warning("大纲粗切未命中科目边界，降级整篇拆分", document_id=document_id)
+            run.stage_detail = "未识别到科目边界，尝试整篇拆分..."
+            await self.db.commit()
             results = await self._split_whole(client, markdown, subjects_by_code)
 
         if not results:
