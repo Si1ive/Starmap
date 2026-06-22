@@ -6,6 +6,8 @@
 """
 
 import asyncio
+import logging
+import re
 import time
 import uuid
 from datetime import datetime
@@ -38,11 +40,100 @@ def generate_id() -> str:
     return uuid.uuid4().hex[:32]
 
 
+class MinerUProgressHandler(logging.Handler):
+    """
+    拦截 MinerU 日志，提取逐页进度并更新 ParseRun（embedded 模式用）。
+
+    真实 MinerU 日志关键行（loguru INFO）：
+    - "Pipeline processing window batch 2/11: 2/11 pages, batch_pages=1, ..."
+    - "... multi-file run. doc_count=1, total_pages=11, window_size=1, total_batches=11"
+    """
+
+    def __init__(self, run_id: str, db_session: AsyncSession, loop: asyncio.AbstractEventLoop):
+        super().__init__()
+        self.run_id = run_id
+        self.db = db_session
+        self.loop = loop
+        self.last_update_time = 0
+        self.update_interval = 2.0  # 最多每 2 秒更新一次 DB，避免过于频繁
+        self.total_pages: Optional[int] = None
+
+        self.patterns = [
+            re.compile(r'batch\s+(\d+)\s*/\s*(\d+)', re.IGNORECASE),   # "batch 2/11" —— 最可靠
+            re.compile(r'(\d+)\s*/\s*(\d+)\s*pages', re.IGNORECASE),   # "2/11 pages"
+            re.compile(r'page[^\d]{0,6}(\d+)\s*/\s*(\d+)', re.IGNORECASE),
+        ]
+        self.total_pages_pattern = re.compile(r'total_pages[=:\s]+(\d+)', re.IGNORECASE)
+
+    def emit(self, record):
+        """处理日志记录，提取页码并更新进度"""
+        try:
+            message = record.getMessage()
+            lower = message.lower()
+            if "page" not in lower and "batch" not in lower:
+                return
+
+            # 先抓总页数
+            tm = self.total_pages_pattern.search(message)
+            if tm:
+                self.total_pages = int(tm.group(1))
+
+            current_page = None
+            total_pages = self.total_pages
+            for pattern in self.patterns:
+                match = pattern.search(message)
+                if match:
+                    current_page = int(match.group(1))
+                    if len(match.groups()) > 1:
+                        total_pages = int(match.group(2))
+                    break
+
+            if current_page is None:
+                return
+
+            # 限流：避免过于频繁的 DB 写入
+            now = time.time()
+            if now - self.last_update_time < self.update_interval:
+                return
+            self.last_update_time = now
+
+            asyncio.run_coroutine_threadsafe(
+                self._update_progress(current_page, total_pages),
+                self.loop
+            )
+        except Exception as e:
+            logger.warning(f"MinerU progress handler error: {e}")
+
+    async def _update_progress(self, current_page: int, total_pages: Optional[int]):
+        """异步更新 ParseRun 的进度字段"""
+        try:
+            run = await self.db.get(ParseRun, self.run_id)
+            if run:
+                run.current_page = current_page
+                if total_pages:
+                    run.total_pages = total_pages
+                    run.stage_detail = f"正在解析第 {current_page}/{total_pages} 页..."
+                else:
+                    run.stage_detail = f"正在解析第 {current_page} 页..."
+                await self.db.commit()
+        except Exception as e:
+            logger.warning(f"Failed to update parse progress: {e}")
+
+
 class DocumentParseService:
     """文档解析服务"""
 
     def __init__(self, db: AsyncSession):
         self.db = db
+
+    def _generate_id(self) -> str:
+        """生成唯一 ID"""
+        return generate_id()
+
+    async def _get_parser(self, parser_name: Optional[str] = None):
+        """获取解析器实例（供 API 层提前检查用）"""
+        runtime_config = await SystemSettingsService(self.db).get_pdf_parser_runtime_config()
+        return choose_parser(requested_parser=parser_name, runtime_config=runtime_config)
 
     async def parse_document(
         self,
@@ -258,6 +349,183 @@ class DocumentParseService:
                 error=error_msg,
             )
             raise
+
+    async def parse_document_with_run_id(
+        self,
+        run_id: str,
+        corpus_file_id: str,
+        parser_name: Optional[str] = None,
+        parse_mode: Optional[str] = "primary",
+    ) -> Dict[str, Any]:
+        """
+        解析单个文档（接收已创建的 run_id，用于异步派发场景）
+
+        与 parse_document 的区别：
+        1. 不创建 ParseRun，而是查询已存在的 run
+        2. 在解析过程中更新 run 的进度字段 (current_page, total_pages, stage_detail)
+        3. 用于后台任务，不抛异常给调用方（错误写到 run.error_detail）
+        """
+        start_time = time.time()
+
+        # 查询已创建的 run
+        parse_run = await self.db.get(ParseRun, run_id)
+        if not parse_run:
+            logger.error("ParseRun 不存在", run_id=run_id)
+            return {"status": "failed", "error": "ParseRun 不存在"}
+
+        try:
+            # 1. 获取文件记录
+            corpus_file = await self.db.get(CorpusFile, corpus_file_id)
+            if not corpus_file:
+                raise ValueError(f"语料文件不存在: {corpus_file_id}")
+
+            if not corpus_file.local_path or not Path(corpus_file.local_path).exists():
+                raise ValueError(f"文件不存在于磁盘: {corpus_file.local_path}")
+
+            # 更新文件状态
+            corpus_file.status = "parsing"
+            corpus_file.error_detail = None
+            await self.db.commit()
+
+            # 2. 选择解析器
+            runtime_config = await SystemSettingsService(self.db).get_pdf_parser_runtime_config()
+            parser = choose_parser(requested_parser=parser_name, runtime_config=runtime_config)
+
+            # 更新进度：开始解析
+            parse_run.current_stage = "parsing"
+            parse_run.stage_detail = f"正在使用 {parser.name} 解析文档..."
+            await self.db.commit()
+
+            # 3. 调用解析器（同步 IO 重任务放线程池），并发追踪逐页进度
+            # - embedded 模式：MinerU 在本进程内，用 logging.Handler 拦截日志
+            # - local 模式：MinerU 在独立 parser_service 进程，轮询其 /progress 端点
+            progress_handler = None
+            is_local_service = hasattr(parser, "fetch_progress") and hasattr(parser, "endpoint")
+
+            if parser.name.lower() == "mineru" and not is_local_service:
+                # embedded 模式：挂载日志拦截器
+                try:
+                    loop = asyncio.get_running_loop()
+                    progress_handler = MinerUProgressHandler(run_id, self.db, loop)
+                    progress_handler.setLevel(logging.DEBUG)
+                    # 兼容新旧 MinerU：同时挂到 root / mineru / magic_pdf
+                    for logger_name in ("", "mineru", "magic_pdf"):
+                        logging.getLogger(logger_name).addHandler(progress_handler)
+                    logger.info("MinerU 日志拦截器已挂载(embedded)", run_id=run_id)
+                except Exception as e:
+                    logger.warning(f"无法挂载 MinerU 进度拦截器: {e}")
+
+            # 把解析放到后台线程，主协程并发轮询进度
+            parse_future = asyncio.ensure_future(
+                asyncio.to_thread(parser.parse, corpus_file.local_path, task_id=run_id)
+                if is_local_service
+                else asyncio.to_thread(parser.parse, corpus_file.local_path)
+            )
+
+            try:
+                while not parse_future.done():
+                    await asyncio.sleep(2)
+                    # local 模式：轮询 parser_service /progress
+                    if is_local_service:
+                        prog = await asyncio.to_thread(parser.fetch_progress, run_id)
+                        if prog and prog.get("total_pages"):
+                            cur = prog.get("current_page") or 0
+                            total = prog.get("total_pages")
+                            parse_run.current_page = cur
+                            parse_run.total_pages = total
+                            parse_run.stage_detail = f"正在解析第 {cur}/{total} 页..."
+                            await self.db.commit()
+                parse_result = await parse_future
+            finally:
+                # 卸载 embedded 日志拦截器
+                if progress_handler:
+                    try:
+                        for logger_name in ("", "mineru", "magic_pdf"):
+                            logging.getLogger(logger_name).removeHandler(progress_handler)
+                    except Exception as e:
+                        logger.warning(f"卸载 MinerU 进度拦截器失败: {e}")
+
+            # 更新进度：解析完成，开始入库
+            parse_run.total_pages = parse_result.page_count
+            parse_run.current_page = parse_result.page_count
+            parse_run.stage_detail = f"解析完成，共 {parse_result.page_count} 页，正在入库..."
+            await self.db.commit()
+
+            # 4. 创建/更新 Document
+            document = await self._get_or_create_document(corpus_file, parse_run.id, parse_result)
+
+            # 5. 落库 pages、blocks、assets
+            await self._persist_pages(document.id, parse_result.pages)
+            await self._persist_blocks(document.id, parse_result.blocks)
+            await self._persist_assets(document.id, parse_result.assets)
+
+            elapsed = time.time() - start_time
+
+            # 6. 更新 parse_run 为成功
+            parse_run.status = "success"
+            parse_run.current_stage = "completed"
+            parse_run.page_count = parse_result.page_count
+            parse_run.block_count = parse_result.block_count
+            parse_run.asset_count = parse_result.asset_count
+            parse_run.confidence = parse_result.confidence
+            parse_run.completed_at = datetime.utcnow()
+            parse_run.stage_detail = f"完成：{parse_result.page_count} 页 / {parse_result.block_count} 块 / {parse_result.asset_count} 资产"
+            parse_run.metrics_json = {
+                "elapsed_seconds": round(elapsed, 2),
+                "parser": parse_result.parser_name,
+                "parser_version": parse_result.parser_version,
+                "parse_mode": parse_mode or "primary",
+                "metadata": parse_result.metadata or {},
+            }
+
+            # 更新文件状态
+            corpus_file.status = "parsed"
+            corpus_file.error_detail = None
+
+            # 更新文档
+            document.page_count = parse_result.page_count
+            document.document_markdown = parse_result.document_markdown or ""
+            document.document_json = self._serialize_parse_result(parse_result)
+            document.raw_parser_output = parse_result.raw_output
+            document.status = "pending"
+
+            await self.db.commit()
+
+            logger.info(
+                "后台解析任务完成",
+                run_id=run_id,
+                document_id=document.id,
+                pages=parse_result.page_count,
+                elapsed=f"{elapsed:.2f}s",
+            )
+
+            return {
+                "status": "success",
+                "run_id": run_id,
+                "document_id": document.id,
+                "page_count": parse_result.page_count,
+            }
+
+        except Exception as e:
+            elapsed = time.time() - start_time
+            error_msg = str(e)[:500]
+
+            parse_run.status = "failed"
+            parse_run.current_stage = "failed"
+            parse_run.error_detail = error_msg
+            parse_run.completed_at = datetime.utcnow()
+            parse_run.stage_detail = f"失败：{error_msg[:100]}"
+            parse_run.metrics_json = {"elapsed_seconds": round(elapsed, 2)}
+
+            corpus_file = await self.db.get(CorpusFile, corpus_file_id)
+            if corpus_file:
+                corpus_file.status = "failed"
+                corpus_file.error_detail = error_msg
+
+            await self.db.commit()
+
+            logger.error("后台解析任务失败", run_id=run_id, error=error_msg)
+            return {"status": "failed", "run_id": run_id, "error": error_msg}
 
     async def _get_document_by_corpus_file_id(self, corpus_file_id: str) -> Optional[Document]:
         result = await self.db.execute(
