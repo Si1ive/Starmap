@@ -3065,28 +3065,66 @@ async def parse_corpus_file(
     req: Optional[ParseCorpusFileRequest] = None,
     db: AsyncSession = Depends(get_db),
 ):
-    """触发文档解析"""
+    """触发文档解析（异步派发，立即返回 run_id）"""
     from app.services.document_parse_service import DocumentParseService
     from app.services.document_parsers import ParserUnavailableError
+    from app.models.mysql_models import CorpusFile, ParseRun
+    import asyncio
 
+    # 先检查文件存在
+    corpus_file = await db.get(CorpusFile, file_id)
+    if not corpus_file:
+        raise HTTPException(status_code=404, detail="语料文件不存在")
+
+    # 立即创建 ParseRun 记录（status=running）
     service = DocumentParseService(db)
     parse_req = req or ParseCorpusFileRequest()
+
     try:
-        result = await service.parse_document(
-            file_id,
-            parser_name=parse_req.parser_name,
-            parse_mode=parse_req.parse_mode,
+        # 获取解析器信息并创建 run 记录
+        parser = await service._get_parser(parse_req.parser_name)
+        run_id = service._generate_id()
+        parse_run = ParseRun(
+            id=run_id,
+            corpus_file_id=file_id,
+            parser_name=parser.name,
+            parser_version=parser.version,
+            parse_mode=parse_req.parse_mode or "primary",
+            status="running",
+            current_stage="parsing",
+            stage_detail="准备开始解析...",
         )
-    except ValueError as e:
-        detail = str(e)
-        status_code = 404 if detail.startswith("语料文件不存在") else 400
-        raise HTTPException(status_code=status_code, detail=detail)
+        db.add(parse_run)
+        await db.commit()
     except ParserUnavailableError as e:
         raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"解析失败: {str(e)[:200]}")
+        raise HTTPException(status_code=500, detail=f"创建解析任务失败: {str(e)[:200]}")
 
-    return ApiResponse(data=result)
+    # 后台异步执行解析（参考 crawler 的模式）
+    async def _run_parse_in_background(run_id: str, file_id: str, parser_name: Optional[str], parse_mode: Optional[str]):
+        from app.db.mysql import mysql_client
+        async with mysql_client.session() as bg_session:
+            bg_service = DocumentParseService(bg_session)
+            try:
+                await bg_service.parse_document_with_run_id(
+                    run_id=run_id,
+                    corpus_file_id=file_id,
+                    parser_name=parser_name,
+                    parse_mode=parse_mode,
+                )
+            except Exception as e:
+                logger.error("后台解析任务失败", run_id=run_id, error=str(e))
+
+    asyncio.ensure_future(_run_parse_in_background(
+        run_id, file_id, parse_req.parser_name, parse_req.parse_mode
+    ))
+
+    return ApiResponse(message="解析任务已启动", data={
+        "run_id": run_id,
+        "status": "running",
+        "corpus_file_id": file_id,
+    })
 
 
 async def _delete_corpus_files_by_ids(
@@ -3200,6 +3238,53 @@ async def list_parse_runs(
         "total": total,
         "page": page,
         "page_size": page_size,
+    })
+
+
+@router.get("/corpus/parse-runs/{run_id}", response_model=ApiResponse)
+async def get_parse_run_detail(run_id: str, db: AsyncSession = Depends(get_db)):
+    """获取解析任务详情（用于进度轮询）"""
+    from app.models.mysql_models import ParseRun, Document
+
+    run = await db.get(ParseRun, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    # 计算进度：如果有 total_pages，用 current_page/total_pages；否则返回不确定状态
+    progress = 0
+    if run.total_pages and run.total_pages > 0 and run.current_page:
+        progress = round((run.current_page / run.total_pages) * 100, 1)
+
+    # 查询关联的 document_id（解析成功后供后续流水线使用）
+    document_id = None
+    doc = (await db.execute(
+        select(Document).where(Document.corpus_file_id == run.corpus_file_id)
+    )).scalar_one_or_none()
+    if doc:
+        document_id = doc.id
+
+    return ApiResponse(data={
+        "id": run.id,
+        "corpus_file_id": run.corpus_file_id,
+        "document_id": document_id,
+        "parser_name": run.parser_name,
+        "parser_version": run.parser_version,
+        "parse_mode": run.parse_mode,
+        "status": run.status,
+        "current_stage": run.current_stage,
+        "current_page": run.current_page,
+        "total_pages": run.total_pages,
+        "stage_detail": run.stage_detail,
+        "progress": progress,
+        "page_count": run.page_count,
+        "block_count": run.block_count,
+        "asset_count": run.asset_count,
+        "confidence": float(run.confidence) if run.confidence else None,
+        "error_detail": run.error_detail,
+        "metrics_json": run.metrics_json,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
     })
 
 
@@ -4287,18 +4372,23 @@ async def get_outline_ingestion_progress(run_id: str, db: AsyncSession = Depends
         raise HTTPException(status_code=404, detail="任务不存在")
 
     return ApiResponse(data={
-        "run_id": run.id,
-        "status": run.status,
+        "id": run.id,
+        "document_id": run.document_id,
         "outline_id": run.outline_id,
         "outline_name": run.outline_name,
-        "year": run.year,
-        "version": run.version,
+        "file_name": (run.result_summary or {}).get("file_name") if isinstance(run.result_summary, dict) else None,
+        "status": run.status,
+        "current_stage": run.current_stage,
+        "stage_detail": run.stage_detail,
         "total_subjects": run.total_subjects,
         "processed_subjects": run.processed_subjects,
-        "current_subject": run.current_subject,
-        "created_at": run.created_at.isoformat() if run.created_at else None,
+        "successful_subjects": run.successful_subjects,
+        "current_subject_name": run.current_subject_name,
+        "error_detail": run.error_detail,
+        "result_summary": run.result_summary,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
         "completed_at": run.completed_at.isoformat() if run.completed_at else None,
-        "error_message": run.error_message,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
     })
 
 
@@ -4370,18 +4460,13 @@ async def upload_parse_outline(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    上传大纲 PDF 并一步走完「注册 → 解析 → LLM 拆分」，返回 document_id + 四门课预览。
+    上传大纲 PDF 并异步执行「注册 → 解析 → LLM 拆分」，立即返回 run_id。
 
-    大纲走的是 LLM 拆分这条路（OutlineLLMService）：MinerU 全解析出 markdown，
-    再让 LLM 按四门课粗切 + 逐门细拆出考察目标 + 多层章节树。
-    刻意不经过题目抽取的「题干/选项分离 + LLM 兜底」机制，也不再走正则标题树。
-    确认预览后，前端再调 /outlines/import-from-llm 携带拆分结果入库。
+    前端轮询 GET /outlines/runs/{run_id} 获取进度，完成后再调 /outlines/import-from-llm 入库。
     """
     from app.services.corpus_service import CorpusService, SUPPORTED_EXTENSIONS
-    from app.services.document_parse_service import DocumentParseService
-    from app.services.document_parsers import ParserUnavailableError
-    from app.services.outline_llm_service import OutlineLLMService
-    from app.models.mysql_models import DocumentBlock
+    from app.models.mysql_models import OutlineIngestionRun
+    import asyncio
 
     if not file.filename:
         raise HTTPException(status_code=400, detail="文件名为空")
@@ -4392,13 +4477,14 @@ async def upload_parse_outline(
             detail=f"不支持的文件类型: {ext}，仅支持 {', '.join(sorted(SUPPORTED_EXTENSIONS))}",
         )
 
-    # 1) 保存并注册（doc_type 默认 other，非试卷类，可走标题树提取）
+    # 1) 保存文件
     upload_dir = Path(__file__).parent.parent.parent / "uploads"
     upload_dir.mkdir(exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     file_path = upload_dir / f"{timestamp}_{file.filename}"
     file_path.write_bytes(await file.read())
 
+    # 2) 注册文件
     corpus_service = CorpusService(db)
     reg = await corpus_service.register_single_file(
         file_path=str(file_path),
@@ -4406,46 +4492,105 @@ async def upload_parse_outline(
     )
     corpus_file_id = reg["corpus_file_id"]
 
-    # 2) 解析（已解析且有 block 则复用既有 document，避免重复跑解析器）
-    parse_service = DocumentParseService(db)
-    document_id: Optional[str] = None
-    parse_mode = "primary"
-    if not reg["is_new"]:
-        existing_doc = await parse_service._get_document_by_corpus_file_id(corpus_file_id)
-        if existing_doc:
-            block_count = (await db.execute(
-                select(func.count()).select_from(DocumentBlock)
-                .where(DocumentBlock.document_id == existing_doc.id)
-            )).scalar_one()
-            if block_count > 0:
-                document_id = existing_doc.id
-            else:
-                # 上次解析中断留下的空文档（0 block），需重新解析覆盖
-                parse_mode = "retry"
+    # 3) 立即创建 OutlineIngestionRun（document_id 可空），让任务列表立即可见
+    from app.services.document_parse_service import generate_id
+    run_id = generate_id()
+    run = OutlineIngestionRun(
+        id=run_id,
+        document_id=None,  # 解析完成后由后台任务填充
+        outline_name=file.filename,
+        status="processing",
+        current_stage="parsing",
+        stage_detail=f"文件已上传：{file.filename}",
+        started_at=datetime.utcnow(),
+    )
+    db.add(run)
+    await db.commit()
 
-    if document_id is None:
-        try:
-            parse_result = await parse_service.parse_document(corpus_file_id, parse_mode=parse_mode)
-            document_id = parse_result["document_id"]
-        except ParserUnavailableError as e:
-            raise HTTPException(status_code=503, detail=str(e))
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+    # 4) 后台异步执行解析 + LLM 拆分
+    async def _run_outline_parse_in_background(
+        run_id: str, corpus_file_id: str, parser_name: Optional[str], is_new: bool, file_name: str
+    ):
+        from app.db.mysql import mysql_client
+        from app.services.document_parse_service import DocumentParseService
+        from app.services.outline_llm_service import OutlineLLMService
+        from app.models.mysql_models import DocumentBlock
 
-    # 3) LLM 拆分（四门课粗切 + 逐门细拆，不入库）
-    llm_service = OutlineLLMService(db)
-    try:
-        split = await llm_service.split_outline(document_id)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        async with mysql_client.session() as bg_session:
+            try:
+                bg_run = await bg_session.get(OutlineIngestionRun, run_id)
+                if not bg_run:
+                    logger.error("OutlineIngestionRun 不存在", run_id=run_id)
+                    return
 
-    return ApiResponse(data={
+                # 解析阶段
+                bg_run.current_stage = "parsing"
+                bg_run.stage_detail = "正在解析 PDF..."
+                await bg_session.commit()
+
+                document_id: Optional[str] = None
+                parse_service = DocumentParseService(bg_session)
+
+                # 复用既有文档（如果已解析）
+                if not is_new:
+                    existing_doc = await parse_service._get_document_by_corpus_file_id(corpus_file_id)
+                    if existing_doc:
+                        block_count = (await bg_session.execute(
+                            select(func.count()).select_from(DocumentBlock)
+                            .where(DocumentBlock.document_id == existing_doc.id)
+                        )).scalar_one()
+                        if block_count > 0:
+                            document_id = existing_doc.id
+
+                if document_id is None:
+                    parse_result = await parse_service.parse_document(corpus_file_id, parser_name=parser_name)
+                    document_id = parse_result["document_id"]
+
+                # 更新 run：解析完成，进入拆分
+                bg_run.document_id = document_id
+                bg_run.current_stage = "splitting"
+                bg_run.stage_detail = "正在用 LLM 拆分大纲..."
+                await bg_session.commit()
+
+                # LLM 拆分阶段
+                llm_service = OutlineLLMService(bg_session)
+                split = await llm_service.split_outline_with_progress(run_id, document_id)
+
+                # 完成
+                bg_run.status = "done"
+                bg_run.current_stage = "completed"
+                bg_run.stage_detail = f"拆分完成，共 {len(split['subjects'])} 个科目"
+                bg_run.total_subjects = len(split["subjects"])
+                bg_run.processed_subjects = len(split["subjects"])
+                bg_run.successful_subjects = len([s for s in split["subjects"] if not s.get("error")])
+                # 把 file_name 存进 result_summary 方便列表展示
+                split_with_meta = {**split, "file_name": file_name}
+                bg_run.result_summary = split_with_meta
+                bg_run.completed_at = datetime.utcnow()
+                await bg_session.commit()
+
+                logger.info("大纲解析+拆分完成", run_id=run_id, document_id=document_id)
+
+            except Exception as e:
+                logger.error("大纲后台任务失败", run_id=run_id, error=str(e))
+                bg_run = await bg_session.get(OutlineIngestionRun, run_id)
+                if bg_run:
+                    bg_run.status = "failed"
+                    bg_run.current_stage = "failed"
+                    bg_run.error_detail = str(e)[:500]
+                    bg_run.stage_detail = f"失败：{str(e)[:100]}"
+                    bg_run.completed_at = datetime.utcnow()
+                    await bg_session.commit()
+
+    asyncio.ensure_future(_run_outline_parse_in_background(
+        run_id, corpus_file_id, parser_name, reg["is_new"], file.filename
+    ))
+
+    return ApiResponse(message="大纲解析任务已启动", data={
+        "run_id": run_id,
         "corpus_file_id": corpus_file_id,
-        "document_id": document_id,
         "file_name": file.filename,
-        "subjects": split["subjects"],
+        "status": "processing",
     })
 
 
@@ -4470,6 +4615,8 @@ async def get_outline_run_detail(run_id: str, db: AsyncSession = Depends(get_db)
         "year": run.year,
         "version": run.version,
         "status": run.status,
+        "current_stage": run.current_stage,
+        "stage_detail": run.stage_detail,
         "progress": progress,
         "total_subjects": run.total_subjects,
         "processed_subjects": run.processed_subjects,
@@ -4489,7 +4636,7 @@ async def get_outline_run_detail(run_id: str, db: AsyncSession = Depends(get_db)
 async def list_outline_runs(
     document_id: Optional[str] = None,
     status: Optional[str] = None,
-    limit: int = 20,
+    limit: int = 100,
     db: AsyncSession = Depends(get_db)
 ):
     """列出大纲入库任务（支持按 document_id 和 status 过滤）"""
@@ -4510,15 +4657,67 @@ async def list_outline_runs(
                 "document_id": r.document_id,
                 "outline_id": r.outline_id,
                 "outline_name": r.outline_name,
+                "file_name": (r.result_summary or {}).get("file_name") if isinstance(r.result_summary, dict) else None,
                 "status": r.status,
+                "current_stage": r.current_stage,
+                "stage_detail": r.stage_detail,
                 "progress": round((r.processed_subjects / r.total_subjects * 100), 1) if r.total_subjects > 0 else 0,
                 "total_subjects": r.total_subjects,
+                "processed_subjects": r.processed_subjects,
                 "successful_subjects": r.successful_subjects,
+                "current_subject_name": r.current_subject_name,
+                "created_chapters": r.created_chapters,
+                "updated_chapters": r.updated_chapters,
+                "error_detail": r.error_detail,
+                "started_at": r.started_at.isoformat() if r.started_at else None,
+                "completed_at": r.completed_at.isoformat() if r.completed_at else None,
                 "created_at": r.created_at.isoformat() if r.created_at else None,
             }
             for r in runs
         ]
     })
+
+
+@router.delete("/outlines/runs/{run_id}", response_model=ApiResponse)
+async def delete_outline_run(run_id: str, db: AsyncSession = Depends(get_db)):
+    """删除大纲入库任务记录（不影响已入库的大纲数据）"""
+    from app.models.mysql_models import OutlineIngestionRun
+
+    run = await db.get(OutlineIngestionRun, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    await db.delete(run)
+    await db.commit()
+    return ApiResponse(message="任务记录已删除", data={"run_id": run_id})
+
+
+@router.post("/outlines/runs/batch-delete", response_model=ApiResponse)
+async def batch_delete_outline_runs(
+    req: BatchIdsRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """批量删除大纲入库任务记录"""
+    from app.models.mysql_models import OutlineIngestionRun
+
+    if not req.ids:
+        return ApiResponse(data={"deleted_count": 0, "requested_count": 0})
+
+    result = await db.execute(
+        select(OutlineIngestionRun).where(OutlineIngestionRun.id.in_(req.ids))
+    )
+    runs = result.scalars().all()
+    for run in runs:
+        await db.delete(run)
+    await db.commit()
+
+    return ApiResponse(
+        message="批量删除成功",
+        data={
+            "deleted_count": len(runs),
+            "requested_count": len(set(req.ids)),
+        },
+    )
 
 
 
