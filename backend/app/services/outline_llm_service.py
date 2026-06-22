@@ -260,19 +260,9 @@ _SPLIT_PROMPT = """下面是一门课《{subject_name}》的考试大纲文本�
    - name：章节标题（去掉前面的编号），必填
    - outline_code：原始编号（如 "1.1.1" / "一" / "(一)"），没有就 null
    - description：该节点对应的考点正文原文（大纲里列的具体考点），没有就 null
-   - enhanced_description：对该知识点的增强描述（2-3句话，包含：核心内容概括、常见考法、易混淆概念），用于帮助题目和知识点建立关联，必填
-   - keywords：关键词标签列表（别名、英文名、相关术语、典型例题关键词），用于精确匹配，必填
    - children：子章节数组，没有就空数组
-4. 增强描述示例：
-   - 节点 "哈希表" 的 enhanced_description: "哈希表是基于哈希函数的键值对存储结构。常考冲突解决方法（链地址法、开放寻址法）、哈希函数设计、装填因子分析。易混淆：线性探测 vs 二次探测。"
-   - 节点 "哈希表" 的 keywords: ["散列表", "Hash Table", "冲突解决", "链地址法", "开放寻址", "线性探测", "二次探测", "装填因子"]
-5. 关键词标签原则：
-   - 包含中英文名称
-   - 包含同义词/别名（如"散列表"="哈希表"）
-   - 包含该节点下的核心术语（如哈希表下的"链地址法"）
-   - 包含典型考题中可能出现的关键词
-6. 不要生成复习建议或重点分析，只忠实还原大纲结构并增强每个节点。
-7. 只输出 JSON，不要任何解释文字。
+4. 不要生成复习建议或重点分析，只忠实还原大纲结构。
+5. 只输出 JSON，不要任何解释文字。
 
 输出格式：
 {{
@@ -282,8 +272,6 @@ _SPLIT_PROMPT = """下面是一门课《{subject_name}》的考试大纲文本�
       "name": "哈希表",
       "outline_code": "1.5",
       "description": "大纲原文...",
-      "enhanced_description": "哈希表是基于哈希函数的键值对存储结构。常考冲突解决方法...",
-      "keywords": ["散列表", "Hash Table", "冲突解决", "链地址法"],
       "children": [...]
     }}
   ]
@@ -293,6 +281,74 @@ _SPLIT_PROMPT = """下面是一门课《{subject_name}》的考试大纲文本�
 ---
 {content}
 ---"""
+
+
+# 骨架拆分 prompt（不生成 enhanced_description 和 keywords，输出量小不会截断）
+_SKELETON_PROMPT = """下面是一门课《{subject_name}》的考试大纲文本。请把它拆成结构化的章节树（骨架）。
+
+要求：
+1. 先识别这门课开头的「考察目标」（概括性的整门课要求，通常三四句话），放进 exam_objective。
+2. 再把后续内容拆成多层级章节树 chapters。层级用嵌套 children 表达（如 一 / (一) / 1. / (1) 这样的层级关系）。
+3. 每个章节节点只包含：
+   - name：章节标题（去掉前面的编号），必填
+   - outline_code：原始编号（如 "1.1.1" / "一" / "(一)"），没有就 null
+   - description：该节点对应的考点正文原文（大纲里列的具体考点），没有就 null
+   - children：子章节数组，没有就空数组
+4. 重要：不要生成 enhanced_description、keywords 或任何其他字段。
+5. 只输出 JSON，不要任何解释文字。
+
+输出格式：
+{{
+  "exam_objective": "……",
+  "chapters": [
+    {{
+      "name": "哈希表",
+      "outline_code": "1.5",
+      "description": "大纲原文...",
+      "children": [...]
+    }}
+  ]
+}}
+
+大纲文本：
+---
+{content}
+---"""
+
+
+# 批量增强 prompt：为一批叶子节点生成 enhanced_description + keywords
+# 每批 10-15 个节点，保证输出量不超 max_tokens
+_BATCH_ENHANCE_PROMPT = """你是408考研大纲解析专家。下面是一些《{subject_name}》的章节节点（每个节点含考点原文 description）。请为每个节点生成 enhanced_description 和 keywords。
+
+每个节点的 enhanced_description 要求（2-3句话，包含）：
+- 核心内容概括
+- 常见考法
+- 易混淆概念
+
+keywords 要求（5-10个）：
+- 包含中英文名称
+- 包含同义词/别名
+- 包含该节点下的核心术语
+
+示例：
+节点 "哈希表" 考点 "哈希函数、冲突解决、链地址法、开放寻址法"
+→ enhanced_description: "哈希表是基于哈希函数的键值对存储结构。常考冲突解决方法（链地址法、开放寻址法）、哈希函数设计、装填因子分析。易混淆：线性探测 vs 二次探测。"
+→ keywords: ["散列表", "Hash Table", "冲突解决", "链地址法", "开放寻址", "线性探测", "二次探测", "装填因子"]
+
+只输出 JSON 对象（不要数组），格式：
+{{
+  "items": [
+    {{"index": 0, "enhanced_description": "...", "keywords": ["...", ...]}},
+    ...
+  ]
+}}
+
+节点列表：
+{items_json}"""
+
+
+# 每批最多 12 个叶子节点（保守估计每节点 300 token 输出 = 3600，远低于 16K 上限）
+_BATCH_SIZE = 12
 
 
 class OutlineLLMService:
@@ -498,24 +554,105 @@ class OutlineLLMService:
     async def _split_one_subject_direct(
         self, client: OutlineLLMClient, subject_name: str, content: str
     ) -> Dict[str, Any]:
-        """直接处理单门课（内容不超过 40000 字符）"""
-        prompt = _SPLIT_PROMPT.format(subject_name=subject_name, content=content[:40000])
+        """
+        两轮拆分单门课：
+
+        第1轮 — 拆骨架：只输出 name/outline_code/description/children，
+                 不生成 enhanced_description 和 keywords。输出量小，不会截断。
+        第2轮 — 批量增强：收集所有叶子节点，按 _BATCH_SIZE 分批并发调用 LLM，
+                 为每批节点生成 enhanced_description + keywords，写回骨架树。
+        """
+        # ===== 第1轮：拆骨架 =====
+        prompt = _SKELETON_PROMPT.format(subject_name=subject_name, content=content[:40000])
         last_err: Optional[Exception] = None
+        skeleton: Optional[Dict[str, Any]] = None
         for attempt in range(2):
             try:
-                text = await client.chat(prompt, purpose=f"大纲拆分-{subject_name}")
+                text = await client.chat(prompt, purpose=f"大纲骨架拆分-{subject_name}")
                 data = _extract_json(text)
                 chapters = _normalize_chapters(data.get("chapters") or [])
                 if not chapters:
-                    raise ValueError("拆分结果章节为空")
-                return {
+                    raise ValueError("骨架拆分结果章节为空")
+                skeleton = {
                     "exam_objective": (str(data.get("exam_objective")).strip() if data.get("exam_objective") else None),
                     "chapters": chapters,
                 }
-            except Exception as e:  # JSON 解析/校验失败重试
+                break
+            except Exception as e:
                 last_err = e
-                logger.warning("大纲单科拆分失败，准备重试", subject=subject_name, attempt=attempt, error=str(e))
-        raise ValueError(f"《{subject_name}》大纲拆分失败: {last_err}")
+                logger.warning("大纲骨架拆分失败，准备重试", subject=subject_name, attempt=attempt, error=str(e))
+
+        if skeleton is None:
+            raise ValueError(f"《{subject_name}》骨架拆分失败: {last_err}")
+
+        # ===== 第2轮：批量增强叶子节点 =====
+        leaf_nodes = self._collect_leaf_nodes(skeleton["chapters"])
+        if leaf_nodes:
+            logger.info("开始批量增强叶子节点", subject=subject_name, leaf_count=len(leaf_nodes))
+            await self._enhance_leaf_nodes_batched(client, subject_name, leaf_nodes)
+        else:
+            logger.info("无叶子节点需要增强", subject=subject_name)
+
+        return skeleton
+
+    @staticmethod
+    def _collect_leaf_nodes(chapters: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """收集章节树中所有叶子节点（无 children 或 children 为空的节点）。"""
+        result: List[Dict[str, Any]] = []
+        for ch in chapters:
+            children = ch.get("children") or []
+            if children:
+                result.extend(OutlineLLMService._collect_leaf_nodes(children))
+            else:
+                result.append(ch)
+        return result
+
+    async def _enhance_leaf_nodes_batched(
+        self, client: OutlineLLMClient, subject_name: str, leaf_nodes: List[Dict[str, Any]]
+    ) -> None:
+        """分批并发调用 LLM 为叶子节点生成 enhanced_description + keywords。"""
+        import asyncio
+
+        # 按 _BATCH_SIZE 分片
+        batches = [
+            leaf_nodes[i:i + _BATCH_SIZE]
+            for i in range(0, len(leaf_nodes), _BATCH_SIZE)
+        ]
+
+        async def _enhance_one_batch(batch: List[Dict[str, Any]], batch_idx: int) -> None:
+            items = [
+                {"index": j, "name": node["name"], "description": node.get("description") or ""}
+                for j, node in enumerate(batch)
+            ]
+            items_json = json.dumps(items, ensure_ascii=False, indent=2)
+            prompt = _BATCH_ENHANCE_PROMPT.format(
+                subject_name=subject_name, items_json=items_json
+            )
+            try:
+                text = await client.chat(prompt, purpose=f"大纲增强-{subject_name}-批{batch_idx+1}")
+                data = _extract_json(text)
+                enhancements = data.get("items") if isinstance(data, dict) else data
+                if not isinstance(enhancements, list):
+                    logger.warning("增强返回格式不正确，跳过此批", batch_idx=batch_idx)
+                    return
+                # 写回叶子节点
+                for item in enhancements:
+                    if not isinstance(item, dict):
+                        continue
+                    idx = item.get("index")
+                    if idx is None or idx >= len(batch):
+                        continue
+                    batch[idx]["enhanced_description"] = str(item.get("enhanced_description") or "").strip()[:1000]
+                    kw = item.get("keywords")
+                    if isinstance(kw, list):
+                        batch[idx]["keywords"] = [str(k).strip() for k in kw if k][:50]
+                logger.info("批量增强完成", batch_idx=batch_idx, nodes=len(batch))
+            except Exception as e:
+                logger.warning("某批增强失败，跳过", batch_idx=batch_idx, error=str(e))
+
+        # 并发执行所有批次
+        tasks = [_enhance_one_batch(batch, i) for i, batch in enumerate(batches)]
+        await asyncio.gather(*tasks)
 
     async def _split_one_subject_chunked(
         self, client: OutlineLLMClient, subject_name: str, content: str
@@ -526,10 +663,10 @@ class OutlineLLMService:
         策略:
         1. 先用前 5000 字符提取考察目标
         2. 按一级章节标题分块（每块最多 30000 字符）
-        3. 每块单独调用 LLM 拆分
-        4. 合并结果
+        3. 每块单独调用 LLM 拆骨架
+        4. 合并骨架，收集所有叶子节点，批量增强
         """
-        # 1. 提取考察目标（只看前部分）
+        # 1. 提取考察目标
         header = content[:5000]
         objective_prompt = f"""请从以下《{subject_name}》大纲片段中提取"考察目标"部分。
 
@@ -551,25 +688,26 @@ class OutlineLLMService:
         chunks = self._split_into_chapter_chunks(content, max_chunk_size=30000)
         logger.info("按章节分块", subject=subject_name, chunks=len(chunks))
 
-        # 3. 每块单独拆分
+        # 3. 每块单独拆骨架
         all_chapters = []
         for i, chunk in enumerate(chunks):
-            chunk_prompt = f"""请拆分以下《{subject_name}》大纲片段（第 {i+1}/{len(chunks)} 块）。
-
-{chunk[:30000]}
-
-只输出 JSON 数组：{{"chapters": [...]}}
-"""
+            chunk_prompt = _SKELETON_PROMPT.format(subject_name=subject_name, content=chunk[:30000])
             try:
-                text = await client.chat(chunk_prompt, purpose=f"大纲拆分-{subject_name}-块{i+1}")
+                text = await client.chat(chunk_prompt, purpose=f"大纲骨架拆分-{subject_name}-块{i+1}")
                 data = _extract_json(text)
                 chapters = _normalize_chapters(data.get("chapters") or [])
                 all_chapters.extend(chapters)
             except Exception as e:
-                logger.warning("某块拆分失败，跳过", subject=subject_name, chunk=i+1, error=str(e))
+                logger.warning("某块骨架拆分失败，跳过", subject=subject_name, chunk=i+1, error=str(e))
 
         if not all_chapters:
             raise ValueError(f"《{subject_name}》所有块拆分均失败")
+
+        # 4. 批量增强叶子节点
+        leaf_nodes = self._collect_leaf_nodes(all_chapters)
+        if leaf_nodes:
+            logger.info("开始批量增强叶子节点（分块模式）", subject=subject_name, leaf_count=len(leaf_nodes))
+            await self._enhance_leaf_nodes_batched(client, subject_name, leaf_nodes)
 
         return {
             "exam_objective": exam_objective,
