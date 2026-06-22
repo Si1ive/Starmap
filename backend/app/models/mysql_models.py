@@ -719,6 +719,10 @@ class ParseRun(Base):
         Enum("running", "success", "failed", "partial"),
         default="running", comment="执行状态"
     )
+    current_stage: Mapped[Optional[str]] = mapped_column(String(50), comment="当前阶段")
+    current_page: Mapped[Optional[int]] = mapped_column(comment="当前处理页码")
+    total_pages: Mapped[Optional[int]] = mapped_column(comment="总页数（预估或实际）")
+    stage_detail: Mapped[Optional[str]] = mapped_column(String(500), comment="阶段详情文本")
     page_count: Mapped[Optional[int]] = mapped_column(comment="识别页数")
     block_count: Mapped[Optional[int]] = mapped_column(comment="识别块数")
     asset_count: Mapped[Optional[int]] = mapped_column(comment="识别资产数")
@@ -956,9 +960,9 @@ class OutlineIngestionRun(Base):
     __tablename__ = "outline_ingestion_runs"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="任务ID")
-    document_id: Mapped[str] = mapped_column(
-        String(32), ForeignKey("documents.id", ondelete="CASCADE"),
-        nullable=False, comment="源文档ID"
+    document_id: Mapped[Optional[str]] = mapped_column(
+        String(32), ForeignKey("documents.id", ondelete="SET NULL"),
+        nullable=True, comment="源文档ID（拆分阶段有，入库阶段可能无）"
     )
     outline_id: Mapped[Optional[str]] = mapped_column(String(32), comment="生成的大纲ID（成功后填充）")
     outline_name: Mapped[Optional[str]] = mapped_column(String(200), comment="大纲名称")
@@ -971,6 +975,8 @@ class OutlineIngestionRun(Base):
         nullable=False,
         comment="任务状态：partial=部分成功"
     )
+    current_stage: Mapped[Optional[str]] = mapped_column(String(50), comment="当前阶段")
+    stage_detail: Mapped[Optional[str]] = mapped_column(String(500), comment="阶段详情文本")
 
     total_subjects: Mapped[int] = mapped_column(default=0, comment="总科目数")
     processed_subjects: Mapped[int] = mapped_column(default=0, comment="已处理科目数")
