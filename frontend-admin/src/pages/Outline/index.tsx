@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   Card, Table, Tag, Button, Space, Modal, Form, Input, InputNumber,
-  Switch, Upload, Tree, message, Alert, Descriptions, Spin, Tabs, Typography, Popconfirm,
+  Switch, Upload, Tree, message, Alert, Descriptions, Spin, Tabs, Typography, Popconfirm, Progress,
 } from 'antd'
 import {
   PlusOutlined, InboxOutlined, EyeOutlined, CheckCircleOutlined, BulbOutlined, DeleteOutlined,
@@ -10,8 +10,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   listOutlines, getOutlineChapters, getOutlineSubjects, uploadParseOutline,
   importOutlineFromLLM, generateOutlineGuidance, deleteOutline,
-  type OutlineSummary, type OutlineChapter, type OutlineUploadParseResult,
-  type OutlinePreviewItem, type OutlineSubjectInfo,
+  listOutlineRuns, deleteOutlineRun, batchDeleteOutlineRuns, getOutlineRunDetail,
+  type OutlineSummary, type OutlineChapter,
+  type OutlinePreviewItem, type OutlineSubjectInfo, type OutlineSubjectSplit,
+  type OutlineRunListItem,
 } from '@/api'
 
 const { Dragger } = Upload
@@ -38,35 +40,84 @@ const buildTreeNodes = (chapters: OutlinePreviewItem[] | OutlineChapter[]): any[
   })
 }
 
+const runStatusConfig: Record<string, { color: string; text: string }> = {
+  pending: { color: 'default', text: '等待中' },
+  processing: { color: 'processing', text: '处理中' },
+  done: { color: 'success', text: '已完成' },
+  partial: { color: 'warning', text: '部分成功' },
+  failed: { color: 'error', text: '失败' },
+}
+
 const OutlineList = () => {
   const qc = useQueryClient()
   const [importModalOpen, setImportModalOpen] = useState(false)
   const [form] = Form.useForm()
-  const [parsed, setParsed] = useState<OutlineUploadParseResult | null>(null)
+  const [splitSubjects, setSplitSubjects] = useState<OutlineSubjectSplit[] | null>(null)
+  const [parsedFileName, setParsedFileName] = useState<string>('')
+  const [detailRunId, setDetailRunId] = useState<string | null>(null) // 正在查看详情的 run_id，非 null 表示查看已完成任务
   const [chapterDrawer, setChapterDrawer] = useState<{ outline: OutlineSummary | null; open: boolean }>({ outline: null, open: false })
   const [activeSubject, setActiveSubject] = useState<string>('')
+  const [selectedRunKeys, setSelectedRunKeys] = useState<React.Key[]>([])
 
   const { data: outlinesRes } = useQuery({ queryKey: ['outlines'], queryFn: listOutlines })
+
+  // 任务列表：有 processing 状态的任务时自动轮询
+  const { data: runsRes } = useQuery({
+    queryKey: ['outlineRuns'],
+    queryFn: () => listOutlineRuns({ limit: 100 }),
+    refetchInterval: (queryData) => {
+      const items = queryData?.data?.items || []
+      return items.some((r: OutlineRunListItem) => r.status === 'processing') ? 3000 : false
+    },
+  })
+  const runs: OutlineRunListItem[] = runsRes?.data?.items || []
 
   const resetImport = () => {
     setImportModalOpen(false)
     form.resetFields()
-    setParsed(null)
+    setSplitSubjects(null)
+    setParsedFileName('')
+    setDetailRunId(null)
   }
 
+  // 上传后立即拿到 run_id
   const uploadMut = useMutation({
     mutationFn: (file: File) => uploadParseOutline(file),
     onSuccess: (res) => {
-      if (res.data) {
-        setParsed(res.data)
-        const total = (res.data.subjects || []).reduce((s, x) => s + x.total_chapters, 0)
-        message.success(`解析完成：识别 ${res.data.subjects?.length || 0} 门课，共 ${total} 个章节`)
+      if (res.data?.run_id) {
+        setParsedFileName(res.data.file_name || '')
+        setSplitSubjects(null)
+        message.info('任务已启动，可在下方任务列表中查看进度')
+        qc.invalidateQueries({ queryKey: ['outlineRuns'] })
       }
     },
     onError: (err: any) => {
-      message.error('解析失败: ' + (err?.response?.data?.detail || err.message))
+      message.error('上传失败: ' + (err?.response?.data?.detail || err.message))
     },
   })
+
+  // 查看任务详情：调详情接口获取 result_summary，打开弹窗
+  const viewRunDetail = async (runItem: OutlineRunListItem) => {
+    setImportModalOpen(true)
+    setDetailRunId(runItem.id)
+    setParsedFileName(runItem.outline_name || runItem.file_name || '')
+    try {
+      const detail = await getOutlineRunDetail(runItem.id)
+      const r = detail.data
+      setParsedFileName(r.outline_name || r.file_name || '')
+      if (r.status === 'done' && r.result_summary?.subjects) {
+        setSplitSubjects(r.result_summary.subjects)
+      } else {
+        setSplitSubjects(null)
+      }
+    } catch {
+      if (runItem.status === 'done' && (runItem as any).result_summary?.subjects) {
+        setSplitSubjects((runItem as any).result_summary.subjects)
+      } else {
+        setSplitSubjects(null)
+      }
+    }
+  }
 
   const importMut = useMutation({
     mutationFn: (values: any) =>
@@ -75,15 +126,35 @@ const OutlineList = () => {
         year: values.year,
         version: values.version || 'v1.0',
         set_default: !!values.set_default,
-        subjects: parsed!.subjects,
+        subjects: splitSubjects!,
       }),
     onSuccess: (res) => {
       const r = res.data
       message.success(`导入成功：新建 ${r?.created_chapters} 个，更新 ${r?.updated_chapters} 个章节`)
       qc.invalidateQueries({ queryKey: ['outlines'] })
+      qc.invalidateQueries({ queryKey: ['outlineRuns'] })
       resetImport()
     },
     onError: (err: any) => message.error('导入失败：' + (err?.response?.data?.detail || err.message)),
+  })
+
+  const deleteRunMut = useMutation({
+    mutationFn: (runId: string) => deleteOutlineRun(runId),
+    onSuccess: () => {
+      message.success('任务记录已删除')
+      qc.invalidateQueries({ queryKey: ['outlineRuns'] })
+    },
+    onError: (err: any) => message.error('删除失败：' + (err?.response?.data?.detail || err.message)),
+  })
+
+  const batchDeleteRunsMut = useMutation({
+    mutationFn: (ids: string[]) => batchDeleteOutlineRuns(ids),
+    onSuccess: (res) => {
+      message.success(`已删除 ${res.data?.deleted_count || 0} 条任务记录`)
+      setSelectedRunKeys([])
+      qc.invalidateQueries({ queryKey: ['outlineRuns'] })
+    },
+    onError: (err: any) => message.error('批量删除失败：' + (err?.response?.data?.detail || err.message)),
   })
 
   // 章节查看：先取该大纲的科目列表，再按选中科目取章节树
@@ -128,12 +199,12 @@ const OutlineList = () => {
       message.error('仅支持 PDF / DOCX / PPTX 文件')
       return Upload.LIST_IGNORE
     }
-    setParsed(null)
+    setSplitSubjects(null)
     uploadMut.mutate(file)
     return false
   }
 
-  const columns = [
+  const outlineColumns = [
     { title: '名称', dataIndex: 'name' },
     { title: '年份', dataIndex: 'year', width: 80 },
     { title: '版本', dataIndex: 'version', width: 100 },
@@ -168,6 +239,64 @@ const OutlineList = () => {
     },
   ]
 
+  const runColumns = [
+    {
+      title: '文件名', dataIndex: 'outline_name', ellipsis: true,
+      render: (name: string, r: OutlineRunListItem) => name || r.file_name || '-',
+    },
+    {
+      title: '状态', dataIndex: 'status', width: 100,
+      render: (s: string) => {
+        const cfg = runStatusConfig[s] || { color: 'default', text: s }
+        return <Tag color={cfg.color}>{cfg.text}</Tag>
+      },
+    },
+    {
+      title: '进度', key: 'progress', width: 200,
+      render: (_: unknown, r: OutlineRunListItem) => {
+        if (r.status === 'done') return <Tag color="success">完成</Tag>
+        if (r.status === 'failed') return <Tag color="error">{r.error_detail?.slice(0, 50) || '失败'}</Tag>
+        return (
+          <Space direction="vertical" size={0} style={{ width: '100%' }}>
+            <span style={{ fontSize: 12, color: '#888' }}>{r.stage_detail || r.current_stage || '处理中...'}</span>
+            {r.total_subjects > 0 && (
+              <Progress
+                percent={Math.round((r.processed_subjects / r.total_subjects) * 100)}
+                size="small"
+                status="active"
+                format={() => `${r.processed_subjects}/${r.total_subjects}`}
+              />
+            )}
+          </Space>
+        )
+      },
+    },
+    {
+      title: '创建时间', dataIndex: 'created_at', width: 170,
+      render: (v: string) => v ? new Date(v).toLocaleString('zh-CN') : '-',
+    },
+    {
+      title: '操作', key: 'actions', width: 160,
+      render: (_: unknown, r: OutlineRunListItem) => (
+        <Space>
+          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => viewRunDetail(r)}>
+            详情
+          </Button>
+          <Popconfirm
+            title="确认删除此任务记录？"
+            description="仅删除任务记录，不影响已入库的大纲数据"
+            onConfirm={() => deleteRunMut.mutate(r.id)}
+            okText="确认"
+            cancelText="取消"
+          >
+            <Button type="link" size="small" danger icon={<DeleteOutlined />}
+              loading={deleteRunMut.isPending && deleteRunMut.variables === r.id}>删除</Button>
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ]
+
   return (
     <div>
       <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -175,13 +304,46 @@ const OutlineList = () => {
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setImportModalOpen(true)}>导入大纲</Button>
       </div>
 
-      <Card>
-        <Table dataSource={outlines} columns={columns} rowKey="id" pagination={false} size="small" />
+      {/* 已入库大纲列表 */}
+      <Card title="已入库大纲" style={{ marginBottom: 16 }}>
+        <Table dataSource={outlines} columns={outlineColumns} rowKey="id" pagination={false} size="small" />
       </Card>
 
-      {/* 导入大纲弹窗：PDF 解析 → LLM 拆分四门课预览 → 入库 */}
+      {/* 入库任务列表 */}
+      <Card
+        title="入库任务"
+        extra={
+          selectedRunKeys.length > 0 && (
+            <Popconfirm
+              title={`确认删除选中的 ${selectedRunKeys.length} 条任务记录？`}
+              onConfirm={() => batchDeleteRunsMut.mutate(selectedRunKeys as string[])}
+              okText="确认"
+              cancelText="取消"
+            >
+              <Button size="small" danger loading={batchDeleteRunsMut.isPending}>
+                批量删除 ({selectedRunKeys.length})
+              </Button>
+            </Popconfirm>
+          )
+        }
+      >
+        <Table
+          dataSource={runs}
+          columns={runColumns}
+          rowKey="id"
+          size="small"
+          pagination={false}
+          rowSelection={{
+            selectedRowKeys: selectedRunKeys,
+            onChange: (keys) => setSelectedRunKeys(keys),
+          }}
+          locale={{ emptyText: '暂无入库任务' }}
+        />
+      </Card>
+
+      {/* 导入大纲弹窗 / 查看任务详情弹窗 */}
       <Modal
-        title="导入大纲（PDF + LLM 拆分）"
+        title={detailRunId ? `任务详情 - ${parsedFileName}` : "导入大纲（PDF + LLM 拆分）"}
         open={importModalOpen}
         onCancel={resetImport}
         footer={null}
@@ -189,50 +351,38 @@ const OutlineList = () => {
         destroyOnClose
       >
         <Space direction="vertical" style={{ width: '100%' }} size="middle">
-          <Alert
-            type="info"
-            showIcon
-            message="上传 408 大纲 PDF，自动拆分四门课"
-            description="系统先用 MinerU 全文解析，再让 LLM 按四门课拆出考察目标 + 多层章节树（含原文考点）。复习指导在入库后单独生成。支持 PDF / DOCX / PPTX。"
-          />
+          {/* 导入模式下显示上传控件 */}
+          {!detailRunId && (
+            <>
+              <Alert
+                type="info"
+                showIcon
+                message="上传 408 大纲 PDF，自动拆分四门课"
+                description="系统先用 MinerU 全文解析，再让 LLM 按四门课拆出考察目标 + 多层章节树（含原文考点）。复习指导在入库后单独生成。支持 PDF / DOCX / PPTX。"
+              />
 
-          <Dragger
-            beforeUpload={beforeUpload}
-            showUploadList={false}
-            accept=".pdf,.docx,.pptx"
-            disabled={uploadMut.isPending}
-          >
-            <p className="ant-upload-drag-icon"><InboxOutlined /></p>
-            <p className="ant-upload-text">点击或拖拽大纲文件到此处</p>
-            <p className="ant-upload-hint">解析 + LLM 拆分较耗时，可能需要数分钟，请耐心等待</p>
-          </Dragger>
-
-          {uploadMut.isPending && (
-            <Card>
-              <Space direction="vertical" style={{ width: '100%', textAlign: 'center' }} size="large">
-                <Spin size="large" />
-                <div>
-                  <h3 style={{ marginBottom: 8 }}>正在处理大纲文件...</h3>
-                  <Space direction="vertical" size="small">
-                    <Text type="secondary">✓ 步骤 1/3: 文件上传</Text>
-                    <Text type="secondary">⏳ 步骤 2/3: MinerU 解析 PDF（约 1-2 分钟）</Text>
-                    <Text type="secondary">⏳ 步骤 3/3: LLM 拆分四门课（约 2-5 分钟）</Text>
-                  </Space>
-                </div>
-                <Alert
-                  type="warning"
-                  showIcon
-                  message="请耐心等待"
-                  description="整个过程可能需要 3-7 分钟，请不要关闭此窗口。如遇超时，可能是内容过长，系统会自动重试。"
-                />
-              </Space>
-            </Card>
+              <Dragger
+                beforeUpload={beforeUpload}
+                showUploadList={false}
+                accept=".pdf,.docx,.pptx"
+                disabled={uploadMut.isPending}
+              >
+                <p className="ant-upload-drag-icon"><InboxOutlined /></p>
+                <p className="ant-upload-text">点击或拖拽大纲文件到此处</p>
+                <p className="ant-upload-hint">解析 + LLM 拆分较耗时，可能需要数分钟。任务启动后可在下方任务列表中查看进度。</p>
+              </Dragger>
+            </>
           )}
 
-          {parsed && (parsed.subjects?.length || 0) > 0 && (
-            <Card size="small" title={`拆分预览（${parsed.file_name}，${parsed.subjects.length} 门课）`}>
+          {/* 详情模式下显示任务状态提示 */}
+          {detailRunId && !splitSubjects && (
+            <Alert type="info" showIcon message="该任务尚未产出拆分结果，或拆分已失败" />
+          )}
+
+          {splitSubjects && splitSubjects.length > 0 && (
+            <Card size="small" title={`拆分预览（${parsedFileName}，${splitSubjects.length} 门课）`}>
               <Tabs
-                items={parsed.subjects.map((s) => ({
+                items={splitSubjects.map((s) => ({
                   key: s.subject_id,
                   label: `${s.subject_name}（${s.total_chapters}）`,
                   children: (
@@ -257,11 +407,11 @@ const OutlineList = () => {
             </Card>
           )}
 
-          {parsed && (parsed.subjects?.length || 0) === 0 && (
+          {splitSubjects && splitSubjects.length === 0 && (
             <Alert type="warning" message="LLM 未拆分出任何科目，请检查大纲内容或 outline_llm 配置" />
           )}
 
-          {parsed && (parsed.subjects?.length || 0) > 0 && (
+          {splitSubjects && splitSubjects.length > 0 && (
             <Card size="small" title="入库设置（四门课一次入库）">
               <Form form={form} layout="vertical" onFinish={(v) => importMut.mutate(v)}>
                 <Space wrap>
