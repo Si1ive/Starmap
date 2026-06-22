@@ -659,7 +659,7 @@ class LocalParserServiceClient:
         self.timeout_seconds = timeout_seconds
         self.processing_window_size = processing_window_size
 
-    def parse(self, file_path: str) -> ParsedDocumentResult:
+    def parse(self, file_path: str, task_id: Optional[str] = None) -> ParsedDocumentResult:
         if not self.endpoint:
             raise ParserUnavailableError(
                 self.name,
@@ -677,6 +677,7 @@ class LocalParserServiceClient:
                             if self.name == "mineru" and self.processing_window_size
                             else {}
                         ),
+                        **({"task_id": task_id} if task_id else {}),
                     },
                     files={"file": (Path(file_path).name, file_obj, "application/pdf")},
                     timeout=self.timeout_seconds,
@@ -708,6 +709,20 @@ class LocalParserServiceClient:
             payload=normalized,
             fallback_metadata={"source_file": file_path, "service_endpoint": self.endpoint},
         )
+
+    def fetch_progress(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """查询解析进度（主 backend 轮询用），失败返回 None 不抛异常。"""
+        if not self.endpoint or not task_id:
+            return None
+        try:
+            response = requests.get(f"{self.endpoint}/progress/{task_id}", timeout=5)
+            if response.status_code != 200:
+                return None
+            payload = response.json()
+            data = payload.get("data") if isinstance(payload, dict) else None
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
 
 
 class RemoteParserServiceClient:
