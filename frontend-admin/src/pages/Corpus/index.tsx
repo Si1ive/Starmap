@@ -15,6 +15,7 @@ import {
   Steps,
   Alert,
   Upload,
+  Progress,
 } from 'antd'
 import {
   FolderOpenOutlined,
@@ -35,6 +36,7 @@ import {
   listCorpusFiles,
   scanCorpusFiles,
   parseCorpusFile,
+  getParseRunDetail,
   extractDocumentSections,
   mapDocumentChapters,
   extractDocumentEntities,
@@ -44,7 +46,7 @@ import {
   batchDeleteCorpusFiles,
   uploadCorpusFiles,
 } from '@/api'
-import type { CorpusFile, DownloadedFile } from '@/types'
+import type { CorpusFile, DownloadedFile, ParseRun } from '@/types'
 
 const { Search } = Input
 
@@ -93,6 +95,7 @@ const CorpusPage = () => {
   const [pipelineOpen, setPipelineOpen] = useState(false)
   const [pipelineDocId, setPipelineDocId] = useState<string | null>(null)
   const [pipelineSteps, setPipelineSteps] = useState<Record<string, 'wait' | 'process' | 'finish' | 'error'>>({})
+  const [parseProgress, setParseProgress] = useState<ParseRun | null>(null)
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
   const [form] = Form.useForm()
 
@@ -203,9 +206,30 @@ const CorpusPage = () => {
     return nextSteps
   }
 
+  // 轮询解析任务直到完成，返回 document_id；过程中更新 parseProgress
+  const pollParseRun = async (runId: string): Promise<string> => {
+    const MAX_ATTEMPTS = 600 // 最多轮询 20 分钟（2s 一次）
+    for (let i = 0; i < MAX_ATTEMPTS; i++) {
+      const res = await getParseRunDetail(runId)
+      const run = res.data
+      setParseProgress(run)
+
+      if (run.status === 'success') {
+        if (!run.document_id) throw new Error('解析成功但未获取到文档ID')
+        return run.document_id
+      }
+      if (run.status === 'failed') {
+        throw new Error(run.error_detail || '解析失败')
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2000))
+    }
+    throw new Error('解析超时')
+  }
+
   const runPipeline = async (fileId: string, documentId?: string) => {
     setPipelineOpen(true)
     setPipelineDocId(documentId || null)
+    setParseProgress(null)
     const steps = resetPipeline()
 
     try {
@@ -213,13 +237,19 @@ const CorpusPage = () => {
       steps.parse = 'process'
       setPipelineSteps({ ...steps })
 
+      // 派发解析任务，拿到 run_id 后轮询进度
       const parseRes = await parseCorpusFile(fileId, { parse_mode: 'primary' })
-      const docId = parseRes.data?.document_id || documentId
+      const runId = parseRes.data?.run_id
+      let docId = documentId
+      if (runId) {
+        docId = await pollParseRun(runId)
+      }
       if (!docId) throw new Error('未获取到文档ID')
 
       steps.parse = 'finish'
       steps.sections = 'process'
       setPipelineDocId(docId)
+      setParseProgress(null)
       setPipelineSteps({ ...steps })
 
       await extractDocumentSections(docId)
@@ -239,7 +269,7 @@ const CorpusPage = () => {
       message.success('入库处理完成')
       queryClient.invalidateQueries({ queryKey: ['corpusFiles'] })
     } catch (err: any) {
-      const detail = err?.response?.data?.detail
+      const detail = err?.response?.data?.detail || err.message
       if (typeof detail === 'string' && (detail.includes('已成功解析') || detail.includes('正在解析中'))) {
         message.info(detail)
         setPipelineOpen(false)
@@ -250,7 +280,7 @@ const CorpusPage = () => {
       const currentKey = Object.keys(steps).find((key) => steps[key] === 'process')
       if (currentKey) steps[currentKey] = 'error'
       setPipelineSteps({ ...steps })
-      message.error(detail || err.message || '处理失败')
+      message.error(detail || '处理失败')
     }
   }
 
@@ -642,9 +672,29 @@ const CorpusPage = () => {
           size="small"
           items={PIPELINE_STEPS.map((step) => {
             const status = pipelineSteps[step.key] || 'wait'
+            // parse 步骤进行中时，展示解析进度详情
+            let description: React.ReactNode = undefined
+            if (step.key === 'parse' && status === 'process' && parseProgress) {
+              description = (
+                <div style={{ marginTop: 4 }}>
+                  {parseProgress.total_pages && parseProgress.total_pages > 0 ? (
+                    <Progress
+                      percent={parseProgress.progress || 0}
+                      size="small"
+                      status="active"
+                      format={() => `${parseProgress.current_page || 0}/${parseProgress.total_pages} 页`}
+                    />
+                  ) : null}
+                  {parseProgress.stage_detail && (
+                    <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>{parseProgress.stage_detail}</div>
+                  )}
+                </div>
+              )
+            }
             return {
               title: step.title,
               status,
+              description,
               icon: status === 'process' ? <LoadingOutlined /> : undefined,
             }
           })}
