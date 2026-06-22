@@ -543,7 +543,7 @@ class OutlineImportService:
             # 全部科目都失败
             error_summary = "; ".join([f"{s.get('subject_name')}: {s.get('error', '章节为空')}" for s in failed_subjects])
             run.status = "failed"
-            run.error_message = f"所有科目拆分均失败。错误: {error_summary}"
+            run.error_detail = f"所有科目拆分均失败。错误: {error_summary}"
             run.completed_at = datetime.utcnow()
             await self.db.commit()
             raise ValueError(f"所有科目拆分均失败，无法入库。错误: {error_summary}")
@@ -565,7 +565,7 @@ class OutlineImportService:
                 continue
 
             # 更新当前处理科目
-            run.current_subject = subject_name
+            run.current_subject_name = subject_name
             await self.db.flush()
 
             try:
