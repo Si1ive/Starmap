@@ -47,9 +47,11 @@ class OutlineLLMClient(BaseLLMClient):
     def __init__(self, config: Dict[str, Any]):
         config = config or {}
         super().__init__(config)
-        # 大纲拆分文本长，token/超时给更大默认值
-        self.max_tokens = int(config.get("max_tokens", 16000))
-        self.timeout_seconds = int(config.get("timeout_seconds", 180))
+        # 如果配置中未显式设置，使用大纲拆分的合理默认值
+        if not config.get("max_tokens"):
+            self.max_tokens = 16000
+        if not config.get("timeout_seconds"):
+            self.timeout_seconds = 180
 
 
 def _repair_truncated_json(s: str) -> str:
@@ -349,6 +351,8 @@ keywords 要求（5-10个）：
 
 # 每批最多 12 个叶子节点（保守估计每节点 300 token 输出 = 3600，远低于 16K 上限）
 _BATCH_SIZE = 12
+# 默认最大并发数（可通过 outline_llm.max_concurrency 配置覆盖）
+_DEFAULT_MAX_CONCURRENCY = 3
 
 
 class OutlineLLMService:
@@ -498,7 +502,7 @@ class OutlineLLMService:
 
                 # 更新当前处理的科目
                 run.current_subject_name = subject.name
-                run.processed_subjects = idx
+                run.processed_subjects = idx + 1
                 run.stage_detail = f"正在拆分《{subject.name}》({idx+1}/{len(segments)})..."
                 await self.db.commit()
 
@@ -613,6 +617,15 @@ class OutlineLLMService:
         """分批并发调用 LLM 为叶子节点生成 enhanced_description + keywords。"""
         import asyncio
 
+        # 从配置读取最大并发数
+        runtime_settings = await SystemSettingsService(self.db).load()
+        cfg = runtime_settings.get("outline_llm", {})
+        max_concurrency = int(cfg.get("max_concurrency", _DEFAULT_MAX_CONCURRENCY))
+        if max_concurrency < 1:
+            max_concurrency = _DEFAULT_MAX_CONCURRENCY
+
+        semaphore = asyncio.Semaphore(max_concurrency)
+
         # 按 _BATCH_SIZE 分片
         batches = [
             leaf_nodes[i:i + _BATCH_SIZE]
@@ -620,37 +633,38 @@ class OutlineLLMService:
         ]
 
         async def _enhance_one_batch(batch: List[Dict[str, Any]], batch_idx: int) -> None:
-            items = [
-                {"index": j, "name": node["name"], "description": node.get("description") or ""}
-                for j, node in enumerate(batch)
-            ]
-            items_json = json.dumps(items, ensure_ascii=False, indent=2)
-            prompt = _BATCH_ENHANCE_PROMPT.format(
-                subject_name=subject_name, items_json=items_json
-            )
-            try:
-                text = await client.chat(prompt, purpose=f"大纲增强-{subject_name}-批{batch_idx+1}")
-                data = _extract_json(text)
-                enhancements = data.get("items") if isinstance(data, dict) else data
-                if not isinstance(enhancements, list):
-                    logger.warning("增强返回格式不正确，跳过此批", batch_idx=batch_idx)
-                    return
-                # 写回叶子节点
-                for item in enhancements:
-                    if not isinstance(item, dict):
-                        continue
-                    idx = item.get("index")
-                    if idx is None or idx >= len(batch):
-                        continue
-                    batch[idx]["enhanced_description"] = str(item.get("enhanced_description") or "").strip()[:1000]
-                    kw = item.get("keywords")
-                    if isinstance(kw, list):
-                        batch[idx]["keywords"] = [str(k).strip() for k in kw if k][:50]
-                logger.info("批量增强完成", batch_idx=batch_idx, nodes=len(batch))
-            except Exception as e:
-                logger.warning("某批增强失败，跳过", batch_idx=batch_idx, error=str(e))
+            async with semaphore:
+                items = [
+                    {"index": j, "name": node["name"], "description": node.get("description") or ""}
+                    for j, node in enumerate(batch)
+                ]
+                items_json = json.dumps(items, ensure_ascii=False, indent=2)
+                prompt = _BATCH_ENHANCE_PROMPT.format(
+                    subject_name=subject_name, items_json=items_json
+                )
+                try:
+                    text = await client.chat(prompt, purpose=f"大纲增强-{subject_name}-批{batch_idx+1}")
+                    data = _extract_json(text)
+                    enhancements = data.get("items") if isinstance(data, dict) else data
+                    if not isinstance(enhancements, list):
+                        logger.warning("增强返回格式不正确，跳过此批", batch_idx=batch_idx)
+                        return
+                    # 写回叶子节点
+                    for item in enhancements:
+                        if not isinstance(item, dict):
+                            continue
+                        idx = item.get("index")
+                        if idx is None or idx >= len(batch):
+                            continue
+                        batch[idx]["enhanced_description"] = str(item.get("enhanced_description") or "").strip()[:1000]
+                        kw = item.get("keywords")
+                        if isinstance(kw, list):
+                            batch[idx]["keywords"] = [str(k).strip() for k in kw if k][:50]
+                    logger.info("批量增强完成", batch_idx=batch_idx, nodes=len(batch))
+                except Exception as e:
+                    logger.warning("某批增强失败，跳过", batch_idx=batch_idx, error=str(e))
 
-        # 并发执行所有批次
+        # 并发执行所有批次（受 semaphore 限流）
         tasks = [_enhance_one_batch(batch, i) for i, batch in enumerate(batches)]
         await asyncio.gather(*tasks)
 

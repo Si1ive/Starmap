@@ -523,14 +523,14 @@ class OutlineImportService:
         if not subjects:
             raise ValueError("LLM 拆分结果为空，无法入库")
 
-        # 创建任务记录
+        # 创建任务记录（status 用 "processing"，与 DB ENUM 一致）
         run = OutlineIngestionRun(
             id=_gen_id(),
             outline_name=name,
             year=year,
             version=version,
             total_subjects=len(subjects),
-            status="running",
+            status="processing",
         )
         self.db.add(run)
         await self.db.flush()

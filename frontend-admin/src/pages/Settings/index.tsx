@@ -97,6 +97,11 @@ const LlmConfigTab = ({
       <Form.Item name={[kind, 'timeout_seconds']} label="请求超时（秒）">
         <InputNumber min={5} max={600} style={{ width: '100%' }} />
       </Form.Item>
+      {kind === 'outline_llm' && (
+        <Form.Item name={[kind, 'max_concurrency']} label="增强批次最大并发数" tooltip="控制大纲拆分第2轮批量增强时的并发 LLM 请求数，避免触发限流。默认 3，可根据服务商限流策略调整">
+          <InputNumber min={1} max={20} style={{ width: '100%' }} />
+        </Form.Item>
+      )}
       <Form.Item name={[kind, 'system_prompt']} label="系统提示词">
         <TextArea rows={4} placeholder="输入该用途专用的系统提示词" />
       </Form.Item>
