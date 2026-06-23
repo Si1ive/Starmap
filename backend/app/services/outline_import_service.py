@@ -639,7 +639,7 @@ class OutlineImportService:
         if len(failed_subjects) > 0:
             run.status = "partial_success"
         else:
-            run.status = "completed"
+            run.status = "done"
         run.completed_at = datetime.utcnow()
 
         await self.db.commit()
