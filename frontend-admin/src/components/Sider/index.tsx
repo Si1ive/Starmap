@@ -21,6 +21,7 @@ import {
   BranchesOutlined,
   ThunderboltOutlined,
   ApartmentOutlined,
+  ShareAltOutlined,
 } from '@ant-design/icons'
 import { useAdminStore } from '@/store'
 import { usePermission } from '@/hooks/usePermission'
@@ -43,6 +44,7 @@ const menuItems = [
       { key: '/admin/review/questions', label: '题目审核' },
       { key: '/admin/review/relations', icon: <BranchesOutlined />, label: '关系审核' },
       { key: '/admin/review/chapter-relations', icon: <ApartmentOutlined />, label: '考点关联审核' },
+      { key: '/admin/review/chapter-relation-graph', icon: <ShareAltOutlined />, label: '考点关联图谱' },
     ],
   },
   { key: '/admin/search', icon: <SearchOutlined />, label: '检索调试' },
