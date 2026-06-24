@@ -1,9 +1,15 @@
 # 大纲考点检索与跨章节关联设计
 
-> 版本：v1.2  
-> 日期：2026-06-24  
-> 状态：设计稿（已校验修正，已加入大纲辅助 Query 扩展）  
+> 版本：v1.3  
+> 日期：2026-06-25  
+> 状态：部分已实现（详见第 7 节 Implemented / Open Decisions）  
 > 读者：Backend / Data
+
+> **v1.3 关键变更**：确立 `ChapterRelation` 表为跨章「语义关联」的唯一真相源。
+> 结构派生关联（同章兄弟 / 父 / 子）改为在线计算、不入表。
+> `expand_related_chapters()` 由「在线编排器」重新定位为「离线构建器」——
+> 它的产出落入 `ChapterRelation` 并走审核，检索时只读 `review_status="approved"` 的关系。
+> 详见 5.6、6.3。
 
 ---
 
@@ -50,16 +56,14 @@
     → QuestionKnowledgeLink 反查关联题目
 ```
 
-### 2.3 当前代码与设计的不一致——必须先修
+### 2.3 前置修复（已完成）
 
-`segment_service.py:288` 已经写入了 `entity_type="canonical_chapter"` 的 segment，但 `RetrievalSegment.entity_type` 的 SQLAlchemy Enum 定义为 `Enum("knowledge_point", "question")`（`mysql_models.py:1327`）。在 MySQL strict mode 下这会导致插入失败。
+以下两个基础设施缺口在 v1.2 设计时尚未修复，现已落地，记录于此供追溯：
 
-同理，`ChapterLinkService._match_by_vector_search` 在 Qdrant 中按 `entity_type="canonical_chapter"` 过滤，但 `qdrant.py:112` 的 `_PAYLOAD_INDEXES` 没有包含 `entity_type` 字段的索引。数据量增大后每次检索都会做 payload 全扫描。
+1. `RetrievalSegment.entity_type` Enum 已扩展为 `Enum("knowledge_point", "question", "canonical_chapter")`（`mysql_models.py:1380`），考点 segment 可正常写入。
+2. Qdrant `_PAYLOAD_INDEXES` 已包含 `"entity_type": PayloadSchemaType.KEYWORD`（`qdrant.py:113`），按 `entity_type` 过滤不再全表扫描。
 
-**这两个是实施本文档方案的前置条件，必须在任何其他开发之前修复：**
-
-1. `mysql_models.py:1327` → `Enum("knowledge_point", "question", "canonical_chapter")`
-2. `qdrant.py:112` 的 `_PAYLOAD_INDEXES` → 新增 `"entity_type": PayloadSchemaType.KEYWORD`
+后续章节默认这两项已就绪。
 
 ---
 
@@ -226,9 +230,13 @@ Phase 1: 内容检索（用扩展后的 query + 结构化过滤）
   └── 合并排序
 
 Phase 2: 考点展开（基于 Phase 0 定位的考点）
-  ├── 同章兄弟考点（Layer 1）
-  └── 跨章关联考点（Layer 2 / Layer 3）
+  ├── scope_expansion（在线计算，见 5.7）
+  └── semantic_relations（读 ChapterRelation 已审核行，见 5.7）
 ```
+
+> **dense / sparse 应分别用扩展 query 和原始 query。** dense 检索吃 `expanded_query`（弥补短查询语义稀疏），sparse 检索应保留**原始 query**——把考点的 `enhanced_description`（上百字学科文本）灌进 LIKE 的关键词集合会引入大量噪声词，稀释精确匹配。
+>
+> ⚠️ **实现差距（Open Decision）**：当前 `RetrievalService.search_with_outline_expansion`（`retrieval_service.py:130`）把 `expanded_query` 同时喂给了 dense 和 sparse 两路，与此处设计不符。收口时应让 sparse 路回退到原始 query（或仅叠加考点 keywords，不叠加 enhanced_description）。另外建议 chapter filter 只取高置信度 top-1/top-2，而非全部 top-k，避免多考点命中时把候选集扩成混杂主题。
 
 #### 实现
 
@@ -420,7 +428,15 @@ AND id != :chapter_id;
 -- Step 5: 兄弟考点下的题目和知识点（重复 Step 2-3）
 ```
 
-**结论：这条链路完全可以用纯结构化检索完成。**
+**结论：这条链路可以用纯结构化检索完成——但"可行"是有前提的，不是无条件成立。**
+
+纯结构化链路的可行性完全依赖 link 表的质量，以下三个前提必须同时满足，否则只是理论可行而非工程可行：
+
+1. **`QuestionChapterLink` 和 `KnowledgePointChapterLink` 足够完整**——题目/知识点都已建立考点关联，缺链就漏召回；
+2. **审核流已把主章节（`is_primary`）修准**——主考点选错，整条展开都偏；
+3. **删除/重审会同步清理旧 link**——题目改判考点后，旧链不清理会召回到错误考点下。
+
+冷启动期这三条往往都不满足，此时结构化链路需要 3.6 节的大纲 Query 扩展和向量检索兜底，不能单独支撑。
 
 ### 4.3 三个坑及解法
 
@@ -558,8 +574,10 @@ async def expand_chapter_scope(
 
 ### 4.4 结构化检索的推荐实现
 
+> **命名说明（Open Decision）**：当前实现叫 `retrieve_by_exam_point()`（`outline_retrieval_service.py:264`），但它的入参其实是 `question_id`，名实不符。一旦后续要支持"用户直接命中考点、不经过题目"的入口，这层抽象会卡住。建议拆成两个函数：`retrieve_by_question(question_id)`（先 题→考点 再展开）和 `retrieve_by_chapters(chapter_ids)`（直接从考点展开），前者调用后者。下面的示例沿用现名，但应理解为 `retrieve_by_question` 的逻辑。
+
 ```python
-async def retrieve_by_exam_point(
+async def retrieve_by_exam_point(  # → 建议更名 retrieve_by_question
     db: AsyncSession,
     question_id: str,
     expand_to_siblings: bool = True,
@@ -635,36 +653,38 @@ async def retrieve_by_exam_point(
 
 **cosine similarity 是信号，不是关系。**
 
-### 5.2 四层关联策略
+### 5.2 关联在「考点」这一层建立——不在知识点层
 
-跨章节考点关联不能靠单一手段，需要四层策略叠加，从精确到模糊逐层降级：
+> **v1.3 重大决策**：跨章关联**只在考点（CanonicalChapter）层建立**，不再依赖知识点关系图（`KnowledgeRelation`）做桥接。
+
+**为什么砍掉知识点级关联**：
+
+1. **展示粒度错配**：用户理解世界的单位是"考点/知识块"（如"Cache 的地址映射"），不是原子知识点。"考点A ↔ 考点B + reason"比"知识点x ↔ 知识点y"更可读，关联理由也更完整。
+2. **底层数据不可信**：`KnowledgeRelation` 的关系类型（`common_confusion`/`contrast_with` 等）当前是**字面规则 + N² embedding 堆出来的**（`relation_service.py:226` 的 `_detect_relations` 靠标题字符级 Jaccard 和关键词命中，`_build_semantic_edges` 靠两两 cosine），没有语义理解，relation_type 标签准确性很低，不能直接展示给用户。
+3. **N² 成本**：知识点级关系是全库两两比对（两遍 N² 双循环），知识点上千时 CPU 成本失控；考点数量小一两个数量级，且关联用 LLM 挑选（O(N) 调用），成本可控。
+4. **冗余**：拿到考点后，顺 `KnowledgePointChapterLink` / `QuestionChapterLink` 就能 JOIN 出该考点下所有知识点和题目。考点关联已经间接覆盖了"相关知识点"，不需要再单独维护知识点关联。
+
+**保留的考点级关联来源**（按可靠性排序，都落 `ChapterRelation` 表）：
 
 ```
-Layer 1: 结构化关联（确定性高，覆盖面窄）
-  → 同 parent_id 的兄弟考点（零误判，无法跨学科）
-  → 同 subject_id 的考点树遍历
+来源 1: scope expansion —— 结构派生（不入表，在线算，见 5.7）
+  → 同 parent_id 的兄弟考点 / 父考点 / 子考点
+  → 零误判，但无法跨学科
 
-Layer 2: 知识点关系图桥接（确定性中，覆盖面中）
-  → 考点A → KnowledgePointChapterLink → 知识点X
-  → 考点B → KnowledgePointChapterLink → 知识点Y
-  → KnowledgeRelation(X, Y) 存在边
-  → ∴ 考点A 与 考点B 存在间接关联
-  → 注意：系统初期大部分考点尚无关联知识点，需兜底
+来源 2: LLM 显式交叉引用（source_type="llm"，主力）
+  → 大纲导入时，基于全科目考点目录标注 cross_references
+  → 输出 target_chapter_id（可精确 JOIN）+ relation_type + reason
+  → LLM 单对判断关系（易混/前置/对比）准确率高，是主力来源
 
-Layer 3: LLM 显式交叉引用（确定性高，覆盖面由 prompt 决定）
-  → 在生成 enhanced_description 时标注 cross_references
-  → 输入中包含全科目考点摘要目录，LLM 基于实际考点列表标注
-  → 输出 chapter_id（非人读字符串），可精确 JOIN
-  → 包含关联理由（reason），不只是相似度分数
-
-Layer 4: Embedding 语义相似度（确定性低，覆盖面广）
-  → 作为建关系的信号，不直接作为检索结果
-  → 超阈值 → 自动创建 KnowledgeRelation（source_type="embedding"）
-  → 待人工审核
-  → 当 Layer 2 因冷启动无法产出结果时，可降级为直接按章节 embedding 相似度排序
+来源 3: Embedding 语义相似度（source_type="embedding"，兜底）
+  → 考点 segment 两两 cosine，超阈值建候选边
+  → 仅作冷启动兜底：LLM 标注尚未覆盖时填充
+  → 误报较高，需审核或 LLM 二次确认
 ```
 
-### 5.3 Layer 1：结构化关联
+> 关于 KnowledgeRelation / knowledge_bridge 的移除，见 5.4。
+
+### 5.3 来源 1：结构派生（scope expansion）
 
 已在 4.3 节坑 2 中详述。核心逻辑：
 
@@ -672,159 +692,29 @@ Layer 4: Embedding 语义相似度（确定性低，覆盖面广）
 - 同 `subject_id` + 同 `level` → 同级考点（关联性中等）
 - 父子关系 → 包含关系（子考点是父考点的细化）
 
-这一层的优势是**零误判**（结构化数据不会错），劣势是**无法跨学科**。
+这一层的优势是**零误判**（结构化数据不会错），劣势是**无法跨学科**。它属于 scope expansion，**永远在线计算、不入 ChapterRelation 表**（见 5.7）。
 
-### 5.4 Layer 2：知识点关系图桥接
+### 5.4 为什么移除知识点级关联（knowledge_bridge）
 
-这是当前架构下最重要的跨章节关联机制。
+v1.2 设计了一条"知识点关系图桥接"路径：考点A → 知识点X →（KnowledgeRelation 边）→ 知识点Y → 考点B，以此推断考点A 与 考点B 关联。本版**移除这条路径**，理由如下。
 
-**逻辑链**：
+**根因：底层的 `KnowledgeRelation` 质量不可信。** 核查 `RelationService`（`relation_service.py`）后确认，知识点之间的关系边是这样建出来的：
 
-```
-考点A（计组-Cache）
-  → KnowledgePointChapterLink → 知识点"Cache 地址映射"
-考点B（OS-虚拟内存）
-  → KnowledgePointChapterLink → 知识点"虚拟内存地址映射"
+- `_detect_relations`（`relation_service.py:226`）：纯**字面规则**。`common_confusion` 靠标题的字符级 Jaccard 相似度（`_string_similarity`，`:293` 按单字算交并比）；`contrast_with` 靠内容里出现"vs/对比/区别"等词；`prerequisite` 靠内容出现"前置/先修"且提到对方标题。没有任何语义理解。
+- `_build_semantic_edges`（`relation_service.py:164`）：**全库 N² 两两 embedding cosine**，超 0.82 建 `similar_to` 边。不传 `subject_id` 时是全库所有知识点两比对。
 
-KnowledgeRelation(
-  source="Cache 地址映射",
-  target="虚拟内存地址映射",
-  relation_type="similar_to",
-  evidence_text="语义相似度 0.88",
-  source_type="embedding"
-)
+这导致两个硬伤：
 
-∴ 考点A 与 考点B 存在间接关联（通过知识点桥接）
-```
+1. **关系类型标签基本是假的。** "标题字面像"不等于"易混淆"，"文中有'区别'二字"不等于"与对方构成对比"。展示给用户的 `relation_type` 不可信。
+2. **N² 成本与噪声。** `_build_semantic_edges` 在 N 上千时做 N² 次纯 Python cosine，CPU 成本陡增；且大量"词面相似但实际无关"的误报涌入审核队列，这正是审核成本爆炸的真正来源。
 
-**冷启动问题**：系统初期，大部分考点还没有关联知识点（知识点尚未入库或尚未建立关联），BFS 图遍历的起点集合 S 为空，Layer 2 将返回空。此时应跳过 Layer 2，直接使用 Layer 3（LLM cross_references）和 Layer 4（embedding 直接相似度）作为跨章关联来源。
+**用考点级关联替代，而非修复它。** 与其投入成本修一条劣质的知识点关系图，不如直接在**考点层面**建关联——考点数量远少于知识点（百级 vs 千级），且 LLM 在考点层面标注关联（5.5 节）质量高、可解释。一旦有了考点级关联，用户要看"相关内容"时，顺着考点的 link 表就能精确拿到对应知识点和题目（4.4 节），不需要知识点之间再单独连边。
 
-**实现**（已修正 N+1 查询——原版在 BFS 循环内逐节点查询关系，现改为批量查询）：
+> **决策**：`KnowledgeRelation` 表和 `find_cross_chapter_relations()` 作为**跨章关联来源**被移除。跨章关联统一收敛到考点级（`ChapterRelation`）。`search_with_relations` 的知识点扩展功能一并废弃——它价值低且建立在劣质边上。
 
-```python
-async def find_cross_chapter_relations(
-    db: AsyncSession,
-    chapter_id: str,
-    max_depth: int = 2,
-    min_confidence: float = 0.7,
-) -> List[CrossChapterRelation]:
-    """
-    通过知识点关系图找到与指定考点关联的其他考点。
+### 5.5 主来源：LLM 显式交叉引用
 
-    算法：
-    1. 考点 → KnowledgePointChapterLink → 该考点下的所有知识点（起点集合 S）
-    2. 如果 S 为空（冷启动），直接返回空列表
-    3. 从 S 出发，沿 KnowledgeRelation 边做 BFS（max_depth 跳），每层批量查询
-    4. 收集到达的知识点集合 T
-    5. T → KnowledgePointChapterLink → 关联的考点集合 C
-    6. 排除原考点，按关系路径强度排序
-
-    性能：O(levels × batch_size) 次 SQL，每层 1 次批量查询，
-    而非 O(Σ|frontier|) 次逐节点查询。
-    """
-    from sqlalchemy import or_
-
-    # Step 1: 考点 → 知识点（批量）
-    kp_links = (await db.execute(
-        select(KnowledgePointChapterLink).where(
-            KnowledgePointChapterLink.canonical_chapter_id == chapter_id
-        )
-    )).scalars().all()
-    start_kp_ids = {link.knowledge_point_id for link in kp_links}
-
-    if not start_kp_ids:
-        # 冷启动：该考点尚无关联知识点
-        return []
-
-    # Step 2: BFS 逐层批量查询
-    visited: Dict[str, float] = {kp_id: 1.0 for kp_id in start_kp_ids}
-    paths: Dict[str, List[RelationHop]] = {}
-    frontier = list(start_kp_ids)
-
-    for depth in range(max_depth):
-        if not frontier:
-            break
-
-        # 批量查询当前层所有节点的关系边（一次 SQL）
-        rows = (await db.execute(
-            select(KnowledgeRelation).where(
-                or_(
-                    KnowledgeRelation.source_knowledge_id.in_(frontier),
-                    KnowledgeRelation.target_knowledge_id.in_(frontier),
-                ),
-                KnowledgeRelation.review_status == "approved",
-                KnowledgeRelation.confidence >= min_confidence,
-            )
-        )).scalars().all()
-
-        next_frontier = []
-        for rel in rows:
-            # 确定邻居方向
-            if rel.source_knowledge_id in frontier:
-                from_kp = rel.source_knowledge_id
-                neighbor = rel.target_knowledge_id
-            else:
-                from_kp = rel.target_knowledge_id
-                neighbor = rel.source_knowledge_id
-
-            if neighbor in start_kp_ids:
-                continue  # 不回退到起点集合
-
-            edge_confidence = float(rel.confidence or 0.5)
-            cumulative = visited[from_kp] * edge_confidence
-
-            if neighbor not in visited or cumulative > visited[neighbor]:
-                visited[neighbor] = cumulative
-                paths[neighbor] = paths.get(from_kp, []) + [RelationHop(
-                    from_kp=from_kp,
-                    to_kp=neighbor,
-                    relation_type=rel.relation_type,
-                    confidence=edge_confidence,
-                )]
-                if neighbor not in next_frontier:
-                    next_frontier.append(neighbor)
-
-        frontier = next_frontier
-
-    # Step 3: 到达的知识点 → 考点（批量）
-    reached_kp_ids = set(visited.keys()) - start_kp_ids
-    if not reached_kp_ids:
-        return []
-
-    chapter_links = (await db.execute(
-        select(KnowledgePointChapterLink).where(
-            KnowledgePointChapterLink.knowledge_point_id.in_(list(reached_kp_ids)),
-            KnowledgePointChapterLink.canonical_chapter_id != chapter_id,
-        )
-    )).scalars().all()
-
-    # Step 4: 聚合到考点，按最强路径排序
-    chapter_scores: Dict[str, CrossChapterRelation] = {}
-    for link in chapter_links:
-        score = visited.get(link.knowledge_point_id, 0)
-        if link.canonical_chapter_id not in chapter_scores or \
-           score > chapter_scores[link.canonical_chapter_id].score:
-            chapter_scores[link.canonical_chapter_id] = CrossChapterRelation(
-                target_chapter_id=link.canonical_chapter_id,
-                score=score,
-                via_knowledge_point_id=link.knowledge_point_id,
-                path=paths.get(link.knowledge_point_id, []),
-            )
-
-    return sorted(chapter_scores.values(), key=lambda r: r.score, reverse=True)
-```
-
-**关键设计决策**：
-
-- 只用 `review_status == "approved"` 的关系边，避免未审核的低质量关系污染结果
-- 用累计置信度（路径上各边 confidence 的乘积）作为排序依据，路径越长置信度越低
-- 保留完整路径（`paths`），便于前端展示关联推理链："考点A → 知识点X → [similar_to] → 知识点Y → 考点B"
-- BFS 每层 1 次批量 SQL，而非逐节点查询，避免 N+1 问题
-- 冷启动时优雅降级，返回空列表，由上层编排逻辑接管
-
-### 5.5 Layer 3：LLM 显式交叉引用
-
-这是最有效的跨章节关联手段——让 LLM 在生成 `enhanced_description` 时，基于**全科目考点摘要目录**主动标注跨章关联。
+考点级关联的**主来源**——让 LLM 在生成 `enhanced_description` 时，基于**全科目考点摘要目录**主动标注跨章关联。这是质量最高、可解释、可审核的一路，绝大多数跨章关联应由它产出。
 
 **关键改进**：原版设计中 LLM 只能看到当前考点的信息，只能靠训练数据猜测其他科目的考点名，容易编造不存在的考点、写错考点名导致无法解析。修正后的 prompt 提供一份所有科目的考点摘要目录作为参考上下文。
 
@@ -946,27 +836,20 @@ async def validate_cross_references(
 | 误报率 | 高（词面相似但实际无关） | 低（LLM 基于考点目录选择，有语义理解） |
 | 目标精度 | 依赖向量质量 | chapter_id 精确匹配，不会指错考点 |
 
-### 5.6 Layer 4：Embedding 语义相似度——作为建关系的信号
+### 5.6 兜底来源：考点级 Embedding 相似度
 
-这一层已在 `RelationService._build_semantic_edges`（`relation_service.py:164`）中实现：
+LLM cross_references 是"宁缺毋滥"的——它只标注强关联，必然有遗漏。对于 LLM 没标到、但语义上确实相关的考点对，用**考点级 embedding 相似度**兜底补网。
 
-```python
-# 当前代码逻辑
-RelationService._build_semantic_edges(kp_list):
-  1. 对每个知识点取 summary/title + topic_terms → embedding
-  2. 两两计算 cosine similarity
-  3. 超阈值（0.82）且尚无关系的配对 → 创建 similar_to 关系边
-  4. source_type = "embedding", review_status = "pending"
-```
-
-**关键设计原则**：embedding 相似度**不直接作为检索结果返回给用户**，而是作为**建关系的信号**写入 `KnowledgeRelation` 表，经过审核后成为可信的关系边。
+**关键设计原则**：embedding 相似度**不直接作为检索结果返回给用户**，而是作为**建关系的信号**写入 `ChapterRelation` 表（`source_type="embedding"`），经过审核后才会出现在检索结果里。
 
 这样做的原因：
 - 关系一旦写入就是持久化的、可审核的、可追溯的
 - 审核通过的边可以在后续所有检索中复用，不需要每次都算相似度
 - 审核不通过的边被标记为 `rejected`，不会再次出现
 
-**冷启动时的降级使用**：当 Layer 2 因无关联知识点而返回空、且 Layer 3 的 `cross_references` 也未覆盖时，可临时使用章节 embedding 的直接相似度作为兜底：
+> **注意**：v1.2 把 embedding 建边做在**知识点级**（`RelationService._build_semantic_edges`，全库 N² 两两 cosine，落 `KnowledgeRelation`）。本版**移除知识点级 embedding 建边**（理由见 5.4），改为只在**考点级**做——考点数量比知识点少一两个量级，N² 成本可控，且产出直接落 `ChapterRelation`、语义粒度更适合展示。
+
+**实现**：直接用考点 segment 的 embedding 在 Qdrant 中找最近邻考点：
 
 ```python
 async def fallback_chapter_similarity(
@@ -975,22 +858,19 @@ async def fallback_chapter_similarity(
     top_k: int = 5,
 ) -> List[tuple[str, float]]:
     """
-    冷启动兜底：直接用章节 segment 的 embedding 计算相似度。
-    仅在 Layer 2 和 Layer 3 均无产出时使用。
+    考点级 embedding 兜底：用章节 segment 的 embedding 找最相似的其他考点。
+    产出写入 ChapterRelation（source_type="embedding", review_status="pending"）。
 
     返回: [(target_chapter_id, cosine_score), ...]
     """
     from app.services.embedding_service import get_embedding_service_from_settings
     from app.db.qdrant import qdrant_manager
 
-    # 用源章节的 segment 作为 query
-    embedding = await get_embedding_service_from_settings(db)
-
-    # 获取源章节信息（用于构造查询文本）
     chapter = await db.get(CanonicalChapter, chapter_id)
     if not chapter:
         return []
 
+    embedding = await get_embedding_service_from_settings(db)
     query_text = f"{chapter.name} {chapter.enhanced_description or ''}"
     query_vector = await embedding.embed_text(query_text)
 
@@ -1014,7 +894,7 @@ async def fallback_chapter_similarity(
     return pairs[:top_k]
 ```
 
-**扩展**：同样的逻辑可以应用于考点-考点关系。如果未来需要直接在考点之间建关系，可以新增 `ChapterRelation` 表：
+**这套逻辑统一落在 `ChapterRelation` 表上。** 该表已实现（`mysql_models.py:1325`），是考点间**语义关系的唯一真相源**：
 
 ```sql
 CREATE TABLE chapter_relations (
@@ -1032,7 +912,42 @@ CREATE TABLE chapter_relations (
 );
 ```
 
-但在当前阶段，通过知识点桥接（Layer 2）已经能间接表达考点间的关系，暂不需要单独的 `ChapterRelation` 表。
+关于真相源的边界，见下一节 5.7 的统一约定——这是本版文档相对 v1.2 最重要的修正。
+
+### 5.7 关联结果的二分：scope expansion vs semantic relation（核心约定）
+
+v1.2 把"同章兄弟"和"跨章语义关联"混在同一个 `RelatedChapter` 返回类型里（`outline_retrieval_service.py:68`），这导致语义污染：sibling 是**结构派生**，不是推断出来的关系。本版强制把关联结果拆成两类，各自有不同的真相源和生命周期：
+
+| 维度 | scope expansion（范围展开） | semantic relation（语义关联） |
+|------|----------------------------|------------------------------|
+| 来源 | sibling / parent / child | llm_cross_reference / embedding |
+| 本质 | 考点树的结构派生 | 推断出来的考点间关系 |
+| 真相源 | **不持久化**，每次在线由 `parent_id` 实时计算 | **ChapterRelation 表（唯一真相源）** |
+| 审核 | 不需要（结构不会错） | 需要，检索只读 `review_status="approved"` 的行 |
+| 失效风险 | 无（树一改自动反映） | 持久化数据，需重建/重审同步 |
+
+**为什么 scope expansion 不入 ChapterRelation 表**：
+
+- sibling/parent/child 完全可由 `parent_id` 推导，持久化进表是冗余；
+- 考点树一旦调整（新增/移动/删除子考点），表里的 sibling 行会立刻 stale，反而要额外维护一致性；
+- 它零误判，没有"审核"的意义。
+
+**为什么 semantic relation 必须以 ChapterRelation 为唯一真相源**：
+
+- llm_cross_reference、embedding 都是**推断**，有误报，必须可审核、可追溯；
+- 审核动作（approve/reject）只有落在一张表上、且检索只读这张表，才能真正生效；
+- 检索结果可复用审核结论，不必每次在线重算相似度。
+
+#### 真相源约定（必须遵守）
+
+1. **语义关联的唯一真相源是 `ChapterRelation` 表。** 检索扩展只读 `review_status="approved"` 的行，不在线重算 llm/embedding。
+2. **scope expansion 永远在线计算**，不写入任何表。
+3. **`ChapterRelation` 的写入只有一个入口**：离线构建器 `/chapter-relations/build`。它聚合 LLM cross_references（主）+ embedding 兜底（次）两类来源，全部以 `pending` 落库，走审核后才 `approved`。检索侧任何时候都不在线推断关系。
+
+#### 当前代码与本约定的差距（Open Decisions，见第 7 节）
+
+- `expand_related_chapters()`（`outline_retrieval_service.py:507`）目前**不读 ChapterRelation 表**，在线重算并直接返回。这意味着审核中心对 `/search/chapter-expansion` 的结果**零影响**——审核动作没有接进检索回路。这是本版要收口的头号问题：在线侧改为读 `ChapterRelation WHERE review_status='approved'`，`expand_related_chapters` 降级为离线构建器的内部实现。
+- `KnowledgeRelation` / `find_cross_chapter_relations`（knowledge_bridge）整层移除——理由见 5.4。跨章关联不再经知识点桥接，统一收敛到考点级。
 
 ---
 
@@ -1058,20 +973,27 @@ Phase 1: 问题定位
 
 Phase 2: 考点展开（如果 Phase 0/1 定位到了题目或考点）
   ├── 2a. 题目 → QuestionChapterLink → 考点列表
-  ├── 2b. 考点 → expand_chapter_scope() → 兄弟考点（Layer 1，同章）
-  ├── 2c. 考点 → CanonicalChapter.cross_references → 关联考点（Layer 3，跨章）
-  └── 2d. 考点 → find_cross_chapter_relations() → 关联考点（Layer 2，跨章）
+  ├── 2b. scope_expansion（在线计算，不入表）:
+  │       考点 → expand_chapter_scope() → 兄弟/父/子考点
+  └── 2c. semantic_relations（读 ChapterRelation 表，review_status="approved"）:
+          考点 → ChapterRelation → 关联考点（llm / embedding / manual 来源）
 
-Phase 3: 内容召回
-  ├── 3a. 在展开的考点范围内检索知识点（RetrievalService.search + chapter_ids filter）
-  ├── 3b. 在展开的考点范围内检索题目（同上）
-  └── 3c. 通过 KnowledgeRelation 扩展关联知识点（search_with_relations）
+Phase 3: 内容召回（双路归并，详见 6.4）
+  ├── 路 A 语义直接召回（带分数，第一梯队）:
+  │     expanded_query embedding → Qdrant 搜 knowledge_point + question segment
+  │     → 命中项自带 cosine 分数
+  └── 路 B 考点结构化展开（补网，第二梯队，设上限）:
+        Phase 2 定位到的 chapter_ids → link 表 JOIN 取同考点知识点/题目
+        → 无分数，作为上下文补充
 
-Phase 4: 排序与返回
-  ├── 4a. 按考点分组
-  ├── 4b. 按关联来源分层排序: 同章 > cross_references > 图桥接 > embedding 兜底
-  └── 4c. 标注关联来源（同章/cross_references/图桥接/embedding相似度）
+Phase 4: 归并与返回
+  ├── 4a. 路 A 与路 B 按 entity_id 去重（同一项以路 A 的分数为准）
+  ├── 4b. 分层排序: 路 A 命中在前（按分数）→ 路 B 补充在后（按考点分组，截断上限）
+  ├── 4c. 跨章关联(semantic_relations) 与 scope_expansion 分两区返回，不与内容混排
+  └── 4d. 标注每项来源: vector_hit / chapter_expansion / cross_reference
 ```
+
+> 注意 Phase 2 的两类展开有本质区别（详见 5.7）：scope_expansion 是结构派生、每次在线计算、不持久化；semantic_relations 一律读 `ChapterRelation` 表的已审核行，**不再在检索路径上在线推导**。这样审核中心对关系的 approve/reject 才会真正影响检索结果。
 
 ### 6.2 检索模式选择
 
@@ -1082,154 +1004,235 @@ Phase 4: 排序与返回
 | "Cache和虚拟内存有什么关系" | 语义检索 + 跨章关联扩展 | 需要跨章节关联 |
 | "二叉树遍历有哪些考法" | 考点 keywords 匹配 → 同考点内容召回 | 考点名明确 |
 
-### 6.3 跨章关联编排逻辑——层叠降级策略
+### 6.3 跨章关联的两个阶段：离线构建 + 在线读取
 
-这是关联扩展的核心编排函数，定义了各层的调用顺序和降级条件：
+按 5.7 的真相源约定，跨章语义关联拆成两个互不重叠的阶段。**检索路径只读表，不在线推导。**
+
+#### 阶段 A：离线构建器（写 ChapterRelation）
+
+`build_chapter_relations` 负责把语义关联来源归一化落到 `ChapterRelation` 表，统一进审核队列。它聚合两类语义来源（注意：**不含 sibling**，sibling 属于 scope_expansion，永远在线算、不入表；也**不含 knowledge_bridge**，知识点级关联已移除，见 5.4）：
+
+| 来源 | source_type | 产出方式 | confidence |
+|------|-------------|---------|-----------|
+| LLM 显式标注 | `llm` | `CanonicalChapter.cross_references`（经 `validate_cross_references`） | 0.9 |
+| Embedding 相似度 | `embedding` | `fallback_chapter_similarity()`（考点级 N² 兜底） | cosine score |
+
+```python
+async def build_chapter_relations(
+    db: AsyncSession,
+    subject_id: Optional[str] = None,
+    outline_id: Optional[str] = None,
+) -> dict:
+    """
+    离线构建器：把 LLM / embedding 两类语义关联
+    归一化写入 ChapterRelation（review_status="pending"），进审核队列。
+
+    幂等：同一 (source, target, relation_type) 已存在则跳过。
+    sibling/parent/child 不在此处理——它们是 scope_expansion，在线计算。
+    knowledge_bridge 已移除——跨章关联只在考点级建立（见 5.4）。
+    """
+    chapters = await _load_active_chapters(db, subject_id, outline_id)
+    chapter_ids = {ch.id for ch in chapters}
+
+    for chapter in chapters:
+        # 来源 1: LLM cross_references（双向各写一条）
+        for ref in await validate_cross_references(db, chapter.cross_references or []):
+            target_id = ref["target_chapter_id"]
+            if target_id not in chapter_ids:
+                continue
+            for src, tgt in [(chapter.id, target_id), (target_id, chapter.id)]:
+                await _upsert_chapter_relation(
+                    db, src, tgt,
+                    relation_type=ref.get("relation_type", "similar_to"),
+                    confidence=0.9, source_type="llm",
+                    evidence_text=ref.get("reason"),
+                )
+
+        # 来源 2: embedding 兜底（仅当该考点无 LLM 标注时，避免噪声淹没高质量标注）
+        if not chapter.cross_references:
+            for target_id, score in await fallback_chapter_similarity(db, chapter.id, top_k=3):
+                if target_id not in chapter_ids:
+                    continue
+                await _upsert_chapter_relation(
+                    db, chapter.id, target_id,
+                    relation_type="similar_to",
+                    confidence=score, source_type="embedding",
+                    evidence_text=f"语义相似度 {score:.4f}",
+                )
+
+    await db.commit()
+    return {"chapters_processed": len(chapters)}
+```
+
+> **相对 v1.2 的核心修正**：v1.2 把跨章关联做成在线四层（sibling / llm / knowledge_bridge / embedding），既与审核表脱节、又混入了不可信的知识点桥接。本版收敛为：sibling 剥离到 scope_expansion（在线算）；knowledge_bridge 整层移除（5.4）；只有 llm + embedding 两类语义关联落 `ChapterRelation`，经审核后供在线读取。
+
+#### 阶段 B：在线读取器（读 ChapterRelation + 在线算 scope）
+
+检索时不再调用任何在线推导逻辑，而是分两路取数后分组返回：
 
 ```python
 async def expand_related_chapters(
     db: AsyncSession,
     chapter_ids: List[str],
-    user_query: Optional[str] = None,
     max_results: int = 10,
-) -> Dict[str, List[RelatedChapter]]:
+) -> Dict[str, Dict[str, list]]:
     """
-    跨章关联编排：层叠降级策略。
+    在线读取器：每个 chapter_id 返回两类关联，互不混排。
 
-    对每个 chapter_id，按以下优先级收集关联考点：
-    1. Layer 1 (结构化): 同 parent_id 兄弟考点 —— 零误判，优先
-    2. Layer 3 (LLM标注): cross_references —— 精确标注，高质量
-    3. Layer 2 (关系图桥接): find_cross_chapter_relations() —— 中置信度
-    4. Layer 4 (embedding兜底): fallback_chapter_similarity() —— 低置信度，仅兜底
-
-    去重规则：同一 target_chapter_id 只保留最高优先级来源的结果。
-
-    返回: {chapter_id: [RelatedChapter(source, score, relation_type, reason), ...]}
-    """
-    result: Dict[str, Dict[str, RelatedChapter]] = {
-        cid: {} for cid in chapter_ids
+    返回: {
+        chapter_id: {
+            "scope_expansion":    [{chapter_id, relation}],        # 在线算，结构派生
+            "semantic_relations": [{chapter_id, source_type,       # 读表，已审核
+                                     relation_type, confidence, evidence_text}],
+        }
     }
-
+    """
+    out: Dict[str, Dict[str, list]] = {}
     for chapter_id in chapter_ids:
-        chapter = await db.get(CanonicalChapter, chapter_id)
-        if not chapter:
-            continue
-        seen = result[chapter_id]
+        # 路 1: scope_expansion —— 在线计算，不读表
+        scope = await expand_chapter_scope(db, [chapter_id], upward_levels=0)
 
-        # ---- Layer 1: 结构化关联（同章兄弟） ----
-        if chapter.parent_id:
-            siblings = (await db.execute(
-                select(CanonicalChapter).where(
-                    CanonicalChapter.parent_id == chapter.parent_id,
-                    CanonicalChapter.id != chapter_id,
-                    CanonicalChapter.status == "active",
-                )
-            )).scalars().all()
-            for sib in siblings:
-                if sib.id not in seen:
-                    seen[sib.id] = RelatedChapter(
-                        chapter_id=sib.id,
-                        source="sibling",
-                        score=1.0,
-                        relation_type="similar_to",
-                    )
+        # 路 2: semantic_relations —— 只读 ChapterRelation 已审核行
+        rows = (await db.execute(
+            select(ChapterRelation).where(
+                ChapterRelation.source_chapter_id == chapter_id,
+                ChapterRelation.review_status == "approved",
+            ).order_by(ChapterRelation.confidence.desc()).limit(max_results)
+        )).scalars().all()
 
-        # ---- Layer 3: LLM 显式标注 ----
-        if chapter.cross_references:
-            for ref in chapter.cross_references:
-                target_id = ref.get("target_chapter_id")
-                if target_id and target_id not in seen:
-                    seen[target_id] = RelatedChapter(
-                        chapter_id=target_id,
-                        source="llm_cross_reference",
-                        score=0.9,
-                        relation_type=ref.get("relation_type", "similar_to"),
-                        reason=ref.get("reason"),
-                    )
-
-        # ---- Layer 2: 知识点关系图桥接 ----
-        try:
-            bridged = await find_cross_chapter_relations(db, chapter_id)
-            for br in bridged:
-                if br.target_chapter_id not in seen:
-                    seen[br.target_chapter_id] = RelatedChapter(
-                        chapter_id=br.target_chapter_id,
-                        source="knowledge_bridge",
-                        score=br.score,
-                        relation_type=br.path[-1].relation_type if br.path else "similar_to",
-                    )
-        except Exception as e:
-            logger.warning("关系图桥接失败，跳过", chapter_id=chapter_id, error=str(e))
-
-        # ---- Layer 4: embedding 兜底（仅冷启动） ----
-        if len(seen) == 0:
-            try:
-                sims = await fallback_chapter_similarity(db, chapter_id, top_k=3)
-                for target_id, score in sims:
-                    if target_id not in seen:
-                        seen[target_id] = RelatedChapter(
-                            chapter_id=target_id,
-                            source="embedding_fallback",
-                            score=score,
-                            relation_type="similar_to",
-                        )
-            except Exception as e:
-                logger.warning("embedding 兜底失败", chapter_id=chapter_id, error=str(e))
-
-    # 按 score 降序，取 top max_results
-    return {
-        cid: sorted(entries.values(), key=lambda r: r.score, reverse=True)[:max_results]
-        for cid, entries in result.items()
-    }
+        out[chapter_id] = {
+            "scope_expansion": [
+                {"chapter_id": cid, "relation": "sibling_or_ancestor"}
+                for cid in scope if cid != chapter_id
+            ],
+            "semantic_relations": [
+                {
+                    "chapter_id": r.target_chapter_id,
+                    "source_type": r.source_type,
+                    "relation_type": r.relation_type,
+                    "confidence": float(r.confidence or 0),
+                    "evidence_text": r.evidence_text,
+                }
+                for r in rows
+            ],
+        }
+    return out
 ```
 
 **关键点**：
 
-- Layer 2 在图桥接为空（冷启动）时被跳过，不阻塞后续层
-- Layer 4 仅在前面所有层都无产出时触发，作为最后的兜底
-- 每个关联都标注 `source`，前端可以据此展示不同的可靠性标记
-- 同 `target_chapter_id` 的去重策略是"高优先级来源优先"而非"高分优先"——因为结构化关联的确定性远高于任何向量分数
+- **审核生效**：semantic_relations 只取 `review_status="approved"`，审核员 reject 的关系不再出现在检索结果中——这修复了 v1.2 审核与检索脱节的问题
+- **职责单一**：在线读取器零推导，所有"建关系"的逻辑（LLM/embedding）都在离线构建器里，由调度或管理端手动触发
+- **scope 与 semantic 不混排**：前端分两区展示，scope 是"同章/上下层"，semantic 是"跨章关联"，可靠性语义不同（见 5.7）
+- **冷启动**：初期 ChapterRelation 为空时，semantic_relations 自然为空，scope_expansion 仍可用；随大纲导入跑构建器 + 审核后逐步填充
+
+### 6.4 内容召回：向量直接命中 + 考点结构化展开的双路分层归并
+
+Phase 3 的内容召回是**召回率的主战场**。本节定义两路召回如何归并，这是本版相对 v1.2 的关键补强。
+
+#### 两路召回
+
+| | 路 A：向量直接命中 | 路 B：考点结构化展开 |
+|---|---|---|
+| 机制 | `expanded_query` embedding → Qdrant 检索 `knowledge_point` / `question` segment | 命中内容 → 其考点 → 同考点 link 表 JOIN 拉取知识点/题目 |
+| 是否带分数 | 有（cosine 相似度） | 无（只是"与命中项同属一个考点"） |
+| 强项 | 精确，命中用户真正问的 | 补网：捞向量没召回但同考点的内容 |
+| 风险 | 短查询/同义词可能漏召回（靠 Phase 0 大纲扩展缓解） | 一个考点下可能挂几十个知识点，全拉进来会引入噪声 |
+
+路 B 之所以成立，是因为它**先收敛到"考点"这个有界锚点再展开**，而不是顺着关键词无边界扩散——考点就是天然的主题边界，防止主题漂移。
+
+#### 归并纪律（必须遵守）
+
+1. **分层不混排**：路 A（向量命中）是第一梯队，按 cosine 分数排序；路 B（结构化展开）是第二梯队，作为补充上下文排在路 A 之后。**严禁 1:1 平铺混排**——否则路 B 的几十条无分数内容会把路 A 的精确命中淹没，召回率上去了精确率塌掉。
+2. **路 B 设上限**：每个考点最多带 N 条展开内容（建议 N≤10），按"是否被路 A 也命中">"is_primary link">"更新时间"排序截断。
+3. **JOIN 为主，关键词为辅**：一旦定位到考点，拉同考点内容走 **link 表 JOIN（精确）**，不要再用关键词去搜——关键词重搜会把"先根遍历 vs 前序遍历"的同义词问题又引回来。关键词 LIKE 只用于**补网**：捞那些还没建 link、但 `sparse_text` 里提到该术语的内容。
+4. **去重**：路 A 和路 B 命中同一实体时，保留路 A 的分数版本，标注"双路命中"（可作为加权信号）。
+
+```python
+async def merge_dual_path_recall(
+    db: AsyncSession,
+    expanded_query: str,
+    chapter_ids: List[str],      # Phase 2 展开后的考点范围
+    subject_ids: List[str],
+    limit: int = 20,
+    per_chapter_cap: int = 10,
+) -> List[dict]:
+    """
+    双路分层归并：向量直接命中（第一梯队）+ 考点结构化展开（第二梯队）。
+
+    归并纪律见 6.4：分层不混排、路 B 设上限、JOIN 为主关键词为辅、去重保分数版。
+    """
+    # 路 A: 向量直接命中（带分数，第一梯队）
+    vector_hits = await retrieval_service.search(
+        query=expanded_query,
+        subject_id=subject_ids[0] if subject_ids else None,
+        chapter_ids=chapter_ids,
+        entity_type=None,            # knowledge_point + question 都召回
+        mode="hybrid",
+        limit=limit,
+    )
+    seen_entity_ids = {h.entity_id for h in vector_hits}
+
+    # 路 B: 考点结构化展开（无分数，第二梯队，JOIN 为主）
+    scope_items: List[dict] = []
+    for cid in chapter_ids:
+        # 同考点知识点 / 题目，走 link 表 JOIN
+        kps = await _join_knowledge_points_by_chapter(db, cid, limit=per_chapter_cap)
+        qs = await _join_questions_by_chapter(db, cid, limit=per_chapter_cap)
+        for item in kps + qs:
+            if item["entity_id"] in seen_entity_ids:
+                continue            # 已被路 A 精确命中，去重
+            scope_items.append({**item, "source": "scope_expansion", "score": None})
+
+    # 分层归并：路 A 在前（按分数），路 B 在后（补充上下文）
+    tier1 = [{
+        "entity_id": h.entity_id, "entity_type": h.entity_type,
+        "score": h.score, "source": "vector",
+        "dual_hit": h.entity_id in seen_entity_ids,
+    } for h in sorted(vector_hits, key=lambda x: x.score, reverse=True)]
+
+    return (tier1 + scope_items)[:limit]
+```
+
+> **为什么这样能提召回率而不牺牲精确率**：向量路保证"用户真正问的"排在最前且有分数；结构化路在向量漏召回时补上同考点的相关内容，但被限制在第二梯队 + per-chapter 上限内，不会反客为主。这正是 graph-RAG / parent-child retrieval 的标准做法。
 
 ---
 
-## 7. 实施路线
+## 7. 实施状态与待决项
 
-### 7.0 前置修复（P0，必须先做）
+本节不再是 roadmap——下列大部分能力已落地。分两部分：已实现（Implemented）和待决/缺口（Open Decisions / Remaining Gaps）。
 
-| 任务 | 说明 |
-|------|------|
-| 修复 `RetrievalSegment.entity_type` Enum | `mysql_models.py:1327` → `Enum("knowledge_point", "question", "canonical_chapter")` |
-| 添加 Qdrant payload `entity_type` 索引 | `qdrant.py:112` → `"entity_type": PayloadSchemaType.KEYWORD` |
-| Alembic 迁移 | 生成 migration 修改 `retrieval_segments.entity_type` 列定义 |
+### 7.1 已实现（Implemented）
 
-### 7.1 短期（当前即可做，无需新表）
+| 能力 | 位置 | 状态 |
+|------|------|------|
+| `RetrievalSegment.entity_type` 含 `canonical_chapter` | `mysql_models.py:1380` | ✅ Enum 已含三值 |
+| Qdrant `entity_type` payload 索引 | `qdrant.py:113` | ✅ `_PAYLOAD_INDEXES` 已含 |
+| 考点 segment 写入 | `SegmentService.build_canonical_chapter_segments()` | ✅ 端点 `admin.py:4220` |
+| Phase 0 大纲 Query 扩展 | `expand_query_with_outline()`（`outline_retrieval_service.py:81`） | ✅ 端点 `/search/with-outline` |
+| 考点树展开 | `expand_chapter_scope()`（`:187`） | ✅ |
+| 题 → 考点 → 知识结构化展开 | `retrieve_by_exam_point()`（`:264`） | ✅ 注：输入为 question_id，命名待澄清（见 7.2） |
+| embedding 兜底（考点级） | `fallback_chapter_similarity()`（`:472`） | ✅ |
+| ~~知识点关系图桥接~~ | `find_cross_chapter_relations()`（`:371`） | ⚠️ 已实现但**本版决定移除**（见 5.4，底层 KnowledgeRelation 质量不可信）——待清理 |
+| `CanonicalChapter.cross_references` 字段 + 入库校验 | `validate_cross_references()`（`:603`） | ✅ |
+| `ChapterRelation` 表 | `mysql_models.py:1325` | ✅ 含索引 + 唯一约束 |
+| ChapterRelation 构建/查询/审核/批删端点 | `admin.py:4466/4571/4646/4687` | ✅ 审核中心已建 |
+| 跨章关联编排 | `expand_related_chapters()`（`:507`）+ `/search/chapter-expansion` | ⚠️ 已实现但**在线重算、不读 ChapterRelation**——见 7.2 缺口 1 |
 
-| 任务 | 说明 | 优先级 |
-|------|------|--------|
-| 考点 segment 写入 Qdrant | `SegmentService.build_canonical_chapter_segments()` 已实现，确认调用链路完整 | P0 |
-| 实现 `expand_query_with_outline()` | 大纲辅助 Query 扩展，Phase 0 核心能力（3.6 节） | P0 |
-| 实现 `retrieve_by_exam_point()` | 从题出发的结构化展开（4.4 节） | P0 |
-| 实现 `expand_chapter_scope()` | 沿考点树向上扩展，批量查询版（4.3 节坑 2） | P0 |
-| 验证 `_match_by_vector_search` | 确认考点 segment 能被 ChapterLinkService 检索到（前提：entity_type 索引已建） | P1 |
+### 7.2 待决项 / 缺口（Open Decisions / Remaining Gaps）
 
-### 7.2 中期（需要开发新字段 + 新表）
+| # | 缺口 | 现状 | 目标 |
+|---|------|------|------|
+| 1 | **审核不生效**：`expand_related_chapters()` 在线重算，不读 ChapterRelation 表，审核员的 approve/reject 对 `/search/chapter-expansion` 结果零影响 | 在线编排器与审核表脱节 | 在线侧改为读 `ChapterRelation WHERE review_status='approved'`（见 6.3 在线读取器）；`expand_related_chapters` 降级为离线构建器内部实现 |
+| 2 | **移除知识点级关联**：`KnowledgeRelation` / `find_cross_chapter_relations()`（knowledge_bridge）底层质量不可信（见 5.4），跨章关联收敛到考点级 | 在线编排仍含 knowledge_bridge 层；`search_with_relations` 仍依赖 KnowledgeRelation | 从 `expand_related_chapters` 和构建器中移除 knowledge_bridge；废弃 `search_with_relations` 的知识点扩展 |
+| 3 | **scope 与 semantic 混排**：`RelatedChapter` 把 sibling 和语义关系塞进同一返回类型 | 语义污染 | 按 5.7 拆为 `scope_expansion`（在线算，不入表）+ `semantic_relations`（读表），见 6.3 |
+| 4 | `retrieve_by_exam_point()` 名实不符：名为"按考点取"，实为输入 question_id | — | 拆为 `retrieve_by_question(question_id)` / `retrieve_by_chapters(chapter_ids)` |
+| 5 | **双路分层归并待落地**：Phase 3 内容召回的向量路 + 结构化路归并（6.4），当前 `search_with_outline_expansion` 只有向量路 | 召回率未充分利用考点结构 | 实现 `merge_dual_path_recall()`：路 A 向量命中（第一梯队带分数）+ 路 B 考点 link JOIN（第二梯队设上限），见 6.4 |
+| 6 | query 扩写策略待调优：多考点命中时拼成混杂大串，100 字截断为拍脑袋 | minor | dense 用 expanded、sparse 保留原始 query + keywords boost；chapter filter 仅取高置信 top-1/2（需先确认 `search_with_outline_expansion` 实现） |
+| 7 | 大纲导入 LLM prompt 接入 cross_references 标注 | prompt 待落地 | 5.5 节完整 prompt（含全科目考点目录） |
+| 8 | 关系图可视化 / 审核面板 | ✅ 已有 ChapterRelations 管理页 | 持续完善 |
 
-| 任务 | 说明 | 优先级 |
-|------|------|--------|
-| `CanonicalChapter.cross_references` 字段 | JSON 字段 + Alembic 迁移 | P1 |
-| 大纲导入 LLM prompt 加入考点目录 + cross_references 标注 | 5.5 节完整 prompt，包含全科目考点目录 | P1 |
-| `cross_references` 入库校验 | 检查 `target_chapter_id` 是否真实存在（5.5 节 validate 函数） | P1 |
-| 实现 `find_cross_chapter_relations()` | 知识点关系图桥接，批量查询版（5.4 节） | P1 |
-| 实现 `expand_related_chapters()` | 跨章关联编排降级逻辑（6.3 节） | P1 |
-| 检索结果标注关联来源 | 前端展示 `source` 字段区分"同章" / "LLM标注" / "图桥接" / "embedding兜底" | P2 |
-
-### 7.3 远期（视需求决定）
-
-| 任务 | 说明 | 优先级 |
-|------|------|--------|
-| `ChapterRelation` 表 | 考点间直接关系表（如果桥接方案覆盖不足） | P3 |
-| 关系图可视化 | 管理端展示考点-知识点-考点关联图 | P3 |
-| `cross_references` 人工审核面板 | 管理端可查看/编辑/确认 LLM 标注的跨章关联 | P3 |
+> **缺口 1/2/3 是同一收口的三个面**：把语义关系单一真相源定为 ChapterRelation，在线只读 approved；sibling/上下层拆到 scope 在线算；knowledge_bridge 整层移除，跨章关联收敛到考点级。这是下一步代码改动的核心，建议先文档后代码。
 
 ---
 
@@ -1239,14 +1242,17 @@ async def expand_related_chapters(
 |------|------|------|
 | 大纲考点是否入向量库 | 入，但不单独建 collection | 考点是检索链路的第一级，写入 `knowledge_segments` 统一管理 |
 | 短查询 vs 长文档语义不对称 | 大纲辅助 Query 扩展，不依赖 HyDE | 大纲是官方考点零幻觉；~50ms vs HyDE 的 1~2s；零 token 成本 |
-| 题→考点→内容能否纯结构化 | 可以，但有 3 个坑 | 同义词（靠 keywords 穷举）、粒度（靠树展开）、跨章（靠关系图） |
-| 跨章关联怎么做 | 四层叠降 | 结构化 → LLM 标注 → 知识点桥接 → embedding 兜底 |
+| 题→考点→内容能否纯结构化 | 可以，但有 3 个坑 | 同义词（靠 keywords 穷举）、粒度（靠树展开）、跨章（靠考点级 ChapterRelation） |
+| 跨章关联怎么做 | scope（结构）+ semantic（语义）二分 | scope 在线推导不入表；semantic 两来源（llm/embedding）统一落 ChapterRelation |
+| 跨章关联建在哪一级 | 考点级（CanonicalChapter），移除知识点级桥接 | 考点是天然展示粒度；KnowledgeRelation 关系类型是字面规则产出，不可信（见 5.4） |
+| 内容召回如何提召回率 | 向量直接命中 + 考点结构化展开双路分层归并 | 分层不混排、路 B 设上限、JOIN 为主关键词为辅（见 6.4） |
+| 知识点/题目是否入向量库 | 入 | 用户 query 对不上考点关键词的场景多，需向量语义召回到具体知识点/题目 |
 | LLM cross_references 使用 chapter_id 还是字符串 | chapter_id | 精确 JOIN，避免 LLM 编造章节名导致的模糊匹配错误 |
 | LLM prompt 是否需要考点目录上下文 | 需要 | 不给目录 LLM 会凭训练数据编造不存在的考点名 |
-| Embedding 相似度的角色 | 建关系的信号 + 冷启动兜底 | 需要审核、持久化、可追溯；检索时仅在前层无产出时降级使用 |
-| BFS 图遍历性能 | 每层 1 次批量 SQL | 避免 N+1 查询，O(levels) 次 DB 调用 |
-| 是否需要 ChapterRelation 表 | 当前不需要 | 知识点桥接 + LLM cross_references 已能覆盖 |
-| 冷启动策略 | Layer 2 空 → 跳过 → Layer 4 兜底 | 初期无知识点关联时，靠 embedding 相似度暂时支撑 |
+| Embedding 相似度的角色 | 建关系的信号 → 落 ChapterRelation 待审 | 需要审核、持久化、可追溯；不直接作为在线检索结果 |
+| 语义关系的唯一真相源 | ChapterRelation 表 | 在线检索只读 `review_status='approved'`；审核动作对检索生效（修复 v1.2 脱节问题） |
+| sibling/上下层是否入 ChapterRelation | 不入 | 结构可推导，入表会随树修改 stale；永远在线算（scope_expansion） |
+| 冷启动策略 | ChapterRelation 空 → semantic 为空，scope 仍可用 | 随大纲导入跑构建器 + 审核逐步填充 semantic |
 
 ---
 
