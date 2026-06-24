@@ -199,7 +199,7 @@ def _extract_json(text: str) -> Any:
 
 
 def _normalize_chapters(raw: Any) -> List[Dict[str, Any]]:
-    """递归清洗 LLM 输出的章节树：name 必填，保留 outline_code/description/enhanced_description/keywords/children。"""
+    """递归清洗 LLM 输出的章节树：name 必填，保留 outline_code/description/enhanced_description/keywords/cross_references/children。"""
     result: List[Dict[str, Any]] = []
     if not isinstance(raw, list):
         return result
@@ -230,6 +230,7 @@ def _normalize_chapters(raw: Any) -> List[Dict[str, Any]]:
             "description": (str(node.get("description")).strip() if node.get("description") else None),
             "enhanced_description": enhanced_desc,
             "keywords": keywords,
+            "cross_references": node.get("cross_references") if isinstance(node.get("cross_references"), list) else None,
             "sort_order": idx,
             "children": children,
         })
@@ -318,9 +319,9 @@ _SKELETON_PROMPT = """下面是一门课《{subject_name}》的考试大纲文�
 ---"""
 
 
-# 批量增强 prompt：为一批叶子节点生成 enhanced_description + keywords
-# 每批 10-15 个节点，保证输出量不超 max_tokens
-_BATCH_ENHANCE_PROMPT = """你是408考研大纲解析专家。下面是一些《{subject_name}》的章节节点（每个节点含考点原文 description）。请为每个节点生成 enhanced_description 和 keywords。
+# 批量增强 prompt：为一批叶子节点生成 enhanced_description + keywords + cross_references
+# 每批 10-12 个节点，保证输出量不超 max_tokens
+_BATCH_ENHANCE_PROMPT = """你是408考研大纲解析专家。下面是一些《{subject_name}》的章节节点（每个节点含考点原文 description）。请为每个节点生成 enhanced_description、keywords 和 cross_references。
 
 每个节点的 enhanced_description 要求（2-3句话，包含）：
 - 核心内容概括
@@ -332,15 +333,25 @@ keywords 要求（5-10个）：
 - 包含同义词/别名
 - 包含该节点下的核心术语
 
+cross_references 要求（可选，标注跨科目/跨章节的强关联考点）：
+- relation_type: similar_to（相似考点）/ prerequisite（前置知识）/ contrast_with（对比考点）/ common_confusion（常见混淆）
+- target_chapter_id 必须从下方考点目录中选择，不得编造
+- reason 必须具体说明关联原因
+- 宁缺毋滥，只标注确实存在强关联的考点
+
 示例：
 节点 "哈希表" 考点 "哈希函数、冲突解决、链地址法、开放寻址法"
 → enhanced_description: "哈希表是基于哈希函数的键值对存储结构。常考冲突解决方法（链地址法、开放寻址法）、哈希函数设计、装填因子分析。易混淆：线性探测 vs 二次探测。"
 → keywords: ["散列表", "Hash Table", "冲突解决", "链地址法", "开放寻址", "线性探测", "二次探测", "装填因子"]
+→ cross_references: [{{"target_chapter_id": "chap_xxx", "relation_type": "similar_to", "reason": "缓存中的哈希映射与哈希表原理一致"}}]
 
-只输出 JSON 对象（不要数组），格式：
+全科目考点目录（选择 target_chapter_id 时参考）：
+{chapter_catalog}
+
+只输出 JSON 对象，格式：
 {{
   "items": [
-    {{"index": 0, "enhanced_description": "...", "keywords": ["...", ...]}},
+    {{"index": 0, "enhanced_description": "...", "keywords": ["...", ...], "cross_references": [{{"target_chapter_id": "...", "relation_type": "similar_to", "reason": "..."}}]}},
     ...
   ]
 }}
@@ -611,11 +622,60 @@ class OutlineLLMService:
                 result.append(ch)
         return result
 
+    async def _build_chapter_catalog(self) -> str:
+        """
+        构建全科目考点目录（用于 LLM prompt 中的 cross_references 标注参考）。
+
+        返回格式：
+        数据结构 (data_structure)
+          CH1.1 线性表 (chap_xxx)
+            CH1.1.1 顺序表 (chap_xxx)
+            ...
+        计算机组成原理 (computer_organization)
+          ...
+        """
+        from app.models.mysql_models import CanonicalChapter
+        from sqlalchemy.orm import selectinload
+
+        rows = (await self.db.execute(
+            select(CanonicalChapter)
+            .options(selectinload(CanonicalChapter.subject))
+            .where(CanonicalChapter.status == "active")
+            .order_by(CanonicalChapter.subject_id, CanonicalChapter.level, CanonicalChapter.sort_order)
+        )).scalars().all()
+
+        # 按 subject_id 分组
+        groups: Dict[str, List[CanonicalChapter]] = {}
+        for ch in rows:
+            groups.setdefault(ch.subject_id, []).append(ch)
+
+        lines = []
+        for subject_id, chapters in groups.items():
+            subject_name = subject_id
+            subject_code = ""
+            for ch in chapters:
+                if ch.subject:
+                    subject_name = ch.subject.name
+                    subject_code = ch.subject.code
+                    break
+            lines.append(f"{subject_name} ({subject_code or subject_id})")
+            # 按 level + outline_code 排序展示
+            for ch in chapters:
+                indent = "  " * (ch.level - 1) if ch.level > 0 else ""
+                code = ch.code or ch.outline_code or ""
+                lines.append(f"  {indent}{code} {ch.name} ({ch.id})")
+            lines.append("")
+
+        return "\n".join(lines)
+
     async def _enhance_leaf_nodes_batched(
         self, client: OutlineLLMClient, subject_name: str, leaf_nodes: List[Dict[str, Any]]
     ) -> None:
-        """分批并发调用 LLM 为叶子节点生成 enhanced_description + keywords。"""
+        """分批并发调用 LLM 为叶子节点生成 enhanced_description + keywords + cross_references。"""
         import asyncio
+
+        # 构建全科目考点目录（供 cross_references 标注使用）
+        chapter_catalog = await self._build_chapter_catalog()
 
         # 从配置读取最大并发数
         runtime_settings = await SystemSettingsService(self.db).load()
@@ -640,7 +700,9 @@ class OutlineLLMService:
                 ]
                 items_json = json.dumps(items, ensure_ascii=False, indent=2)
                 prompt = _BATCH_ENHANCE_PROMPT.format(
-                    subject_name=subject_name, items_json=items_json
+                    subject_name=subject_name,
+                    chapter_catalog=chapter_catalog,
+                    items_json=items_json,
                 )
                 try:
                     text = await client.chat(prompt, purpose=f"大纲增强-{subject_name}-批{batch_idx+1}")
@@ -660,6 +722,10 @@ class OutlineLLMService:
                         kw = item.get("keywords")
                         if isinstance(kw, list):
                             batch[idx]["keywords"] = [str(k).strip() for k in kw if k][:50]
+                        # 写入 cross_references
+                        cr = item.get("cross_references")
+                        if isinstance(cr, list) and cr:
+                            batch[idx]["cross_references"] = cr
                     logger.info("批量增强完成", batch_idx=batch_idx, nodes=len(batch))
                 except Exception as e:
                     logger.warning("某批增强失败，跳过", batch_idx=batch_idx, error=str(e))
