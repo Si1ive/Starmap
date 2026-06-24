@@ -1030,6 +1030,10 @@ class CanonicalChapter(Base):
     enhanced_description: Mapped[Optional[str]] = mapped_column(Text, comment="LLM 增强描述（2-3句，含考法/易混点/核心内容，用于向量检索）")
     keywords: Mapped[Optional[List[str]]] = mapped_column(JSON, comment="关键词标签（别名、英文名、相关术语，用于精确匹配）")
     exam_guidance: Mapped[Optional[str]] = mapped_column(Text, comment="LLM 生成的复习指导（重点内容/复习方向）")
+    cross_references: Mapped[Optional[List[dict]]] = mapped_column(
+        JSON,
+        comment="LLM 标注的跨章节考点关联。每项含 target_chapter_id/relation_type/reason。target_chapter_id 可直接 JOIN canonical_chapters"
+    )
     sort_order: Mapped[int] = mapped_column(default=0, comment="排序序号")
     status: Mapped[str] = mapped_column(
         Enum("active", "inactive"),
@@ -1290,7 +1294,7 @@ class KnowledgeRelation(Base):
     evidence_page: Mapped[Optional[int]] = mapped_column(comment="证据页码")
     confidence: Mapped[Optional[float]] = mapped_column(DECIMAL(5, 4), comment="置信度")
     source_type: Mapped[str] = mapped_column(
-        Enum("rule", "llm", "manual", "term_similarity"),
+        Enum("rule", "llm", "manual", "term_similarity", "embedding"),
         default="llm", comment="来源类型"
     )
     review_status: Mapped[str] = mapped_column(
@@ -1324,7 +1328,7 @@ class RetrievalSegment(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="segment ID")
     entity_type: Mapped[str] = mapped_column(
-        Enum("knowledge_point", "question"),
+        Enum("knowledge_point", "question", "canonical_chapter"),
         nullable=False, comment="实体类型"
     )
     entity_id: Mapped[str] = mapped_column(String(32), nullable=False, comment="实体ID")

@@ -110,6 +110,7 @@ class QdrantManager:
 
     # 需要建 payload 索引的字段 → 索引类型（用于结构化过滤）
     _PAYLOAD_INDEXES = {
+        "entity_type": PayloadSchemaType.KEYWORD,
         "subject_id": PayloadSchemaType.KEYWORD,
         "chapter_ids": PayloadSchemaType.KEYWORD,
         "segment_type": PayloadSchemaType.KEYWORD,
