@@ -244,15 +244,23 @@ class ChatService:
                     logger.warning("读取问答 LLM 配置失败，回退环境变量", error=str(cfg_err))
 
                 retrieval_service = RetrievalService(db)
-                results = await retrieval_service.search_with_relations(
+                results = await retrieval_service.search_with_outline_expansion(
                     query=request.message,
                     subject_id=getattr(request, "subject_id", None),
                     limit=5,
                 )
 
                 # 构建上下文和来源引用
-                primary = results.get("primary_results", [])
-                related = results.get("related_results", [])
+                primary = results.get("results", [])
+                outline_expansion = results.get("outline_expansion", {})
+                matched_chapters = outline_expansion.get("matched_chapters", [])
+
+                # 如果大纲定位到了考点，加入上下文提示
+                if matched_chapters:
+                    chapter_names = [ch.get("name", "") for ch in matched_chapters[:3]]
+                    context_parts.append(
+                        f"[大纲定位] 用户问题涉及考点: {', '.join(chapter_names)}"
+                    )
 
                 for i, item in enumerate(primary, 1):
                     content = item.get("context_text") or item.get("content_text", "")
@@ -273,12 +281,6 @@ class ChatService:
                             url=f"/documents/{item['source']['document_id']}",
                             score=item.get("score", 0),
                         ))
-
-                # 关系扩展的内容也加入上下文（标记为关联知识）
-                for item in related[:2]:
-                    content = item.get("context_text") or item.get("content_text", "")
-                    if content:
-                        context_parts.append(f"[关联知识]\n{content}")
 
         except Exception as e:
             logger.warning("检索服务异常，降级为直接回答", error=str(e))
