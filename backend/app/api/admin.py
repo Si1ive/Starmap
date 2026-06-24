@@ -3983,6 +3983,26 @@ async def build_question_segments(
     return ApiResponse(data=result)
 
 
+@router.post("/segments/build/chapters", response_model=ApiResponse)
+async def build_chapter_segments(
+    subject_id: Optional[str] = None,
+    outline_id: Optional[str] = None,
+    rebuild: bool = False,
+    db: AsyncSession = Depends(get_db),
+):
+    """构建大纲章节检索单元"""
+    from app.services.segment_service import SegmentService
+
+    service = SegmentService(db)
+    result = await service.build_canonical_chapter_segments(
+        subject_id=subject_id,
+        outline_id=outline_id,
+        rebuild=rebuild,
+    )
+
+    return ApiResponse(data=result)
+
+
 # ========== 检索调试 ==========
 
 

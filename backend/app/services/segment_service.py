@@ -566,7 +566,7 @@ class SegmentService:
         document_id: Optional[str] = None,
         rebuild: bool = False,
     ) -> Dict[str, Any]:
-        """构建全部 segments（知识点 + 题目）"""
+        """构建全部 segments（知识点 + 题目 + 大纲章节）"""
         # 确保 Qdrant collections 存在（维度跟随 embedding 配置）
         await self._ensure_embedding()
         self.qdrant.init_default_collections(vector_size=self.embedding.dimension)
@@ -581,10 +581,15 @@ class SegmentService:
             document_id=document_id,
             rebuild=rebuild,
         )
+        ch_result = await self.build_canonical_chapter_segments(
+            subject_id=subject_id,
+            rebuild=rebuild,
+        )
 
         return {
             "knowledge_segments": kp_result,
             "question_segments": q_result,
+            "chapter_segments": ch_result,
         }
 
     # ========== 辅助方法 ==========

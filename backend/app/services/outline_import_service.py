@@ -25,6 +25,7 @@ from app.core.logging import get_logger
 from app.models.mysql_models import (
     ExamOutline, CanonicalChapter, Subject, DocumentSection, ExamOutlineSubject,
 )
+from app.services.outline_retrieval_service import validate_cross_references
 
 logger = get_logger(__name__)
 
@@ -312,6 +313,9 @@ class OutlineImportService:
                 chapter.description = data.get("description") or chapter.description
                 chapter.enhanced_description = data.get("enhanced_description") or chapter.enhanced_description
                 chapter.keywords = data.get("keywords") or chapter.keywords
+                if data.get("cross_references"):
+                    validated = await validate_cross_references(self.db, data["cross_references"])
+                    chapter.cross_references = validated
                 chapter.sort_order = data.get("sort_order", idx)
                 chapter.status = "active"
                 updated += 1
@@ -329,6 +333,7 @@ class OutlineImportService:
                     description=data.get("description"),
                     enhanced_description=data.get("enhanced_description"),
                     keywords=data.get("keywords"),
+                    cross_references=data.get("cross_references") if data.get("cross_references") else None,
                     sort_order=data.get("sort_order", idx),
                     status="active",
                 )
@@ -643,6 +648,18 @@ class OutlineImportService:
         run.completed_at = datetime.utcnow()
 
         await self.db.commit()
+
+        # 大纲入库完成后，自动构建考点 segment 写入 Qdrant
+        try:
+            from app.services.segment_service import SegmentService
+            seg_service = SegmentService(self.db)
+            seg_result = await seg_service.build_canonical_chapter_segments(
+                outline_id=outline.id,
+                rebuild=False,
+            )
+            logger.info("大纲章节 segment 构建完成", outline_id=outline.id, count=seg_result.get("segments_count", 0))
+        except Exception as e:
+            logger.warning("大纲章节 segment 构建失败（不影响大纲入库）", outline_id=outline.id, error=str(e))
 
         return {
             "outline_id": outline.id,
