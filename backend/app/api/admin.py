@@ -4116,6 +4116,53 @@ async def search_with_outline(
     return ApiResponse(data=result)
 
 
+class ChapterExpansionRequest(BaseModel):
+    """跨章关联编排请求"""
+    chapter_ids: List[str] = Field(..., min_length=1, description="考点 ID 列表")
+    max_results: int = Field(10, ge=1, le=50, description="每题点最多返回关联数")
+
+
+@router.post("/search/chapter-expansion", response_model=ApiResponse)
+async def expand_chapters(
+    request: ChapterExpansionRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    跨章关联编排（层叠降级策略）
+
+    对每个 chapter_id：
+    1. Layer 1: 同 parent_id 兄弟考点
+    2. Layer 3: LLM cross_references 标注
+    3. Layer 2: 知识点关系图 BFS 桥接
+    4. Layer 4: embedding 语义相似度兜底
+
+    返回: {chapter_id: [{chapter_id, source, score, relation_type}, ...]}
+    """
+    from app.services.outline_retrieval_service import expand_related_chapters
+
+    result = await expand_related_chapters(
+        db,
+        chapter_ids=request.chapter_ids,
+        max_results=request.max_results,
+    )
+
+    # 序列化为 JSON 友好格式
+    serialized = {}
+    for cid, entries in result.items():
+        serialized[cid] = [
+            {
+                "chapter_id": e.chapter_id,
+                "source": e.source,
+                "score": round(e.score, 4),
+                "relation_type": e.relation_type,
+                "reason": e.reason,
+            }
+            for e in entries
+        ]
+
+    return ApiResponse(data={"relations": serialized})
+
+
 # ========== 富化与关系构建 ==========
 
 
