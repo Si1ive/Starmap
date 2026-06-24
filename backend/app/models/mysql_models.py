@@ -1322,6 +1322,56 @@ class KnowledgeRelation(Base):
     )
 
 
+class ChapterRelation(Base):
+    """考点间关系表 - 直接关联两个 CanonicalChapter"""
+    __tablename__ = "chapter_relations"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="关系ID")
+    source_chapter_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("canonical_chapters.id", ondelete="CASCADE"),
+        nullable=False, comment="源考点ID"
+    )
+    target_chapter_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("canonical_chapters.id", ondelete="CASCADE"),
+        nullable=False, comment="目标考点ID"
+    )
+    relation_type: Mapped[str] = mapped_column(
+        Enum("similar_to", "prerequisite", "contrast_with", "common_confusion"),
+        nullable=False, comment="关系类型"
+    )
+    confidence: Mapped[Optional[float]] = mapped_column(DECIMAL(5, 4), comment="置信度")
+    source_type: Mapped[str] = mapped_column(
+        Enum("llm", "embedding", "manual"),
+        default="llm", comment="来源类型"
+    )
+    evidence_text: Mapped[Optional[str]] = mapped_column(Text, comment="证据文本")
+    review_status: Mapped[str] = mapped_column(
+        Enum("pending", "approved", "rejected"),
+        default="pending", comment="审核状态"
+    )
+    review_notes: Mapped[Optional[str]] = mapped_column(Text, comment="审核备注")
+    reviewed_by: Mapped[Optional[str]] = mapped_column(String(32), comment="审核人")
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, comment="审核时间")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    # relationships
+    source_chapter: Mapped["CanonicalChapter"] = relationship(foreign_keys=[source_chapter_id])
+    target_chapter: Mapped["CanonicalChapter"] = relationship(foreign_keys=[target_chapter_id])
+
+    __table_args__ = (
+        Index("idx_chrel_source", "source_chapter_id"),
+        Index("idx_chrel_target", "target_chapter_id"),
+        Index("idx_chrel_type", "relation_type"),
+        Index("idx_chrel_review_status", "review_status"),
+        UniqueConstraint("source_chapter_id", "target_chapter_id", "relation_type",
+                         name="uk_chapter_relation"),
+        {"comment": "考点间关系表"}
+    )
+
+
 class RetrievalSegment(Base):
     """检索单元表 - 用于向量检索的段落"""
     __tablename__ = "retrieval_segments"

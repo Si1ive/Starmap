@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, W
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, Response, FileResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func, or_, update, delete
+from sqlalchemy import select, func, or_, and_, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger, get_request_id
@@ -4224,6 +4224,217 @@ async def build_knowledge_relations(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"关系构建失败: {str(e)[:200]}")
     return ApiResponse(data=result)
+
+
+# ========== 考点关系管理 ==========
+
+
+@router.post("/chapter-relations/build", response_model=ApiResponse)
+async def build_chapter_relations(
+    subject_id: Optional[str] = None,
+    outine_id: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    构建考点间直接关系（从 cross_references + embedding 相似度）
+
+    1. 读取 CanonicalChapter.cross_references（LLM 标注的跨章关联）
+    2. 双向写入 ChapterRelation（source_type="llm"）
+    3. 对无 cross_references 的考点，用 embedding 相似度兜底（source_type="embedding"）
+    """
+    from app.services.outline_retrieval_service import (
+        validate_cross_references, fallback_chapter_similarity,
+    )
+    from app.models.mysql_models import CanonicalChapter, ChapterRelation
+
+    query = select(CanonicalChapter).where(CanonicalChapter.status == "active")
+    if subject_id:
+        query = query.where(CanonicalChapter.subject_id == subject_id)
+    if outine_id:
+        query = query.where(CanonicalChapter.outline_id == outine_id)
+
+    chapters = (await db.execute(query)).scalars().all()
+    if not chapters:
+        return ApiResponse(data={"message": "没有可用考点", "created": 0})
+
+    created = 0
+    llm_created = 0
+    embedding_created = 0
+    chapter_map = {ch.id: ch for ch in chapters}
+
+    for chapter in chapters:
+        cross_refs = getattr(chapter, "cross_references", None)
+
+        # Layer 1: 从 LLM cross_references 创建关系
+        if cross_refs:
+            valid_refs = await validate_cross_references(db, cross_refs)
+            for ref in valid_refs:
+                target_id = ref["target_chapter_id"]
+                if target_id not in chapter_map:
+                    continue
+                # 双向各写一条（source → target 和 target → source）
+                for src, tgt in [(chapter.id, target_id), (target_id, chapter.id)]:
+                    exists = (await db.execute(
+                        select(ChapterRelation).where(
+                            ChapterRelation.source_chapter_id == src,
+                            ChapterRelation.target_chapter_id == tgt,
+                            ChapterRelation.relation_type == ref.get("relation_type", "similar_to"),
+                        )
+                    )).scalar_one_or_none()
+                    if exists:
+                        continue
+                    db.add(ChapterRelation(
+                        id=_gen_chrel_id(),
+                        source_chapter_id=src,
+                        target_chapter_id=tgt,
+                        relation_type=ref.get("relation_type", "similar_to"),
+                        confidence=0.9,
+                        source_type="llm",
+                        evidence_text=ref.get("reason"),
+                        review_status="pending",
+                    ))
+                    llm_created += 1
+                    created += 1
+
+        # Layer 2: 无 cross_references 的考点用 embedding 相似度兜底
+        if not cross_refs:
+            sims = await fallback_chapter_similarity(db, chapter.id, top_k=3)
+            for target_id, score in sims:
+                if target_id not in chapter_map:
+                    continue
+                exists = (await db.execute(
+                    select(ChapterRelation).where(
+                        ChapterRelation.source_chapter_id == chapter.id,
+                        ChapterRelation.target_chapter_id == target_id,
+                        ChapterRelation.relation_type == "similar_to",
+                    )
+                )).scalar_one_or_none()
+                if exists:
+                    continue
+                db.add(ChapterRelation(
+                    id=_gen_chrel_id(),
+                    source_chapter_id=chapter.id,
+                    target_chapter_id=target_id,
+                    relation_type="similar_to",
+                    confidence=round(score, 4),
+                    source_type="embedding",
+                    evidence_text=f"语义相似度 {score:.4f}",
+                    review_status="pending",
+                ))
+                embedding_created += 1
+                created += 1
+
+    await db.commit()
+
+    return ApiResponse(data={
+        "created": created,
+        "llm_created": llm_created,
+        "embedding_created": embedding_created,
+        "chapters_processed": len(chapters),
+    })
+
+
+@router.get("/chapter-relations", response_model=ApiResponse)
+async def list_chapter_relations(
+    source_chapter_id: Optional[str] = None,
+    target_chapter_id: Optional[str] = None,
+    relation_type: Optional[str] = None,
+    review_status: Optional[str] = None,
+    source_type: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    """查询考点关系列表（用于审核面板）"""
+    from app.models.mysql_models import ChapterRelation, CanonicalChapter
+
+    query = (
+        select(
+            ChapterRelation,
+            CanonicalChapter.name.label("source_name"),
+            CanonicalChapter.name.label("target_name"),
+        )
+        .join(CanonicalChapter, ChapterRelation.source_chapter_id == CanonicalChapter.id)
+    )
+    # 注意：上面的 join 只拿到了 source_name，需要额外查 target
+    conditions = []
+    if source_chapter_id:
+        conditions.append(ChapterRelation.source_chapter_id == source_chapter_id)
+    if target_chapter_id:
+        conditions.append(ChapterRelation.target_chapter_id == target_chapter_id)
+    if relation_type:
+        conditions.append(ChapterRelation.relation_type == relation_type)
+    if review_status:
+        conditions.append(ChapterRelation.review_status == review_status)
+    if source_type:
+        conditions.append(ChapterRelation.source_type == source_type)
+
+    if conditions:
+        query = query.where(and_(*conditions))
+
+    count_query = select(func.count()).select_from(ChapterRelation)
+    if conditions:
+        count_query = count_query.where(and_(*conditions))
+    total = await db.scalar(count_query) or 0
+
+    query = query.order_by(ChapterRelation.created_at.desc())
+    query = query.offset((page - 1) * page_size).limit(page_size)
+    rows = (await db.execute(query)).all()
+
+    items = []
+    for row in rows:
+        rel, source_name, _ = row
+        # 获取 target chapter name
+        target_ch = await db.get(CanonicalChapter, rel.target_chapter_id)
+        items.append({
+            "id": rel.id,
+            "source_chapter_id": rel.source_chapter_id,
+            "source_chapter_name": source_name,
+            "target_chapter_id": rel.target_chapter_id,
+            "target_chapter_name": target_ch.name if target_ch else "",
+            "relation_type": rel.relation_type,
+            "confidence": float(rel.confidence) if rel.confidence else None,
+            "source_type": rel.source_type,
+            "evidence_text": rel.evidence_text,
+            "review_status": rel.review_status,
+            "review_notes": rel.review_notes,
+            "created_at": rel.created_at.isoformat() if rel.created_at else None,
+        })
+
+    return ApiResponse(data={
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    })
+
+
+@router.post("/chapter-relations/{relation_id}/review", response_model=ApiResponse)
+async def review_chapter_relation(
+    relation_id: str,
+    review_status: str = Query(..., description="approved / rejected"),
+    review_notes: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """审核考点关系"""
+    from app.models.mysql_models import ChapterRelation
+
+    rel = await db.get(ChapterRelation, relation_id)
+    if not rel:
+        raise HTTPException(status_code=404, detail="关系不存在")
+
+    rel.review_status = review_status
+    if review_notes:
+        rel.review_notes = review_notes
+    rel.reviewed_at = datetime.utcnow()
+    await db.commit()
+
+    return ApiResponse(data={"id": relation_id, "review_status": review_status})
+
+
+def _gen_chrel_id() -> str:
+    import uuid
+    return uuid.uuid4().hex[:32]
 
 
 
