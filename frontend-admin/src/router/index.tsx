@@ -31,6 +31,7 @@ import SectionReviewPage from '@/pages/Review/Sections'
 import KnowledgeReviewPage from '@/pages/Review/Knowledge'
 import QuestionReviewPage from '@/pages/Review/Questions'
 import RelationReviewPage from '@/pages/Review/Relations'
+import ChapterRelationReviewPage from '@/pages/Review/ChapterRelations'
 import SearchDebugPage from '@/pages/Search'
 import { usePermission } from '@/hooks/usePermission'
 
@@ -120,6 +121,7 @@ const AppRoutes = () => {
         <Route path="review/knowledge" element={<KnowledgeReviewPage />} />
         <Route path="review/questions" element={<QuestionReviewPage />} />
         <Route path="review/relations" element={<RelationReviewPage />} />
+        <Route path="review/chapter-relations" element={<ChapterRelationReviewPage />} />
 
         {/* 检索调试 */}
         <Route path="search" element={<SearchDebugPage />} />
