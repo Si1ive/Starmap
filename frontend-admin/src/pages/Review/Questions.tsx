@@ -1,8 +1,8 @@
 import { useState } from 'react'
-import { Card, Table, Button, Select, Space, Tag, Input, message, Descriptions, Drawer } from 'antd'
-import { CheckOutlined, CloseOutlined, QuestionCircleOutlined } from '@ant-design/icons'
+import { Card, Table, Button, Select, Space, Tag, Input, message, Descriptions, Drawer, Modal, Popconfirm } from 'antd'
+import { CheckOutlined, CloseOutlined, QuestionCircleOutlined, DeleteOutlined } from '@ant-design/icons'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { listQuestionReviews, reviewQuestion, getSubjects } from '@/api'
+import { listQuestionReviews, reviewQuestion, getSubjects, deleteQuestion, batchDeleteQuestions } from '@/api'
 
 const { TextArea } = Input
 
@@ -24,6 +24,7 @@ const QuestionReviewPage = () => {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [currentItem, setCurrentItem] = useState<any>(null)
   const [reviewNotes, setReviewNotes] = useState('')
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
 
   const { data, isLoading } = useQuery({ queryKey: ['questionReviews', params], queryFn: () => listQuestionReviews(params) })
   const { data: subjectsData } = useQuery({ queryKey: ['subjects'], queryFn: getSubjects })
@@ -38,6 +39,33 @@ const QuestionReviewPage = () => {
     },
   })
 
+  const deleteMut = useMutation({
+    mutationFn: deleteQuestion,
+    onSuccess: (_, id) => {
+      message.success('删除成功')
+      if (currentItem?.id === id) {
+        setDrawerOpen(false)
+        setCurrentItem(null)
+        setReviewNotes('')
+      }
+      queryClient.invalidateQueries({ queryKey: ['questionReviews'] })
+    },
+  })
+
+  const batchDeleteMut = useMutation({
+    mutationFn: batchDeleteQuestions,
+    onSuccess: (res) => {
+      message.success(`已删除 ${res.data?.deleted_count || 0} 道题目`)
+      setSelectedRowKeys([])
+      if (currentItem && selectedRowKeys.includes(currentItem.id)) {
+        setDrawerOpen(false)
+        setCurrentItem(null)
+        setReviewNotes('')
+      }
+      queryClient.invalidateQueries({ queryKey: ['questionReviews'] })
+    },
+  })
+
   const items = data?.data?.items || []
   const total = data?.data?.total || 0
   const subjects = subjectsData?.data || []
@@ -48,14 +76,42 @@ const QuestionReviewPage = () => {
     { title: '难度', dataIndex: 'difficulty', key: 'difficulty', width: 80, render: (d: string) => <Tag color={difficultyConfig[d]?.color}>{difficultyConfig[d]?.text || d}</Tag> },
     { title: '来源', dataIndex: 'source', key: 'source', width: 120, ellipsis: true },
     { title: '状态', dataIndex: 'review_status', key: 'review_status', width: 100, render: (s: string) => <Tag color={reviewStatusConfig[s]?.color}>{reviewStatusConfig[s]?.text || s}</Tag> },
-    { title: '操作', key: 'actions', width: 100, render: (_: any, record: any) => (
-      <Button type="link" size="small" onClick={() => { setCurrentItem(record); setReviewNotes(record.review_notes || ''); setDrawerOpen(true) }}>审核</Button>
+    { title: '操作', key: 'actions', width: 120, render: (_: any, record: any) => (
+      <Space size="small">
+        <Button type="link" size="small" onClick={() => { setCurrentItem(record); setReviewNotes(record.review_notes || ''); setDrawerOpen(true) }}>审核</Button>
+        <Popconfirm title="确定删除这道题目？" onConfirm={() => deleteMut.mutate(record.id)}>
+          <Button type="link" size="small" danger icon={<DeleteOutlined />} />
+        </Popconfirm>
+      </Space>
     )},
   ]
 
+  const handleBatchDelete = () => {
+    if (selectedRowKeys.length === 0) return
+    Modal.confirm({
+      title: '确认批量删除',
+      content: `确定要删除选中的 ${selectedRowKeys.length} 道题目吗？删除后审核列表和检索结果中将不再展示。`,
+      okText: '删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: () => batchDeleteMut.mutate(selectedRowKeys.map(String)),
+    })
+  }
+
   return (
     <div>
-      <h3><QuestionCircleOutlined style={{ marginRight: 8 }} />题目审核</h3>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <h3 style={{ margin: 0 }}><QuestionCircleOutlined style={{ marginRight: 8 }} />题目审核</h3>
+        <Button
+          danger
+          icon={<DeleteOutlined />}
+          disabled={selectedRowKeys.length === 0}
+          loading={batchDeleteMut.isPending}
+          onClick={handleBatchDelete}
+        >
+          批量删除{selectedRowKeys.length ? ` (${selectedRowKeys.length})` : ''}
+        </Button>
+      </div>
       <Card style={{ marginBottom: 16 }}>
         <Space wrap>
           <Select value={params.review_status || 'all'} style={{ width: 130 }}
@@ -74,6 +130,11 @@ const QuestionReviewPage = () => {
       </Card>
       <Card>
         <Table dataSource={items} columns={columns} rowKey="id" loading={isLoading}
+          rowSelection={{
+            selectedRowKeys,
+            onChange: setSelectedRowKeys,
+            preserveSelectedRowKeys: true,
+          }}
           pagination={{ current: params.page, total, pageSize: params.page_size, showTotal: (c) => `共 ${c} 条`, onChange: (page) => setParams((p) => ({ ...p, page })) }}
         />
       </Card>

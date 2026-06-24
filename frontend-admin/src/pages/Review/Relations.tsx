@@ -1,8 +1,8 @@
 import { useState } from 'react'
-import { Card, Table, Button, Select, Space, Tag, Input, message, Descriptions, Drawer } from 'antd'
-import { CheckOutlined, CloseOutlined, BranchesOutlined } from '@ant-design/icons'
+import { Card, Table, Button, Select, Space, Tag, Input, message, Descriptions, Drawer, Modal, Popconfirm } from 'antd'
+import { CheckOutlined, CloseOutlined, BranchesOutlined, DeleteOutlined } from '@ant-design/icons'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { listRelationReviews, reviewRelation } from '@/api'
+import { listRelationReviews, reviewRelation, deleteReviewRelation, batchDeleteReviewRelations } from '@/api'
 
 const { TextArea } = Input
 
@@ -27,6 +27,7 @@ const RelationReviewPage = () => {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [currentItem, setCurrentItem] = useState<any>(null)
   const [reviewNotes, setReviewNotes] = useState('')
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
 
   const { data, isLoading } = useQuery({ queryKey: ['relationReviews', params], queryFn: () => listRelationReviews(params) })
 
@@ -50,6 +51,33 @@ const RelationReviewPage = () => {
     },
   })
 
+  const deleteMut = useMutation({
+    mutationFn: deleteReviewRelation,
+    onSuccess: (_, id) => {
+      message.success('删除成功')
+      if (currentItem?.relation_id === id) {
+        setDrawerOpen(false)
+        setCurrentItem(null)
+        setReviewNotes('')
+      }
+      queryClient.invalidateQueries({ queryKey: ['relationReviews'] })
+    },
+  })
+
+  const batchDeleteMut = useMutation({
+    mutationFn: batchDeleteReviewRelations,
+    onSuccess: (res) => {
+      message.success(`已删除 ${res.data?.deleted_count || 0} 条关系`)
+      setSelectedRowKeys([])
+      if (currentItem && selectedRowKeys.includes(currentItem.relation_id)) {
+        setDrawerOpen(false)
+        setCurrentItem(null)
+        setReviewNotes('')
+      }
+      queryClient.invalidateQueries({ queryKey: ['relationReviews'] })
+    },
+  })
+
   const items = data?.data?.items || []
   const total = data?.data?.total || 0
 
@@ -62,14 +90,42 @@ const RelationReviewPage = () => {
     { title: '目标知识点', dataIndex: 'target_title', key: 'target_title', ellipsis: true, render: (t: string) => <strong>{t}</strong> },
     { title: '证据', dataIndex: 'evidence_text', key: 'evidence_text', ellipsis: true, render: (t: string) => t?.slice(0, 60) || '-' },
     { title: '状态', dataIndex: 'review_status', key: 'review_status', width: 100, render: (s: string) => <Tag color={reviewStatusConfig[s]?.color}>{reviewStatusConfig[s]?.text || s}</Tag> },
-    { title: '操作', key: 'actions', width: 100, render: (_: any, record: any) => (
-      <Button type="link" size="small" onClick={() => { setCurrentItem(record); setReviewNotes(record.review_notes || ''); setDrawerOpen(true) }}>审核</Button>
+    { title: '操作', key: 'actions', width: 120, render: (_: any, record: any) => (
+      <Space size="small">
+        <Button type="link" size="small" onClick={() => { setCurrentItem(record); setReviewNotes(record.review_notes || ''); setDrawerOpen(true) }}>审核</Button>
+        <Popconfirm title="确定删除这条关系？" onConfirm={() => deleteMut.mutate(record.relation_id)}>
+          <Button type="link" size="small" danger icon={<DeleteOutlined />} />
+        </Popconfirm>
+      </Space>
     )},
   ]
 
+  const handleBatchDelete = () => {
+    if (selectedRowKeys.length === 0) return
+    Modal.confirm({
+      title: '确认批量删除',
+      content: `确定要删除选中的 ${selectedRowKeys.length} 条关系吗？`,
+      okText: '删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: () => batchDeleteMut.mutate(selectedRowKeys.map(String)),
+    })
+  }
+
   return (
     <div>
-      <h3><BranchesOutlined style={{ marginRight: 8 }} />关系审核</h3>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <h3 style={{ margin: 0 }}><BranchesOutlined style={{ marginRight: 8 }} />关系审核</h3>
+        <Button
+          danger
+          icon={<DeleteOutlined />}
+          disabled={selectedRowKeys.length === 0}
+          loading={batchDeleteMut.isPending}
+          onClick={handleBatchDelete}
+        >
+          批量删除{selectedRowKeys.length ? ` (${selectedRowKeys.length})` : ''}
+        </Button>
+      </div>
       <Card style={{ marginBottom: 16 }}>
         <Space wrap>
           <Select value={params.review_status || 'all'} style={{ width: 130 }}
@@ -84,6 +140,11 @@ const RelationReviewPage = () => {
       </Card>
       <Card>
         <Table dataSource={items} columns={columns} rowKey="relation_id" loading={isLoading}
+          rowSelection={{
+            selectedRowKeys,
+            onChange: setSelectedRowKeys,
+            preserveSelectedRowKeys: true,
+          }}
           pagination={{ current: params.page, total, pageSize: params.page_size, showTotal: (c) => `共 ${c} 条`, onChange: (page) => setParams((p) => ({ ...p, page })) }}
         />
       </Card>

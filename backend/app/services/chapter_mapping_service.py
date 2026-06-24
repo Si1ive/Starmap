@@ -9,7 +9,7 @@ import uuid
 from collections import Counter, defaultdict
 from typing import Dict, Any, List, Optional, Tuple
 
-from sqlalchemy import select, and_, or_, delete
+from sqlalchemy import select, and_, or_, delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
@@ -1127,6 +1127,24 @@ class ChapterMappingService:
         # 如果指定了新的标准章节，更新映射
         if canonical_chapter_id:
             mapping.canonical_chapter_id = canonical_chapter_id
+
+        # 同一个 section 只保留一个最终审核结果。
+        # 当前映射一旦被审核，其它待审候选需要同步收口，避免审核列表继续冒出同 section 的候选项。
+        if review_status == "approved":
+            await self.db.execute(
+                update(DocumentSectionMapping)
+                .where(
+                    DocumentSectionMapping.document_section_id == mapping.document_section_id,
+                    DocumentSectionMapping.id != mapping.id,
+                    DocumentSectionMapping.review_status == "pending",
+                )
+                .values(
+                    review_status="rejected",
+                    review_notes="Auto rejected after another candidate on the same section was reviewed.",
+                    reviewed_by=reviewed_by,
+                    reviewed_at=datetime.utcnow(),
+                )
+            )
 
         mapping.review_status = review_status
         mapping.review_notes = review_notes

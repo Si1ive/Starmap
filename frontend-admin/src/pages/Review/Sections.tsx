@@ -1,8 +1,8 @@
 import { useState } from 'react'
-import { Card, Table, Button, Select, Space, Tag, Input, message, Descriptions, Drawer } from 'antd'
-import { CheckOutlined, CloseOutlined, AuditOutlined } from '@ant-design/icons'
+import { Card, Table, Button, Select, Space, Tag, Input, message, Descriptions, Drawer, Modal, Popconfirm } from 'antd'
+import { CheckOutlined, CloseOutlined, AuditOutlined, DeleteOutlined } from '@ant-design/icons'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { listSectionReviews, reviewSectionMapping, getSubjects } from '@/api'
+import { listSectionReviews, reviewSectionMapping, getSubjects, deleteSectionMapping, batchDeleteSectionMappings } from '@/api'
 
 const { TextArea } = Input
 
@@ -20,6 +20,7 @@ const SectionReviewPage = () => {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [currentItem, setCurrentItem] = useState<any>(null)
   const [reviewNotes, setReviewNotes] = useState('')
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
 
   const { data, isLoading } = useQuery({
     queryKey: ['sectionReviews', params],
@@ -36,6 +37,33 @@ const SectionReviewPage = () => {
       setDrawerOpen(false)
       setCurrentItem(null)
       setReviewNotes('')
+      queryClient.invalidateQueries({ queryKey: ['sectionReviews'] })
+    },
+  })
+
+  const deleteMut = useMutation({
+    mutationFn: deleteSectionMapping,
+    onSuccess: (_, id) => {
+      message.success('删除成功')
+      if (currentItem?.mapping_id === id) {
+        setDrawerOpen(false)
+        setCurrentItem(null)
+        setReviewNotes('')
+      }
+      queryClient.invalidateQueries({ queryKey: ['sectionReviews'] })
+    },
+  })
+
+  const batchDeleteMut = useMutation({
+    mutationFn: batchDeleteSectionMappings,
+    onSuccess: (res) => {
+      message.success(`已删除 ${res.data?.deleted_count || 0} 条映射`)
+      setSelectedRowKeys([])
+      if (currentItem && selectedRowKeys.includes(currentItem.mapping_id)) {
+        setDrawerOpen(false)
+        setCurrentItem(null)
+        setReviewNotes('')
+      }
       queryClient.invalidateQueries({ queryKey: ['sectionReviews'] })
     },
   })
@@ -62,18 +90,46 @@ const SectionReviewPage = () => {
       render: (s: string) => <Tag color={reviewStatusConfig[s]?.color}>{reviewStatusConfig[s]?.text || s}</Tag>,
     },
     {
-      title: '操作', key: 'actions', width: 100,
+      title: '操作', key: 'actions', width: 120,
       render: (_: any, record: any) => (
-        <Button type="link" size="small" onClick={() => { setCurrentItem(record); setReviewNotes(record.review_notes || ''); setDrawerOpen(true) }}>
-          审核
-        </Button>
+        <Space size="small">
+          <Button type="link" size="small" onClick={() => { setCurrentItem(record); setReviewNotes(record.review_notes || ''); setDrawerOpen(true) }}>
+            审核
+          </Button>
+          <Popconfirm title="确定删除这条映射？" onConfirm={() => deleteMut.mutate(record.mapping_id)}>
+            <Button type="link" size="small" danger icon={<DeleteOutlined />} />
+          </Popconfirm>
+        </Space>
       ),
     },
   ]
 
+  const handleBatchDelete = () => {
+    if (selectedRowKeys.length === 0) return
+    Modal.confirm({
+      title: '确认批量删除',
+      content: `确定要删除选中的 ${selectedRowKeys.length} 条映射吗？`,
+      okText: '删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: () => batchDeleteMut.mutate(selectedRowKeys.map(String)),
+    })
+  }
+
   return (
     <div>
-      <h3><AuditOutlined style={{ marginRight: 8 }} />Section 映射审核</h3>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <h3 style={{ margin: 0 }}><AuditOutlined style={{ marginRight: 8 }} />Section 映射审核</h3>
+        <Button
+          danger
+          icon={<DeleteOutlined />}
+          disabled={selectedRowKeys.length === 0}
+          loading={batchDeleteMut.isPending}
+          onClick={handleBatchDelete}
+        >
+          批量删除{selectedRowKeys.length ? ` (${selectedRowKeys.length})` : ''}
+        </Button>
+      </div>
 
       <Card style={{ marginBottom: 16 }}>
         <Space wrap>
@@ -101,6 +157,11 @@ const SectionReviewPage = () => {
       <Card>
         <Table
           dataSource={items} columns={columns} rowKey="mapping_id" loading={isLoading}
+          rowSelection={{
+            selectedRowKeys,
+            onChange: setSelectedRowKeys,
+            preserveSelectedRowKeys: true,
+          }}
           pagination={{ current: params.page, total, pageSize: params.page_size, showTotal: (c) => `共 ${c} 条`, onChange: (page) => setParams((p) => ({ ...p, page })) }}
         />
       </Card>

@@ -2214,13 +2214,69 @@ async def update_knowledge_point(
     return ApiResponse(message="更新成功")
 
 
+@router.delete("/knowledge/points/{point_id}", response_model=ApiResponse)
+async def delete_knowledge_point(
+    point_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """删除单个知识点（软删除，并清理关联边）"""
+    from app.models.mysql_models import (
+        KnowledgePoint, RetrievalSegment, KnowledgePointChapterLink,
+        QuestionKnowledgeLink, KnowledgeRelation, EntitySourceLink
+    )
+
+    point = await db.get(KnowledgePoint, point_id)
+    if not point or point.status == "deleted":
+        raise HTTPException(status_code=404, detail="知识点不存在")
+
+    point.status = "deleted"
+    point.review_status = "rejected"
+
+    await db.execute(
+        delete(RetrievalSegment).where(
+            RetrievalSegment.entity_type == "knowledge_point",
+            RetrievalSegment.entity_id == point_id,
+        )
+    )
+    await db.execute(
+        delete(KnowledgePointChapterLink).where(
+            KnowledgePointChapterLink.knowledge_point_id == point_id
+        )
+    )
+    await db.execute(
+        delete(QuestionKnowledgeLink).where(
+            QuestionKnowledgeLink.knowledge_point_id == point_id
+        )
+    )
+    await db.execute(
+        delete(KnowledgeRelation).where(
+            or_(
+                KnowledgeRelation.source_knowledge_id == point_id,
+                KnowledgeRelation.target_knowledge_id == point_id,
+            )
+        )
+    )
+    await db.execute(
+        delete(EntitySourceLink).where(
+            EntitySourceLink.entity_type == "knowledge_point",
+            EntitySourceLink.entity_id == point_id,
+        )
+    )
+    await db.commit()
+
+    return ApiResponse(message="删除成功", data={"id": point_id})
+
+
 @router.post("/knowledge/points/batch-delete", response_model=ApiResponse)
 async def batch_delete_knowledge_points(
     req: BatchIdsRequest,
     db: AsyncSession = Depends(get_db)
 ):
     """批量删除知识点（软删除）"""
-    from app.models.mysql_models import KnowledgePoint, RetrievalSegment
+    from app.models.mysql_models import (
+        KnowledgePoint, RetrievalSegment, KnowledgePointChapterLink,
+        QuestionKnowledgeLink, KnowledgeRelation, EntitySourceLink
+    )
 
     unique_ids = list(dict.fromkeys(req.ids))
     result = await db.execute(
@@ -2236,12 +2292,36 @@ async def batch_delete_knowledge_points(
     await db.execute(
         update(KnowledgePoint)
         .where(KnowledgePoint.id.in_(existing_ids))
-        .values(status="deleted")
+        .values(status="deleted", review_status="rejected")
     )
     await db.execute(
         delete(RetrievalSegment).where(
             RetrievalSegment.entity_type == "knowledge_point",
             RetrievalSegment.entity_id.in_(existing_ids),
+        )
+    )
+    await db.execute(
+        delete(KnowledgePointChapterLink).where(
+            KnowledgePointChapterLink.knowledge_point_id.in_(existing_ids)
+        )
+    )
+    await db.execute(
+        delete(QuestionKnowledgeLink).where(
+            QuestionKnowledgeLink.knowledge_point_id.in_(existing_ids)
+        )
+    )
+    await db.execute(
+        delete(KnowledgeRelation).where(
+            or_(
+                KnowledgeRelation.source_knowledge_id.in_(existing_ids),
+                KnowledgeRelation.target_knowledge_id.in_(existing_ids),
+            )
+        )
+    )
+    await db.execute(
+        delete(EntitySourceLink).where(
+            EntitySourceLink.entity_type == "knowledge_point",
+            EntitySourceLink.entity_id.in_(existing_ids),
         )
     )
     await db.commit()
@@ -2409,13 +2489,61 @@ async def update_question(
     return ApiResponse(message="更新成功")
 
 
+@router.delete("/questions/{question_id}", response_model=ApiResponse)
+async def delete_question(
+    question_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """删除单个题目（软删除，并清理关联边）"""
+    from app.models.mysql_models import (
+        Question, RetrievalSegment, QuestionChapterLink,
+        QuestionKnowledgeLink, EntitySourceLink
+    )
+
+    question = await db.get(Question, question_id)
+    if not question or question.status == "deleted":
+        raise HTTPException(status_code=404, detail="题目不存在")
+
+    question.status = "deleted"
+    question.review_status = "rejected"
+
+    await db.execute(
+        delete(RetrievalSegment).where(
+            RetrievalSegment.entity_type == "question",
+            RetrievalSegment.entity_id == question_id,
+        )
+    )
+    await db.execute(
+        delete(QuestionChapterLink).where(
+            QuestionChapterLink.question_id == question_id
+        )
+    )
+    await db.execute(
+        delete(QuestionKnowledgeLink).where(
+            QuestionKnowledgeLink.question_id == question_id
+        )
+    )
+    await db.execute(
+        delete(EntitySourceLink).where(
+            EntitySourceLink.entity_type == "question",
+            EntitySourceLink.entity_id == question_id,
+        )
+    )
+    await db.commit()
+
+    return ApiResponse(message="删除成功", data={"id": question_id})
+
+
 @router.post("/questions/batch-delete", response_model=ApiResponse)
 async def batch_delete_questions(
     req: BatchIdsRequest,
     db: AsyncSession = Depends(get_db)
 ):
     """批量删除题目（软删除）"""
-    from app.models.mysql_models import Question, RetrievalSegment
+    from app.models.mysql_models import (
+        Question, RetrievalSegment, QuestionChapterLink,
+        QuestionKnowledgeLink, EntitySourceLink
+    )
 
     unique_ids = list(dict.fromkeys(req.ids))
     result = await db.execute(
@@ -2431,12 +2559,28 @@ async def batch_delete_questions(
     await db.execute(
         update(Question)
         .where(Question.id.in_(existing_ids))
-        .values(status="deleted")
+        .values(status="deleted", review_status="rejected")
     )
     await db.execute(
         delete(RetrievalSegment).where(
             RetrievalSegment.entity_type == "question",
             RetrievalSegment.entity_id.in_(existing_ids),
+        )
+    )
+    await db.execute(
+        delete(QuestionChapterLink).where(
+            QuestionChapterLink.question_id.in_(existing_ids)
+        )
+    )
+    await db.execute(
+        delete(QuestionKnowledgeLink).where(
+            QuestionKnowledgeLink.question_id.in_(existing_ids)
+        )
+    )
+    await db.execute(
+        delete(EntitySourceLink).where(
+            EntitySourceLink.entity_type == "question",
+            EntitySourceLink.entity_id.in_(existing_ids),
         )
     )
     await db.commit()
@@ -3683,7 +3827,7 @@ async def list_pending_section_mappings(
         ).where(and_(*conditions))
 
     total = await db.scalar(count_query) or 0
-    query = query.order_by(DocumentSectionMapping.created_at.desc())
+    query = query.order_by(DocumentSectionMapping.created_at.desc(), DocumentSectionMapping.id.desc())
     query = query.offset((page - 1) * page_size).limit(page_size)
     result = await db.execute(query)
     rows = result.all()
@@ -3738,6 +3882,51 @@ async def review_section_mapping(
         raise HTTPException(status_code=404, detail=str(e))
 
     return ApiResponse(data=result)
+
+
+@router.delete("/review/sections/{mapping_id}", response_model=ApiResponse)
+async def delete_section_mapping(
+    mapping_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """删除单个 section 映射"""
+    from app.models.mysql_models import DocumentSectionMapping
+
+    mapping = await db.get(DocumentSectionMapping, mapping_id)
+    if not mapping:
+        raise HTTPException(status_code=404, detail="映射不存在")
+
+    await db.delete(mapping)
+    await db.commit()
+
+    return ApiResponse(message="删除成功", data={"id": mapping_id})
+
+
+@router.post("/review/sections/batch-delete", response_model=ApiResponse)
+async def batch_delete_section_mappings(
+    req: BatchIdsRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """批量删除 section 映射"""
+    from app.models.mysql_models import DocumentSectionMapping
+
+    unique_ids = list(dict.fromkeys(req.ids))
+    result = await db.execute(
+        select(DocumentSectionMapping.id).where(DocumentSectionMapping.id.in_(unique_ids))
+    )
+    existing_ids = [row[0] for row in result.all()]
+    if not existing_ids:
+        raise HTTPException(status_code=404, detail="未找到可删除的映射")
+
+    await db.execute(
+        delete(DocumentSectionMapping).where(DocumentSectionMapping.id.in_(existing_ids))
+    )
+    await db.commit()
+
+    return ApiResponse(
+        message="删除成功",
+        data={"deleted_count": len(existing_ids), "requested_count": len(unique_ids)}
+    )
 
 
 @router.get("/review/knowledge", response_model=ApiResponse)
@@ -3895,6 +4084,51 @@ async def review_relation(
         raise HTTPException(status_code=404, detail=str(e))
 
     return ApiResponse(data=result)
+
+
+@router.delete("/review/relations/{relation_id}", response_model=ApiResponse)
+async def delete_review_relation(
+    relation_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """删除单个知识点关系"""
+    from app.models.mysql_models import KnowledgeRelation
+
+    relation = await db.get(KnowledgeRelation, relation_id)
+    if not relation:
+        raise HTTPException(status_code=404, detail="关系不存在")
+
+    await db.delete(relation)
+    await db.commit()
+
+    return ApiResponse(message="删除成功", data={"id": relation_id})
+
+
+@router.post("/review/relations/batch-delete", response_model=ApiResponse)
+async def batch_delete_review_relations(
+    req: BatchIdsRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """批量删除知识点关系"""
+    from app.models.mysql_models import KnowledgeRelation
+
+    unique_ids = list(dict.fromkeys(req.ids))
+    result = await db.execute(
+        select(KnowledgeRelation.id).where(KnowledgeRelation.id.in_(unique_ids))
+    )
+    existing_ids = [row[0] for row in result.all()]
+    if not existing_ids:
+        raise HTTPException(status_code=404, detail="未找到可删除的关系")
+
+    await db.execute(
+        delete(KnowledgeRelation).where(KnowledgeRelation.id.in_(existing_ids))
+    )
+    await db.commit()
+
+    return ApiResponse(
+        message="删除成功",
+        data={"deleted_count": len(existing_ids), "requested_count": len(unique_ids)}
+    )
 
 
 @router.get("/review/stats", response_model=ApiResponse)
@@ -4377,7 +4611,7 @@ async def list_chapter_relations(
         count_query = count_query.where(and_(*conditions))
     total = await db.scalar(count_query) or 0
 
-    query = query.order_by(ChapterRelation.created_at.desc())
+    query = query.order_by(ChapterRelation.created_at.desc(), ChapterRelation.id.desc())
     query = query.offset((page - 1) * page_size).limit(page_size)
     rows = (await db.execute(query)).all()
 
@@ -4430,6 +4664,51 @@ async def review_chapter_relation(
     await db.commit()
 
     return ApiResponse(data={"id": relation_id, "review_status": review_status})
+
+
+@router.delete("/chapter-relations/{relation_id}", response_model=ApiResponse)
+async def delete_chapter_relation(
+    relation_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """删除单个考点关系"""
+    from app.models.mysql_models import ChapterRelation
+
+    relation = await db.get(ChapterRelation, relation_id)
+    if not relation:
+        raise HTTPException(status_code=404, detail="关系不存在")
+
+    await db.delete(relation)
+    await db.commit()
+
+    return ApiResponse(message="删除成功", data={"id": relation_id})
+
+
+@router.post("/chapter-relations/batch-delete", response_model=ApiResponse)
+async def batch_delete_chapter_relations(
+    req: BatchIdsRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """批量删除考点关系"""
+    from app.models.mysql_models import ChapterRelation
+
+    unique_ids = list(dict.fromkeys(req.ids))
+    result = await db.execute(
+        select(ChapterRelation.id).where(ChapterRelation.id.in_(unique_ids))
+    )
+    existing_ids = [row[0] for row in result.all()]
+    if not existing_ids:
+        raise HTTPException(status_code=404, detail="未找到可删除的关系")
+
+    await db.execute(
+        delete(ChapterRelation).where(ChapterRelation.id.in_(existing_ids))
+    )
+    await db.commit()
+
+    return ApiResponse(
+        message="删除成功",
+        data={"deleted_count": len(existing_ids), "requested_count": len(unique_ids)}
+    )
 
 
 def _gen_chrel_id() -> str:

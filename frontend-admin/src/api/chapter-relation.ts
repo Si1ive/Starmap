@@ -84,6 +84,18 @@ export const reviewChapterRelation = (
   })
 }
 
+export const deleteChapterRelation = (
+  id: string
+): Promise<ApiResponse<{ id: string }>> => {
+  return adminClient.delete(`/chapter-relations/${id}`)
+}
+
+export const batchDeleteChapterRelations = (
+  ids: string[]
+): Promise<ApiResponse<{ deleted_count: number; requested_count: number }>> => {
+  return adminClient.post('/chapter-relations/batch-delete', { ids })
+}
+
 // 跨章关联编排
 export const expandChapterRelations = (chapterIds: string[], maxResults?: number): Promise<ApiResponse<ChapterExpansionResult>> => {
   return adminClient.post('/search/chapter-expansion', {

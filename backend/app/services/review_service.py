@@ -43,6 +43,7 @@ class ReviewService:
         count_query = select(func.count()).select_from(KnowledgePoint)
 
         conditions = []
+        conditions.append(KnowledgePoint.status != "deleted")
         if subject_id:
             conditions.append(KnowledgePoint.subject_id == subject_id)
         if chapter_id:
@@ -54,6 +55,10 @@ class ReviewService:
             )
         if review_status:
             conditions.append(KnowledgePoint.review_status == review_status)
+            if review_status == "pending":
+                conditions.append(KnowledgePoint.status == "pending")
+            elif review_status == "approved":
+                conditions.append(KnowledgePoint.status == "active")
 
         if conditions:
             query = query.where(and_(*conditions))
@@ -61,7 +66,7 @@ class ReviewService:
 
         total = await self.db.scalar(count_query) or 0
 
-        query = query.order_by(KnowledgePoint.created_at.desc())
+        query = query.order_by(KnowledgePoint.created_at.desc(), KnowledgePoint.id.desc())
         query = query.offset((page - 1) * page_size).limit(page_size)
         result = await self.db.execute(query)
         items = result.scalars().all()
@@ -118,6 +123,10 @@ class ReviewService:
             kp.topic_terms = topic_terms
 
         kp.review_status = review_status
+        if review_status == "approved":
+            kp.status = "active"
+        else:
+            kp.status = "pending"
         kp.review_notes = review_notes
 
         await self.db.commit()
@@ -173,6 +182,7 @@ class ReviewService:
         count_query = select(func.count()).select_from(Question)
 
         conditions = []
+        conditions.append(Question.status != "deleted")
         if subject_id:
             conditions.append(Question.subject_id == subject_id)
         if chapter_id:
@@ -190,6 +200,10 @@ class ReviewService:
             conditions.append(Question.type == question_type)
         if review_status:
             conditions.append(Question.review_status == review_status)
+            if review_status == "pending":
+                conditions.append(Question.status == "pending")
+            elif review_status == "approved":
+                conditions.append(Question.status == "active")
 
         if conditions:
             query = query.where(and_(*conditions))
@@ -197,7 +211,7 @@ class ReviewService:
 
         total = await self.db.scalar(count_query) or 0
 
-        query = query.order_by(Question.created_at.desc())
+        query = query.order_by(Question.created_at.desc(), Question.id.desc())
         query = query.offset((page - 1) * page_size).limit(page_size)
         result = await self.db.execute(query)
         items = result.scalars().all()
@@ -249,6 +263,10 @@ class ReviewService:
             await self._mark_segment_rebuild("question", question_id)
 
         q.review_status = review_status
+        if review_status == "approved":
+            q.status = "active"
+        else:
+            q.status = "pending"
         q.review_notes = review_notes
 
         await self.db.commit()
@@ -340,7 +358,7 @@ class ReviewService:
 
         total = await self.db.scalar(count_query) or 0
 
-        query = query.order_by(KnowledgeRelation.created_at.desc())
+        query = query.order_by(KnowledgeRelation.created_at.desc(), KnowledgeRelation.id.desc())
         query = query.offset((page - 1) * page_size).limit(page_size)
         result = await self.db.execute(query)
         rows = result.all()

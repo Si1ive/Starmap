@@ -144,6 +144,18 @@ export const reviewSectionMapping = (
   return adminClient.post(`/review/sections/${mappingId}`, null, { params: data })
 }
 
+export const deleteSectionMapping = (
+  id: string
+): Promise<ApiResponse<{ id: string }>> => {
+  return adminClient.delete(`/review/sections/${id}`)
+}
+
+export const batchDeleteSectionMappings = (
+  ids: string[]
+): Promise<ApiResponse<{ deleted_count: number; requested_count: number }>> => {
+  return adminClient.post('/review/sections/batch-delete', { ids })
+}
+
 export const listKnowledgeReviews = (params: {
   subject_id?: string
   chapter_id?: string
@@ -194,6 +206,18 @@ export const reviewRelation = (
   data: { review_status: string; relation_type?: string; directionality?: string; review_notes?: string }
 ): Promise<ApiResponse<any>> => {
   return adminClient.post(`/review/relations/${id}`, null, { params: data })
+}
+
+export const deleteReviewRelation = (
+  id: string
+): Promise<ApiResponse<{ id: string }>> => {
+  return adminClient.delete(`/review/relations/${id}`)
+}
+
+export const batchDeleteReviewRelations = (
+  ids: string[]
+): Promise<ApiResponse<{ deleted_count: number; requested_count: number }>> => {
+  return adminClient.post('/review/relations/batch-delete', { ids })
 }
 
 export const getReviewStats = (subjectId?: string): Promise<ApiResponse<any>> => {
