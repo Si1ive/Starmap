@@ -43,16 +43,26 @@ export interface SearchWithOutlineResult {
   outline_expansion: OutlineExpansionResult
 }
 
-export interface ChapterExpansionEntry {
+export interface ScopeChapterEntry {
   chapter_id: string
-  source: string
-  score: number
+  relation: string
+}
+
+export interface SemanticRelationEntry {
+  chapter_id: string
+  source_type: string
   relation_type: string
-  reason?: string
+  confidence: number
+  evidence_text?: string
+}
+
+export interface ChapterExpansionEntry {
+  scope_expansion: ScopeChapterEntry[]
+  semantic_relations: SemanticRelationEntry[]
 }
 
 export interface ChapterExpansionResult {
-  relations: Record<string, ChapterExpansionEntry[]>
+  relations: Record<string, ChapterExpansionEntry>
 }
 
 // 考点关系 CRUD

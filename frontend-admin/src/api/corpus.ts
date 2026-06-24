@@ -246,6 +246,21 @@ export const searchWithRelations = (req: {
   return adminClient.post('/search/with-relations', req)
 }
 
+export const searchDualPath = (req: {
+  expanded_query: string
+  chapter_ids: string[]
+  subject_id?: string
+  limit?: number
+  per_chapter_cap?: number
+}): Promise<ApiResponse<{
+  results: any[]
+  total: number
+  tier1_count: number
+  tier2_count: number
+}>> => {
+  return adminClient.post('/search/dual-path', req)
+}
+
 export const buildSegments = (params: {
   subject_id?: string
   document_id?: string

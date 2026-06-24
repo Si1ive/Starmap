@@ -5,17 +5,17 @@
 
 Phase 0: expand_query_with_outline()  - 大纲辅助 Query 扩展
 Phase 2: expand_chapter_scope()      - 沿考点树向上扩展
-Phase 2: retrieve_by_exam_point()    - 从题出发的结构化展开
-Phase 2: find_cross_chapter_relations() - 知识点关系图桥接
-Phase 2: fallback_chapter_similarity()  - embedding 兜底
-Phase 2: expand_related_chapters()      - 跨章关联编排（层叠降级）
+Phase 2: retrieve_by_chapters()      - 从考点出发的结构化展开
+Phase 2: retrieve_by_question()      - 从题出发（题→考点→委托 retrieve_by_chapters）
+Phase 2: fallback_chapter_similarity()  - embedding 兜底（离线构建器用）
+Phase 2: expand_related_chapters()      - 在线读取器：scope 在线算 + semantic 读 ChapterRelation 已审核行
 """
 
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import select, or_
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from qdrant_client.models import Filter, FieldCondition, MatchValue
 
@@ -23,12 +23,11 @@ from app.core.logging import get_logger
 from app.db.qdrant import qdrant_manager
 from app.models.mysql_models import (
     CanonicalChapter,
+    ChapterRelation,
     KnowledgePoint,
     KnowledgePointChapterLink,
-    KnowledgeRelation,
     Question,
     QuestionChapterLink,
-    RetrievalSegment,
 )
 from app.services.embedding_service import get_embedding_service_from_settings
 
@@ -48,31 +47,20 @@ class OutlineExpansionResult:
 
 
 @dataclass
-class RelationHop:
-    """关系图中的一跳"""
-    from_kp: str
-    to_kp: str
-    relation_type: str
-    confidence: float
-
-
-@dataclass
-class CrossChapterRelation:
-    """跨章关联结果"""
-    target_chapter_id: str
-    score: float
-    via_knowledge_point_id: str = ""
-    path: List[RelationHop] = field(default_factory=list)
-
-
-@dataclass
-class RelatedChapter:
-    """跨章关联编排结果"""
+class ScopeChapter:
+    """scope_expansion 结果：考点树结构派生（在线计算，不入表）"""
     chapter_id: str
-    source: str  # sibling / llm_cross_reference / knowledge_bridge / embedding_fallback
-    score: float
+    relation: str = "sibling_or_ancestor"  # sibling / parent / child
+
+
+@dataclass
+class SemanticRelation:
+    """semantic_relations 结果：读 ChapterRelation 已审核行"""
+    chapter_id: str
+    source_type: str  # llm / embedding / manual
     relation_type: str = "similar_to"
-    reason: Optional[str] = None
+    confidence: float = 0.0
+    evidence_text: Optional[str] = None
 
 
 # ========== Phase 0: 大纲辅助 Query 扩展 ==========
@@ -261,49 +249,47 @@ async def expand_chapter_scope(
 # ========== Phase 2: 题 → 考点 → 相关知识 结构化检索 ==========
 
 
-async def retrieve_by_exam_point(
+async def retrieve_by_chapters(
     db: AsyncSession,
-    question_id: str,
+    chapter_ids: List[str],
     expand_to_siblings: bool = True,
     expand_upward_levels: int = 1,
+    exclude_question_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    从一道题出发，围绕考点展开所有相关知识。
+    从一组考点出发，展开该范围内的题目和知识点（结构化检索，纯 link 表 JOIN）。
+
+    chapter_ids 为「主考点」，可选地沿考点树展开到兄弟/父考点。
 
     返回:
     {
-        "question": {...},
-        "primary_chapters": [...],
-        "all_chapters": [...],
+        "primary_chapters": [...],   # 传入的主考点
+        "all_chapters": [...],       # 展开后的全部考点
         "questions_by_chapter": {...},
         "knowledge_points_by_chapter": {...},
     }
     """
-    # Step 1: 题目 → 考点
-    chapter_links = (await db.execute(
-        select(QuestionChapterLink).where(
-            QuestionChapterLink.question_id == question_id
-        )
-    )).scalars().all()
-    chapter_ids = [link.canonical_chapter_id for link in chapter_links]
+    primary_ids = list(chapter_ids)
 
-    # Step 2: 扩展考点范围
-    all_chapter_ids = set(chapter_ids)
-    if expand_to_siblings and chapter_ids:
-        expanded = await expand_chapter_scope(db, chapter_ids, expand_upward_levels)
+    # Step 1: 扩展考点范围
+    all_chapter_ids = set(primary_ids)
+    if expand_to_siblings and primary_ids:
+        expanded = await expand_chapter_scope(db, primary_ids, expand_upward_levels)
         all_chapter_ids.update(expanded)
 
     chapter_id_list = list(all_chapter_ids)
 
-    # Step 3: 批量收集范围内的题目和知识点
+    # Step 2: 批量收集范围内的题目和知识点
     questions = []
     if chapter_id_list:
+        conds = [
+            QuestionChapterLink.canonical_chapter_id.in_(chapter_id_list),
+            Question.review_status == "approved",
+        ]
+        if exclude_question_id:
+            conds.append(Question.id != exclude_question_id)
         questions = (await db.execute(
-            select(Question).join(QuestionChapterLink).where(
-                QuestionChapterLink.canonical_chapter_id.in_(chapter_id_list),
-                Question.id != question_id,
-                Question.review_status == "approved",
-            )
+            select(Question).join(QuestionChapterLink).where(*conds)
         )).scalars().all()
 
     knowledge_points = []
@@ -315,7 +301,7 @@ async def retrieve_by_exam_point(
             )
         )).scalars().all()
 
-    # Step 4: 加载章节信息
+    # Step 3: 加载章节信息
     chapters = []
     if chapter_id_list:
         chapters = (await db.execute(
@@ -354,7 +340,7 @@ async def retrieve_by_exam_point(
     return {
         "primary_chapters": [
             {"id": ch.id, "name": ch.name, "level": ch.level}
-            for ch in chapters if ch.id in chapter_ids
+            for ch in chapters if ch.id in primary_ids
         ],
         "all_chapters": [
             {"id": ch.id, "name": ch.name, "level": ch.level, "outline_code": ch.outline_code}
@@ -365,108 +351,34 @@ async def retrieve_by_exam_point(
     }
 
 
-# ========== Phase 2: 跨章关联 ==========
-
-
-async def find_cross_chapter_relations(
+async def retrieve_by_question(
     db: AsyncSession,
-    chapter_id: str,
-    max_depth: int = 2,
-    min_confidence: float = 0.7,
-) -> List[CrossChapterRelation]:
+    question_id: str,
+    expand_to_siblings: bool = True,
+    expand_upward_levels: int = 1,
+) -> Dict[str, Any]:
     """
-    通过知识点关系图找到与指定考点关联的其他考点（Layer 2）。
+    从一道题出发：题 → 考点（QuestionChapterLink）→ 委托 retrieve_by_chapters 展开。
 
-    1. 考点 → KnowledgePointChapterLink → 该考点下的所有知识点（起点 S）
-    2. 从 S 出发，沿 KnowledgeRelation 边做 BFS（max_depth 跳）
-    3. 到达的知识点集合 T → KnowledgePointChapterLink → 关联的考点 C
-    4. 排除原考点，按关系路径强度排序
+    返回结构同 retrieve_by_chapters，主考点为该题直接关联的考点。
     """
-    # Step 1: 考点 → 知识点
-    kp_links = (await db.execute(
-        select(KnowledgePointChapterLink).where(
-            KnowledgePointChapterLink.canonical_chapter_id == chapter_id
-        )
-    )).scalars().all()
-    start_kp_ids = {link.knowledge_point_id for link in kp_links}
-
-    if not start_kp_ids:
-        return []
-
-    # Step 2: BFS 逐层批量查询
-    visited: Dict[str, float] = {kp_id: 1.0 for kp_id in start_kp_ids}
-    paths: Dict[str, List[RelationHop]] = {}
-    frontier = list(start_kp_ids)
-
-    for _depth in range(max_depth):
-        if not frontier:
-            break
-
-        rows = (await db.execute(
-            select(KnowledgeRelation).where(
-                or_(
-                    KnowledgeRelation.source_knowledge_id.in_(frontier),
-                    KnowledgeRelation.target_knowledge_id.in_(frontier),
-                ),
-                KnowledgeRelation.review_status == "approved",
-                KnowledgeRelation.confidence >= min_confidence,
-            )
-        )).scalars().all()
-
-        next_frontier = []
-        for rel in rows:
-            if rel.source_knowledge_id in frontier:
-                from_kp = rel.source_knowledge_id
-                neighbor = rel.target_knowledge_id
-            else:
-                from_kp = rel.target_knowledge_id
-                neighbor = rel.source_knowledge_id
-
-            if neighbor in start_kp_ids:
-                continue
-
-            edge_confidence = float(rel.confidence or 0.5)
-            cumulative = visited[from_kp] * edge_confidence
-
-            if neighbor not in visited or cumulative > visited[neighbor]:
-                visited[neighbor] = cumulative
-                paths[neighbor] = paths.get(from_kp, []) + [RelationHop(
-                    from_kp=from_kp,
-                    to_kp=neighbor,
-                    relation_type=rel.relation_type,
-                    confidence=edge_confidence,
-                )]
-                if neighbor not in next_frontier:
-                    next_frontier.append(neighbor)
-
-        frontier = next_frontier
-
-    # Step 3: 到达的知识点 → 考点
-    reached_kp_ids = set(visited.keys()) - start_kp_ids
-    if not reached_kp_ids:
-        return []
-
     chapter_links = (await db.execute(
-        select(KnowledgePointChapterLink).where(
-            KnowledgePointChapterLink.knowledge_point_id.in_(list(reached_kp_ids)),
-            KnowledgePointChapterLink.canonical_chapter_id != chapter_id,
+        select(QuestionChapterLink).where(
+            QuestionChapterLink.question_id == question_id
         )
     )).scalars().all()
+    chapter_ids = [link.canonical_chapter_id for link in chapter_links]
 
-    # Step 4: 聚合到考点
-    chapter_scores: Dict[str, CrossChapterRelation] = {}
-    for link in chapter_links:
-        score = visited.get(link.knowledge_point_id, 0)
-        if link.canonical_chapter_id not in chapter_scores or \
-           score > chapter_scores[link.canonical_chapter_id].score:
-            chapter_scores[link.canonical_chapter_id] = CrossChapterRelation(
-                target_chapter_id=link.canonical_chapter_id,
-                score=score,
-                via_knowledge_point_id=link.knowledge_point_id,
-                path=paths.get(link.knowledge_point_id, []),
-            )
+    return await retrieve_by_chapters(
+        db,
+        chapter_ids=chapter_ids,
+        expand_to_siblings=expand_to_siblings,
+        expand_upward_levels=expand_upward_levels,
+        exclude_question_id=question_id,
+    )
 
-    return sorted(chapter_scores.values(), key=lambda r: r.score, reverse=True)
+
+# ========== Phase 2: 跨章关联 ==========
 
 
 async def fallback_chapter_similarity(
@@ -508,93 +420,56 @@ async def expand_related_chapters(
     db: AsyncSession,
     chapter_ids: List[str],
     max_results: int = 10,
-) -> Dict[str, List[RelatedChapter]]:
+) -> Dict[str, Dict[str, list]]:
     """
-    跨章关联编排（层叠降级策略）。
+    在线读取器：每个 chapter_id 返回两类关联，互不混排（见设计文档 6.3 阶段 B）。
 
-    对每个 chapter_id:
-    1. Layer 1: 同 parent_id 兄弟考点 → 零误判，优先
-    2. Layer 3: cross_references → LLM 精确标注
-    3. Layer 2: find_cross_chapter_relations() → 知识点桥接
-    4. Layer 4: fallback_chapter_similarity() → embedding 兜底
+    - scope_expansion:    在线由 parent_id 计算的结构派生（兄弟/父/子），不入表、不审核
+    - semantic_relations: 只读 ChapterRelation 已审核行（review_status="approved"）
 
-    去重：同一 target_chapter_id 只保留最高优先级来源的结果。
-    """
-    result: Dict[str, Dict[str, RelatedChapter]] = {
-        cid: {} for cid in chapter_ids
+    检索路径不再在线推导语义关联——审核员对 ChapterRelation 的 approve/reject
+    直接决定这里返回什么，从而修复 v1.2 审核与检索脱节的问题。
+
+    返回: {
+        chapter_id: {
+            "scope_expansion":    [{chapter_id, relation}],
+            "semantic_relations": [{chapter_id, source_type, relation_type,
+                                     confidence, evidence_text}],
+        }
     }
+    """
+    out: Dict[str, Dict[str, list]] = {}
 
     for chapter_id in chapter_ids:
-        chapter = await db.get(CanonicalChapter, chapter_id)
-        if not chapter:
-            continue
-        seen = result[chapter_id]
+        # 路 1: scope_expansion —— 在线计算，不读表（upward_levels=0 只取兄弟+父）
+        scope_ids = await expand_chapter_scope(db, [chapter_id], upward_levels=0)
 
-        # Layer 1: 结构化关联（同章兄弟）
-        if chapter.parent_id:
-            siblings = (await db.execute(
-                select(CanonicalChapter).where(
-                    CanonicalChapter.parent_id == chapter.parent_id,
-                    CanonicalChapter.id != chapter_id,
-                    CanonicalChapter.status == "active",
-                )
-            )).scalars().all()
-            for sib in siblings:
-                if sib.id not in seen:
-                    seen[sib.id] = RelatedChapter(
-                        chapter_id=sib.id,
-                        source="sibling",
-                        score=1.0,
-                        relation_type="similar_to",
-                    )
+        # 路 2: semantic_relations —— 只读 ChapterRelation 已审核行
+        rows = (await db.execute(
+            select(ChapterRelation).where(
+                ChapterRelation.source_chapter_id == chapter_id,
+                ChapterRelation.review_status == "approved",
+            ).order_by(ChapterRelation.confidence.desc()).limit(max_results)
+        )).scalars().all()
 
-        # Layer 3: LLM 显式标注
-        cross_refs = getattr(chapter, "cross_references", None)
-        if cross_refs:
-            for ref in cross_refs:
-                target_id = ref.get("target_chapter_id")
-                if target_id and target_id not in seen:
-                    seen[target_id] = RelatedChapter(
-                        chapter_id=target_id,
-                        source="llm_cross_reference",
-                        score=0.9,
-                        relation_type=ref.get("relation_type", "similar_to"),
-                        reason=ref.get("reason"),
-                    )
+        out[chapter_id] = {
+            "scope_expansion": [
+                {"chapter_id": cid, "relation": "sibling_or_ancestor"}
+                for cid in scope_ids if cid != chapter_id
+            ],
+            "semantic_relations": [
+                {
+                    "chapter_id": r.target_chapter_id,
+                    "source_type": r.source_type,
+                    "relation_type": r.relation_type,
+                    "confidence": float(r.confidence or 0),
+                    "evidence_text": r.evidence_text,
+                }
+                for r in rows
+            ],
+        }
 
-        # Layer 2: 知识点关系图桥接
-        try:
-            bridged = await find_cross_chapter_relations(db, chapter_id)
-            for br in bridged:
-                if br.target_chapter_id not in seen:
-                    seen[br.target_chapter_id] = RelatedChapter(
-                        chapter_id=br.target_chapter_id,
-                        source="knowledge_bridge",
-                        score=br.score,
-                        relation_type=br.path[-1].relation_type if br.path else "similar_to",
-                    )
-        except Exception as e:
-            logger.warning("关系图桥接失败，跳过", chapter_id=chapter_id, error=str(e))
-
-        # Layer 4: embedding 兜底（仅冷启动）
-        if len(seen) == 0:
-            try:
-                sims = await fallback_chapter_similarity(db, chapter_id, top_k=3)
-                for target_id, score in sims:
-                    if target_id not in seen:
-                        seen[target_id] = RelatedChapter(
-                            chapter_id=target_id,
-                            source="embedding_fallback",
-                            score=score,
-                            relation_type="similar_to",
-                        )
-            except Exception as e:
-                logger.warning("embedding 兜底失败", chapter_id=chapter_id, error=str(e))
-
-    return {
-        cid: sorted(entries.values(), key=lambda r: r.score, reverse=True)[:max_results]
-        for cid, entries in result.items()
-    }
+    return out
 
 
 # ========== cross_references 校验 ==========

@@ -4350,6 +4350,40 @@ async def search_with_outline(
     return ApiResponse(data=result)
 
 
+class DualPathRecallRequest(BaseModel):
+    """双路分层归并请求"""
+    expanded_query: str = Field(..., min_length=1, description="（已扩展的）查询文本")
+    chapter_ids: List[str] = Field(..., min_length=1, description="Phase 2 展开后的考点范围")
+    subject_id: Optional[str] = Field(None, description="学科过滤")
+    limit: int = Field(20, ge=1, le=50, description="归并后返回总数")
+    per_chapter_cap: int = Field(10, ge=1, le=50, description="路 B 每考点展开上限")
+
+
+@router.post("/search/dual-path", response_model=ApiResponse)
+async def dual_path_recall(
+    request: DualPathRecallRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Phase 3 双路分层归并（见设计文档 6.4）
+
+    路 A 向量直接命中（第一梯队，带分数）+ 路 B 考点结构化展开（第二梯队，link JOIN，设上限）。
+    分层不混排，路 A 在前、路 B 补网。
+    """
+    from app.services.retrieval_service import RetrievalService
+
+    service = RetrievalService(db)
+    result = await service.merge_dual_path_recall(
+        expanded_query=request.expanded_query,
+        chapter_ids=request.chapter_ids,
+        subject_id=request.subject_id,
+        limit=request.limit,
+        per_chapter_cap=request.per_chapter_cap,
+    )
+
+    return ApiResponse(data=result)
+
+
 class ChapterExpansionRequest(BaseModel):
     """跨章关联编排请求"""
     chapter_ids: List[str] = Field(..., min_length=1, description="考点 ID 列表")
@@ -4362,15 +4396,15 @@ async def expand_chapters(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    跨章关联编排（层叠降级策略）
+    跨章关联在线读取器（见设计文档 6.3 阶段 B）
 
-    对每个 chapter_id：
-    1. Layer 1: 同 parent_id 兄弟考点
-    2. Layer 3: LLM cross_references 标注
-    3. Layer 2: 知识点关系图 BFS 桥接
-    4. Layer 4: embedding 语义相似度兜底
+    对每个 chapter_id 返回两类互不混排的关联：
+    - scope_expansion:    在线由 parent_id 计算的结构派生（兄弟/父/子），不入表
+    - semantic_relations: 只读 ChapterRelation 已审核行（review_status="approved"）
 
-    返回: {chapter_id: [{chapter_id, source, score, relation_type}, ...]}
+    审核员对 ChapterRelation 的 approve/reject 直接决定 semantic_relations 返回什么。
+
+    返回: {chapter_id: {scope_expansion: [...], semantic_relations: [...]}}
     """
     from app.services.outline_retrieval_service import expand_related_chapters
 
@@ -4380,21 +4414,7 @@ async def expand_chapters(
         max_results=request.max_results,
     )
 
-    # 序列化为 JSON 友好格式
-    serialized = {}
-    for cid, entries in result.items():
-        serialized[cid] = [
-            {
-                "chapter_id": e.chapter_id,
-                "source": e.source,
-                "score": round(e.score, 4),
-                "relation_type": e.relation_type,
-                "reason": e.reason,
-            }
-            for e in entries
-        ]
-
-    return ApiResponse(data={"relations": serialized})
+    return ApiResponse(data={"relations": result})
 
 
 # ========== 富化与关系构建 ==========

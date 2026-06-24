@@ -120,16 +120,22 @@ class RetrievalService:
         # Phase 0: 大纲扩展
         expansion = await expand_query_with_outline(self.db, query)
 
-        # 合并过滤条件
+        # 合并过滤条件。chapter filter 只取高置信 top-2 命中考点（matched_chapters
+        # 已按 score 降序），避免低分考点把候选集扩成混杂主题、引入噪声。
         merged_subject_id = subject_id or (expansion.subject_ids[0] if expansion.subject_ids else None)
+        top_expansion_chapter_ids = [
+            c["chapter_id"] for c in expansion.matched_chapters[:2] if c.get("chapter_id")
+        ]
         merged_chapter_ids = list(set(
-            (chapter_ids or []) + expansion.chapter_ids
+            (chapter_ids or []) + top_expansion_chapter_ids
         )) or None
 
-        # Phase 1: 用扩展后的 query 做内容检索
-        search_query = expansion.expanded_query if expansion.matched_chapters else query
+        # Phase 1: dense 用扩展后的 query（解决短查询语义不对称）；
+        # sparse 保留原始 query（避免扩展拼入的长描述污染关键词匹配）。
+        dense_query = expansion.expanded_query if expansion.matched_chapters else query
         results = await self.search(
-            query=search_query,
+            query=dense_query,
+            sparse_query=query,
             subject_id=merged_subject_id,
             chapter_ids=merged_chapter_ids,
             entity_type=entity_type,
@@ -150,6 +156,99 @@ class RetrievalService:
             },
         }
 
+    async def merge_dual_path_recall(
+        self,
+        expanded_query: str,
+        chapter_ids: List[str],
+        subject_id: Optional[str] = None,
+        limit: int = 20,
+        per_chapter_cap: int = 10,
+    ) -> Dict[str, Any]:
+        """
+        双路分层归并（见设计文档 6.4）：
+
+        - 路 A 向量直接命中（第一梯队，带 cosine 分数）：expanded_query → hybrid 检索
+        - 路 B 考点结构化展开（第二梯队，无分数，按 link 表 JOIN）：在 chapter_ids
+          范围内拉同考点的知识点/题目，补向量没召回的内容
+
+        归并纪律：
+        1. 分层不混排——路 A 在前（按分数），路 B 在后（补充上下文）
+        2. 路 B 每考点设上限 per_chapter_cap，避免几十条无分数内容淹没精确命中
+        3. JOIN 为主——路 B 走 link 表精确 JOIN，不再用关键词重搜
+        4. 去重——路 A 已命中的实体不在路 B 重复出现，标注 dual_hit
+        """
+        from app.services.outline_retrieval_service import retrieve_by_chapters
+
+        # 路 A: 向量直接命中（第一梯队）
+        vector_hits = await self.search(
+            query=expanded_query,
+            subject_id=subject_id,
+            chapter_ids=chapter_ids or None,
+            entity_type=None,  # knowledge_point + question 都召回
+            mode="hybrid",
+            limit=limit,
+        )
+        seen_entity_ids = {h.entity_id for h in vector_hits}
+
+        tier1 = [
+            {
+                "entity_id": h.entity_id,
+                "entity_type": h.entity_type,
+                "segment_type": h.segment_type,
+                "content_text": h.content_text,
+                "score": h.score,
+                "chapter_ids": h.chapter_ids,
+                "source": "vector",
+                "tier": 1,
+            }
+            for h in sorted(vector_hits, key=lambda x: x.score, reverse=True)
+        ]
+
+        # 路 B: 考点结构化展开（第二梯队），不再向上爬树，只取本批考点内容
+        tier2: List[Dict[str, Any]] = []
+        if chapter_ids:
+            scope = await retrieve_by_chapters(
+                self.db,
+                chapter_ids=chapter_ids,
+                expand_to_siblings=False,
+            )
+            for cid, items in scope.get("knowledge_points_by_chapter", {}).items():
+                for item in items[:per_chapter_cap]:
+                    if item["id"] in seen_entity_ids:
+                        continue
+                    seen_entity_ids.add(item["id"])
+                    tier2.append({
+                        "entity_id": item["id"],
+                        "entity_type": "knowledge_point",
+                        "content_text": item.get("summary") or item.get("title"),
+                        "score": None,
+                        "chapter_ids": [cid],
+                        "source": "scope_expansion",
+                        "tier": 2,
+                    })
+            for cid, items in scope.get("questions_by_chapter", {}).items():
+                for item in items[:per_chapter_cap]:
+                    if item["id"] in seen_entity_ids:
+                        continue
+                    seen_entity_ids.add(item["id"])
+                    tier2.append({
+                        "entity_id": item["id"],
+                        "entity_type": "question",
+                        "content_text": item.get("content"),
+                        "score": None,
+                        "chapter_ids": [cid],
+                        "source": "scope_expansion",
+                        "tier": 2,
+                    })
+
+        merged = (tier1 + tier2)[:limit]
+        return {
+            "results": merged,
+            "total": len(merged),
+            "tier1_count": len(tier1),
+            "tier2_count": len(tier2),
+        }
+
     async def search(
         self,
         query: str,
@@ -159,18 +258,21 @@ class RetrievalService:
         mode: str = "hybrid",
         limit: int = 10,
         filters: Optional[Dict[str, Any]] = None,
+        sparse_query: Optional[str] = None,
     ) -> List[RetrievalResult]:
         """
         统一检索入口
 
         Args:
-            query: 用户查询文本
+            query: 用户查询文本（dense 检索用，可为大纲扩展后的长 query）
             subject_id: 学科过滤
             chapter_ids: 章节过滤（任意匹配）
             entity_type: "knowledge_point" / "question" / None(both)
             mode: "dense" / "sparse" / "hybrid"
             limit: 返回数量
             filters: 结构化过滤，支持 exam_year/exam_scope/difficulty/question_type/answer_source/tags
+            sparse_query: sparse 检索专用 query。缺省时复用 query；大纲扩展场景下
+                应传入原始 query，避免扩展拼接的长串给关键词 LIKE 引入噪声词
 
         Returns:
             按相关性排序的检索结果列表
@@ -178,7 +280,9 @@ class RetrievalService:
         if not query.strip():
             return []
 
-        # 生成 query embedding
+        sparse_q = sparse_query if (sparse_query and sparse_query.strip()) else query
+
+        # 生成 query embedding（dense 用 query）
         await self._ensure_embedding()
         query_vector = await self.embedding.embed_text(query)
 
@@ -203,12 +307,12 @@ class RetrievalService:
                 hits = dense_hits
             elif mode == "sparse":
                 hits = await self._sparse_search(
-                    collection, query, limit * 2, qdrant_filter
+                    collection, sparse_q, limit * 2, qdrant_filter
                 )
             else:
-                # hybrid: dense + sparse 合并去重，按 score 排序
+                # hybrid: dense 用 query，sparse 用 sparse_q（原始 query）
                 sparse_hits = await self._sparse_search(
-                    collection, query, limit * 2, qdrant_filter
+                    collection, sparse_q, limit * 2, qdrant_filter
                 )
                 hits = self._merge_hits(dense_hits, sparse_hits)
 
