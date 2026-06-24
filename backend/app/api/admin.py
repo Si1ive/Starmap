@@ -4074,6 +4074,48 @@ async def search_with_relations(
     return ApiResponse(data=result)
 
 
+class SearchWithOutlineRequest(BaseModel):
+    """带大纲扩展的检索请求"""
+    query: str = Field(..., min_length=1, description="查询文本")
+    subject_id: Optional[str] = Field(None, description="学科过滤")
+    chapter_ids: Optional[List[str]] = Field(None, description="章节过滤")
+    entity_type: Optional[str] = Field(None, description="实体类型过滤")
+    mode: str = Field("hybrid", description="检索模式: dense/sparse/hybrid")
+    limit: int = Field(10, ge=1, le=50, description="返回数量")
+    filters: Optional[Dict[str, Any]] = Field(
+        None, description="结构化过滤: exam_year/exam_scope/difficulty/question_type/answer_source/tags"
+    )
+
+
+@router.post("/search/with-outline", response_model=ApiResponse)
+async def search_with_outline(
+    request: SearchWithOutlineRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Phase 0 + Phase 1 检索：大纲辅助 Query 扩展 + 内容检索
+
+    1. 用户 query → 检索大纲考点（canonical_chapter segment）
+    2. 用考点 keywords + enhanced_description 扩展 query
+    3. 用扩展后的 query 做 dense/sparse/hybrid 检索
+    4. 返回检索结果 + 大纲扩展信息（matched_chapters）
+    """
+    from app.services.retrieval_service import RetrievalService
+
+    service = RetrievalService(db)
+    result = await service.search_with_outline_expansion(
+        query=request.query,
+        subject_id=request.subject_id,
+        chapter_ids=request.chapter_ids,
+        entity_type=request.entity_type,
+        mode=request.mode,
+        limit=request.limit,
+        filters=request.filters,
+    )
+
+    return ApiResponse(data=result)
+
+
 # ========== 富化与关系构建 ==========
 
 

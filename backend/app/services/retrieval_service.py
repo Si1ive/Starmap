@@ -89,6 +89,67 @@ class RetrievalService:
             self.embedding = await get_embedding_service_from_settings(self.db)
         return self.embedding
 
+    async def search_with_outline_expansion(
+        self,
+        query: str,
+        subject_id: Optional[str] = None,
+        chapter_ids: Optional[List[str]] = None,
+        entity_type: Optional[str] = None,
+        mode: str = "hybrid",
+        limit: int = 10,
+        filters: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Phase 0 + Phase 1 检索：先用大纲扩展 query，再做内容检索。
+
+        1. Phase 0: query → Qdrant 搜 canonical_chapter → 扩展 query + 提取过滤条件
+        2. Phase 1: 用扩展后的 query + 合并后的过滤条件做内容检索
+
+        Returns:
+            {
+                "results": [...],
+                "total": N,
+                "outline_expansion": {
+                    "expanded_query": "...",
+                    "matched_chapters": [...],
+                },
+            }
+        """
+        from app.services.outline_retrieval_service import expand_query_with_outline
+
+        # Phase 0: 大纲扩展
+        expansion = await expand_query_with_outline(self.db, query)
+
+        # 合并过滤条件
+        merged_subject_id = subject_id or (expansion.subject_ids[0] if expansion.subject_ids else None)
+        merged_chapter_ids = list(set(
+            (chapter_ids or []) + expansion.chapter_ids
+        )) or None
+
+        # Phase 1: 用扩展后的 query 做内容检索
+        search_query = expansion.expanded_query if expansion.matched_chapters else query
+        results = await self.search(
+            query=search_query,
+            subject_id=merged_subject_id,
+            chapter_ids=merged_chapter_ids,
+            entity_type=entity_type,
+            mode=mode,
+            limit=limit,
+            filters=filters,
+        )
+
+        return {
+            "results": [r.to_dict() for r in results],
+            "total": len(results),
+            "mode": mode,
+            "outline_expansion": {
+                "expanded_query": expansion.expanded_query[:200],
+                "matched_chapters": expansion.matched_chapters,
+                "subject_ids": expansion.subject_ids,
+                "chapter_ids": expansion.chapter_ids,
+            },
+        }
+
     async def search(
         self,
         query: str,
