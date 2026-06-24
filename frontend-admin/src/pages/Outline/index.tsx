@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import {
   Card, Table, Tag, Button, Space, Modal, Form, Input, InputNumber,
   Switch, Upload, Tree, message, Alert, Descriptions, Spin, Tabs, Typography, Popconfirm, Progress,
@@ -518,6 +518,19 @@ const ChapterDetail = ({ nodeKey, chapters }: { nodeKey: string; chapters: Outli
   return (
     <Space direction="vertical" style={{ width: '100%' }}>
       <div><strong>原文考点</strong><Paragraph style={{ whiteSpace: 'pre-wrap' }}>{ch.description || '（无）'}</Paragraph></div>
+      {ch.enhanced_description && (
+        <div><strong>增强描述</strong><Paragraph style={{ whiteSpace: 'pre-wrap' }}>{ch.enhanced_description}</Paragraph></div>
+      )}
+      {ch.keywords && ch.keywords.length > 0 && (
+        <div>
+          <strong>关键词</strong>
+          <div style={{ marginTop: 4 }}>
+            {ch.keywords.map((kw: string, i: number) => (
+              <Tag key={i} color="blue" style={{ marginBottom: 4 }}>{kw}</Tag>
+            ))}
+          </div>
+        </div>
+      )}
       <div><strong>复习指导</strong><Paragraph style={{ whiteSpace: 'pre-wrap' }}>{ch.exam_guidance || '（尚未生成）'}</Paragraph></div>
     </Space>
   )

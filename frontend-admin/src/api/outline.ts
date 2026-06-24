@@ -24,6 +24,8 @@ export interface OutlineChapter {
   subject_id?: string
   sort_order: number
   description?: string
+  enhanced_description?: string
+  keywords?: string[]
   exam_guidance?: string
   children: OutlineChapter[]
 }
