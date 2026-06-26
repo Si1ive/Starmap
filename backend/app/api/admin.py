@@ -4010,6 +4010,31 @@ async def list_questions_for_review(
     return ApiResponse(data=result)
 
 
+@router.post("/review/questions/backfill-chapters", response_model=ApiResponse)
+async def backfill_question_review_chapters(
+    review_status: str = Query("pending", description="审核状态过滤，留空表示不过滤"),
+    item_status: str = Query("pending", description="题目状态过滤，留空表示不过滤"),
+    subject_id: Optional[str] = None,
+    limit: int = Query(500, ge=1, le=2000),
+    force: bool = Query(False, description="是否覆盖已有章节归属"),
+    dry_run: bool = Query(False, description="只预览不写库"),
+    db: AsyncSession = Depends(get_db),
+):
+    """批量回填待审核题目的章节归属。"""
+    from app.services.chapter_link_service import ChapterLinkService
+
+    service = ChapterLinkService(db)
+    result = await service.backfill_question_chapters(
+        review_status=review_status,
+        status=item_status,
+        subject_id=subject_id,
+        limit=limit,
+        force=force,
+        dry_run=dry_run,
+    )
+    return ApiResponse(data=result)
+
+
 @router.post("/review/questions/{question_id}", response_model=ApiResponse)
 async def review_question(
     question_id: str,
