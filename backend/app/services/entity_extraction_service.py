@@ -1112,7 +1112,7 @@ class EntityExtractionService:
             .where(
                 and_(
                     DocumentSection.document_id == document_id,
-                    DocumentSectionMapping.review_status.in_(["approved", "pending"])
+                    DocumentSectionMapping.review_status == "approved"
                 )
             )
         )

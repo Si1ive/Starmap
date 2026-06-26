@@ -350,13 +350,11 @@ class ChapterMappingService:
             if match_result:
                 chapter_id, confidence, mapping_type = match_result
 
-                # 确定审核状态
+                # Section 映射只作为内部辅助，不再产生独立审核项。
+                # 低置信匹配交给实体抽取阶段的章节直接解析兜底。
                 if confidence >= auto_approve_threshold:
                     review_status = "approved"
                     auto_approved += 1
-                elif confidence >= reject_threshold:
-                    review_status = "pending"
-                    pending_review += 1
                 else:
                     review_status = "rejected"
                     rejected += 1

@@ -39,7 +39,6 @@ const menuItems = [
     icon: <AuditOutlined />,
     label: '审核中心',
     children: [
-      { key: '/admin/review/sections', label: 'Section 映射' },
       { key: '/admin/review/knowledge', label: '知识点审核' },
       { key: '/admin/review/questions', label: '题目审核' },
       { key: '/admin/review/relations', icon: <BranchesOutlined />, label: '关系审核' },

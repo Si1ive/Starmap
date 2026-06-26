@@ -3785,7 +3785,7 @@ async def get_canonical_chapters(
 # ========== 审核相关 ==========
 
 
-@router.get("/review/sections", response_model=ApiResponse)
+@router.get("/review/sections", response_model=ApiResponse, deprecated=True)
 async def list_pending_section_mappings(
     subject_id: Optional[str] = None,
     review_status: Optional[str] = "pending",
@@ -3793,7 +3793,7 @@ async def list_pending_section_mappings(
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
 ):
-    """获取待审核的 section 映射列表"""
+    """获取待审核的 section 映射列表。已废弃，仅保留回滚兼容。"""
     from app.models.mysql_models import DocumentSectionMapping, DocumentSection, Document, CanonicalChapter
     from sqlalchemy import and_
 
@@ -3859,7 +3859,7 @@ async def list_pending_section_mappings(
     })
 
 
-@router.post("/review/sections/{mapping_id}", response_model=ApiResponse)
+@router.post("/review/sections/{mapping_id}", response_model=ApiResponse, deprecated=True)
 async def review_section_mapping(
     mapping_id: str,
     review_status: str = Query(..., description="审核状态: approved/rejected"),
@@ -3867,7 +3867,7 @@ async def review_section_mapping(
     review_notes: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
-    """审核 section 映射"""
+    """审核 section 映射。已废弃，仅保留回滚兼容。"""
     from app.services.chapter_mapping_service import ChapterMappingService
 
     service = ChapterMappingService(db)
@@ -3884,12 +3884,12 @@ async def review_section_mapping(
     return ApiResponse(data=result)
 
 
-@router.delete("/review/sections/{mapping_id}", response_model=ApiResponse)
+@router.delete("/review/sections/{mapping_id}", response_model=ApiResponse, deprecated=True)
 async def delete_section_mapping(
     mapping_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """删除单个 section 映射"""
+    """删除单个 section 映射。已废弃，仅保留回滚兼容。"""
     from app.models.mysql_models import DocumentSectionMapping
 
     mapping = await db.get(DocumentSectionMapping, mapping_id)
@@ -3902,12 +3902,12 @@ async def delete_section_mapping(
     return ApiResponse(message="删除成功", data={"id": mapping_id})
 
 
-@router.post("/review/sections/batch-delete", response_model=ApiResponse)
+@router.post("/review/sections/batch-delete", response_model=ApiResponse, deprecated=True)
 async def batch_delete_section_mappings(
     req: BatchIdsRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """批量删除 section 映射"""
+    """批量删除 section 映射。已废弃，仅保留回滚兼容。"""
     from app.models.mysql_models import DocumentSectionMapping
 
     unique_ids = list(dict.fromkeys(req.ids))

@@ -27,7 +27,6 @@ import QuestionDetail from '@/pages/Question/Detail'
 import QuestionEdit from '@/pages/Question/Edit'
 import CorpusPage from '@/pages/Corpus'
 import DocumentDetailPage from '@/pages/Corpus/DocumentDetail'
-import SectionReviewPage from '@/pages/Review/Sections'
 import KnowledgeReviewPage from '@/pages/Review/Knowledge'
 import QuestionReviewPage from '@/pages/Review/Questions'
 import RelationReviewPage from '@/pages/Review/Relations'
@@ -118,7 +117,6 @@ const AppRoutes = () => {
         <Route path="outlines" element={<OutlineList />} />
 
         {/* 审核中心 */}
-        <Route path="review/sections" element={<SectionReviewPage />} />
         <Route path="review/knowledge" element={<KnowledgeReviewPage />} />
         <Route path="review/questions" element={<QuestionReviewPage />} />
         <Route path="review/relations" element={<RelationReviewPage />} />
