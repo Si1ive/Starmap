@@ -1133,6 +1133,7 @@ class EntityExtractionService:
                     "chapter_id": mapping.canonical_chapter_id,
                     "subject_id": chapter.subject_id,
                     "legacy_chapter_id": legacy_chapter_cache[chapter.id],
+                    "source_section_path": section.section_path[:500] if section.section_path else None,
                 }
                 for page in range(section.page_start, (section.page_end or section.page_start) + 1):
                     page_chapter_map[page] = info
@@ -1250,6 +1251,7 @@ class EntityExtractionService:
         primary_chapter_id = mapping_info["chapter_id"] if mapping_info else None
         subject_id = mapping_info["subject_id"] if mapping_info else fallback_subject_id
         legacy_chapter_id = mapping_info["legacy_chapter_id"] if mapping_info else None
+        source_section_path = mapping_info.get("source_section_path") if mapping_info else None
         resolved_source: Optional[str] = None
 
         # 组合内容
@@ -1313,6 +1315,7 @@ class EntityExtractionService:
             subject_id=subject_id,
             primary_chapter_id=primary_chapter_id,
             source_document_id=document_id,
+            source_section_path=source_section_path,
             title=title_block.content_text or "未命名知识点",
             canonical_title=title_block.content_text,
             content=content,
@@ -1692,6 +1695,7 @@ class EntityExtractionService:
         primary_chapter_id = mapping_info["chapter_id"] if mapping_info else None
         subject_id = mapping_info["subject_id"] if mapping_info else fallback_subject_id
         legacy_chapter_id = mapping_info["legacy_chapter_id"] if mapping_info else None
+        source_section_path = mapping_info.get("source_section_path") if mapping_info else None
 
         # 组合内容
         content_parts = []
@@ -1772,6 +1776,7 @@ class EntityExtractionService:
         return {
             'id': generate_id(),
             'document_id': document_id,
+            'source_section_path': source_section_path,
             'subject_id': subject_id,
             'chapter_id': legacy_chapter_id,
             'primary_chapter_id': primary_chapter_id,
@@ -2078,6 +2083,7 @@ class EntityExtractionService:
                     chapter_id=legacy_chapter_id,
                     primary_chapter_id=primary_chapter_id,
                     source_document_id=question_dict['document_id'],
+                    source_section_path=(question_dict.get('source_section_path') or None),
                     type=question_dict['question_type'],
                     content=question_content,
                     options=options or None,
@@ -2430,6 +2436,7 @@ class EntityExtractionService:
         primary_chapter_id = mapping_info["chapter_id"] if mapping_info else None
         subject_id = mapping_info["subject_id"] if mapping_info else fallback_subject_id
         legacy_chapter_id = mapping_info["legacy_chapter_id"] if mapping_info else None
+        source_section_path = mapping_info.get("source_section_path") if mapping_info else None
         if not legacy_chapter_id:
             legacy_chapter_id = await resolve_legacy_chapter_id(self.db, subject_id=subject_id)
 
@@ -2468,6 +2475,7 @@ class EntityExtractionService:
             chapter_id=legacy_chapter_id,
             primary_chapter_id=primary_chapter_id,
             source_document_id=document_id,
+            source_section_path=source_section_path,
             type=question_type,
             content=content,
             answer="",  # 需要后续从 blocks 中提取或人工补充

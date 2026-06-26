@@ -437,6 +437,10 @@ class KnowledgePoint(Base):
         String(32), ForeignKey("documents.id", ondelete="SET NULL"),
         comment="来源文档ID"
     )
+    source_section_path: Mapped[Optional[str]] = mapped_column(
+        String(500),
+        comment="识别出的原始章节路径"
+    )
     canonical_title: Mapped[Optional[str]] = mapped_column(String(200), comment="标准化标题")
     title: Mapped[str] = mapped_column(String(200), nullable=False, comment="知识点标题")
     content: Mapped[str] = mapped_column(Text, nullable=False, comment="知识点正文（Markdown）")
@@ -522,6 +526,10 @@ class Question(Base):
     source_document_id: Mapped[Optional[str]] = mapped_column(
         String(32), ForeignKey("documents.id", ondelete="SET NULL"),
         comment="来源文档ID"
+    )
+    source_section_path: Mapped[Optional[str]] = mapped_column(
+        String(500),
+        comment="识别出的原始章节路径"
     )
     type: Mapped[str] = mapped_column(
         Enum("choice", "fill", "judge", "short_answer", "design", "analysis"),

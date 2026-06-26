@@ -522,6 +522,7 @@ export interface ReviewItem {
   subject_id?: string
   chapter_id?: string
   primary_chapter_id?: string
+  source_section_path?: string
   topic_terms?: string[]
   source?: string
   review_status: string

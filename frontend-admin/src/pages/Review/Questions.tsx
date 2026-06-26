@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Card, Table, Button, Select, Space, Tag, Input, message, Descriptions, Drawer, Modal, Popconfirm } from 'antd'
 import { CheckOutlined, CloseOutlined, QuestionCircleOutlined, DeleteOutlined } from '@ant-design/icons'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { listQuestionReviews, reviewQuestion, getSubjects, deleteQuestion, batchDeleteQuestions } from '@/api'
+import { listQuestionReviews, reviewQuestion, getSubjects, getCanonicalChapters, deleteQuestion, batchDeleteQuestions } from '@/api'
 
 const { TextArea } = Input
 
@@ -24,17 +24,27 @@ const QuestionReviewPage = () => {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [currentItem, setCurrentItem] = useState<any>(null)
   const [reviewNotes, setReviewNotes] = useState('')
+  const [selectedPrimaryChapterId, setSelectedPrimaryChapterId] = useState<string | undefined>()
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
 
   const { data, isLoading } = useQuery({ queryKey: ['questionReviews', params], queryFn: () => listQuestionReviews(params) })
   const { data: subjectsData } = useQuery({ queryKey: ['subjects'], queryFn: getSubjects })
+  const { data: canonicalChaptersData, isLoading: isChapterLoading } = useQuery({
+    queryKey: ['questionReviewCanonicalChapters', currentItem?.subject_id],
+    queryFn: () => getCanonicalChapters(currentItem.subject_id),
+    enabled: drawerOpen && !!currentItem?.subject_id,
+  })
 
   const reviewMut = useMutation({
     mutationFn: ({ id, status }: { id: string; status: string }) =>
-      reviewQuestion(id, { review_status: status, review_notes: reviewNotes || undefined }),
+      reviewQuestion(id, {
+        review_status: status,
+        review_notes: reviewNotes || undefined,
+        primary_chapter_id: selectedPrimaryChapterId || undefined,
+      }),
     onSuccess: () => {
       message.success('操作成功')
-      setDrawerOpen(false); setCurrentItem(null); setReviewNotes('')
+      setDrawerOpen(false); setCurrentItem(null); setReviewNotes(''); setSelectedPrimaryChapterId(undefined)
       queryClient.invalidateQueries({ queryKey: ['questionReviews'] })
     },
   })
@@ -47,6 +57,7 @@ const QuestionReviewPage = () => {
         setDrawerOpen(false)
         setCurrentItem(null)
         setReviewNotes('')
+        setSelectedPrimaryChapterId(undefined)
       }
       queryClient.invalidateQueries({ queryKey: ['questionReviews'] })
     },
@@ -61,6 +72,7 @@ const QuestionReviewPage = () => {
         setDrawerOpen(false)
         setCurrentItem(null)
         setReviewNotes('')
+        setSelectedPrimaryChapterId(undefined)
       }
       queryClient.invalidateQueries({ queryKey: ['questionReviews'] })
     },
@@ -69,6 +81,11 @@ const QuestionReviewPage = () => {
   const items = data?.data?.items || []
   const total = data?.data?.total || 0
   const subjects = subjectsData?.data || []
+  const canonicalChapters = canonicalChaptersData?.data || []
+  const chapterOptions = canonicalChapters.map((c: any) => ({
+    label: `${c.code ? `${c.code} ` : ''}${c.name}`,
+    value: c.id,
+  }))
 
   const columns = [
     { title: '题干', dataIndex: 'content', key: 'content', ellipsis: true, render: (t: string) => t?.slice(0, 120) || '-' },
@@ -78,7 +95,18 @@ const QuestionReviewPage = () => {
     { title: '状态', dataIndex: 'review_status', key: 'review_status', width: 100, render: (s: string) => <Tag color={reviewStatusConfig[s]?.color}>{reviewStatusConfig[s]?.text || s}</Tag> },
     { title: '操作', key: 'actions', width: 120, render: (_: any, record: any) => (
       <Space size="small">
-        <Button type="link" size="small" onClick={() => { setCurrentItem(record); setReviewNotes(record.review_notes || ''); setDrawerOpen(true) }}>审核</Button>
+        <Button
+          type="link"
+          size="small"
+          onClick={() => {
+            setCurrentItem(record)
+            setReviewNotes(record.review_notes || '')
+            setSelectedPrimaryChapterId(record.primary_chapter_id || undefined)
+            setDrawerOpen(true)
+          }}
+        >
+          审核
+        </Button>
         <Popconfirm title="确定删除这道题目？" onConfirm={() => deleteMut.mutate(record.id)}>
           <Button type="link" size="small" danger icon={<DeleteOutlined />} />
         </Popconfirm>
@@ -138,7 +166,16 @@ const QuestionReviewPage = () => {
           pagination={{ current: params.page, total, pageSize: params.page_size, showTotal: (c) => `共 ${c} 条`, onChange: (page) => setParams((p) => ({ ...p, page })) }}
         />
       </Card>
-      <Drawer title="审核题目" open={drawerOpen} onClose={() => setDrawerOpen(false)} width={600}
+      <Drawer
+        title="审核题目"
+        open={drawerOpen}
+        onClose={() => {
+          setDrawerOpen(false)
+          setCurrentItem(null)
+          setReviewNotes('')
+          setSelectedPrimaryChapterId(undefined)
+        }}
+        width={600}
         extra={<Space>
           <Button danger icon={<CloseOutlined />} loading={reviewMut.isPending} onClick={() => reviewMut.mutate({ id: currentItem?.id, status: 'rejected' })}>拒绝</Button>
           <Button type="primary" icon={<CheckOutlined />} loading={reviewMut.isPending} onClick={() => reviewMut.mutate({ id: currentItem?.id, status: 'approved' })}>通过</Button>
@@ -151,6 +188,20 @@ const QuestionReviewPage = () => {
               <Descriptions.Item label="题干"><div style={{ maxHeight: 150, overflow: 'auto' }}>{currentItem.content}</div></Descriptions.Item>
               <Descriptions.Item label="难度"><Tag color={difficultyConfig[currentItem.difficulty]?.color}>{difficultyConfig[currentItem.difficulty]?.text}</Tag></Descriptions.Item>
               <Descriptions.Item label="来源">{currentItem.source || '-'}</Descriptions.Item>
+              <Descriptions.Item label="识别章节">{currentItem.source_section_path || '-'}</Descriptions.Item>
+              <Descriptions.Item label="映射考点">
+                <Select
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                  placeholder="选择大纲考点"
+                  loading={isChapterLoading}
+                  value={selectedPrimaryChapterId}
+                  onChange={setSelectedPrimaryChapterId}
+                  options={chapterOptions}
+                  style={{ width: '100%' }}
+                />
+              </Descriptions.Item>
               <Descriptions.Item label="状态"><Tag color={reviewStatusConfig[currentItem.review_status]?.color}>{reviewStatusConfig[currentItem.review_status]?.text}</Tag></Descriptions.Item>
             </Descriptions>
             <div style={{ marginBottom: 8 }}><strong>审核备注</strong></div>

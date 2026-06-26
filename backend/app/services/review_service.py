@@ -585,6 +585,7 @@ class ReviewService:
             "chapter_id": kp.chapter_id,
             "primary_chapter_id": kp.primary_chapter_id,
             "source_document_id": kp.source_document_id,
+            "source_section_path": kp.source_section_path,
             "title": kp.title,
             "canonical_title": kp.canonical_title,
             "content": kp.content[:500] if kp.content else None,  # 截断
@@ -609,6 +610,7 @@ class ReviewService:
             "chapter_id": q.chapter_id,
             "primary_chapter_id": q.primary_chapter_id,
             "source_document_id": q.source_document_id,
+            "source_section_path": q.source_section_path,
             "type": q.type,
             "content": q.content[:500] if q.content else None,  # 截断
             "options": q.options,
