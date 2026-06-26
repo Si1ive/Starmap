@@ -1165,7 +1165,7 @@ class KnowledgePointChapterLink(Base):
         DECIMAL(5, 4), nullable=False, server_default="1.0000", comment="关联度 [0,1]"
     )
     source: Mapped[str] = mapped_column(
-        Enum("existing", "document_mapping", "vector_search", "manual"),
+        Enum("existing", "document_mapping", "vector_search", "keyword_match", "manual"),
         nullable=False, server_default="manual", comment="关联来源"
     )
     created_by: Mapped[Optional[str]] = mapped_column(String(50), comment="创建方式（system/user）")
@@ -1201,7 +1201,7 @@ class QuestionChapterLink(Base):
         DECIMAL(5, 4), nullable=False, server_default="1.0000", comment="关联度 [0,1]"
     )
     source: Mapped[str] = mapped_column(
-        Enum("existing", "document_mapping", "vector_search", "manual"),
+        Enum("existing", "document_mapping", "vector_search", "keyword_match", "manual"),
         nullable=False, server_default="manual", comment="关联来源"
     )
     created_by: Mapped[Optional[str]] = mapped_column(String(50), comment="创建方式（system/user）")

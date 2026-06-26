@@ -1330,6 +1330,8 @@ class EntityExtractionService:
                 knowledge_point_id=kp_id,
                 canonical_chapter_id=primary_chapter_id,
                 is_primary=True,
+                source=resolved_source or ("document_mapping" if mapping_info else "manual"),
+                created_by="system",
             )
             self.db.add(link)
 
@@ -1696,6 +1698,7 @@ class EntityExtractionService:
         subject_id = mapping_info["subject_id"] if mapping_info else fallback_subject_id
         legacy_chapter_id = mapping_info["legacy_chapter_id"] if mapping_info else None
         source_section_path = mapping_info.get("source_section_path") if mapping_info else None
+        resolved_source: Optional[str] = None
 
         # 组合内容
         content_parts = []
@@ -1724,6 +1727,7 @@ class EntityExtractionService:
                 if resolved:
                     primary_chapter_id = resolved["chapter_id"]
                     subject_id = resolved["subject_id"] or subject_id
+                    resolved_source = resolved.get("source", "vector_search")
                     logger.info(
                         "题目章节解析（提取阶段）",
                         chapter_id=primary_chapter_id,
@@ -1780,6 +1784,7 @@ class EntityExtractionService:
             'subject_id': subject_id,
             'chapter_id': legacy_chapter_id,
             'primary_chapter_id': primary_chapter_id,
+            'chapter_link_source': resolved_source or ("document_mapping" if mapping_info else None),
             'question_type': question_type,
             'type': question_type,
             'content': stem if options else content,
@@ -2105,6 +2110,8 @@ class EntityExtractionService:
                         question_id=question_dict['id'],
                         canonical_chapter_id=primary_chapter_id,
                         is_primary=True,
+                        source=question_dict.get('chapter_link_source') or "manual",
+                        created_by="system",
                     )
                     self.db.add(link)
 
@@ -2489,6 +2496,8 @@ class EntityExtractionService:
                 question_id=q_id,
                 canonical_chapter_id=primary_chapter_id,
                 is_primary=True,
+                source="document_mapping" if mapping_info else "manual",
+                created_by="system",
             )
             self.db.add(link)
 
