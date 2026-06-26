@@ -16,8 +16,8 @@ from app.services.llm_call_recorder import LLMCallRecorder
 
 logger = get_logger(__name__)
 
-# OpenAI ada-002 单次最大 batch 和 token 限制
-MAX_BATCH_SIZE = 100
+# OpenAI 兼容服务的批量上限不一致；DashScope embedding 单批最多 25 条。
+MAX_BATCH_SIZE = 25
 # 缺省值（无配置时回退）
 DEFAULT_EMBEDDING_MODEL = "text-embedding-ada-002"
 DEFAULT_EMBEDDING_DIMENSION = 1536
@@ -35,6 +35,7 @@ class EmbeddingService:
         self.dimension = int(config.get("dimension") or DEFAULT_EMBEDDING_DIMENSION)
         self.api_key = str(config.get("api_key") or settings.OPENAI_API_KEY or "").strip()
         self.base_url = str(config.get("base_url") or "").strip()
+        self.timeout_seconds = int(config.get("timeout_seconds") or 60)
 
     def _create_embedding(self, inputs: List[str]):
         """同步调用，save-restore openai 全局变量。"""
@@ -46,7 +47,11 @@ class EmbeddingService:
         if self.base_url:
             openai.api_base = self.base_url.rstrip("/")
         try:
-            return openai.Embedding.create(input=inputs, model=self.model)
+            return openai.Embedding.create(
+                input=inputs,
+                model=self.model,
+                request_timeout=self.timeout_seconds,
+            )
         finally:
             openai.api_key = previous_api_key
             openai.api_base = previous_api_base

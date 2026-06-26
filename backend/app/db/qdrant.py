@@ -94,10 +94,11 @@ class QdrantManager:
     ) -> None:
         """确保 collection 存在，不存在则创建"""
         try:
-            collections = self._client.get_collections()
+            client = self.client
+            collections = client.get_collections()
             existing = {c.name for c in collections.collections}
             if name not in existing:
-                self._client.create_collection(
+                client.create_collection(
                     collection_name=name,
                     vectors_config=VectorParams(size=vector_size, distance=distance),
                 )
@@ -124,9 +125,10 @@ class QdrantManager:
 
     def ensure_payload_indexes(self, name: str) -> None:
         """为 collection 建结构化过滤所需的 payload 索引（已存在则忽略）。"""
+        client = self.client
         for field, schema in self._PAYLOAD_INDEXES.items():
             try:
-                self._client.create_payload_index(
+                client.create_payload_index(
                     collection_name=name,
                     field_name=field,
                     field_schema=schema,
@@ -148,7 +150,11 @@ class QdrantManager:
             info = self.client.get_collection(name)
             return {
                 "name": name,
-                "vectors_count": info.vectors_count,
+                "vectors_count": getattr(
+                    info,
+                    "vectors_count",
+                    getattr(info, "indexed_vectors_count", None),
+                ),
                 "points_count": info.points_count,
                 "status": info.status,
             }
@@ -174,12 +180,22 @@ class QdrantManager:
         query_filter: Optional[Filter] = None,
     ) -> List[Dict[str, Any]]:
         """向量检索"""
-        results = self.client.search(
-            collection_name=collection_name,
-            query_vector=query_vector,
-            limit=limit,
-            query_filter=query_filter,
-        )
+        client = self.client
+        if hasattr(client, "search"):
+            results = client.search(
+                collection_name=collection_name,
+                query_vector=query_vector,
+                limit=limit,
+                query_filter=query_filter,
+            )
+        else:
+            response = client.query_points(
+                collection_name=collection_name,
+                query=query_vector,
+                limit=limit,
+                query_filter=query_filter,
+            )
+            results = response.points
         return [
             {
                 "id": hit.id,

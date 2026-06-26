@@ -108,11 +108,12 @@ async def expand_query_with_outline(
     # Step 2: 合并 title + content 命中，聚合到 chapter_id
     chapter_scores: Dict[str, float] = {}
     for hit in title_hits + content_hits:
-        ch_id = hit.payload.get("entity_id")
+        payload = hit.get("payload") or {}
+        ch_id = payload.get("entity_id")
         if not ch_id:
             continue
-        weight = 1.2 if hit.payload.get("segment_type") == "title" else 1.0
-        chapter_scores[ch_id] = max(chapter_scores.get(ch_id, 0), hit.score * weight)
+        weight = 1.2 if payload.get("segment_type") == "title" else 1.0
+        chapter_scores[ch_id] = max(chapter_scores.get(ch_id, 0), hit.get("score", 0) * weight)
 
     top_chapters = sorted(
         [(cid, s) for cid, s in chapter_scores.items() if s >= 0.7],
@@ -408,11 +409,12 @@ async def fallback_chapter_similarity(
 
     pairs = []
     for hit in results:
-        if hit.payload.get("entity_id") == chapter_id:
+        payload = hit.get("payload") or {}
+        if payload.get("entity_id") == chapter_id:
             continue
-        if hit.score < 0.75:
+        if hit.get("score", 0) < 0.75:
             continue
-        pairs.append((hit.payload["entity_id"], hit.score))
+        pairs.append((payload["entity_id"], hit.get("score", 0)))
     return pairs[:top_k]
 
 

@@ -1250,8 +1250,7 @@ class EntityExtractionService:
         primary_chapter_id = mapping_info["chapter_id"] if mapping_info else None
         subject_id = mapping_info["subject_id"] if mapping_info else fallback_subject_id
         legacy_chapter_id = mapping_info["legacy_chapter_id"] if mapping_info else None
-        if not legacy_chapter_id:
-            legacy_chapter_id = await resolve_legacy_chapter_id(self.db, subject_id=subject_id)
+        resolved_source: Optional[str] = None
 
         # 组合内容
         content_parts = []
@@ -1263,6 +1262,38 @@ class EntityExtractionService:
 
         if not content:
             return False
+
+        title_text = title_block.content_text or ""
+
+        # 回退：section 映射拿不到章节时，直接用 title/content 匹配大纲
+        if not primary_chapter_id:
+            from app.services.chapter_link_service import ChapterLinkService
+            topic_terms_preview = self._extract_topic_terms(title_text, content)
+            resolved = await ChapterLinkService(self.db).resolve_chapter_for_entity(
+                title=title_text,
+                content=content[:1000],
+                subject_id=subject_id,
+                topic_terms=topic_terms_preview,
+                entity_type="knowledge_point",
+            )
+            if resolved:
+                primary_chapter_id = resolved["chapter_id"]
+                subject_id = resolved.get("subject_id") or subject_id
+                resolved_source = resolved.get("source", "keyword_match")
+                logger.info(
+                    "知识点章节直接解析成功",
+                    document_id=document_id,
+                    chapter_id=primary_chapter_id,
+                    source=resolved_source,
+                    confidence=resolved.get("confidence"),
+                )
+
+        if not legacy_chapter_id:
+            legacy_chapter_id = await resolve_legacy_chapter_id(
+                self.db,
+                canonical_chapter_id=primary_chapter_id,
+                subject_id=subject_id,
+            )
         if not subject_id or not legacy_chapter_id:
             logger.warning(
                 "知识点缺少有效章节归属，跳过入库",
@@ -1661,12 +1692,6 @@ class EntityExtractionService:
         primary_chapter_id = mapping_info["chapter_id"] if mapping_info else None
         subject_id = mapping_info["subject_id"] if mapping_info else fallback_subject_id
         legacy_chapter_id = mapping_info["legacy_chapter_id"] if mapping_info else None
-        if not legacy_chapter_id:
-            legacy_chapter_id = await resolve_legacy_chapter_id(
-                self.db,
-                canonical_chapter_id=primary_chapter_id,
-                subject_id=subject_id,
-            )
 
         # 组合内容
         content_parts = []
@@ -1680,6 +1705,36 @@ class EntityExtractionService:
             return None
 
         stem, options = self._split_question_stem_options(content)
+
+        # section_mapping 缺失时（试卷类文档天然没有），用题干内容直接匹配大纲考点
+        if not primary_chapter_id:
+            from app.services.chapter_link_service import ChapterLinkService
+            try:
+                resolved = await ChapterLinkService(self.db).resolve_chapter_for_entity(
+                    title=stem[:200],
+                    content=content,
+                    subject_id=subject_id,
+                    entity_type="question",
+                    options=options,
+                )
+                if resolved:
+                    primary_chapter_id = resolved["chapter_id"]
+                    subject_id = resolved["subject_id"] or subject_id
+                    logger.info(
+                        "题目章节解析（提取阶段）",
+                        chapter_id=primary_chapter_id,
+                        confidence=resolved.get("confidence"),
+                        source=resolved.get("source"),
+                    )
+            except Exception as e:
+                logger.warning("题目章节解析失败，跳过", error=str(e))
+
+        if not legacy_chapter_id:
+            legacy_chapter_id = await resolve_legacy_chapter_id(
+                self.db,
+                canonical_chapter_id=primary_chapter_id,
+                subject_id=subject_id,
+            )
 
         # 判断题型
         question_type = "short_answer"

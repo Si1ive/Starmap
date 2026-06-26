@@ -37,7 +37,7 @@ const LlmConfigTab = ({
     mutationFn: (cfg: Partial<LlmConfig>) => testLlm(kind, cfg),
     onSuccess: (res) => {
       if (res.code === 200 && res.data?.success) {
-        message.success(`测试成功：${res.data.reply || '已连通'}`)
+        message.success(`测试成功：${res.data.reply || '已连通'}；点击右上角保存配置后生效`)
         queryClient.invalidateQueries({ queryKey: ['llm-status', kind] })
       } else {
         message.error(res.data?.error || res.message || '测试失败')
@@ -127,7 +127,7 @@ const EmbeddingConfigTab = ({ form }: { form: any }) => {
         const dimMsg = d.dimension_match
           ? `维度 ${d.dimension} 与配置一致`
           : `实际维度 ${d.dimension} 与配置 ${d.configured_dimension} 不一致，请修正`
-        if (d.dimension_match) message.success(`测试成功：${dimMsg}`)
+        if (d.dimension_match) message.success(`测试成功：${dimMsg}；点击右上角保存配置后生效`)
         else message.warning(`已连通，但${dimMsg}`)
         queryClient.invalidateQueries({ queryKey: ['llm-status', 'embedding'] })
       } else {
