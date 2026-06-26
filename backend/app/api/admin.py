@@ -4511,7 +4511,7 @@ async def build_knowledge_relations(
 @router.post("/chapter-relations/build", response_model=ApiResponse)
 async def build_chapter_relations(
     subject_id: Optional[str] = None,
-    outine_id: Optional[str] = None,
+    outline_id: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -4529,8 +4529,8 @@ async def build_chapter_relations(
     query = select(CanonicalChapter).where(CanonicalChapter.status == "active")
     if subject_id:
         query = query.where(CanonicalChapter.subject_id == subject_id)
-    if outine_id:
-        query = query.where(CanonicalChapter.outline_id == outine_id)
+    if outline_id:
+        query = query.where(CanonicalChapter.outline_id == outline_id)
 
     chapters = (await db.execute(query)).scalars().all()
     if not chapters:
@@ -4540,6 +4540,16 @@ async def build_chapter_relations(
     llm_created = 0
     embedding_created = 0
     chapter_map = {ch.id: ch for ch in chapters}
+    relation_keys = {
+        (row[0], row[1], row[2])
+        for row in (await db.execute(
+            select(
+                ChapterRelation.source_chapter_id,
+                ChapterRelation.target_chapter_id,
+                ChapterRelation.relation_type,
+            )
+        )).all()
+    }
 
     for chapter in chapters:
         cross_refs = getattr(chapter, "cross_references", None)
@@ -4553,20 +4563,16 @@ async def build_chapter_relations(
                     continue
                 # 双向各写一条（source → target 和 target → source）
                 for src, tgt in [(chapter.id, target_id), (target_id, chapter.id)]:
-                    exists = (await db.execute(
-                        select(ChapterRelation).where(
-                            ChapterRelation.source_chapter_id == src,
-                            ChapterRelation.target_chapter_id == tgt,
-                            ChapterRelation.relation_type == ref.get("relation_type", "similar_to"),
-                        )
-                    )).scalar_one_or_none()
-                    if exists:
+                    relation_type = ref.get("relation_type", "similar_to")
+                    relation_key = (src, tgt, relation_type)
+                    if src == tgt or relation_key in relation_keys:
                         continue
+                    relation_keys.add(relation_key)
                     db.add(ChapterRelation(
                         id=_gen_chrel_id(),
                         source_chapter_id=src,
                         target_chapter_id=tgt,
-                        relation_type=ref.get("relation_type", "similar_to"),
+                        relation_type=relation_type,
                         confidence=0.9,
                         source_type="llm",
                         evidence_text=ref.get("reason"),
@@ -4581,15 +4587,10 @@ async def build_chapter_relations(
             for target_id, score in sims:
                 if target_id not in chapter_map:
                     continue
-                exists = (await db.execute(
-                    select(ChapterRelation).where(
-                        ChapterRelation.source_chapter_id == chapter.id,
-                        ChapterRelation.target_chapter_id == target_id,
-                        ChapterRelation.relation_type == "similar_to",
-                    )
-                )).scalar_one_or_none()
-                if exists:
+                relation_key = (chapter.id, target_id, "similar_to")
+                if chapter.id == target_id or relation_key in relation_keys:
                     continue
+                relation_keys.add(relation_key)
                 db.add(ChapterRelation(
                     id=_gen_chrel_id(),
                     source_chapter_id=chapter.id,
