@@ -484,6 +484,25 @@ class MinerUParser:
             normalized = self._normalize_result(file_path=file_path, result=result, output_dir=output_dir)
             return normalized
 
+    @staticmethod
+    def _find_content_list(output_dir: Path) -> List[Dict[str, Any]]:
+        """
+        从 MinerU 输出目录寻找 content_list.json。
+
+        do_parse 把产出写到 output_dir/<pdf_name>/auto/ 子目录，
+        result dict 不包含 content_list 字段。这里直接搜磁盘。
+        """
+        # content_list.json / *_content_list.json 两种命名
+        for pattern in ("*content_list.json", "content_list.json", "**_content_list.json"):
+            for path in output_dir.rglob(pattern):
+                try:
+                    data = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+                    if isinstance(data, list) and data:
+                        return data
+                except Exception:
+                    continue
+        return []
+
     def _normalize_result(
         self,
         file_path: str,
@@ -493,139 +512,97 @@ class MinerUParser:
         """
         将 MinerU 输出适配成统一结构。
 
-        说明：
-        - MinerU 原始输出结构与版本关系较大
-        - 适配层只负责尽可能提取 page/block/asset/markdown
-        - 若字段缺失，保持为空，不影响下游库表结构
+        MinerU do_parse 产出全部落在 output_dir 磁盘上（content_list、md、图片），
+        result dict 几乎没有有效字段。适配层统一从磁盘读取。
         """
         pages: List[ParsedPage] = []
         blocks: List[ParsedBlock] = []
         assets: List[ParsedAsset] = []
         document_markdown = ""
-        content_list: List[Dict[str, Any]] = []
 
+        # ---- content_list: 仅从磁盘读取（do_parse 不返回在 result dict 中） ----
+        content_list = self._find_content_list(output_dir)
         if isinstance(result, dict):
-            markdown_path = result.get("markdown_path") or result.get("md_path")
-            if markdown_path and Path(markdown_path).exists():
-                document_markdown = Path(markdown_path).read_text(encoding="utf-8", errors="ignore")
+            fallback = result.get("content_list") or result.get("content_list_json") or []
+            if isinstance(fallback, list) and fallback:
+                content_list = fallback
 
-            content_list = result.get("content_list") or result.get("content_list_json") or []
-            if isinstance(content_list, list):
-                order_counters: Dict[int, int] = {}
-                for item in content_list:
-                    page_no = int(item.get("page_idx", 0) or 0) + 1 if item.get("page_idx") is not None else int(item.get("page_no", 1) or 1)
-                    order_no = order_counters.get(page_no, 0)
-                    order_counters[page_no] = order_no + 1
+        # ---- MinerU 图片/表格真实输出根目录（content_list 中 image_path 以此为基础） ----
+        # content_list 在 output_dir/<pdf>/auto/ 下，图片也在同级的 images/ 子目录
+        auto_dir = output_dir
+        cl_path = next(output_dir.rglob("content_list.json"), None)
+        if cl_path:
+            auto_dir = cl_path.parent  # .../<pdf>/auto/
 
-                    item_type = str(item.get("type") or item.get("category") or "paragraph").lower()
-                    block_type = self._map_mineru_block_type(item_type)
-                    bbox = item.get("bbox") if isinstance(item.get("bbox"), dict) else None
-                    text = item.get("text") or item.get("content") or ""
-                    md = item.get("markdown") or item.get("md") or None
+        # ---- blocks / assets ----
+        order_counters: Dict[int, int] = {}
+        for item in content_list:
+            if not isinstance(item, dict):
+                continue
+            page_no = int(item.get("page_idx", 0) or 0) + 1 if item.get("page_idx") is not None else int(item.get("page_no", 1) or 1)
+            order_no = order_counters.get(page_no, 0)
+            order_counters[page_no] = order_no + 1
 
-                    if block_type in {"figure", "table"}:
-                        assets.append(
-                            ParsedAsset(
-                                page_no=page_no,
-                                asset_type=block_type,
-                                caption_text=item.get("caption") or text or None,
-                                bbox=bbox,
-                                file_path=item.get("image_path") or item.get("file_path"),
-                            )
-                        )
+            item_type = str(item.get("type") or item.get("category") or "paragraph").lower()
+            block_type = self._map_mineru_block_type(item_type)
+            bbox = item.get("bbox") if isinstance(item.get("bbox"), dict) else None
+            text = item.get("text") or item.get("content") or ""
+            md = item.get("markdown") or item.get("md") or None
 
-                    blocks.append(
-                        ParsedBlock(
-                            page_no=page_no,
-                            block_type=block_type,
-                            order_no=order_no,
-                            content_text=text or None,
-                            content_md=md if md and md != text else None,
-                            bbox=bbox,
-                            html_table=item.get("html") if block_type == "table" else None,
-                            latex=item.get("latex") if block_type == "formula" else None,
-                        )
+            if block_type in {"figure", "table"}:
+                assets.append(
+                    ParsedAsset(
+                        page_no=page_no,
+                        asset_type=block_type,
+                        caption_text=item.get("caption") or text or None,
+                        bbox=bbox,
+                        file_path=item.get("image_path") or item.get("file_path"),
                     )
+                )
 
-            page_count = int(result.get("page_count") or 0)
-            if page_count > 0:
-                pages = [ParsedPage(page_no=index + 1) for index in range(page_count)]
+            blocks.append(
+                ParsedBlock(
+                    page_no=page_no,
+                    block_type=block_type,
+                    order_no=order_no,
+                    content_text=text or None,
+                    content_md=md if md and md != text else None,
+                    bbox=bbox,
+                    html_table=item.get("html") if block_type == "table" else None,
+                    latex=item.get("latex") if block_type == "formula" else None,
+                )
+            )
 
-        if not content_list:
-            content_list_path = next(output_dir.rglob("*_content_list.json"), None)
-            if content_list_path and content_list_path.exists():
-                try:
-                    loaded_content = json.loads(content_list_path.read_text(encoding="utf-8", errors="ignore"))
-                    if isinstance(loaded_content, list):
-                        content_list = loaded_content
-                except Exception:
-                    content_list = []
-
-            if content_list:
-                order_counters = {}
-                for item in content_list:
-                    if not isinstance(item, dict):
-                        continue
-                    page_idx = item.get("page_idx")
-                    page_no = int(page_idx or 0) + 1 if page_idx is not None else int(item.get("page_no", 1) or 1)
-                    order_no = order_counters.get(page_no, 0)
-                    order_counters[page_no] = order_no + 1
-
-                    item_type = str(item.get("type") or item.get("category") or "paragraph").lower()
-                    block_type = self._map_mineru_block_type(item_type)
-                    bbox = item.get("bbox") if isinstance(item.get("bbox"), dict) else None
-                    text = item.get("text") or item.get("content") or ""
-                    md = item.get("markdown") or item.get("md") or None
-
-                    if block_type in {"figure", "table"}:
-                        assets.append(
-                            ParsedAsset(
-                                page_no=page_no,
-                                asset_type=block_type,
-                                caption_text=item.get("caption") or text or None,
-                                bbox=bbox,
-                                file_path=item.get("image_path") or item.get("file_path"),
-                            )
-                        )
-
-                    blocks.append(
-                        ParsedBlock(
-                            page_no=page_no,
-                            block_type=block_type,
-                            order_no=order_no,
-                            content_text=text or None,
-                            content_md=md if md and md != text else None,
-                            bbox=bbox,
-                            html_table=item.get("html") if block_type == "table" else None,
-                            latex=item.get("latex") if block_type == "formula" else None,
-                        )
-                    )
-
+        # ---- pages ----
+        if isinstance(result, dict) and result.get("page_count"):
+            page_count = int(result["page_count"])
+            pages = [ParsedPage(page_no=i + 1) for i in range(page_count)]
         if not pages:
             max_page_no = max((block.page_no for block in blocks), default=0)
             if max_page_no > 0:
-                pages = [ParsedPage(page_no=index + 1) for index in range(max_page_no)]
+                pages = [ParsedPage(page_no=i + 1) for i in range(max_page_no)]
 
-        if not document_markdown:
-            markdown_candidates = list(output_dir.rglob("*.md"))
-            if markdown_candidates:
-                document_markdown = markdown_candidates[0].read_text(encoding="utf-8", errors="ignore")
-
-        # 把临时目录里的图片读成 base64 内联进 asset（落盘动作收敛到主 backend）。
-        # 必须在 with tempfile 块内（output_dir 尚存活）完成，否则图片随临时目录销毁。
-        # 服务模式下 base64 会随 JSON 跨进程传回主 backend，统一在那里写盘。
-        self._inline_asset_images(assets, output_dir)
-
-        # 构造原始输出用于存储
-        raw_output = None
+        # ---- markdown ----
         if isinstance(result, dict):
-            # 保存原始result字典，但移除文件路径避免数据过大
-            raw_output = {
-                "content_list": content_list,
-                "page_count": result.get("page_count"),
-                "parser": self.name,
-                "parser_version": self.version,
-            }
+            md_path = result.get("markdown_path") or result.get("md_path")
+            if md_path and Path(md_path).exists():
+                document_markdown = Path(md_path).read_text(encoding="utf-8", errors="ignore")
+        if not document_markdown:
+            for md in output_dir.rglob("*.md"):
+                document_markdown = md.read_text(encoding="utf-8", errors="ignore")
+                break
+
+        # ---- 图片 base64 内联 ----
+        # MinerU 的 image 产出在 auto_dir/images/ 下，
+        # content_list 中的 image_path 相对于 auto_dir。
+        self._inline_asset_images(assets, auto_dir)
+
+        raw_output = {
+            "content_list": content_list,
+            "page_count": len(pages),
+            "parser": self.name,
+            "parser_version": self.version,
+        }
 
         return ParsedDocumentResult(
             parser_name=self.name,
