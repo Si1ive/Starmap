@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import base64
 import inspect
 import json
 import os
@@ -105,6 +106,11 @@ class ParsedAsset:
     caption_text: Optional[str] = None
     bbox: Optional[dict] = None
     file_path: Optional[str] = None
+    # 临时字段：解析阶段把图片字节读成 base64 内联传输（不入库）。
+    # parser_service（podman 容器）与主 backend 不共享文件系统，图片字节必须
+    # 随 JSON 内联回传，由主 backend 统一解码落盘到 uploads/assets。
+    image_base64: Optional[str] = None
+    image_ext: Optional[str] = None
 
 
 @dataclass
@@ -605,6 +611,11 @@ class MinerUParser:
             if markdown_candidates:
                 document_markdown = markdown_candidates[0].read_text(encoding="utf-8", errors="ignore")
 
+        # 把临时目录里的图片读成 base64 内联进 asset（落盘动作收敛到主 backend）。
+        # 必须在 with tempfile 块内（output_dir 尚存活）完成，否则图片随临时目录销毁。
+        # 服务模式下 base64 会随 JSON 跨进程传回主 backend，统一在那里写盘。
+        self._inline_asset_images(assets, output_dir)
+
         # 构造原始输出用于存储
         raw_output = None
         if isinstance(result, dict):
@@ -626,6 +637,42 @@ class MinerUParser:
             metadata={"source_file": file_path},
             raw_output=raw_output,
         )
+
+    @staticmethod
+    def _inline_asset_images(assets: List[ParsedAsset], output_dir: Path) -> None:
+        """
+        把 MinerU 写在临时目录里的图片读成 base64，内联到 asset.image_base64。
+
+        MinerU 的图片产出在 output_dir（tempfile）内，解析结束临时目录销毁后即失效。
+        嵌入模式下主 backend 直接拿到内存对象，服务模式下 base64 随 JSON 跨进程回传，
+        两种模式统一由主 backend 的 _persist_assets 写盘到 uploads/assets/，
+        file_path 由主 backend 生成，确保始终是主 backend 可读的 host 路径。
+        """
+        for asset in assets:
+            raw = asset.file_path
+            if not raw:
+                continue
+
+            # MinerU 的 image_path 可能是相对（相对 output_dir）或绝对路径
+            src = Path(raw)
+            if not src.is_absolute():
+                candidates = [output_dir / raw, *list(output_dir.rglob(src.name))]
+            else:
+                candidates = [src, *list(output_dir.rglob(src.name))]
+
+            src_path = next((c for c in candidates if c.exists() and c.is_file()), None)
+            if not src_path:
+                logger.warning("资产图片源文件未找到，跳过", raw_path=raw)
+                asset.file_path = None
+                continue
+
+            try:
+                asset.image_base64 = base64.b64encode(src_path.read_bytes()).decode("ascii")
+                asset.image_ext = src_path.suffix or ".png"
+            except Exception as e:
+                logger.warning("资产图片读取失败", src=str(src_path), error=str(e))
+            # file_path 是临时路径，跨进程/临时目录销毁后无意义，清空交由主 backend 重建
+            asset.file_path = None
 
     @staticmethod
     def _map_mineru_block_type(item_type: str) -> str:
@@ -842,6 +889,8 @@ def _parsed_document_result_from_dict(
             caption_text=item.get("caption_text"),
             bbox=item.get("bbox") if isinstance(item.get("bbox"), dict) else None,
             file_path=item.get("file_path"),
+            image_base64=item.get("image_base64"),
+            image_ext=item.get("image_ext"),
         )
         for item in (payload.get("assets") or [])
         if isinstance(item, dict)

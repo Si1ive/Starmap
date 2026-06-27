@@ -120,6 +120,60 @@ export const extractDocumentEntities = (id: string, subjectId?: string): Promise
   })
 }
 
+export interface ContentOverviewKPBrief {
+  id: string
+  title: string
+  summary?: string | null
+  content_preview: string
+  topic_terms: string[]
+  review_status: string
+  status: string
+  source_section_path?: string | null
+}
+
+export interface ContentOverviewChapter {
+  chapter_id: string
+  chapter_name: string
+  outline_code?: string | null
+  keywords: string[]
+  description?: string | null
+  exam_guidance?: string | null
+  knowledge_points: ContentOverviewKPBrief[]
+}
+
+export interface ContentOverviewQuestion {
+  id: string
+  question_no?: string | null
+  type: string
+  content_preview: string
+  options: Array<{ key?: string; text?: string }>
+  exam_year: number
+  review_status: string
+  status: string
+  primary_chapter_id?: string | null
+  primary_chapter_name?: string | null
+  source_section_path?: string | null
+}
+
+export interface ContentOverview {
+  document_id: string
+  title: string
+  doc_type: string
+  knowledge_chapters: ContentOverviewChapter[]
+  ungrouped_knowledge_points: ContentOverviewKPBrief[]
+  questions: ContentOverviewQuestion[]
+  summary: {
+    knowledge_count: number
+    question_count: number
+    chapter_count: number
+    ungrouped_count: number
+  }
+}
+
+export const getDocumentContentOverview = (id: string): Promise<ApiResponse<ContentOverview>> => {
+  return adminClient.get(`/corpus/documents/${id}/content-overview`)
+}
+
 // ========== 标准章节 ==========
 
 export const getCanonicalChapters = (subjectId: string, tree = false): Promise<ApiResponse<CanonicalChapter[]>> => {

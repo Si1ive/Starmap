@@ -204,6 +204,9 @@ def _serialize_asset(asset: ParsedAsset) -> Dict[str, Any]:
         "caption_text": asset.caption_text,
         "bbox": asset.bbox,
         "file_path": asset.file_path,
+        # 图片字节随 JSON 内联回传（容器与主 backend 不共享文件系统）
+        "image_base64": asset.image_base64,
+        "image_ext": asset.image_ext,
     }
 
 

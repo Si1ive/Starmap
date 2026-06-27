@@ -3716,6 +3716,26 @@ async def get_document_chapter_diagnostics(
     return ApiResponse(data=result)
 
 
+@router.get("/corpus/documents/{document_id}/content-overview", response_model=ApiResponse)
+async def get_document_content_overview(
+    document_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    文档内容总览：知识点按大纲考点分组、题目按题号排列。
+
+    替代原"原生标题映射 + 归属诊断"展示——直接清晰列出解析出的结构化内容。
+    """
+    from app.services.document_parse_service import DocumentParseService
+
+    service = DocumentParseService(db)
+    result = await service.get_content_overview(document_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="文档不存在")
+
+    return ApiResponse(data=result)
+
+
 @router.post("/corpus/documents/{document_id}/extract-entities", response_model=ApiResponse)
 async def extract_document_entities(
     document_id: str,

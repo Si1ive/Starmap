@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.models.mysql_models import (
-    DocumentAsset, EntityAssetLink,
+    DocumentAsset, EntityAssetLink, DocumentBlock,
 )
 
 logger = get_logger(__name__)
@@ -77,6 +77,69 @@ async def link_entity_assets_by_pages(
             entity_type=entity_type,
             entity_id=entity_id,
             asset_id=asset.id,
+            relation="inline",
+            sort_order=idx,
+        ))
+        created += 1
+
+    return created
+
+
+async def link_entity_assets_by_blocks(
+    session: AsyncSession,
+    entity_type: str,
+    entity_id: str,
+    block_ids: Iterable[str],
+) -> int:
+    """
+    按实体覆盖的 block_ids 精确绑定资产：只绑这些 block 上挂着的 asset。
+
+    依赖 _persist_assets 回填的 DocumentBlock.asset_id（block→asset 精确桥）。
+    相比 link_entity_assets_by_pages 的按页笛卡尔积，这里只关联实体真正包含的
+    figure/table/formula block 对应的资产，一图归一题/一知识点。
+
+    Args:
+        entity_type: 'knowledge_point' / 'question'
+        entity_id: 实体 ID
+        block_ids: 实体覆盖的 block ID 列表（来自 EntitySourceLink.block_ids）
+
+    Returns:
+        新建的关联数量
+    """
+    ids = [b for b in block_ids if b]
+    if not ids:
+        return 0
+
+    # 取这些 block 里挂了 asset 的，保留页内顺序用于 sort_order
+    blocks = (await session.execute(
+        select(DocumentBlock).where(
+            DocumentBlock.id.in_(ids),
+            DocumentBlock.asset_id.isnot(None),
+        ).order_by(DocumentBlock.page_no, DocumentBlock.order_no)
+    )).scalars().all()
+    if not blocks:
+        return 0
+
+    existing = (await session.execute(
+        select(EntityAssetLink.asset_id).where(
+            EntityAssetLink.entity_type == entity_type,
+            EntityAssetLink.entity_id == entity_id,
+        )
+    )).scalars().all()
+    existing_set: Set[str] = set(existing)
+
+    created = 0
+    seen: Set[str] = set()
+    for idx, b in enumerate(blocks):
+        asset_id = b.asset_id
+        if not asset_id or asset_id in existing_set or asset_id in seen:
+            continue
+        seen.add(asset_id)
+        session.add(EntityAssetLink(
+            id=_gen_id(),
+            entity_type=entity_type,
+            entity_id=entity_id,
+            asset_id=asset_id,
             relation="inline",
             sort_order=idx,
         ))

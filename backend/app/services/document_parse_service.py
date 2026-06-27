@@ -6,6 +6,7 @@
 """
 
 import asyncio
+import base64
 import logging
 import re
 import time
@@ -21,6 +22,7 @@ from app.core.logging import get_logger
 from app.models.mysql_models import (
     CorpusFile, ParseRun, Document,
     DocumentPage, DocumentBlock, DocumentAsset,
+    KnowledgePoint, Question, CanonicalChapter,
 )
 from app.services.document_parsers import (
     ParserUnavailableError,
@@ -623,8 +625,63 @@ class DocumentParseService:
 
         await self.db.flush()
 
+    @staticmethod
+    def _bbox_x1(bbox: Optional[dict]) -> Optional[float]:
+        """取 bbox 的 x1 作为同页同类型 block/asset 的位置判别键。"""
+        if not bbox:
+            return None
+        x1 = bbox.get("x1")
+        try:
+            return round(float(x1), 2) if x1 is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _write_asset_image(document_id: str, asset_data: ParsedAsset) -> Optional[str]:
+        """
+        把内联的 base64 图片字节解码落盘到 uploads/assets/<document_id>/，返回 host 绝对路径。
+
+        嵌入模式与服务模式都把图片字节以 base64 内联回传（见 ParsedAsset.image_base64），
+        由主 backend 在此统一写盘，确保 file_path 始终是主 backend 可读的 host 路径。
+        无 base64 时返回 None（如 block 提升的 asset、或读取失败的图片）。
+        """
+        b64 = getattr(asset_data, "image_base64", None)
+        if not b64:
+            return None
+
+        ext = getattr(asset_data, "image_ext", None) or ".png"
+        # backend 根目录：本文件在 app/services/ 下，向上三层到 backend
+        dest_dir = Path(__file__).parent.parent.parent / "uploads" / "assets" / document_id
+        try:
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest = dest_dir / f"{generate_id()}{ext}"
+            dest.write_bytes(base64.b64decode(b64))
+            return str(dest)
+        except Exception as e:
+            logger.warning("资产图片落盘失败", document_id=document_id, error=str(e))
+            return None
+
+    @staticmethod
+    def _bbox_x1(bbox: Optional[dict]):
+        """取 bbox 的 x1 作为同页内的位置键（MinerU 同一图/表的 block 与 asset 共享 bbox）。"""
+        if not bbox:
+            return None
+        x1 = bbox.get("x1")
+        try:
+            return round(float(x1), 1) if x1 is not None else None
+        except (TypeError, ValueError):
+            return None
+
     async def _persist_assets(self, document_id: str, assets: List[ParsedAsset]) -> None:
-        """Persist asset records."""
+        """
+        落库资产记录，并回填 DocumentBlock.asset_id 建立 block→asset 精确桥。
+
+        MinerU 对同一个 figure/table 会同时产出 block 和 asset 且共享 bbox，提升来的
+        asset 本就源自 block。这里按 (page, type, bbox.x1) 把每个 asset 对回它的 block，
+        写入 block.asset_id —— 下游按实体的 block_ids 即可精确绑定资产（不再按页笛卡尔积）。
+        """
+        from app.models.mysql_models import DocumentBlock as _Block
+
         # Remove old assets for re-parse
         old = await self.db.execute(
             select(DocumentAsset).where(DocumentAsset.document_id == document_id)
@@ -632,33 +689,49 @@ class DocumentParseService:
         for a in old.scalars().all():
             await self.db.delete(a)
 
+        # 该文档的 figure/table/formula block：用于回填 asset_id + 提升为 asset
+        media_blocks = (await self.db.execute(
+            select(_Block).where(
+                _Block.document_id == document_id,
+                _Block.block_type.in_(["figure", "table", "formula"]),
+            )
+        )).scalars().all()
+        for b in media_blocks:
+            b.asset_id = None  # 重新解析时重建桥
+
+        # (page_no, type, x1) → block，把 MinerU content_list 产出的 asset 对回它的 block
+        block_by_key: Dict[Any, Any] = {}
+        for b in media_blocks:
+            block_by_key.setdefault((b.page_no, b.block_type, self._bbox_x1(b.bbox)), b)
+
+        explicit_keys = set()
         for asset_data in assets:
+            # 图片字节以 base64 内联回传（嵌入/服务两种模式统一），在此解码落盘到
+            # uploads/assets/<document_id>/，file_path 由主 backend 生成、确保 host 可读。
+            persisted_path = self._write_asset_image(document_id, asset_data)
+            asset_type = asset_data.asset_type or "figure"
             asset = DocumentAsset(
                 id=generate_id(),
                 document_id=document_id,
                 page_no=asset_data.page_no,
-                asset_type=asset_data.asset_type or "figure",
-                file_path=asset_data.file_path or None,
+                asset_type=asset_type,
+                file_path=persisted_path or (asset_data.file_path or None),
                 caption_text=asset_data.caption_text,
                 bbox=asset_data.bbox,
                 metadata_json=getattr(asset_data, "metadata", None),
             )
             self.db.add(asset)
+            key = (asset_data.page_no, asset_type, self._bbox_x1(asset_data.bbox))
+            explicit_keys.add(key)
+            matched = block_by_key.get(key)
+            if matched is not None:
+                matched.asset_id = asset.id  # 回填 block→asset 桥
 
-        # 同步把 figure/table/formula block 也注册成 asset，让公式 LaTeX 和 HTML 表格也能被实体引用
-        from app.models.mysql_models import DocumentBlock as _Block
-        block_query = await self.db.execute(
-            select(_Block).where(
-                _Block.document_id == document_id,
-                _Block.block_type.in_(["figure", "table", "formula"]),
-            )
-        )
-        blocks_to_promote = block_query.scalars().all()
-        existing_pages = {(a.page_no, a.asset_type, (a.bbox or {}).get("x1") if a.bbox else None) for a in assets}
-        for b in blocks_to_promote:
-            key = (b.page_no, b.block_type, (b.bbox or {}).get("x1") if b.bbox else None)
-            if key in existing_pages:
-                continue  # 已有同位置同类型 asset
+        # 把未被显式 asset 覆盖的 figure/table/formula block 提升为 asset，并回填 asset_id
+        for b in media_blocks:
+            key = (b.page_no, b.block_type, self._bbox_x1(b.bbox))
+            if key in explicit_keys or b.asset_id:
+                continue  # 已有同位置 asset 或已回填
             metadata = {}
             if b.block_type == "table" and b.html_table:
                 metadata["html"] = b.html_table
@@ -666,7 +739,7 @@ class DocumentParseService:
                 metadata["latex"] = b.latex
             if b.content_text:
                 metadata.setdefault("text", b.content_text)
-            self.db.add(DocumentAsset(
+            promoted = DocumentAsset(
                 id=generate_id(),
                 document_id=document_id,
                 page_no=b.page_no,
@@ -675,7 +748,9 @@ class DocumentParseService:
                 caption_text=b.content_text[:500] if b.content_text else None,
                 bbox=b.bbox,
                 metadata_json=metadata or None,
-            ))
+            )
+            self.db.add(promoted)
+            b.asset_id = promoted.id
 
         await self.db.flush()
 
@@ -817,4 +892,119 @@ class DocumentParseService:
             "pages": pages,
             "blocks": blocks,
             "assets": assets,
+        }
+
+    async def get_content_overview(self, document_id: str) -> Optional[Dict[str, Any]]:
+        """
+        文档内容总览：知识点按所属大纲考点分组，题目按题号排列。
+
+        替代原"原生标题映射 + 归属诊断"的展示——直接把解析出的结构化内容
+        清晰列出，让人能看出每章有哪些知识点、考点关键词是什么，题目有哪些。
+        """
+        document = (await self.db.execute(
+            select(Document).where(Document.id == document_id)
+        )).scalar_one_or_none()
+        if not document:
+            return None
+
+        # 知识点（排除已删除）
+        kps = (await self.db.execute(
+            select(KnowledgePoint)
+            .where(
+                KnowledgePoint.source_document_id == document_id,
+                KnowledgePoint.status != "deleted",
+            )
+            .order_by(KnowledgePoint.created_at, KnowledgePoint.id)
+        )).scalars().all()
+
+        # 题目（排除已删除）
+        questions = (await self.db.execute(
+            select(Question)
+            .where(
+                Question.source_document_id == document_id,
+                Question.status != "deleted",
+            )
+        )).scalars().all()
+
+        # 收集涉及的考点，批量加载章节信息
+        chapter_ids = {kp.primary_chapter_id for kp in kps if kp.primary_chapter_id}
+        chapter_ids |= {q.primary_chapter_id for q in questions if q.primary_chapter_id}
+        chapter_map: Dict[str, CanonicalChapter] = {}
+        if chapter_ids:
+            chapters = (await self.db.execute(
+                select(CanonicalChapter).where(CanonicalChapter.id.in_(list(chapter_ids)))
+            )).scalars().all()
+            chapter_map = {ch.id: ch for ch in chapters}
+
+        # 知识点按 primary_chapter 分组；无章节的归入 ungrouped
+        groups: Dict[str, Dict[str, Any]] = {}
+        ungrouped_kps: List[Dict[str, Any]] = []
+        for kp in kps:
+            kp_brief = {
+                "id": kp.id,
+                "title": kp.title,
+                "summary": kp.summary,
+                "content_preview": (kp.content or "")[:300],
+                "topic_terms": kp.topic_terms or [],
+                "review_status": kp.review_status,
+                "status": kp.status,
+                "source_section_path": kp.source_section_path,
+            }
+            cid = kp.primary_chapter_id
+            if cid and cid in chapter_map:
+                if cid not in groups:
+                    ch = chapter_map[cid]
+                    groups[cid] = {
+                        "chapter_id": cid,
+                        "chapter_name": ch.name,
+                        "outline_code": ch.outline_code,
+                        "keywords": ch.keywords or [],
+                        "description": ch.description,
+                        "exam_guidance": ch.exam_guidance,
+                        "knowledge_points": [],
+                    }
+                groups[cid]["knowledge_points"].append(kp_brief)
+            else:
+                ungrouped_kps.append(kp_brief)
+
+        # 题目按题号排序（题号可能是 "16"/"44" 等字符串，按数值优先、回退字典序）
+        def _q_sort_key(q: Question):
+            no = (q.question_no or "").strip()
+            digits = "".join(c for c in no if c.isdigit())
+            return (0, int(digits)) if digits else (1, no)
+
+        questions_sorted = sorted(questions, key=_q_sort_key)
+        question_items = [
+            {
+                "id": q.id,
+                "question_no": q.question_no,
+                "type": q.type,
+                "content_preview": (q.content or "")[:300],
+                "options": q.options or [],
+                "exam_year": q.exam_year,
+                "review_status": q.review_status,
+                "status": q.status,
+                "primary_chapter_id": q.primary_chapter_id,
+                "primary_chapter_name": (
+                    chapter_map[q.primary_chapter_id].name
+                    if q.primary_chapter_id and q.primary_chapter_id in chapter_map else None
+                ),
+                "source_section_path": q.source_section_path,
+            }
+            for q in questions_sorted
+        ]
+
+        return {
+            "document_id": document.id,
+            "title": document.title,
+            "doc_type": document.doc_type,
+            "knowledge_chapters": list(groups.values()),
+            "ungrouped_knowledge_points": ungrouped_kps,
+            "questions": question_items,
+            "summary": {
+                "knowledge_count": len(kps),
+                "question_count": len(questions),
+                "chapter_count": len(groups),
+                "ungrouped_count": len(ungrouped_kps),
+            },
         }

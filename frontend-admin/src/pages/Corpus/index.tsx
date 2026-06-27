@@ -37,8 +37,6 @@ import {
   scanCorpusFiles,
   parseCorpusFile,
   getParseRunDetail,
-  extractDocumentSections,
-  mapDocumentChapters,
   extractDocumentEntities,
   getDownloadedFiles,
   registerCorpusFileByDownload,
@@ -69,8 +67,6 @@ const downloadedStatusConfig: Record<string, { color: string; text: string }> = 
 const PIPELINE_STEPS = [
   { key: 'register', title: '注册文件' },
   { key: 'parse', title: '文档解析' },
-  { key: 'sections', title: '提取标题树' },
-  { key: 'map', title: '映射章节' },
   { key: 'extract', title: '抽取实体' },
 ]
 
@@ -247,19 +243,9 @@ const CorpusPage = () => {
       if (!docId) throw new Error('未获取到文档ID')
 
       steps.parse = 'finish'
-      steps.sections = 'process'
+      steps.extract = 'process'
       setPipelineDocId(docId)
       setParseProgress(null)
-      setPipelineSteps({ ...steps })
-
-      await extractDocumentSections(docId)
-      steps.sections = 'finish'
-      steps.map = 'process'
-      setPipelineSteps({ ...steps })
-
-      await mapDocumentChapters(docId)
-      steps.map = 'finish'
-      steps.extract = 'process'
       setPipelineSteps({ ...steps })
 
       await extractDocumentEntities(docId)

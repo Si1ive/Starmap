@@ -1349,16 +1349,15 @@ class EntityExtractionService:
 
         await self.db.flush()
 
-        # 关联同页的图片/表格/公式资产
+        # 关联资产：按实体覆盖的 block 精确绑定（只绑这些 block 上挂着的图/表/公式）
         try:
-            from app.services.entity_asset_service import link_entity_assets_by_pages
-            pages = {b.page_no for b in [title_block, *content_blocks] if b.page_no is not None}
-            await link_entity_assets_by_pages(
+            from app.services.entity_asset_service import link_entity_assets_by_blocks
+            block_ids = [title_block.id] + [b.id for b in content_blocks]
+            await link_entity_assets_by_blocks(
                 self.db,
                 entity_type="knowledge_point",
                 entity_id=kp_id,
-                document_id=document_id,
-                page_numbers=pages,
+                block_ids=block_ids,
             )
         except Exception as e:
             logger.warning("知识点资产关联失败", knowledge_point_id=kp_id, error=str(e))
@@ -2131,17 +2130,16 @@ class EntityExtractionService:
 
                 await self.db.flush()
 
-                # 关联资产
-                if blocks:
+                # 关联资产：按 block 精确绑定，只绑题目真正包含的图/表/公式
+                block_ids = question_dict.get('block_ids') or [b.id for b in blocks]
+                if block_ids:
                     try:
-                        from app.services.entity_asset_service import link_entity_assets_by_pages
-                        pages = {b.page_no for b in blocks if b.page_no is not None}
-                        await link_entity_assets_by_pages(
+                        from app.services.entity_asset_service import link_entity_assets_by_blocks
+                        await link_entity_assets_by_blocks(
                             self.db,
                             entity_type="question",
                             entity_id=question_dict['id'],
-                            document_id=question_dict['document_id'],
-                            page_numbers=pages,
+                            block_ids=block_ids,
                         )
                     except Exception as e:
                         logger.warning("题目资产关联失败", question_id=question_dict['id'], error=str(e))
