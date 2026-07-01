@@ -8,6 +8,7 @@ import re
 import uuid
 import asyncio
 from collections import Counter
+from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -954,6 +955,540 @@ def _extract_question_number_simple(question: Dict[str, Any]) -> Optional[int]:
     return None
 
 
+# ===== QuestionLayoutGrouper: 基于 bbox 坐标的题目分组器 =====
+
+# 阈值常量
+LEFT_EDGE_MARGIN = 30       # 0-1000 坐标系，约 3% 页宽
+GAP_RATIO_NEW_QUESTION = 3.0
+GAP_RATIO_PAREN_Q = 1.5
+GAP_RATIO_CONTINUATION = 1.5
+
+
+def _strip_option_marker_simple(text: str) -> str:
+    """去掉选项文本开头可能残留的选项标记，如 '. ' 或 '. Ⅰ' 等。"""
+    t = (text or "").strip()
+    t = re.sub(r'^\s*[.．、:：。]\s*', '', t)
+    return t.strip()
+
+
+@dataclass
+class PageStats:
+    page_no: int
+    left_edge: float
+    median_gap: float
+    is_dense: bool
+
+
+@dataclass
+class BlockTag:
+    block: Any
+    at_left_edge: bool
+    has_q_number: bool
+    has_option: bool
+    has_paren_q: bool
+    is_media: bool
+    is_noise: bool
+    gap_ratio: float
+
+
+@dataclass
+class QuestionGroup:
+    blocks: List[Any]
+    page_no: int
+
+
+class QuestionLayoutGrouper:
+    """基于 bbox 坐标的题目分组器"""
+
+    def __init__(self, blocks: List[Any]):
+        self.blocks = blocks
+        self.page_stats: Dict[int, PageStats] = {}
+
+    # ---- Phase 1: 页面统计 ----
+
+    def _compute_page_stats(self, page_no: int, page_blocks: List[Any]) -> PageStats:
+        left_edges = []
+        gaps: List[float] = []
+
+        # 只对 text 类 block 计算左边缘和行距，排除 figure/table 等媒体块
+        text_blocks = [
+            b for b in page_blocks
+            if (getattr(b, "block_type", "") or "").lower()
+            not in (
+                "figure", "table", "formula", "image", "chart",
+                "header", "footer", "page_number", "aside_text", "page_footnote",
+            )
+        ]
+
+        for i, b in enumerate(text_blocks):
+            bbox = getattr(b, "bbox", None) or {}
+            x0 = self._bbox_x0(bbox)
+            if x0 is not None:
+                left_edges.append(x0)
+
+            if i > 0:
+                prev = text_blocks[i - 1]
+                prev_bbox = getattr(prev, "bbox", None) or {}
+                cur_bbox = bbox
+                prev_y1 = self._bbox_y1(prev_bbox)
+                cur_y0 = self._bbox_y0(cur_bbox)
+                if prev_y1 is not None and cur_y0 is not None:
+                    gap = cur_y0 - prev_y1
+                    if gap >= 0:
+                        gaps.append(gap)
+
+        page_left_edge = min(left_edges) if left_edges else 50.0
+        median_gap = self._median(gaps) if gaps else 10.0
+        is_dense = self._check_dense_layout(text_blocks)
+
+        return PageStats(
+            page_no=page_no,
+            left_edge=page_left_edge,
+            median_gap=max(median_gap, 1.0),
+            is_dense=is_dense,
+        )
+
+    def _check_dense_layout(self, page_blocks: List[Any]) -> bool:
+        """统计同 y 坐标的 block 数量，判断是否多栏排版"""
+        y_buckets: Dict[int, int] = {}
+        for b in page_blocks:
+            bbox = getattr(b, "bbox", None) or {}
+            y0 = self._bbox_y0(bbox)
+            if y0 is None:
+                continue
+            bucket = int(y0 // 20)
+            y_buckets[bucket] = y_buckets.get(bucket, 0) + 1
+        total = sum(1 for v in y_buckets.values())
+        if total == 0:
+            return False
+        multi = sum(1 for v in y_buckets.values() if v > 2)
+        return (multi / total) > 0.3
+
+    # ---- Phase 2: 逐 block 打标 ----
+
+    def _tag_block(self, block: Any, stats: PageStats, prev_block: Optional[Any]) -> BlockTag:
+        bbox = getattr(block, "bbox", None) or {}
+        text = getattr(block, "content_text", None) or getattr(block, "content_md", None) or ""
+        block_type = getattr(block, "block_type", "") or ""
+
+        x0 = self._bbox_x0(bbox)
+        at_left_edge = False
+        if x0 is not None:
+            at_left_edge = (x0 - stats.left_edge) < LEFT_EDGE_MARGIN
+
+        has_q_number = bool(QUESTION_NUMERIC_RE.match(text.strip()))
+        has_option = bool(OPTION_BLOCK_RE.match(text.strip()))
+        has_paren_q = bool(QUESTION_PAREN_RE.match(text.strip()))
+        is_media = block_type.lower() in ("figure", "table", "formula", "image", "chart")
+        is_noise = block_type.lower() in ("header", "footer", "page_number", "aside_text", "page_footnote")
+
+        gap_ratio = 0.0
+        if prev_block is not None:
+            prev_bbox = getattr(prev_block, "bbox", None) or {}
+            prev_y1 = self._bbox_y1(prev_bbox)
+            cur_y0 = self._bbox_y0(bbox)
+            if prev_y1 is not None and cur_y0 is not None and stats.median_gap > 0:
+                gap = cur_y0 - prev_y1
+                gap_ratio = gap / stats.median_gap
+
+        return BlockTag(
+            block=block,
+            at_left_edge=at_left_edge,
+            has_q_number=has_q_number,
+            has_option=has_option,
+            has_paren_q=has_paren_q,
+            is_media=is_media,
+            is_noise=is_noise,
+            gap_ratio=gap_ratio,
+        )
+
+    # ---- Phase 3: 题目边界判定 ----
+
+    def group_into_questions(self) -> List[QuestionGroup]:
+        """主入口：将 blocks 分组为题目列表"""
+        if not self.blocks:
+            return []
+
+        # 按页组合 blocks
+        pages: Dict[int, List[Any]] = {}
+        for b in self.blocks:
+            page_no = getattr(b, "page_no", None) or 1
+            pages.setdefault(page_no, []).append(b)
+
+        # 为每页计算 PageStats
+        for page_no, page_blocks in pages.items():
+            self.page_stats[page_no] = self._compute_page_stats(page_no, page_blocks)
+            if self.page_stats[page_no].is_dense:
+                logger.warning("检测到疑似多栏/密排页面，当前版本仅记录告警", page_no=page_no)
+
+        groups: List[QuestionGroup] = []
+        current_group_blocks: List[Any] = []
+        prev_block: Optional[Any] = None
+
+        all_blocks_ordered: List[Any] = []
+        for page_no in sorted(pages.keys()):
+            all_blocks_ordered.extend(pages[page_no])
+
+        for i, block in enumerate(all_blocks_ordered):
+            page_no = getattr(block, "page_no", None) or 1
+            stats = self.page_stats.get(page_no)
+            if stats is None:
+                stats = PageStats(page_no=page_no, left_edge=50.0, median_gap=10.0, is_dense=False)
+                self.page_stats[page_no] = stats
+
+            prev = all_blocks_ordered[i - 1] if i > 0 else None
+            tag = self._tag_block(block, stats, prev)
+
+            if tag.is_noise:
+                continue
+
+            is_new_question = self._is_new_question_start(tag, prev_block)
+
+            if is_new_question:
+                if current_group_blocks:
+                    groups.append(QuestionGroup(
+                        blocks=current_group_blocks,
+                        page_no=getattr(current_group_blocks[0], "page_no", None) or 1,
+                    ))
+                current_group_blocks = [block]
+            else:
+                current_group_blocks.append(block)
+
+            prev_block = block
+
+        if current_group_blocks:
+            groups.append(QuestionGroup(
+                blocks=current_group_blocks,
+                page_no=getattr(current_group_blocks[0], "page_no", None) or 1,
+            ))
+
+        # Phase 5: 跨页合并
+        groups = self._merge_cross_page_groups(groups)
+
+        return groups
+
+    def _is_new_question_start(self, tag: BlockTag, prev_block: Optional[Any]) -> bool:
+        """判断是否为新题目起点"""
+        if prev_block is None:
+            return True
+
+        # 选项/媒体/噪声块绝不可能是新题起点
+        if tag.has_option or tag.is_media or tag.is_noise:
+            return False
+
+        # 检查当前 block 是否有有效的 bbox（x0 和 y0 都能取到）
+        bbox = getattr(tag.block, "bbox", None) or {}
+        has_bbox = (
+            self._bbox_x0(bbox) is not None
+            and self._bbox_y0(bbox) is not None
+        )
+
+        if has_bbox:
+            # ---- 有 bbox：严格按空间位置判断 ----
+
+            # A. 左边缘 + 题号 → 最高置信度，无论 gap 多大都算新题
+            if tag.at_left_edge and tag.has_q_number:
+                return True
+
+            # B. 左边缘 + 括号题号 + 间距不小于中位行距
+            if tag.at_left_edge and tag.has_paren_q and tag.gap_ratio > GAP_RATIO_PAREN_Q:
+                return True
+
+            # C. 大间距 + 有实质文本（不是选项）
+            text = getattr(tag.block, "content_text", None) or getattr(tag.block, "content_md", None) or ""
+            if tag.gap_ratio > GAP_RATIO_NEW_QUESTION and len(text.strip()) > 10:
+                return True
+
+            # gap_ratio < 1.5 且无题号 → 是上一题的延续内容
+            return False
+
+        # ---- 无 bbox：回退到纯文本判断 ----
+        if tag.has_q_number:
+            return True
+        if tag.has_paren_q:
+            text = getattr(tag.block, "content_text", None) or getattr(tag.block, "content_md", None) or ""
+            if len(text.strip()) > 20:
+                return True
+
+        return False
+
+    # ---- Phase 4: 组内处理 ----
+
+    def _extract_stem(self, group: QuestionGroup) -> str:
+        parts: List[str] = []
+        in_options = False
+        for block in group.blocks:
+            text = getattr(block, "content_text", None) or getattr(block, "content_md", None) or ""
+            text = text.strip()
+            if not text:
+                continue
+            if OPTION_BLOCK_RE.match(text):
+                in_options = True
+            if in_options:
+                continue
+            block_type = getattr(block, "block_type", "") or ""
+            if block_type.lower() in ("figure", "table", "formula", "image", "chart"):
+                continue
+            # 给纯 figure caption 文本换行，避免题干直接拼接 "1" + "II" 这类污染
+            parts.append(text)
+        # 用空格而非换行拼接 stem
+        return " ".join(parts)
+
+    def _extract_options(self, group: QuestionGroup) -> List[Dict[str, str]]:
+        """从组内提取选项（含跨 block 合并）"""
+        option_blocks: List[Dict[str, Any]] = []
+        non_option_after: List[Any] = []
+        last_option_block: Optional[Any] = None
+
+        option_phase = False
+        for block in group.blocks:
+            text = getattr(block, "content_text", None) or getattr(block, "content_md", None) or ""
+            text = text.strip()
+            block_type = getattr(block, "block_type", "") or ""
+
+            if OPTION_BLOCK_RE.match(text):
+                option_phase = True
+                option_blocks.append({"text": text, "block": block, "is_option": True})
+                last_option_block = block
+            elif option_phase:
+                # 媒体块不应作为选项尾部文字合并
+                if (
+                    block_type.lower() not in ("figure", "table", "formula", "image", "chart")
+                    and last_option_block is not None
+                    and self._should_append_to_last_option(last_option_block, block)
+                ):
+                    non_option_after.append(block)
+
+        if not option_blocks:
+            return []
+
+        # 从选项块中解析出各个选项
+        all_option_text = " ".join(ob["text"] for ob in option_blocks)
+
+        options = self._parse_options_from_text(all_option_text)
+
+        # 处理跨 block 的选项尾部文字
+        if non_option_after and options:
+            trailing_text = " ".join(
+                getattr(b, "content_text", None) or getattr(b, "content_md", None) or ""
+                for b in non_option_after
+            ).strip()
+            if trailing_text and not QUESTION_NUMERIC_RE.match(trailing_text):
+                options[-1]["text"] = options[-1]["text"] + " " + trailing_text
+
+        return options
+
+    def _should_append_to_last_option(self, option_block: Any, continuation_block: Any) -> bool:
+        text = (
+            getattr(continuation_block, "content_text", None)
+            or getattr(continuation_block, "content_md", None)
+            or ""
+        ).strip()
+        if not text:
+            return False
+        if QUESTION_NUMERIC_RE.match(text) or QUESTION_PAREN_RE.match(text) or OPTION_BLOCK_RE.match(text):
+            return False
+
+        option_bbox = getattr(option_block, "bbox", None) or {}
+        cont_bbox = getattr(continuation_block, "bbox", None) or {}
+        option_y1 = self._bbox_y1(option_bbox)
+        cont_y0 = self._bbox_y0(cont_bbox)
+        option_x0 = self._bbox_x0(option_bbox)
+        option_x1 = self._bbox_x1(option_bbox)
+        cont_x0 = self._bbox_x0(cont_bbox)
+
+        if option_y1 is not None and cont_y0 is not None and cont_y0 < option_y1:
+            return False
+
+        page_no = getattr(option_block, "page_no", None) or getattr(continuation_block, "page_no", None) or 1
+        stats = self.page_stats.get(page_no)
+        if stats and option_y1 is not None and cont_y0 is not None:
+            gap = max(0.0, cont_y0 - option_y1)
+            gap_ratio = gap / max(stats.median_gap, 1.0)
+            if gap_ratio >= GAP_RATIO_CONTINUATION:
+                return False
+
+        if option_x0 is not None and option_x1 is not None and cont_x0 is not None:
+            if cont_x0 > option_x1 + LEFT_EDGE_MARGIN:
+                return False
+
+        return True
+
+    def _parse_options_from_text(self, text: str) -> List[Dict[str, str]]:
+        """从选项文本中提取各个选项"""
+        if not text:
+            return []
+        matches = list(OPTION_MARKER_RE.finditer(text))
+        if not matches:
+            return []
+
+        options: List[Dict[str, str]] = []
+        seen_labels = set()
+        for idx, match in enumerate(matches):
+            label = match.group(1).upper()
+            if label in seen_labels:
+                continue
+            text_start = match.end()
+            text_end = len(text)
+            if idx + 1 < len(matches):
+                text_end = matches[idx + 1].start(1)
+            option_text = text[text_start:text_end].strip()
+            # 去掉选项文本开头可能残留的选项标记
+            option_text = _strip_option_marker_simple(option_text)
+            if not option_text:
+                continue
+            options.append({
+                "key": label,
+                "label": label,
+                "option_label": label,
+                "text": option_text,
+            })
+            seen_labels.add(label)
+
+        return options if len(options) >= 2 else []
+
+    def _extract_figures(self, group: QuestionGroup) -> List[str]:
+        figure_ids: List[str] = []
+        for block in group.blocks:
+            block_type = getattr(block, "block_type", "") or ""
+            if block_type.lower() in ("figure", "table", "formula", "image", "chart"):
+                block_id = getattr(block, "id", None)
+                if block_id:
+                    figure_ids.append(block_id)
+        return figure_ids
+
+    def _extract_question_no(self, group: QuestionGroup) -> Optional[int]:
+        for block in group.blocks:
+            text = getattr(block, "content_text", None) or getattr(block, "content_md", None) or ""
+            text = text.strip()
+            m = QUESTION_NUMERIC_RE.match(text)
+            if m:
+                return int(m.group(1))
+            m = QUESTION_PAREN_RE.match(text)
+            if m:
+                return int(m.group(1))
+            m = QUESTION_TITLE_RE.match(text)
+            if m:
+                try:
+                    return int(m.group(1))
+                except ValueError:
+                    pass
+        return None
+
+    # ---- Phase 5: 跨页处理 ----
+
+    def _merge_cross_page_groups(self, groups: List[QuestionGroup]) -> List[QuestionGroup]:
+        """合并跨页的题目"""
+        if len(groups) < 2:
+            return groups
+
+        merged: List[QuestionGroup] = []
+        i = 0
+        while i < len(groups):
+            current = groups[i]
+            next_group = groups[i + 1] if i + 1 < len(groups) else None
+
+            if next_group and self._should_merge_groups(current, next_group):
+                combined = QuestionGroup(
+                    blocks=current.blocks + next_group.blocks,
+                    page_no=current.page_no,
+                )
+                merged.append(combined)
+                i += 2
+            else:
+                merged.append(current)
+                i += 1
+
+        return merged
+
+    def _should_merge_groups(self, current: QuestionGroup, next_group: QuestionGroup) -> bool:
+        cur_has_options = any(
+            OPTION_BLOCK_RE.match(
+                (getattr(b, "content_text", None) or getattr(b, "content_md", None) or "").strip()
+            )
+            for b in current.blocks
+        )
+        if cur_has_options:
+            return False
+
+        # 当前组只有题干没有选项，且下组开头是选项
+        next_blocks = next_group.blocks
+        if not next_blocks:
+            return False
+        first_text = (
+            getattr(next_blocks[0], "content_text", None) or
+            getattr(next_blocks[0], "content_md", None) or ""
+        ).strip()
+        if OPTION_BLOCK_RE.match(first_text) and not QUESTION_NUMERIC_RE.match(first_text):
+            return True
+
+        return False
+
+    # ---- 坐标辅助方法 ----
+
+    @staticmethod
+    def _bbox_x0(bbox: Optional[dict]) -> Optional[float]:
+        """左边缘。MinerU 归一化存储 {x1: left, y1: top, x2: right, y2: bottom}"""
+        if not bbox:
+            return None
+        val = bbox.get("x1")  # MinerU normalized: x1 = left
+        if val is None:
+            val = bbox.get("x0") or bbox.get("l")
+        try:
+            return float(val) if val is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _bbox_y0(bbox: Optional[dict]) -> Optional[float]:
+        """上边缘。MinerU 归一化存储 {x1: left, y1: top, x2: right, y2: bottom}"""
+        if not bbox:
+            return None
+        val = bbox.get("y1")  # MinerU normalized: y1 = top
+        if val is None:
+            val = bbox.get("y0") or bbox.get("t")
+        try:
+            return float(val) if val is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _bbox_x1(bbox: Optional[dict]) -> Optional[float]:
+        """右边缘。MinerU 归一化存储 {x1: left, y1: top, x2: right, y2: bottom}"""
+        if not bbox:
+            return None
+        val = bbox.get("x2")  # MinerU normalized: x2 = right
+        if val is None:
+            val = bbox.get("x1") or bbox.get("r")
+        try:
+            return float(val) if val is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _bbox_y1(bbox: Optional[dict]) -> Optional[float]:
+        """下边缘。MinerU 归一化存储 {x1: left, y1: top, x2: right, y2: bottom}"""
+        if not bbox:
+            return None
+        val = bbox.get("y2")  # MinerU normalized: y2 = bottom
+        if val is None:
+            val = bbox.get("y1") or bbox.get("b")
+        try:
+            return float(val) if val is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _median(values: List[float]) -> float:
+        if not values:
+            return 0.0
+        sorted_vals = sorted(values)
+        n = len(sorted_vals)
+        if n % 2 == 1:
+            return sorted_vals[n // 2]
+        return (sorted_vals[n // 2 - 1] + sorted_vals[n // 2]) / 2.0
+
+
 class EntityExtractionService:
     """实体抽取服务"""
 
@@ -1056,7 +1591,7 @@ class EntityExtractionService:
             question_blocks = [
                 b for b in blocks
                 if block_label_by_id.get(getattr(b, "id", ""), "") in
-                   ("question_stem", "question_option", "answer", "heading", "unknown")
+                   ("question_stem", "question_option", "answer", "heading", "unknown", "figure", "table", "formula")
             ] or blocks
             question_result = await self._extract_questions(
                 document_id, fallback_subject_id, question_blocks, section_mappings
@@ -1375,8 +1910,8 @@ class EntityExtractionService:
         抽取题目（带校验和修复）
 
         完整流程：
-        1. 标点清洗
-        2. 初步提取题目
+        1. 标点清洗（入口已完成）
+        2. 基于 bbox 坐标分组提取题目
         3. 综合校验
         4. 规则修复
         5. 重新校验
@@ -1384,14 +1919,12 @@ class EntityExtractionService:
         7. 保存题目和诊断报告
         """
         # Step 1: 标点 / 空白清洗已在 extract_entities 入口完成
-        blocks = self._expand_blocks_with_embedded_question_starts(blocks)
-        logger.info(f"展开内嵌题号完成，处理 {len(blocks)} 个blocks")
 
-        # Step 2: 初步提取题目（转换为字典格式，不直接入库）
-        raw_questions = await self._extract_questions_to_dict(
+        # Step 2: 基于 bbox 坐标分组提取题目
+        raw_questions = await self._extract_questions_v2(
             document_id, fallback_subject_id, blocks, section_mappings
         )
-        logger.info(f"初步提取: {len(raw_questions)} 道题目")
+        logger.info(f"初步提取 (bbox): {len(raw_questions)} 道题目")
 
         if not raw_questions:
             diagnostic = self._build_question_extraction_diagnostic(
@@ -1412,9 +1945,6 @@ class EntityExtractionService:
 
         # 4.1 修复选项问题
         questions = fixer.fix_option_issues(raw_questions, validation_report['option_issues'])
-
-        # 4.2 修复编号问题
-        questions = fixer.fix_number_issues(questions, validation_report['number_continuity'])
 
         rule_fixed_count = sum(1 for q in questions if q.get('fixed_by_rule'))
         logger.info(f"规则修复: {rule_fixed_count} 道题目")
@@ -1499,7 +2029,7 @@ class EntityExtractionService:
             logger.warning("读取PDF结构解析LLM配置失败，跳过LLM兜底", error=str(e))
             return None
 
-    async def _extract_questions_to_dict(
+    async def _extract_questions_v2(
         self,
         document_id: str,
         fallback_subject_id: str,
@@ -1507,191 +2037,42 @@ class EntityExtractionService:
         section_mappings: Dict[int, Dict[str, Optional[str]]],
     ) -> List[Dict[str, Any]]:
         """
-        将blocks提取为题目字典列表（不入库）
-        用于后续的校验和修复
+        基于 bbox 坐标的题目分组提取（新方案）。
+
+        流程：
+        1. QuestionLayoutGrouper.group_into_questions() → List[QuestionGroup]
+        2. 对每个 QuestionGroup 调用组内处理 → List[question_dict]
         """
-        questions = []
+        grouper = QuestionLayoutGrouper(list(blocks))
+        groups = grouper.group_into_questions()
 
-        current_question_blocks = []
-        current_question_start_kind: Optional[str] = None
-        in_question = False
-
-        for block in blocks:
-            text = (block.content_text or "").strip()
-
-            # 检测题目开始
-            question_start_kind = self._question_start_kind(block)
-            is_question_start = question_start_kind is not None
-            if (
-                in_question
-                and question_start_kind == "paren"
-                and current_question_start_kind != "paren"
-            ):
-                # 综合题的（1）（2）（3）通常是当前大题的小问，不能把大题拆散。
-                is_question_start = False
-
-            if is_question_start:
-                # 保存前一个题目
-                if in_question and current_question_blocks:
-                    q_dict = await self._blocks_to_question_dict(
-                        document_id, fallback_subject_id, current_question_blocks, section_mappings
-                    )
-                    if q_dict:
-                        questions.append(q_dict)
-                    current_question_blocks = []
-
-                in_question = True
-                current_question_start_kind = question_start_kind
-                current_question_blocks.append(block)
-            elif in_question:
-                is_option_continuation = bool(OPTION_BLOCK_RE.match(text))
-                if block.block_type in ('title', 'heading') and not is_option_continuation:
-                    if current_question_blocks:
-                        q_dict = await self._blocks_to_question_dict(
-                            document_id, fallback_subject_id, current_question_blocks, section_mappings
-                        )
-                        if q_dict:
-                            questions.append(q_dict)
-                        current_question_blocks = []
-                    in_question = False
-                    current_question_start_kind = None
-                else:
-                    current_question_blocks.append(block)
-
-        # 保存最后一个题目
-        if in_question and current_question_blocks:
-            q_dict = await self._blocks_to_question_dict(
-                document_id, fallback_subject_id, current_question_blocks, section_mappings
+        questions: List[Dict[str, Any]] = []
+        for group in groups:
+            q_dict = await self._question_group_to_dict(
+                document_id, fallback_subject_id, group, section_mappings, grouper
             )
             if q_dict:
                 questions.append(q_dict)
 
         return questions
 
-    def _expand_blocks_with_embedded_question_starts(self, blocks: List[DocumentBlock]) -> List[DocumentBlock]:
-        """拆分同一文本块内粘连的多道题，常见于页级解析把 12 和 13 合在一个 block。"""
-        expanded: List[DocumentBlock] = []
-        for block in blocks:
-            expanded.extend(self._split_block_by_embedded_question_starts(block))
-        return expanded
-
-    def _split_block_by_embedded_question_starts(self, block: DocumentBlock) -> List[DocumentBlock]:
-        text = block.content_md or block.content_text or ""
-        if not text.strip() or block.block_type not in ("paragraph", "heading", "list"):
-            return [block]
-
-        first_number_match = QUESTION_NUMERIC_RE.match(text.strip())
-        if not first_number_match:
-            return [block]
-        expected_number = int(first_number_match.group(1)) + 1
-
-        split_positions = []
-        for match in EMBEDDED_QUESTION_NUMERIC_RE.finditer(text):
-            if match.start() == 0:
-                continue
-            if self._is_embedded_question_start(text, match, expected_number):
-                split_positions.append(match.start())
-                expected_number += 1
-
-        if not split_positions:
-            return [block]
-
-        boundaries = [0] + split_positions + [len(text)]
-        parts = []
-        for index, (start, end) in enumerate(zip(boundaries, boundaries[1:])):
-            part_text = text[start:end].strip()
-            if not part_text:
-                continue
-            parts.append(SimpleNamespace(
-                id=block.id,
-                document_id=block.document_id,
-                page_id=getattr(block, "page_id", None),
-                page_no=block.page_no,
-                block_type=block.block_type,
-                order_no=(block.order_no or 0) * 100 + index,
-                bbox=getattr(block, "bbox", None),
-                content_text=part_text,
-                content_md=part_text,
-                content_json=getattr(block, "content_json", None),
-                latex=getattr(block, "latex", None),
-                html_table=getattr(block, "html_table", None),
-                asset_id=getattr(block, "asset_id", None),
-                confidence=getattr(block, "confidence", None),
-                review_status=getattr(block, "review_status", None),
-            ))
-
-        return parts or [block]
-
-    def _is_embedded_question_start(self, text: str, match: re.Match, expected_number: int) -> bool:
-        try:
-            number = int(match.group(1))
-        except (TypeError, ValueError):
-            return False
-        if number != expected_number:
-            return False
-
-        prefix = text[:match.start()].strip()
-        suffix = text[match.start(): match.start() + 180].strip()
-        if len(prefix) < 30 or len(suffix) < 20:
-            return False
-        if not QUESTION_CUE_RE.search(suffix):
-            return False
-
-        previous_number_match = QUESTION_NUMERIC_RE.match(prefix)
-        if previous_number_match:
-            previous_number = int(previous_number_match.group(1))
-            if number <= previous_number:
-                return False
-
-        return True
-
-    def _is_question_start_block(self, block: DocumentBlock, in_question: bool = False) -> bool:
-        """判断 block 是否是题目起点，避免把 A/B/C/D 选项块误判为新题。"""
-        return self._question_start_kind(block) is not None
-
-    def _question_start_kind(self, block: DocumentBlock) -> Optional[str]:
-        """返回题目起点类型；None 表示不是题目起点。"""
-        text = (block.content_text or block.content_md or "").strip()
-        if not text or block.block_type not in ('paragraph', 'heading', 'list'):
-            return None
-
-        if OPTION_BLOCK_RE.match(text):
-            return None
-
-        if QUESTION_TITLE_RE.match(text) or QUESTION_EXAMPLE_RE.match(text):
-            return "title"
-
-        if QUESTION_PAREN_RE.match(text):
-            return "paren" if bool(QUESTION_CUE_RE.search(text)) or len(text) > 20 else None
-
-        numeric_match = QUESTION_NUMERIC_RE.match(text)
-        if numeric_match:
-            number = int(numeric_match.group(1))
-            if number > 200:
-                return None
-            if (
-                bool(QUESTION_CUE_RE.search(text))
-                or len(text) > 20
-                or block.block_type == 'heading'
-                or bool(OPTION_MARKER_RE.search(text))
-            ):
-                return "numeric"
-
-        return None
-
-    async def _blocks_to_question_dict(
+    async def _question_group_to_dict(
         self,
         document_id: str,
         fallback_subject_id: str,
-        blocks: List[DocumentBlock],
+        group: QuestionGroup,
         section_mappings: Dict[int, Dict[str, Optional[str]]],
+        grouper: QuestionLayoutGrouper,
     ) -> Optional[Dict[str, Any]]:
-        """将blocks转换为题目字典"""
+        """将 QuestionGroup 转换为题目字典"""
+        blocks = group.blocks
         if not blocks:
             return None
 
         first_block = blocks[0]
-        mapping_info = self._resolve_mapping_for_page(first_block.page_no, section_mappings)
+        mapping_info = self._resolve_mapping_for_page(
+            getattr(first_block, "page_no", None), section_mappings
+        )
 
         primary_chapter_id = mapping_info["chapter_id"] if mapping_info else None
         subject_id = mapping_info["subject_id"] if mapping_info else fallback_subject_id
@@ -1699,10 +2080,16 @@ class EntityExtractionService:
         source_section_path = mapping_info.get("source_section_path") if mapping_info else None
         resolved_source: Optional[str] = None
 
+        # 使用 bbox 分组器提取 stem / options / figures
+        stem = grouper._extract_stem(group)
+        options = grouper._extract_options(group)
+        figures = grouper._extract_figures(group)
+        question_no = grouper._extract_question_no(group)
+
         # 组合内容
         content_parts = []
         for block in blocks:
-            text = block.content_md or block.content_text or ""
+            text = getattr(block, "content_md", None) or getattr(block, "content_text", None) or ""
             if text.strip():
                 content_parts.append(text.strip())
         content = "\n".join(content_parts)
@@ -1710,9 +2097,7 @@ class EntityExtractionService:
         if not content:
             return None
 
-        stem, options = self._split_question_stem_options(content)
-
-        # section_mapping 缺失时（试卷类文档天然没有），用题干内容直接匹配大纲考点
+        # section_mapping 缺失时用题干内容直接匹配大纲考点
         if not primary_chapter_id:
             from app.services.chapter_link_service import ChapterLinkService
             try:
@@ -1728,7 +2113,7 @@ class EntityExtractionService:
                     subject_id = resolved["subject_id"] or subject_id
                     resolved_source = resolved.get("source", "vector_search")
                     logger.info(
-                        "题目章节解析（提取阶段）",
+                        "题目章节解析（bbox v2）",
                         chapter_id=primary_chapter_id,
                         confidence=resolved.get("confidence"),
                         source=resolved.get("source"),
@@ -1752,7 +2137,7 @@ class EntityExtractionService:
         elif '填空' in content[:50]:
             question_type = "fill"
 
-        # 题目级来源/年份：题干优先，缺则继承文档级
+        # 题目级来源/年份
         doc_meta = getattr(self, "_doc_meta", {}) or {}
         doc_type = getattr(self, "_doc_type", "other")
         stem_year = _detect_stem_year(content)
@@ -1765,7 +2150,6 @@ class EntityExtractionService:
             source = doc_meta.get("source_label") or None
             paper_name = doc_meta.get("paper_name") or doc_meta.get("source_label") or None
         else:
-            # 课本无年份标记 → 课后习题（带机构）
             exam_year = 0
             inst = doc_meta.get("institution")
             if doc_type == "textbook":
@@ -1789,8 +2173,8 @@ class EntityExtractionService:
             'content': stem if options else content,
             'stem': stem if options else content,
             'options': options,
-            'page_no': first_block.page_no,
-            'block_ids': [b.id for b in blocks],
+            'page_no': getattr(first_block, "page_no", None),
+            'block_ids': [getattr(b, "id", None) for b in blocks if getattr(b, "id", None)],
             'blocks': blocks,
             'raw_text': content,
             'source': source,
@@ -1798,210 +2182,9 @@ class EntityExtractionService:
             'exam_scope': doc_meta.get("exam_scope"),
             'paper_name': paper_name,
             'tags': tags,
+            'question_no': question_no,
+            'figures': figures,
         }
-
-    def _split_question_stem_options(self, content: str) -> tuple[str, List[Dict[str, str]]]:
-        """从题目全文中拆出题干和选项，选项文本不保留 A./A： 等标记。"""
-        if not content:
-            return "", []
-
-        matches = list(OPTION_MARKER_RE.finditer(content))
-        if not matches:
-            return content.strip(), []
-
-        option_sequence = self._find_best_option_sequence(content, matches)
-        if not option_sequence:
-            return content.strip(), []
-
-        options: List[Dict[str, str]] = []
-        seen_labels = set()
-        first_option_start = option_sequence[0].start(1)
-
-        for idx, match in enumerate(option_sequence):
-            label = match.group(1).upper()
-            if label in seen_labels:
-                continue
-
-            text_start = match.end()
-            text_end = len(content)
-            if idx + 1 < len(option_sequence):
-                text_end = option_sequence[idx + 1].start(1)
-
-            option_text = content[text_start:text_end].strip()
-            option_text = self._strip_leading_option_marker(option_text)
-            if not option_text:
-                continue
-
-            options.append({
-                "key": label,
-                "label": label,
-                "option_label": label,
-                "text": option_text,
-            })
-            seen_labels.add(label)
-
-        if len(options) < 2:
-            return content.strip(), []
-
-        stem = content[:first_option_start].strip() if first_option_start is not None else content.strip()
-        return stem or content.strip(), options
-
-    def _find_best_option_sequence(
-        self,
-        content: str,
-        matches: List[re.Match],
-    ) -> List[re.Match]:
-        """选出可信的连续选项序列，避免把题干中的 A/B/C/D 普通字母误判为选项。"""
-        best: List[re.Match] = []
-        best_score = -10_000
-
-        for start_idx, first_match in enumerate(matches):
-            first_label = first_match.group(1).upper()
-            if first_label not in {"A", "B"}:
-                continue
-            if not self._is_valid_option_marker_match(content, first_match):
-                continue
-            if not self._has_choice_stem_signal(content[:first_match.start(1)]):
-                continue
-
-            for sequence in self._candidate_option_sequences(content, matches, start_idx):
-                if len(sequence) < 2:
-                    continue
-                if not self._is_plausible_option_text(content[sequence[-1].end():], is_last=True):
-                    continue
-                score = self._score_option_sequence(content, sequence)
-                if score > best_score:
-                    best = sequence
-                    best_score = score
-
-        return best if len(best) >= 2 else []
-
-    def _candidate_option_sequences(
-        self,
-        content: str,
-        matches: List[re.Match],
-        start_idx: int,
-    ) -> List[List[re.Match]]:
-        """枚举从 A 开始的连续选项候选，处理选项文本里也出现 A/B/C/D 的情况。"""
-        results: List[List[re.Match]] = []
-        max_results = 256
-
-        def walk(sequence: List[re.Match], search_from: int, expected_ord: int) -> None:
-            if len(results) >= max_results:
-                return
-            results.append(sequence)
-            if len(sequence) >= 8 or expected_ord > ord("H"):
-                return
-
-            candidates_seen = 0
-            for next_idx in range(search_from, len(matches)):
-                next_match = matches[next_idx]
-                if ord(next_match.group(1).upper()) != expected_ord:
-                    continue
-                if not self._is_valid_option_marker_match(content, next_match):
-                    continue
-                if not self._is_plausible_option_text(
-                    content[sequence[-1].end():next_match.start(1)],
-                    is_last=False,
-                ):
-                    continue
-                walk(sequence + [next_match], next_idx + 1, expected_ord + 1)
-                candidates_seen += 1
-                if candidates_seen >= 8:
-                    break
-
-        first = matches[start_idx]
-        walk([first], start_idx + 1, ord(first.group(1).upper()) + 1)
-        return results
-
-    def _is_valid_option_marker_match(self, content: str, match: re.Match) -> bool:
-        """过滤明显不是选项标记的 A/B/C/D，例如 RISC 末尾 C 或 computer(A)。"""
-        label_start = match.start(1)
-        marker_text = content[label_start:match.end()]
-        has_explicit_punctuation = bool(re.search(r'[.．、:：。]|<sub>', marker_text))
-
-        previous_char = content[label_start - 1] if label_start > 0 else ""
-        if previous_char and previous_char.isascii() and previous_char.isalnum() and not has_explicit_punctuation:
-            return False
-
-        previous_nonspace = ""
-        for char in reversed(content[:label_start]):
-            if not char.isspace():
-                previous_nonspace = char
-                break
-        if previous_nonspace in "([{（【" and not has_explicit_punctuation:
-            return False
-
-        option_text_start = match.end()
-        while option_text_start < len(content) and content[option_text_start].isspace():
-            option_text_start += 1
-        if option_text_start < len(content) and content[option_text_start] in ")]}）】;；":
-            return False
-
-        return True
-
-    def _score_option_sequence(self, content: str, sequence: List[re.Match]) -> int:
-        """给候选选项序列打分；分数高表示更像真实 A/B/C/D 选项边界。"""
-        score = len(sequence) * 100
-        labels = [match.group(1).upper() for match in sequence]
-        if labels[:4] == ["A", "B", "C", "D"]:
-            score += 80
-
-        stem_tail = content[max(0, sequence[0].start(1) - 120):sequence[0].start(1)]
-        if CHOICE_BLANK_RE.search(stem_tail):
-            score += 30
-
-        option_texts = []
-        for idx, match in enumerate(sequence):
-            start = match.end()
-            end = sequence[idx + 1].start(1) if idx + 1 < len(sequence) else len(content)
-            option_texts.append(self._strip_leading_option_marker(content[start:end]))
-
-            marker_text = match.group(0)
-            if re.search(r'[.．、:：。]|<sub>', marker_text):
-                score += 4
-
-        for idx, option_text in enumerate(option_texts):
-            compact = re.sub(r'\s+', '', option_text)
-            if len(compact) < 2:
-                score -= 80
-            if len(compact) > 120 and idx + 1 < len(option_texts):
-                score -= min(60, (len(compact) - 120) // 3)
-            if re.match(r'^[的和与及、，。；:：]', option_text):
-                score -= 140
-            if re.match(r'^[A-H]\s+[A-H]\s+', option_text):
-                score += 10
-
-        return score
-
-    def _has_choice_stem_signal(self, stem: str) -> bool:
-        """题干必须像选择题，才能启用宽松的 A/B/C/D 选项识别。"""
-        stem = stem or ""
-        tail = stem[-120:]
-        if "下列问题" in tail or "以下问题" in tail:
-            return False
-        if CHOICE_BLANK_RE.search(stem):
-            return True
-        if any(keyword in tail for keyword in ("下列", "以下", "正确", "错误", "不是", "属于", "应采用", "哪种", "哪个", "哪些")):
-            return True
-        return False
-
-    def _has_choice_blank_near_option_start(self, stem: str) -> bool:
-        """只把 A 选项前最近的括号空位当作选择题信号，避免说明性括号误触发。"""
-        if not stem:
-            return False
-        tail = stem[-80:]
-        return bool(CHOICE_BLANK_RE.search(tail))
-
-    def _is_plausible_option_text(self, text: str, is_last: bool) -> bool:
-        """判断两个选项标记之间的文本是否像一个选项内容。"""
-        cleaned = self._strip_leading_option_marker(text)
-        compact = re.sub(r'\s+', '', cleaned)
-        if not compact:
-            return False
-        if len(compact) > 180 and not is_last:
-            return False
-        return True
 
     def _strip_leading_option_marker(self, text: str, expected_label: Optional[str] = None) -> str:
         """清理选项文本中重复出现的选项标记。"""
@@ -2017,11 +2200,6 @@ class EntityExtractionService:
             cleaned = cleaned[malformed_sub.end():]
             cleaned = re.sub(r'^([^<]{0,60})</sub>', r'\1', cleaned, count=1).strip()
         return re.sub(r'^\s*[.．、:：。]\s*', '', cleaned).strip()
-
-    def _extract_options_from_content(self, content: str) -> List[Dict[str, str]]:
-        """从内容中提取选项"""
-        _stem, options = self._split_question_stem_options(content)
-        return options
 
     def _normalize_options(self, options: Optional[List[Dict[str, Any]]]) -> List[Dict[str, str]]:
         """统一选择题选项结构，兼容前端 key/text 和校验器 label/text。"""
