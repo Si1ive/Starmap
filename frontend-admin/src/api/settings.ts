@@ -27,7 +27,7 @@ export interface LlmConfig {
 
 export interface EmbeddingConfig {
   enabled: boolean
-  provider: 'openai_compatible'
+  provider: 'openai_compatible' | 'local_bge_m3'
   base_url: string
   api_key: string
   model: string

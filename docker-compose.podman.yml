@@ -44,6 +44,28 @@ services:
       timeout: 10s
       retries: 5
 
+  # BGE-M3 本地向量化服务（infinity 提供 OpenAI 兼容接口）
+  bge-m3:
+    image: docker.io/michaelf34/infinity:0.0.75
+    container_name: starmap-bge-m3
+    ports:
+      - "7997:7997"
+    volumes:
+      - bge_m3_cache:/app/.cache
+    environment:
+      - HF_HOME=/app/.cache/huggingface
+    command: >
+      v2
+      --model-id BAAI/bge-m3
+      --port 7997
+      --host 0.0.0.0
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7997/health').read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 300s
+
   # MySQL 主数据库
   mysql:
     image: docker.io/mysql:8.0
@@ -167,3 +189,4 @@ volumes:
   redis_data:
   qdrant_data:
   mineru_cache:
+  bge_m3_cache:

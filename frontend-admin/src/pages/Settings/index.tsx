@@ -156,7 +156,7 @@ const EmbeddingConfigTab = ({ form }: { form: any }) => {
             statusLoading
               ? '正在读取后端配置状态...'
               : status?.is_available
-                ? `当前可用：${status.model}（${status.dimension} 维），API Key 来源：${status.uses_env_api_key ? '环境变量' : '配置中心'}`
+                ? `当前可用：${status.model}（${status.dimension} 维）${status.provider === 'local_bge_m3' ? '，本地模型无需 API Key' : `，API Key 来源：${status.uses_env_api_key ? '环境变量' : '配置中心'}`}`
                 : (status?.issues?.join('；') || '配置后点击"测试当前配置"验证连通性与维度。')
           }
         />
@@ -173,15 +173,50 @@ const EmbeddingConfigTab = ({ form }: { form: any }) => {
         <Switch />
       </Form.Item>
       <Form.Item name={['embedding', 'provider']} label="服务类型">
-        <Select>
+        <Select onChange={(value) => {
+          if (value === 'local_bge_m3') {
+            form.setFieldsValue({
+              embedding: {
+                ...form.getFieldValue('embedding'),
+                model: 'BAAI/bge-m3',
+                dimension: 1024,
+              }
+            })
+          }
+        }}>
           <Option value="openai_compatible">OpenAI 兼容接口</Option>
+          <Option value="local_bge_m3">本地 BGE-M3 (1024维)</Option>
         </Select>
       </Form.Item>
-      <Form.Item name={['embedding', 'base_url']} label="Base URL">
-        <Input placeholder="https://api.openai.com/v1" />
-      </Form.Item>
-      <Form.Item name={['embedding', 'api_key']} label="API Key" tooltip="留空时后端使用 OPENAI_API_KEY 环境变量">
-        <Input.Password placeholder="留空使用环境变量；已保存密钥会显示为保留占位符" autoComplete="new-password" />
+      <Form.Item
+        shouldUpdate={(prev, cur) => prev.embedding?.provider !== cur.embedding?.provider}
+        noStyle
+      >
+        {({ getFieldValue }) => {
+          const provider = getFieldValue(['embedding', 'provider'])
+          const isLocal = provider === 'local_bge_m3'
+          if (isLocal) {
+            return (
+              <Form.Item
+                name={['embedding', 'base_url']}
+                label="服务地址"
+                tooltip="本地 BGE-M3 由独立容器（infinity）提供 OpenAI 兼容接口。留空则后端默认连 http://bge-m3:7997/v1"
+              >
+                <Input placeholder="留空使用容器默认地址 http://bge-m3:7997/v1" />
+              </Form.Item>
+            )
+          }
+          return (
+            <>
+              <Form.Item name={['embedding', 'base_url']} label="Base URL">
+                <Input placeholder="https://api.openai.com/v1" />
+              </Form.Item>
+              <Form.Item name={['embedding', 'api_key']} label="API Key" tooltip="留空时后端使用 OPENAI_API_KEY 环境变量">
+                <Input.Password placeholder="留空使用环境变量；已保存密钥会显示为保留占位符" autoComplete="new-password" />
+              </Form.Item>
+            </>
+          )
+        }}
       </Form.Item>
       <Form.Item name={['embedding', 'model']} label="模型">
         <Input placeholder="如 text-embedding-3-small / bge-m3 / text-embedding-v3" />

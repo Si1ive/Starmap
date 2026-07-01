@@ -19,22 +19,48 @@ logger = get_logger(__name__)
 # OpenAI 兼容服务的批量上限不一致；DashScope embedding 单批最多 25 条。
 MAX_BATCH_SIZE = 25
 # 缺省值（无配置时回退）
+DEFAULT_EMBEDDING_PROVIDER = "openai_compatible"
 DEFAULT_EMBEDDING_MODEL = "text-embedding-ada-002"
 DEFAULT_EMBEDDING_DIMENSION = 1536
 # 兼容旧引用
 EMBEDDING_MODEL = DEFAULT_EMBEDDING_MODEL
 EMBEDDING_DIMENSION = DEFAULT_EMBEDDING_DIMENSION
 
+# 本地 BGE-M3：由独立 infinity 容器提供 OpenAI 兼容接口，走 dense 检索。
+LOCAL_BGE_M3_PROVIDER = "local_bge_m3"
+DEFAULT_BGE_M3_MODEL = "BAAI/bge-m3"
+DEFAULT_BGE_M3_DIMENSION = 1024
+# 容器内服务名 + infinity 默认端口，OpenAI 兼容路径在 /v1
+DEFAULT_BGE_M3_BASE_URL = "http://bge-m3:7997/v1"
+# infinity 不校验 api_key，但 openai SDK 要求非空，填占位符即可。
+LOCAL_BGE_M3_API_KEY_PLACEHOLDER = "local-bge-m3"
+
 
 class EmbeddingService:
-    """文本向量化服务（model/维度/api_key/base_url 可由系统配置注入）"""
+    """文本向量化服务（model/维度/api_key/base_url 可由系统配置注入）
+
+    provider:
+    - openai_compatible: 调用外部 OpenAI 兼容 embedding 接口
+    - local_bge_m3: 调用本机/容器内的 BGE-M3 infinity 服务（同样是 OpenAI 兼容接口，
+      只是 base_url 默认指向 bge-m3 容器，且不需要真实 api_key）
+    """
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         config = config or {}
-        self.model = str(config.get("model") or DEFAULT_EMBEDDING_MODEL).strip()
-        self.dimension = int(config.get("dimension") or DEFAULT_EMBEDDING_DIMENSION)
-        self.api_key = str(config.get("api_key") or settings.OPENAI_API_KEY or "").strip()
-        self.base_url = str(config.get("base_url") or "").strip()
+        self.provider = str(config.get("provider") or DEFAULT_EMBEDDING_PROVIDER).strip()
+        self.is_local = self.provider == LOCAL_BGE_M3_PROVIDER
+
+        if self.is_local:
+            self.model = str(config.get("model") or DEFAULT_BGE_M3_MODEL).strip()
+            self.dimension = int(config.get("dimension") or DEFAULT_BGE_M3_DIMENSION)
+            self.base_url = str(config.get("base_url") or DEFAULT_BGE_M3_BASE_URL).strip()
+            # infinity 不校验 key，但 openai SDK 要求非空。
+            self.api_key = str(config.get("api_key") or LOCAL_BGE_M3_API_KEY_PLACEHOLDER).strip()
+        else:
+            self.model = str(config.get("model") or DEFAULT_EMBEDDING_MODEL).strip()
+            self.dimension = int(config.get("dimension") or DEFAULT_EMBEDDING_DIMENSION)
+            self.base_url = str(config.get("base_url") or "").strip()
+            self.api_key = str(config.get("api_key") or settings.OPENAI_API_KEY or "").strip()
         self.timeout_seconds = int(config.get("timeout_seconds") or 60)
 
     def _create_embedding(self, inputs: List[str]):
@@ -77,8 +103,8 @@ class EmbeddingService:
             return response["data"][0]["embedding"]
 
     async def embed_batch(self, texts: List[str]) -> List[List[float]]:
-        import openai
         preprocessed = [self._preprocess(t) for t in texts]
+
         all_embeddings: List[List[float]] = []
 
         for i in range(0, len(preprocessed), MAX_BATCH_SIZE):
@@ -134,6 +160,7 @@ def get_embedding_service(config: Optional[Dict[str, Any]] = None) -> EmbeddingS
     global _embedding_service, _embedding_fingerprint
     config = config or {}
     fingerprint = (
+        str(config.get("provider") or DEFAULT_EMBEDDING_PROVIDER),
         str(config.get("model") or DEFAULT_EMBEDDING_MODEL),
         int(config.get("dimension") or DEFAULT_EMBEDDING_DIMENSION),
         str(config.get("api_key") or settings.OPENAI_API_KEY or ""),

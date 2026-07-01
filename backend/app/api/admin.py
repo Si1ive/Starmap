@@ -1579,23 +1579,25 @@ async def get_llm_status(kind: str, db: AsyncSession = Depends(get_db)):
     if kind == "embedding":
         from app.services.embedding_service import EmbeddingService
         svc = EmbeddingService(config)
+        is_local = svc.provider == "local_bge_m3"
         has_key = bool(svc.api_key)
         issues = []
         if not bool(config.get("enabled")):
             issues.append("未启用向量化配置")
         if not svc.model:
             issues.append("未配置模型")
-        if not has_key:
+        if not is_local and not has_key:
             issues.append("未配置 API Key，且 OPENAI_API_KEY 环境变量为空")
+        is_available = bool(config.get("enabled")) and bool(svc.model and (is_local or has_key))
         return ApiResponse(data={
             "enabled": bool(config.get("enabled")),
-            "provider": str(config.get("provider") or "openai_compatible"),
+            "provider": svc.provider,
             "model": svc.model,
-            "base_url": svc.base_url,
+            "base_url": svc.base_url if not is_local else "(本地模型)",
             "dimension": svc.dimension,
             "has_api_key": has_key,
-            "uses_env_api_key": has_key and not bool(config.get("api_key")),
-            "is_available": bool(config.get("enabled")) and bool(svc.model and has_key),
+            "uses_env_api_key": not is_local and has_key and not bool(config.get("api_key")),
+            "is_available": is_available,
             "issues": issues,
         })
 
@@ -1646,20 +1648,26 @@ async def test_llm(
     if kind == "embedding":
         from app.services.embedding_service import EmbeddingService
         svc = EmbeddingService(merged_config)
-        if not (svc.model and svc.api_key):
+        is_local = svc.provider == "local_bge_m3"
+        if not is_local and not (svc.model and svc.api_key):
             return ApiResponse(code=400, message="向量化配置不可用", data={
                 "success": False, "model": svc.model, "has_api_key": bool(svc.api_key),
                 "error": "请确认模型和 API Key 已配置（或设置 OPENAI_API_KEY 环境变量）。",
+            })
+        if not svc.model:
+            return ApiResponse(code=400, message="向量化配置不可用", data={
+                "success": False, "model": svc.model,
+                "error": "请配置模型名称。",
             })
         try:
             vec = await svc.embed_text("连通性测试")
         except Exception as e:
             return ApiResponse(code=502, message="向量化测试失败", data={
-                "success": False, "model": svc.model, "base_url": svc.base_url,
+                "success": False, "model": svc.model, "base_url": svc.base_url or "(本地模型)",
                 "error": str(e)[:500],
             })
         return ApiResponse(data={
-            "success": True, "model": svc.model, "base_url": svc.base_url,
+            "success": True, "model": svc.model, "base_url": svc.base_url or "(本地模型)",
             "dimension": len(vec), "configured_dimension": svc.dimension,
             "dimension_match": len(vec) == svc.dimension,
         })
