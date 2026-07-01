@@ -2,7 +2,7 @@ import pytest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.services.document_parse_service import DocumentParseService
+from app.services.document_parse_service import DocumentParseService, _normalize_asset_type_for_db
 from app.services.document_parsers import ParsedDocumentResult, ParsedPage, ParsedBlock, ParsedAsset
 
 
@@ -62,3 +62,8 @@ def test_serialize_parse_result_contains_structured_payload():
     assert payload["pages"][0]["page_no"] == 1
     assert payload["blocks"][0]["content_text"] == "第1章"
     assert payload["assets"][0]["caption_text"] == "图1"
+
+
+def test_normalize_asset_type_maps_unknown_to_other():
+    assert _normalize_asset_type_for_db("code") == "other"
+    assert _normalize_asset_type_for_db("table") == "table"

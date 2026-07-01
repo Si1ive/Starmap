@@ -122,14 +122,17 @@ class BlockClassifier:
         if block_type == "table":
             cls.label = "table"
             cls.confidence = 1.0
+            cls.signals["is_media_block"] = True
             return cls
         if block_type == "figure":
             cls.label = "figure"
             cls.confidence = 1.0
+            cls.signals["is_media_block"] = True
             return cls
         if block_type == "formula":
             cls.label = "formula"
             cls.confidence = 1.0
+            cls.signals["is_media_block"] = True
             return cls
 
         # 噪声
@@ -211,8 +214,15 @@ class BlockClassifier:
                         c.label = "question_option"
                     else:
                         c.label = "question_stem" if c.signals.get("text_length", 0) < 200 else "knowledge"
+                        # 媒体块作为题干邻接内容时，也放回 figure，保障与题目块集合联动
+                        if c.signals.get("is_media_block"):
+                            c.label = "figure"
                     c.confidence = 0.55
                     c.needs_llm = False
+
+            # 媒体块在题干后直接出现，避免被当作噪声后被排除
+            if c.label == "figure" and prev is not None and prev.label == "question_stem":
+                c.confidence = min(1.0, c.confidence + 0.2)
 
             # 答案块出现在选项块之后，确认是 answer
             if c.label == "answer" and prev and prev.label == "question_option":

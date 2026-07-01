@@ -485,12 +485,14 @@ class MinerUParser:
             return normalized
 
     @staticmethod
-    def _find_content_list(output_dir: Path) -> List[Dict[str, Any]]:
+    def _find_content_list(output_dir: Path) -> tuple:
         """
         从 MinerU 输出目录寻找 content_list.json。
 
         do_parse 把产出写到 output_dir/<pdf_name>/auto/ 子目录，
         result dict 不包含 content_list 字段。这里直接搜磁盘。
+
+        Returns (content_list, file_path) —— file_path 用于下游推断 auto_dir。
         """
         # content_list.json / *_content_list.json 两种命名
         for pattern in ("*content_list.json", "content_list.json", "**_content_list.json"):
@@ -498,10 +500,31 @@ class MinerUParser:
                 try:
                     data = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
                     if isinstance(data, list) and data:
-                        return data
+                        return data, path
                 except Exception:
                     continue
-        return []
+        return [], None
+
+    @staticmethod
+    def _normalize_bbox(bbox: Any) -> Optional[dict]:
+        """归一化 bbox 为字典，兼容 dict、list/tuple、其他类型。"""
+        if not bbox:
+            return None
+        if isinstance(bbox, dict):
+            return dict(bbox)
+        if isinstance(bbox, (list, tuple)):
+            values = [v for v in bbox if isinstance(v, (int, float))]
+            if len(values) < 4:
+                return None
+            x_values = values[::2]
+            y_values = values[1::2]
+            return {
+                "x1": float(x_values[0]) if x_values else None,
+                "y1": float(y_values[0]) if y_values else None,
+                "x2": float(x_values[1]) if len(x_values) > 1 else float(x_values[0]),
+                "y2": float(y_values[1]) if len(y_values) > 1 else float(y_values[0]),
+            }
+        return None
 
     def _normalize_result(
         self,
@@ -521,7 +544,7 @@ class MinerUParser:
         document_markdown = ""
 
         # ---- content_list: 仅从磁盘读取（do_parse 不返回在 result dict 中） ----
-        content_list = self._find_content_list(output_dir)
+        content_list, cl_path = self._find_content_list(output_dir)
         if isinstance(result, dict):
             fallback = result.get("content_list") or result.get("content_list_json") or []
             if isinstance(fallback, list) and fallback:
@@ -530,7 +553,6 @@ class MinerUParser:
         # ---- MinerU 图片/表格真实输出根目录（content_list 中 image_path 以此为基础） ----
         # content_list 在 output_dir/<pdf>/auto/ 下，图片也在同级的 images/ 子目录
         auto_dir = output_dir
-        cl_path = next(output_dir.rglob("content_list.json"), None)
         if cl_path:
             auto_dir = cl_path.parent  # .../<pdf>/auto/
 
@@ -545,30 +567,54 @@ class MinerUParser:
 
             item_type = str(item.get("type") or item.get("category") or "paragraph").lower()
             block_type = self._map_mineru_block_type(item_type)
-            bbox = item.get("bbox") if isinstance(item.get("bbox"), dict) else None
+            bbox = self._normalize_bbox(item.get("bbox"))
             text = item.get("text") or item.get("content") or ""
             md = item.get("markdown") or item.get("md") or None
 
-            if block_type in {"figure", "table"}:
+            image_path = item.get("image_path") or item.get("img_path") or item.get("file_path")
+            caption = item.get("caption")
+            if caption is None:
+                if item_type == "table":
+                    table_caption = item.get("table_caption")
+                    if isinstance(table_caption, list):
+                        caption = table_caption[0] if table_caption else None
+                    elif isinstance(table_caption, str):
+                        caption = table_caption
+                elif item_type == "image":
+                    image_caption = item.get("image_caption")
+                    if isinstance(image_caption, list):
+                        caption = image_caption[0] if image_caption else None
+                    elif isinstance(image_caption, str):
+                        caption = image_caption
+
+            # MinerU 的 content_list 会把图片用 type="image" 表示；映射后应归类到 figure。
+            # 这里按已映射类型判断是为了确保图像资产不会被遗漏。
+            if block_type in {"figure", "table", "code"}:
                 assets.append(
                     ParsedAsset(
                         page_no=page_no,
                         asset_type=block_type,
-                        caption_text=item.get("caption") or text or None,
+                        caption_text=caption or text or None,
                         bbox=bbox,
-                        file_path=item.get("image_path") or item.get("file_path"),
+                        file_path=image_path,
                     )
                 )
+
+            # 图片/表格块：若 MinerU 未给 text 字段，用 caption 作为 content_text，
+            # 避免落库后 figure block 内容为空。
+            block_text = text or None
+            if not block_text and block_type in {"figure", "table"}:
+                block_text = caption or None
 
             blocks.append(
                 ParsedBlock(
                     page_no=page_no,
                     block_type=block_type,
                     order_no=order_no,
-                    content_text=text or None,
+                    content_text=block_text,
                     content_md=md if md and md != text else None,
                     bbox=bbox,
-                    html_table=item.get("html") if block_type == "table" else None,
+                    html_table=item.get("html") or item.get("table_body") if block_type == "table" else None,
                     latex=item.get("latex") if block_type == "formula" else None,
                 )
             )
@@ -633,7 +679,11 @@ class MinerUParser:
             # MinerU 的 image_path 可能是相对（相对 output_dir）或绝对路径
             src = Path(raw)
             if not src.is_absolute():
-                candidates = [output_dir / raw, *list(output_dir.rglob(src.name))]
+                candidates = [
+                    output_dir / raw,
+                    output_dir / "images" / src.name,
+                    *list(output_dir.rglob(src.name)),
+                ]
             else:
                 candidates = [src, *list(output_dir.rglob(src.name))]
 
@@ -662,9 +712,16 @@ class MinerUParser:
             "table": "table",
             "image": "figure",
             "figure": "figure",
+            "chart": "figure",
             "equation": "formula",
             "formula": "formula",
             "code": "code",
+            "code_block": "code",
+            "header": "header",
+            "footer": "footer",
+            "page_number": "page_number",
+            "aside_text": "aside_text",
+            "page_footnote": "page_footnote",
         }
         return mapping.get(item_type, "paragraph")
 
@@ -831,6 +888,43 @@ def _unwrap_service_payload(payload: Any) -> Dict[str, Any]:
     raise ParserUnavailableError("unknown", "解析服务返回结构不符合约定")
 
 
+def _normalize_asset_type(raw_asset_type: Optional[Any]) -> str:
+    """Normalize raw asset type to DB-safe enum values."""
+    value = (str(raw_asset_type).strip().lower() if raw_asset_type is not None else "figure")
+    if not value:
+        return "figure"
+    if value in {"figure", "table", "formula", "page_crop", "other"}:
+        return value
+    if value in {"img", "image", "picture", "chart"}:
+        return "figure"
+    if value in {"eq", "formula_block", "equation", "formula_img"}:
+        return "formula"
+    # 兼容服务/模型返回的未知类型
+    return "other"
+
+
+def _normalize_payload_block_type(raw_block_type: Optional[Any]) -> str:
+    """Normalize block_type from parser payload to internal block type set."""
+    value = (str(raw_block_type or "").strip().lower())
+    if not value:
+        return "paragraph"
+
+    if value in {"image", "img", "picture", "chart"}:
+        return "figure"
+    if value in {"paragraph", "text"}:
+        return "paragraph"
+    if value in {
+        "heading", "title", "table", "figure", "formula", "code", "code_block", "list",
+        "header", "footer", "page_number", "aside_text", "page_footnote",
+    }:
+        return value if value != "code_block" else "code"
+    if value == "equation":
+        return "formula"
+
+    # 兼容历史输入：未显式提供 block_type 时，尝试按 payload type/category 原始语义归一。
+    return _map_mineru_block_type(value)
+
+
 def _parsed_document_result_from_dict(
     parser_name: str,
     payload: Dict[str, Any],
@@ -848,7 +942,9 @@ def _parsed_document_result_from_dict(
     blocks = [
         ParsedBlock(
             page_no=int(item.get("page_no") or 1),
-            block_type=str(item.get("block_type") or "paragraph"),
+            block_type=_normalize_payload_block_type(
+                item.get("type") or item.get("category") or item.get("block_type")
+            ),
             order_no=int(item.get("order_no") or 0),
             content_text=item.get("content_text"),
             content_md=item.get("content_md"),
@@ -862,7 +958,7 @@ def _parsed_document_result_from_dict(
     assets = [
         ParsedAsset(
             page_no=int(item.get("page_no") or 1),
-            asset_type=str(item.get("asset_type") or "figure"),
+            asset_type=_normalize_asset_type(item.get("asset_type")),
             caption_text=item.get("caption_text"),
             bbox=item.get("bbox") if isinstance(item.get("bbox"), dict) else None,
             file_path=item.get("file_path"),
