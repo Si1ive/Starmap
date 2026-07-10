@@ -97,7 +97,7 @@ export const getLlmStatus = (kind: LlmKind): Promise<ApiResponse<LlmStatus>> => 
 
 export const testLlm = (
   kind: LlmKind,
-  data: Partial<LlmConfig & EmbeddingConfig>,
+  data: Partial<LlmConfig> | Partial<EmbeddingConfig>,
 ): Promise<ApiResponse<LlmTestResult>> => {
   return adminClient.post(`/settings/llm/${kind}/test`, data, { timeout: 120000 })
 }
