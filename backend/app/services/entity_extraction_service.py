@@ -31,6 +31,54 @@ from app.services.llm_client import PDFStructureLLMClient
 logger = get_logger(__name__)
 
 
+async def cleanup_document_entities(
+    db: AsyncSession,
+    document_id: str,
+    entity_type: Optional[str] = None,
+) -> Dict[str, int]:
+    """清理某文档已抽取的实体及其级联数据（来源链/资产链/检索段/关联）。
+
+    entity_type=None 时同时清理知识点与题目；否则只清理指定类型。
+    重解析会重建 blocks/assets，旧实体基于旧版面已失效，必须一并清掉，
+    否则新版面配旧实体，坐标桥与来源引用全部错位。
+    """
+    types = ["knowledge_point", "question"] if entity_type is None else [entity_type]
+    removed: Dict[str, int] = {}
+    for etype in types:
+        model = KnowledgePoint if etype == "knowledge_point" else Question
+        rows = await db.execute(
+            select(model.id).where(model.source_document_id == document_id)
+        )
+        entity_ids = [row[0] for row in rows.all()]
+        removed[etype] = len(entity_ids)
+        if not entity_ids:
+            continue
+
+        await db.execute(
+            delete(EntitySourceLink).where(
+                and_(
+                    EntitySourceLink.entity_type == etype,
+                    EntitySourceLink.entity_id.in_(entity_ids),
+                )
+            )
+        )
+        try:
+            from app.services.entity_asset_service import cleanup_entity_links
+            await cleanup_entity_links(db, entity_type=etype, entity_ids=entity_ids)
+        except Exception:
+            pass
+        await db.execute(
+            delete(RetrievalSegment).where(
+                and_(
+                    RetrievalSegment.entity_type == etype,
+                    RetrievalSegment.entity_id.in_(entity_ids),
+                )
+            )
+        )
+        await db.execute(delete(model).where(model.id.in_(entity_ids)))
+    return removed
+
+
 def generate_id() -> str:
     return uuid.uuid4().hex[:32]
 
@@ -1696,39 +1744,7 @@ class EntityExtractionService:
 
     async def _cleanup_existing_entities(self, document_id: str, entity_type: str) -> None:
         """清理同一文档已抽取的实体，避免重复入库。"""
-        model = KnowledgePoint if entity_type == "knowledge_point" else Question
-        result = await self.db.execute(
-            select(model.id).where(model.source_document_id == document_id)
-        )
-        entity_ids = [row[0] for row in result.all()]
-        if not entity_ids:
-            return
-
-        await self.db.execute(
-            delete(EntitySourceLink).where(
-                and_(
-                    EntitySourceLink.entity_type == entity_type,
-                    EntitySourceLink.entity_id.in_(entity_ids),
-                )
-            )
-        )
-        # 清理资产关联
-        try:
-            from app.services.entity_asset_service import cleanup_entity_links
-            await cleanup_entity_links(self.db, entity_type=entity_type, entity_ids=entity_ids)
-        except Exception:
-            pass
-        await self.db.execute(
-            delete(RetrievalSegment).where(
-                and_(
-                    RetrievalSegment.entity_type == entity_type,
-                    RetrievalSegment.entity_id.in_(entity_ids),
-                )
-            )
-        )
-        await self.db.execute(
-            delete(model).where(model.id.in_(entity_ids))
-        )
+        await cleanup_document_entities(self.db, document_id, entity_type)
 
     async def _extract_knowledge_points(
         self,

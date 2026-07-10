@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { Card, Button, Tag, Space, Descriptions, message, Spin, Empty, Select, Modal, Alert, Tabs } from 'antd'
 import { ArrowLeftOutlined, ExperimentOutlined } from '@ant-design/icons'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getDocumentDetail, extractDocumentEntities, getSubjects } from '@/api'
+import { getDocumentDetail, extractDocumentEntities, getSubjects, getDocumentContentOverview } from '@/api'
 import PageAnalysis from './PageAnalysis'
 import ContentOverview from './ContentOverview'
 
@@ -34,9 +34,19 @@ const DocumentDetailPage = () => {
     queryFn: getSubjects,
   })
 
+  const { data: overviewData } = useQuery({
+    queryKey: ['contentOverview', id],
+    queryFn: () => getDocumentContentOverview(id!),
+    enabled: !!id,
+  })
+
   const document = docData?.data
   const subjects = subjectsData?.data || []
   const isExamDoc = !!document && EXAM_DOC_TYPES.has(document.doc_type || '')
+
+  const summary = overviewData?.data?.summary
+  const extractedCount = (summary?.knowledge_count ?? 0) + (summary?.question_count ?? 0)
+  const hasExtracted = extractedCount > 0
 
   const extractEntitiesMut = useMutation({
     mutationFn: () => extractDocumentEntities(id!, selectedSubject || document?.subject_id),
@@ -69,7 +79,7 @@ const DocumentDetailPage = () => {
       </Button>
 
       <Card style={{ marginBottom: 16 }}>
-        <Descriptions title="文档信息" column={2}>
+        <Descriptions title="第一步 · 解析产物（文档信息）" column={2}>
           <Descriptions.Item label="文件名">{document.file_name || document.title || '-'}</Descriptions.Item>
           <Descriptions.Item label="文档类型">
             <Tag color={isExamDoc ? 'volcano' : 'blue'}>{docTypeText[document.doc_type || ''] || document.doc_type || '-'}</Tag>
@@ -83,12 +93,25 @@ const DocumentDetailPage = () => {
         </Descriptions>
       </Card>
 
-      <Card style={{ marginBottom: 16 }}>
+      <Card
+        style={{ marginBottom: 16 }}
+        title={
+          <Space>
+            <span>第二步 · 抽取知识点/题目</span>
+            {hasExtracted ? (
+              <Tag color="green">已抽取 {extractedCount} 项</Tag>
+            ) : (
+              <Tag color="default">尚未抽取</Tag>
+            )}
+          </Space>
+        }
+      >
         <Alert
           type="info"
           showIcon
           style={{ marginBottom: 16 }}
-          message="抽取知识点/题目时，系统会直接把每个实体挂到学科+标准章节上（不再需要先做原生标题映射与审核）。下方「内容总览」按章节展示知识点、按题号展示题目；「页级对比」用于核对每页解析质量。"
+          message="解析与抽取是两个独立步骤"
+          description="上一步「解析」只把 PDF 拆成文字/图片/表格等版面块；这一步「抽取」才用 LLM 把版面块理解成知识点和题目，并挂到学科+标准章节上。重新解析会清空本文档已抽取的实体，需要重新点此抽取。"
         />
         <Space>
           <Select
@@ -104,14 +127,16 @@ const DocumentDetailPage = () => {
             icon={<ExperimentOutlined />}
             loading={extractEntitiesMut.isPending}
             onClick={() => Modal.confirm({
-              title: '确认抽取',
-              content: isExamDoc
-                ? '将从文档中抽取题目并挂到指定学科+标准章节，确认继续？'
-                : '将从文档中抽取知识点和题目并挂到标准章节，确认继续？',
+              title: hasExtracted ? '确认重新抽取' : '确认抽取',
+              content: hasExtracted
+                ? '本文档已有抽取结果，重新抽取会先清空旧的知识点/题目再重建，确认继续？'
+                : (isExamDoc
+                  ? '将从文档中抽取题目并挂到指定学科+标准章节，确认继续？'
+                  : '将从文档中抽取知识点和题目并挂到标准章节，确认继续？'),
               onOk: () => extractEntitiesMut.mutate(),
             })}
           >
-            {isExamDoc ? '抽取题目' : '抽取知识点/题目'}
+            {hasExtracted ? '重新抽取' : (isExamDoc ? '抽取题目' : '抽取知识点/题目')}
           </Button>
         </Space>
       </Card>
@@ -122,12 +147,12 @@ const DocumentDetailPage = () => {
           items={[
             {
               key: 'content-overview',
-              label: '内容总览',
+              label: '内容总览（抽取产物）',
               children: <ContentOverview documentId={id!} />,
             },
             {
               key: 'page-analysis',
-              label: '页级对比',
+              label: '页级对比（解析产物）',
               children: (
                 <PageAnalysis
                   documentId={id!}

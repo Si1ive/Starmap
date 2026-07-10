@@ -71,7 +71,7 @@ const ContentOverview = ({ documentId }: { documentId: string }) => {
 
   const overview = data?.data
   if (!overview) {
-    return <Empty description="暂无内容，请先抽取知识点/题目" />
+    return <Empty description="尚未抽取 — 内容总览展示的是抽取产物，请先点击上方「抽取知识点/题目」" />
   }
 
   const { knowledge_chapters, ungrouped_knowledge_points, questions, summary } = overview
@@ -192,7 +192,7 @@ const ContentOverview = ({ documentId }: { documentId: string }) => {
       )}
 
       {knowledge_chapters.length === 0 && ungrouped_knowledge_points.length === 0 && questions.length === 0 && (
-        <Empty description="暂无知识点/题目，请先在上方抽取" />
+        <Empty description="尚未抽取或抽取结果为空 — 请点击上方「抽取知识点/题目」" />
       )}
     </div>
   )

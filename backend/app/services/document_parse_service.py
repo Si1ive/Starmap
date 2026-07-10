@@ -294,6 +294,18 @@ class DocumentParseService:
             await self._persist_blocks(document.id, parse_result.blocks)
             await self._persist_assets(document.id, parse_result.assets)
 
+            # 5.5 清理旧的抽取实体：blocks/assets 已重建，旧知识点/题目基于旧版面已失效，
+            # 与版面在同一事务清掉，避免新版面配旧实体（坐标桥与来源引用错位）。
+            from app.services.entity_extraction_service import cleanup_document_entities
+            removed = await cleanup_document_entities(self.db, document.id)
+            if removed.get("knowledge_point") or removed.get("question"):
+                logger.info(
+                    "重解析清理旧抽取实体",
+                    document_id=document.id,
+                    removed_knowledge=removed.get("knowledge_point", 0),
+                    removed_questions=removed.get("question", 0),
+                )
+
             elapsed = time.time() - start_time
 
             # 6. 更新 parse_run
@@ -539,6 +551,17 @@ class DocumentParseService:
             await self._persist_pages(document.id, parse_result.pages)
             await self._persist_blocks(document.id, parse_result.blocks)
             await self._persist_assets(document.id, parse_result.assets)
+
+            # 5.5 清理旧的抽取实体：与主链路同理，重解析重建版面后旧实体已失效。
+            from app.services.entity_extraction_service import cleanup_document_entities
+            removed = await cleanup_document_entities(self.db, document.id)
+            if removed.get("knowledge_point") or removed.get("question"):
+                logger.info(
+                    "重解析清理旧抽取实体",
+                    document_id=document.id,
+                    removed_knowledge=removed.get("knowledge_point", 0),
+                    removed_questions=removed.get("question", 0),
+                )
 
             elapsed = time.time() - start_time
 
