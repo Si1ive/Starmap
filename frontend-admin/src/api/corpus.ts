@@ -117,6 +117,7 @@ export const getDocumentChapterDiagnostics = (
 export const extractDocumentEntities = (id: string, subjectId?: string): Promise<ApiResponse<any>> => {
   return adminClient.post(`/corpus/documents/${id}/extract-entities`, null, {
     params: subjectId ? { subject_id: subjectId } : undefined,
+    timeout: 10 * 60 * 1000, // 抽取含多次 LLM 调用（block 分类/题目分组/答案回连），给 10 分钟
   })
 }
 

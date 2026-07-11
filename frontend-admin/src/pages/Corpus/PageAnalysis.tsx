@@ -127,8 +127,15 @@ const PageAnalysis = ({ documentId, totalPages }: PageAnalysisProps) => {
                 <Card key={idx} size="small" style={{ marginBottom: 8 }}>
                   <Tag color="green">{asset.asset_type}</Tag>
                   {asset.caption_text && <Text>{asset.caption_text}</Text>}
-                  <div style={{ fontSize: 11, color: '#666' }}>
-                    路径: {asset.file_path}
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: '#666',
+                      marginTop: 4,
+                      wordBreak: 'break-all',
+                    }}
+                  >
+                    {asset.file_path ? `路径: ${asset.file_path}` : '无独立图片文件（由块提升）'}
                   </div>
                 </Card>
               ))}
