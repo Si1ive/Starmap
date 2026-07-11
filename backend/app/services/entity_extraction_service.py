@@ -120,8 +120,10 @@ def _build_question_tags(
 OPTION_SEPARATOR_RE = re.compile(
     r'(?:\s*(?:[.．、:：。]|<sub>\s*[.．、:：。]\s*</sub>)\s*|\s+)(?=\S)'
 )
-OPTION_MARKER_RE = re.compile(r'([A-H])(?:\s*(?:[.．、:：。]|<sub>\s*[.．、:：。]\s*</sub>)\s*|\s+)(?=\S)')
-OPTION_BLOCK_RE = re.compile(r'^\s*([A-H])(?:\s*(?:[.．、:：。]|<sub>\s*[.．、:：。]\s*</sub>)\s*|\s+)(?=\S)')
+# 选项标记限定 A-D：408 单选恒为四选项，放宽到 A-H 会把题干里的
+# 数学符号（图 G、访问位 R、修改位 M 等）误当选项标记切分。
+OPTION_MARKER_RE = re.compile(r'([A-D])(?:\s*(?:[.．、:：。]|<sub>\s*[.．、:：。]\s*</sub>)\s*|\s+)(?=\S)')
+OPTION_BLOCK_RE = re.compile(r'^\s*([A-D])(?:\s*(?:[.．、:：。]|<sub>\s*[.．、:：。]\s*</sub>)\s*|\s+)(?=\S)')
 CHOICE_BLANK_RE = re.compile(r'[（(]\s*(?:\)|）|_|　|\.{2,}|…{1,2})?\s*[）)]')
 QUESTION_NUMERIC_RE = re.compile(r'^\s*(\d{1,3})(?:\s*[.、．。]\s*|\s+)(?=\S)')
 EMBEDDED_QUESTION_NUMERIC_RE = re.compile(r'(?<!\d)(\d{1,3})(?:\s*[.、．。]\s*|\s+)(?=\S)')
@@ -1309,9 +1311,16 @@ class QuestionLayoutGrouper:
         if prev_block is None:
             return True
 
-        # 选项/媒体/噪声块绝不可能是新题起点
-        if tag.has_option or tag.is_media or tag.is_noise:
+        # 选项/噪声块绝不可能是新题起点
+        if tag.has_option or tag.is_noise:
             return False
+
+        # 媒体块（图/表）通常不是新题起点，但 MinerU 有时把"题号+题干+数据表"
+        # 整块识别成 table（如第47题），此时题号就在 media 块里。若 media 块
+        # 左边缘且带阿拉伯数字题号，视为新题起点，避免整道题被并入前一题；
+        # 否则（纯图表、无题号）仍归属当前题。
+        if tag.is_media:
+            return bool(tag.at_left_edge and tag.has_q_number)
 
         # 检查当前 block 是否有有效的 bbox（x0 和 y0 都能取到）
         bbox = getattr(tag.block, "bbox", None) or {}
@@ -1321,31 +1330,29 @@ class QuestionLayoutGrouper:
         )
 
         if has_bbox:
-            # ---- 有 bbox：严格按空间位置判断 ----
+            # ---- 有 bbox：题号锚定 ----
+            # 一道题的边界由"题号"锚定，而非 block 间距。408 简答题常有
+            # "题干 + 图/表 + 追问 + (1)(2) 小问"结构，中间的表格/图/续体
+            # 没有题号，必须归属当前题，不能因大间距被误判成新题——否则一道题
+            # 会被表格从中间切断（如第46题）。
 
-            # A. 左边缘 + 题号 → 最高置信度，无论 gap 多大都算新题
+            # A. 左边缘 + 阿拉伯数字题号 → 新题（最高置信度，覆盖选择题与大题）
             if tag.at_left_edge and tag.has_q_number:
                 return True
 
-            # B. 左边缘 + 括号题号 + 间距不小于中位行距
-            if tag.at_left_edge and tag.has_paren_q and tag.gap_ratio > GAP_RATIO_PAREN_Q:
-                return True
+            # 括号号 (1)(2) 是题内小问，绝不是新题起点；有它就明确归属当前题。
+            if tag.has_paren_q:
+                return False
 
-            # C. 大间距 + 有实质文本（不是选项）
-            text = getattr(tag.block, "content_text", None) or getattr(tag.block, "content_md", None) or ""
-            if tag.gap_ratio > GAP_RATIO_NEW_QUESTION and len(text.strip()) > 10:
-                return True
-
-            # gap_ratio < 1.5 且无题号 → 是上一题的延续内容
+            # 其余无题号块（续体、表格后的追问、跨栏延续）一律归属当前题。
+            # 去掉原"大间距 + 长文本 → 新题"的规则 C：表格/图会撑大间距，
+            # 是题目被切断的元凶，间距不再作为新题依据。
             return False
 
-        # ---- 无 bbox：回退到纯文本判断 ----
+        # ---- 无 bbox：只认强题号（与有 bbox 分支一致）。
+        # 括号号 (1)(2) 是题内小问，不作为新题起点，避免把简答题的小问拆成独立题。
         if tag.has_q_number:
             return True
-        if tag.has_paren_q:
-            text = getattr(tag.block, "content_text", None) or getattr(tag.block, "content_md", None) or ""
-            if len(text.strip()) > 20:
-                return True
 
         return False
 
@@ -1382,6 +1389,11 @@ class QuestionLayoutGrouper:
                 continue
             block_type = getattr(block, "block_type", "") or ""
             if block_type.lower() in ("figure", "table", "formula", "image", "chart"):
+                # media 块通常是纯图表，内容不混进题干。但 MinerU 常把"题干文字+数据表"
+                # 混成一个 table 块（如第47题），块内带题号的文字正是题干，需纳入；
+                # 纯图表（无题号文字）仍跳过。
+                if QUESTION_NUMERIC_RE.match(text):
+                    parts.append(text)
                 continue
             # 题干+选项同块：只保留选项标记之前的题干，选项部分留给 _extract_options 处理
             if self._has_inline_options(text):
@@ -1491,16 +1503,25 @@ class QuestionLayoutGrouper:
         if not matches:
             return []
 
+        # 选项标记必然严格升序 A<B<C<D。遇到非升序标记（MinerU 常把右栏末题的
+        # 末选项重复输出成残块，或选项文本尾部粘连下一标记字母）即视为选项区结束，
+        # 用它的位置作为最后一个有效选项的截断点，丢弃其后的重复残块。
+        valid: List[Any] = []
+        last_ord = ord("A") - 1
+        cutoff = len(text)
+        for m in matches:
+            if ord(m.group(1).upper()) > last_ord:
+                valid.append(m)
+                last_ord = ord(m.group(1).upper())
+            else:
+                cutoff = m.start(1)
+                break
+
         options: List[Dict[str, str]] = []
-        seen_labels = set()
-        for idx, match in enumerate(matches):
+        for idx, match in enumerate(valid):
             label = match.group(1).upper()
-            if label in seen_labels:
-                continue
             text_start = match.end()
-            text_end = len(text)
-            if idx + 1 < len(matches):
-                text_end = matches[idx + 1].start(1)
+            text_end = valid[idx + 1].start(1) if idx + 1 < len(valid) else cutoff
             option_text = text[text_start:text_end].strip()
             # 去掉选项文本开头可能残留的选项标记
             option_text = _strip_option_marker_simple(option_text)
@@ -1512,7 +1533,6 @@ class QuestionLayoutGrouper:
                 "option_label": label,
                 "text": option_text,
             })
-            seen_labels.add(label)
 
         return options if len(options) >= 2 else []
 
