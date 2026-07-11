@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Card, Select, Spin, Empty, Row, Col, Collapse, Tag, Divider, Typography } from 'antd'
+import { Card, Select, Spin, Empty, Row, Col, Collapse, Tag, Divider, Typography, Space } from 'antd'
 import { useQuery } from '@tanstack/react-query'
 import { getDocumentPageAnalysis } from '@/api'
 
@@ -123,22 +123,47 @@ const PageAnalysis = ({ documentId, totalPages }: PageAnalysisProps) => {
               <Divider />
 
               <Title level={5}>Assets ({pageData.assets?.length || 0})</Title>
-              {pageData.assets?.map((asset: any, idx: number) => (
-                <Card key={idx} size="small" style={{ marginBottom: 8 }}>
-                  <Tag color="green">{asset.asset_type}</Tag>
-                  {asset.caption_text && <Text>{asset.caption_text}</Text>}
-                  <div
-                    style={{
-                      fontSize: 11,
-                      color: '#666',
-                      marginTop: 4,
-                      wordBreak: 'break-all',
-                    }}
-                  >
-                    {asset.file_path ? `路径: ${asset.file_path}` : '无独立图片文件（由块提升）'}
-                  </div>
-                </Card>
-              ))}
+              {pageData.assets?.map((asset: any, idx: number) => {
+                const tableHtml = asset.metadata?.html
+                return (
+                  <Card key={idx} size="small" style={{ marginBottom: 8 }}>
+                    <Space wrap>
+                      <Tag color="green">{asset.asset_type}</Tag>
+                      {asset.caption_text && <Text>{asset.caption_text}</Text>}
+                    </Space>
+
+                    {asset.file_path && (
+                      <div style={{ marginTop: 8 }}>
+                        <img
+                          src={`/api/v1/admin/assets/${asset.id}/file`}
+                          alt={asset.caption_text || `asset-${idx}`}
+                          style={{ maxWidth: '100%', border: '1px solid #d9d9d9' }}
+                          loading="lazy"
+                        />
+                      </div>
+                    )}
+
+                    {!asset.file_path && tableHtml && (
+                      <div
+                        style={{ marginTop: 8, overflow: 'auto', fontSize: 12 }}
+                        dangerouslySetInnerHTML={{ __html: tableHtml }}
+                      />
+                    )}
+
+                    {!asset.file_path && !tableHtml && (
+                      <div style={{ fontSize: 11, color: '#999', marginTop: 4 }}>
+                        无独立图片文件（由块提升）
+                      </div>
+                    )}
+
+                    {asset.bbox && (
+                      <div style={{ fontSize: 10, color: '#999', marginTop: 4 }}>
+                        位置: {JSON.stringify(asset.bbox)}
+                      </div>
+                    )}
+                  </Card>
+                )
+              })}
             </Card>
           </Col>
         </Row>

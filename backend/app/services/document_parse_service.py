@@ -989,6 +989,9 @@ class DocumentParseService:
                 "asset_type": a.asset_type,
                 "caption_text": a.caption_text,
                 "file_path": a.file_path,
+                "bbox": a.bbox,
+                "metadata": a.metadata_json,
+                "file_url": f"/api/v1/admin/assets/{a.id}/file" if a.file_path else None,
             }
             for a in assets_result.scalars().all()
         ]
