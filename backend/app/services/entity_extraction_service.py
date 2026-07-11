@@ -1262,6 +1262,23 @@ class QuestionLayoutGrouper:
 
     # ---- Phase 4: 组内处理 ----
 
+    @staticmethod
+    def _has_inline_options(text: str) -> bool:
+        """判断文本内是否内联了选项序列（题干与选项同一 block）。
+
+        要求含选项 A 且至少 2 个不同选项标记，避免把题干中孤立的 "A。" 误判为选项。
+        """
+        labels = {m.group(1).upper() for m in OPTION_MARKER_RE.finditer(text or "")}
+        return "A" in labels and len(labels) >= 2
+
+    @staticmethod
+    def _find_inline_option_start(text: str) -> int:
+        """返回选项 A 标记在文本中的起始下标；找不到返回 -1。"""
+        for m in OPTION_MARKER_RE.finditer(text or ""):
+            if m.group(1).upper() == "A":
+                return m.start()
+        return -1
+
     def _extract_stem(self, group: QuestionGroup) -> str:
         parts: List[str] = []
         in_options = False
@@ -1277,7 +1294,15 @@ class QuestionLayoutGrouper:
             block_type = getattr(block, "block_type", "") or ""
             if block_type.lower() in ("figure", "table", "formula", "image", "chart"):
                 continue
-            # 给纯 figure caption 文本换行，避免题干直接拼接 "1" + "II" 这类污染
+            # 题干+选项同块：只保留选项标记之前的题干，选项部分留给 _extract_options 处理
+            if self._has_inline_options(text):
+                opt_start = self._find_inline_option_start(text)
+                if opt_start > 0:
+                    stem_part = text[:opt_start].strip()
+                    if stem_part:
+                        parts.append(stem_part)
+                    in_options = True
+                    continue
             parts.append(text)
         # 用空格而非换行拼接 stem
         return " ".join(parts)
@@ -1298,6 +1323,13 @@ class QuestionLayoutGrouper:
                 option_phase = True
                 option_blocks.append({"text": text, "block": block, "is_option": True})
                 last_option_block = block
+            elif not option_phase and self._has_inline_options(text):
+                # 题干+选项同块：切出选项标记之后的部分作为选项文本
+                opt_start = self._find_inline_option_start(text)
+                if opt_start >= 0:
+                    option_phase = True
+                    option_blocks.append({"text": text[opt_start:], "block": block, "is_option": True})
+                    last_option_block = block
             elif option_phase:
                 # 媒体块不应作为选项尾部文字合并
                 if (
@@ -1422,6 +1454,34 @@ class QuestionLayoutGrouper:
                 except ValueError:
                     pass
         return None
+
+    def classify_group(
+        self, group: QuestionGroup, options: List[Dict[str, str]], question_no: Optional[int]
+    ) -> Tuple[str, str]:
+        """判断一个组是题目还是知识点候选。
+
+        返回 (label, reason)，label ∈ {"question", "knowledge_candidate", "uncertain"}。
+        组题已经把拆散的选项/跨页内容合并好，所以"有选项"是题目的强信号。
+        判定顺序按置信度从高到低：
+          1. 有 ≥2 个选项 → 题目（最强，选择题）
+          2. 有题号(1./（1）/第一题) → 题目
+          3. 有明确疑问特征(下列/正确的是/？等) → 题目（大题/简答）
+          4. 都没有 → 知识点候选(uncertain，交给上层决定或 LLM)
+        """
+        if options and len(options) >= 2:
+            return "question", "has_options"
+        if question_no is not None:
+            return "question", "has_question_no"
+
+        # 疑问特征：合并组内全部文本再判，避免题干被拆到多个 block 时漏判
+        joined = " ".join(
+            (getattr(b, "content_text", None) or getattr(b, "content_md", None) or "")
+            for b in group.blocks
+        )
+        if QUESTION_CUE_RE.search(joined):
+            return "question", "has_cue"
+
+        return "uncertain", "no_signal"
 
     # ---- Phase 5: 跨页处理 ----
 
@@ -1622,37 +1682,41 @@ class EntityExtractionService:
         question_unassigned: List[Dict[str, Any]] = []
         answer_linked = 0
 
-        # 4. 抽取知识点 — 只用被分类为 knowledge / heading 的 block
-        if extract_knowledge:
-            await self._cleanup_existing_entities(document_id, "knowledge_point")
-            knowledge_blocks = [
-                b for b in blocks
-                if block_label_by_id.get(getattr(b, "id", ""), "") in ("knowledge", "heading", "table", "figure", "formula")
-            ] or blocks  # 完全识别不出时退化为全量
-            knowledge_count = await self._extract_knowledge_points(
-                document_id, fallback_subject_id, knowledge_blocks, section_mappings
-            )
+        # 架构：先组题再判类型。题目路径吃全部文本 block（不再按分类器预过滤，
+        # 避免题目 block 被误判成 knowledge 而在组题前就被滤掉）。组题后由
+        # QuestionLayoutGrouper.classify_group 按"有选项/题号/疑问特征"判定是否题目，
+        # 非题目组不落为题目、其 block 留给知识点路径。
+        # block_label_by_id 仅用于诊断展示，不再决定分流。
+        consumed_block_ids: set = set()
 
-        # 5. 抽取题目 — 只用被分类为题目相关的 block
+        # 4. 抽取题目 — 吃全部 block，组题后判类型
         if extract_questions:
             await self._cleanup_existing_entities(document_id, "question")
-            question_blocks = [
-                b for b in blocks
-                if block_label_by_id.get(getattr(b, "id", ""), "") in
-                   ("question_stem", "question_option", "answer", "heading", "unknown", "figure", "table", "formula")
-            ] or blocks
             question_result = await self._extract_questions(
-                document_id, fallback_subject_id, question_blocks, section_mappings
+                document_id, fallback_subject_id, list(blocks), section_mappings
             )
             question_count = question_result["saved_count"]
             question_diagnostic = question_result["diagnostic"]
             question_unassigned = question_result.get("unassigned", [])
-            # 5.1 PDF 自带答案区回连：扫描"参考答案"段，按题号写回 answer（标 extracted）
+            consumed_block_ids = set(question_result.get("consumed_block_ids") or [])
+            # 4.1 PDF 自带答案区回连：扫描"参考答案"段，按题号写回 answer（标 extracted）
             try:
                 answer_linked = await self._extract_and_link_answers(document_id, blocks)
             except Exception as e:
                 logger.warning("PDF 答案区回连失败，跳过", document_id=document_id, error=str(e))
                 answer_linked = 0
+
+        # 5. 抽取知识点 — 用剩余 block（排除已被题目消费的），保留标题/段落结构
+        if extract_knowledge:
+            await self._cleanup_existing_entities(document_id, "knowledge_point")
+            knowledge_blocks = [
+                b for b in blocks
+                if getattr(b, "id", None) not in consumed_block_ids
+                and block_label_by_id.get(getattr(b, "id", ""), "") in ("knowledge", "heading", "table", "figure", "formula")
+            ] or [b for b in blocks if getattr(b, "id", None) not in consumed_block_ids]
+            knowledge_count = await self._extract_knowledge_points(
+                document_id, fallback_subject_id, knowledge_blocks, section_mappings
+            )
 
         # 跨页归属加固：找出未被任何 section 覆盖的页码（标题漏检/映射失败的信号）
         all_pages = sorted({b.page_no for b in blocks if b.page_no is not None})
@@ -1950,7 +2014,7 @@ class EntityExtractionService:
                 final_report={},
                 saved_results=[],
             )
-            return {"saved_count": 0, "diagnostic": diagnostic, "unassigned": []}
+            return {"saved_count": 0, "diagnostic": diagnostic, "unassigned": [], "consumed_block_ids": set()}
 
         # Step 3: 综合校验
         validation_report = comprehensive_validation(raw_questions)
@@ -2012,8 +2076,8 @@ class EntityExtractionService:
             })
 
         question_count = sum(1 for item in saved_results if item["saved"])
-        # 未归属（缺学科/章节）题目：无法入库（subject_id/chapter_id 为 NOT NULL），
-        # 但聚合页码 + 摘要冒泡到结果，供前端人工指认。
+        # 未归属（缺学科/章节）题目现在也入库（reason=saved_unassigned），
+        # 聚合页码 + 摘要冒泡到结果，供前端人工指认章节。
         unassigned = [
             {
                 "page_no": item.get("page_no"),
@@ -2022,8 +2086,7 @@ class EntityExtractionService:
                 "text_excerpt": item.get("text_excerpt"),
             }
             for item in saved_results
-            if not item["saved"]
-            and item.get("reason") in ("missing_subject_and_chapter", "missing_subject", "missing_legacy_chapter")
+            if item.get("reason") == "saved_unassigned"
         ]
         diagnostic = self._build_question_extraction_diagnostic(
             raw_questions=raw_questions,
@@ -2033,7 +2096,19 @@ class EntityExtractionService:
             saved_results=saved_results,
         )
 
-        return {"saved_count": question_count, "diagnostic": diagnostic, "unassigned": unassigned}
+        # 收集被题目消费的 block_ids：知识点路径据此排除，避免同一 block 既成题又成知识点
+        saved_ids = {item["question_id"] for item in saved_results if item["saved"]}
+        consumed_block_ids: set = set()
+        for q in questions:
+            if q.get("id") in saved_ids:
+                consumed_block_ids.update(q.get("block_ids") or [])
+
+        return {
+            "saved_count": question_count,
+            "diagnostic": diagnostic,
+            "unassigned": unassigned,
+            "consumed_block_ids": consumed_block_ids,
+        }
 
     async def _get_pdf_structure_llm_client(self) -> Optional[PDFStructureLLMClient]:
         """读取 PDF 结构解析专用 LLM 配置。"""
@@ -2101,6 +2176,13 @@ class EntityExtractionService:
         options = grouper._extract_options(group)
         figures = grouper._extract_figures(group)
         question_no = grouper._extract_question_no(group)
+
+        # 组内类型判定：组题已把拆散的选项/跨页合并好，此时判"是不是题目"最准。
+        # 非题目组（无选项/无题号/无疑问特征）直接跳过，不落为题目——避免把知识点
+        # 段落误抽成题目。这些组的 block 会留给知识点路径处理。
+        group_label, group_label_reason = grouper.classify_group(group, options, question_no)
+        if group_label != "question":
+            return None
 
         # 组合内容
         content_parts = []
@@ -2176,6 +2258,15 @@ class EntityExtractionService:
 
         tags = _build_question_tags(question_type, exam_year, bool(stem_year))
 
+        extraction_meta = self._build_extraction_meta(
+            blocks=blocks,
+            options=options,
+            question_type=question_type,
+            question_no=question_no,
+            has_figures=bool(figures),
+            group_label_reason=group_label_reason,
+        )
+
         return {
             'id': generate_id(),
             'document_id': document_id,
@@ -2200,6 +2291,48 @@ class EntityExtractionService:
             'tags': tags,
             'question_no': question_no,
             'figures': figures,
+            'extraction_meta': extraction_meta,
+        }
+
+    @staticmethod
+    def _build_extraction_meta(
+        blocks: List[Any],
+        options: List[Dict[str, str]],
+        question_type: str,
+        question_no: Optional[str],
+        has_figures: bool,
+        group_label_reason: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """构建题目抽取质量诊断，供前端区分组题问题与 block 噪音。
+
+        - group_source: single_block（一块成题）/ merged（多块合并）
+        - block_count: 组题用了几个 block
+        - option_count: 提取到的选项数
+        - suspected_truncated_options: 选项文本疑似被截断（过短或无中文/字母数字实体）
+        - missing_question_no: 未识别出题号
+        """
+        block_count = len(blocks)
+        option_count = len(options)
+
+        suspected_truncated = False
+        if question_type == "choice" and options:
+            # 选择题选项文本过短（<2 字符）视为疑似截断
+            short_opts = sum(1 for o in options if len((o.get("text") or "").strip()) < 2)
+            if short_opts > 0:
+                suspected_truncated = True
+
+        # 选择题却选项不足 4 个：疑似漏选项（D 常见丢失）
+        few_options = question_type == "choice" and 0 < option_count < 4
+
+        return {
+            "group_source": "single_block" if block_count == 1 else "merged",
+            "block_count": block_count,
+            "option_count": option_count,
+            "has_figures": has_figures,
+            "missing_question_no": not question_no,
+            "suspected_truncated_options": suspected_truncated,
+            "few_options": few_options,
+            "group_label_reason": group_label_reason,
         }
 
     def _strip_leading_option_marker(self, text: str, expected_label: Optional[str] = None) -> str:
@@ -2250,20 +2383,18 @@ class EntityExtractionService:
             )
             question_dict['chapter_id'] = legacy_chapter_id
 
-        if not subject_id or not legacy_chapter_id:
-            logger.warning(
-                "题目缺少有效章节归属，跳过入库",
+        # 归属缺失不再丢弃：组题成功的题目一律入库，缺归属者标记待指认，
+        # 让前端能区分"组题失败"（题目根本没出现）与"归属失败"（题目在但未挂章节）。
+        unassigned = not subject_id or not legacy_chapter_id
+        if unassigned:
+            logger.info(
+                "题目归属缺失，以待指认状态入库",
                 document_id=question_dict.get('document_id'),
                 question_id=question_dict.get('id'),
                 page_no=question_dict.get('page_no'),
                 subject_id=subject_id,
                 chapter_id=legacy_chapter_id,
             )
-            if not subject_id and not legacy_chapter_id:
-                return False, "missing_subject_and_chapter"
-            if not subject_id:
-                return False, "missing_subject"
-            return False, "missing_legacy_chapter"
 
         try:
             async with self.db.begin_nested():
@@ -2294,6 +2425,12 @@ class EntityExtractionService:
                     topic_terms=topic_terms,
                     question_no=str(_extract_question_number_simple(question_dict) or "") or None,
                     review_status="pending",
+                    # status 一律用默认 pending 走审核流程，不因归属与否跳过审核；
+                    # 归属状态只记在 extraction_meta.unassigned，供前端区分与指认。
+                    extraction_meta={
+                        **(question_dict.get('extraction_meta') or {}),
+                        "unassigned": unassigned,
+                    },
                 )
                 self.db.add(question)
 
@@ -2337,7 +2474,7 @@ class EntityExtractionService:
                         )
                     except Exception as e:
                         logger.warning("题目资产关联失败", question_id=question_dict['id'], error=str(e))
-            return True, "saved"
+            return True, ("saved_unassigned" if unassigned else "saved")
         except Exception as e:
             logger.error(f"保存题目失败: {e}")
             return False, "save_failed"

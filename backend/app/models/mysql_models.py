@@ -510,13 +510,13 @@ class Question(Base):
     __tablename__ = "questions"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="唯一标识")
-    subject_id: Mapped[str] = mapped_column(
-        String(32), ForeignKey("subjects.id", ondelete="CASCADE"),
-        nullable=False, comment="所属学科ID"
+    subject_id: Mapped[Optional[str]] = mapped_column(
+        String(32), ForeignKey("subjects.id", ondelete="SET NULL"),
+        comment="所属学科ID（未归属时为空）"
     )
-    chapter_id: Mapped[str] = mapped_column(
-        String(32), ForeignKey("chapters.id", ondelete="CASCADE"),
-        nullable=False, comment="所属章节ID（兼容旧接口）"
+    chapter_id: Mapped[Optional[str]] = mapped_column(
+        String(32), ForeignKey("chapters.id", ondelete="SET NULL"),
+        comment="所属章节ID（兼容旧接口，未归属时为空）"
     )
     # 新增字段 - 多模态扩展
     primary_chapter_id: Mapped[Optional[str]] = mapped_column(
@@ -555,6 +555,9 @@ class Question(Base):
     topic_terms: Mapped[Optional[List[str]]] = mapped_column(JSON, comment="主题术语列表")
     knowledge_point_ids: Mapped[Optional[List[str]]] = mapped_column(JSON, comment="关联知识点ID")
     tags: Mapped[Optional[List[str]]] = mapped_column(JSON, comment="标签")
+    extraction_meta: Mapped[Optional[dict]] = mapped_column(
+        JSON, comment="抽取质量诊断：组题来源/选项数/疑似截断等"
+    )
     answer_source: Mapped[str] = mapped_column(
         Enum("none", "extracted", "llm", "manual"),
         default="none", comment="答案来源：none未填/extracted原卷抽取/llm生成/manual人工"
