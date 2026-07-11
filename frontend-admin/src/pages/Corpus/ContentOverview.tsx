@@ -25,6 +25,34 @@ function ReviewTag({ status }: { status: string }) {
   return <Tag color={cfg.color}>{cfg.text}</Tag>
 }
 
+// 把 extraction_meta 翻译成人能看懂的质量警示标签。无警示时返回"正常"绿标。
+function QualityBadges({ meta }: { meta?: Record<string, any> | null }) {
+  if (!meta) return <Text type="secondary">-</Text>
+  const badges: Array<{ color: string; text: string; title: string }> = []
+  if (meta.suspected_truncated_options) {
+    badges.push({ color: 'red', text: '选项截断', title: '选项文本疑似被 MinerU 截断（过短）' })
+  }
+  if (meta.few_options) {
+    badges.push({ color: 'orange', text: '选项不足', title: '选择题选项少于 4 个，可能漏选项（常见 D 丢失）' })
+  }
+  if (meta.missing_question_no) {
+    badges.push({ color: 'gold', text: '无题号', title: '未识别出题号，可能是题号被吞或非标准题目' })
+  }
+  if (meta.group_source === 'merged') {
+    badges.push({ color: 'blue', text: '多块合并', title: `由 ${meta.block_count ?? '多'} 个 block 合并而成` })
+  }
+  if (badges.length === 0) {
+    return <Tag color="green">正常</Tag>
+  }
+  return (
+    <Space size={[0, 4]} wrap>
+      {badges.map((b, i) => (
+        <Tag key={i} color={b.color} title={b.title}>{b.text}</Tag>
+      ))}
+    </Space>
+  )
+}
+
 function KnowledgePointList({ items }: { items: ContentOverviewKPBrief[] }) {
   return (
     <div>
@@ -91,7 +119,16 @@ const ContentOverview = ({ documentId }: { documentId: string }) => {
     },
     {
       title: '考点', dataIndex: 'primary_chapter_name', key: 'primary_chapter_name', width: 160,
-      render: (v: string | null) => v ? <Tag color="blue">{v}</Tag> : <Text type="secondary">未挂考点</Text>,
+      render: (v: string | null, row: ContentOverviewQuestion) =>
+        v
+          ? <Tag color="blue">{v}</Tag>
+          : row.is_unassigned
+            ? <Tag color="volcano" title="组题成功但未挂到大纲考点，待人工指认">未归属</Tag>
+            : <Text type="secondary">未挂考点</Text>,
+    },
+    {
+      title: '抽取质量', key: 'quality', width: 160,
+      render: (_: unknown, row: ContentOverviewQuestion) => <QualityBadges meta={row.extraction_meta} />,
     },
     {
       title: '年份', dataIndex: 'exam_year', key: 'exam_year', width: 80,
@@ -106,10 +143,11 @@ const ContentOverview = ({ documentId }: { documentId: string }) => {
   return (
     <div>
       <Row gutter={16} style={{ marginBottom: 16 }}>
-        <Col span={6}><Card size="small"><Statistic title="知识点" value={summary.knowledge_count} /></Card></Col>
-        <Col span={6}><Card size="small"><Statistic title="题目" value={summary.question_count} /></Card></Col>
-        <Col span={6}><Card size="small"><Statistic title="覆盖考点" value={summary.chapter_count} /></Card></Col>
-        <Col span={6}><Card size="small"><Statistic title="未挂考点知识点" value={summary.ungrouped_count} valueStyle={{ color: summary.ungrouped_count > 0 ? '#faad14' : undefined }} /></Card></Col>
+        <Col span={5}><Card size="small"><Statistic title="知识点" value={summary.knowledge_count} /></Card></Col>
+        <Col span={5}><Card size="small"><Statistic title="题目" value={summary.question_count} /></Card></Col>
+        <Col span={5}><Card size="small"><Statistic title="覆盖考点" value={summary.chapter_count} /></Card></Col>
+        <Col span={5}><Card size="small"><Statistic title="未挂考点知识点" value={summary.ungrouped_count} valueStyle={{ color: summary.ungrouped_count > 0 ? '#faad14' : undefined }} /></Card></Col>
+        <Col span={4}><Card size="small"><Statistic title="未归属题目" value={summary.unassigned_question_count} valueStyle={{ color: summary.unassigned_question_count > 0 ? '#fa541c' : undefined }} /></Card></Col>
       </Row>
 
       {(knowledge_chapters.length > 0 || ungrouped_knowledge_points.length > 0) && (

@@ -1096,6 +1096,10 @@ class DocumentParseService:
             return (0, int(digits)) if digits else (1, no)
 
         questions_sorted = sorted(questions, key=_q_sort_key)
+        # 未归属：缺学科或章节（组题成功但没挂到大纲考点），前端据此标记待指认。
+        def _q_unassigned(q: Question) -> bool:
+            return not q.subject_id or not q.chapter_id
+
         question_items = [
             {
                 "id": q.id,
@@ -1112,9 +1116,12 @@ class DocumentParseService:
                     if q.primary_chapter_id and q.primary_chapter_id in chapter_map else None
                 ),
                 "source_section_path": q.source_section_path,
+                "is_unassigned": _q_unassigned(q),
+                "extraction_meta": q.extraction_meta or None,
             }
             for q in questions_sorted
         ]
+        unassigned_question_count = sum(1 for q in questions if _q_unassigned(q))
 
         return {
             "document_id": document.id,
@@ -1128,5 +1135,6 @@ class DocumentParseService:
                 "question_count": len(questions),
                 "chapter_count": len(groups),
                 "ungrouped_count": len(ungrouped_kps),
+                "unassigned_question_count": unassigned_question_count,
             },
         }

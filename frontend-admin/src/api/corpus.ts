@@ -142,6 +142,18 @@ export interface ContentOverviewChapter {
   knowledge_points: ContentOverviewKPBrief[]
 }
 
+export interface QuestionExtractionMeta {
+  group_source?: 'single_block' | 'merged'
+  block_count?: number
+  option_count?: number
+  has_figures?: boolean
+  missing_question_no?: boolean
+  suspected_truncated_options?: boolean
+  few_options?: boolean
+  group_label_reason?: string
+  unassigned?: boolean
+}
+
 export interface ContentOverviewQuestion {
   id: string
   question_no?: string | null
@@ -154,6 +166,8 @@ export interface ContentOverviewQuestion {
   primary_chapter_id?: string | null
   primary_chapter_name?: string | null
   source_section_path?: string | null
+  is_unassigned: boolean
+  extraction_meta?: QuestionExtractionMeta | null
 }
 
 export interface ContentOverview {
@@ -168,6 +182,7 @@ export interface ContentOverview {
     question_count: number
     chapter_count: number
     ungrouped_count: number
+    unassigned_question_count: number
   }
 }
 
