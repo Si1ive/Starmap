@@ -37,7 +37,6 @@ import {
   scanCorpusFiles,
   parseCorpusFile,
   getParseRunDetail,
-  extractDocumentEntities,
   getDownloadedFiles,
   registerCorpusFileByDownload,
   deleteCorpusFile,
@@ -67,7 +66,6 @@ const downloadedStatusConfig: Record<string, { color: string; text: string }> = 
 const PIPELINE_STEPS = [
   { key: 'register', title: '注册文件' },
   { key: 'parse', title: '文档解析' },
-  { key: 'extract', title: '抽取实体' },
 ]
 
 const getProcessDisabledReason = (record: CorpusFile) => {
@@ -243,16 +241,11 @@ const CorpusPage = () => {
       if (!docId) throw new Error('未获取到文档ID')
 
       steps.parse = 'finish'
-      steps.extract = 'process'
       setPipelineDocId(docId)
       setParseProgress(null)
       setPipelineSteps({ ...steps })
 
-      await extractDocumentEntities(docId)
-      steps.extract = 'finish'
-      setPipelineSteps({ ...steps })
-
-      message.success('入库处理完成')
+      message.success('解析完成，请在文档详情页抽取知识点/题目')
       queryClient.invalidateQueries({ queryKey: ['corpusFiles'] })
     } catch (err: any) {
       const detail = err?.response?.data?.detail || err.message
@@ -388,7 +381,7 @@ const CorpusPage = () => {
               </Button>
             </Tooltip>
           ) : (
-            <Tooltip title={getProcessDisabledReason(record) || '执行解析、标题树、章节映射和实体抽取'}>
+            <Tooltip title={getProcessDisabledReason(record) || '解析文档（提取版面文字/图片/表格）。抽取知识点/题目请在文档详情页手动触发'}>
               <Button
                 type="link"
                 size="small"
