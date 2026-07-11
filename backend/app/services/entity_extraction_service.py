@@ -1010,6 +1010,10 @@ LEFT_EDGE_MARGIN = 30       # 0-1000 坐标系，约 3% 页宽
 GAP_RATIO_NEW_QUESTION = 3.0
 GAP_RATIO_PAREN_Q = 1.5
 GAP_RATIO_CONTINUATION = 1.5
+# 分栏检测（0-1000 坐标系）：双栏页的左右栏 x0 分布会出现两个聚集带，
+# 中间有明显空隙。COLUMN_GAP_MIN 为两带间的最小空隙，低于此视为单栏。
+COLUMN_GAP_MIN = 120        # 左右栏 x0 聚集带之间的最小间隔
+COLUMN_MIN_BLOCKS_PER_COL = 3   # 每栏至少的文本块数，避免个别偏移块误判成栏
 
 
 def _strip_option_marker_simple(text: str) -> str:
@@ -1025,6 +1029,11 @@ class PageStats:
     left_edge: float
     median_gap: float
     is_dense: bool
+    # 分栏：column_boundary 为 None 表示单栏；非 None 时为左右栏分界 x 坐标。
+    # left_edge_by_col 记录每栏各自的左边缘（0=左栏,1=右栏），双栏时右栏题号
+    # 需按右栏左边缘判断 at_left_edge，否则右栏题目永远无法被识别为新题起点。
+    column_boundary: Optional[float] = None
+    left_edge_by_col: Optional[Dict[int, float]] = None
 
 
 @dataclass
@@ -1055,7 +1064,6 @@ class QuestionLayoutGrouper:
     # ---- Phase 1: 页面统计 ----
 
     def _compute_page_stats(self, page_no: int, page_blocks: List[Any]) -> PageStats:
-        left_edges = []
         gaps: List[float] = []
 
         # 只对 text 类 block 计算左边缘和行距，排除 figure/table 等媒体块
@@ -1068,33 +1076,102 @@ class QuestionLayoutGrouper:
             )
         ]
 
-        for i, b in enumerate(text_blocks):
-            bbox = getattr(b, "bbox", None) or {}
-            x0 = self._bbox_x0(bbox)
-            if x0 is not None:
-                left_edges.append(x0)
+        left_edges = [
+            x0 for b in text_blocks
+            if (x0 := self._bbox_x0(getattr(b, "bbox", None) or {})) is not None
+        ]
 
-            if i > 0:
-                prev = text_blocks[i - 1]
-                prev_bbox = getattr(prev, "bbox", None) or {}
-                cur_bbox = bbox
-                prev_y1 = self._bbox_y1(prev_bbox)
-                cur_y0 = self._bbox_y0(cur_bbox)
-                if prev_y1 is not None and cur_y0 is not None:
-                    gap = cur_y0 - prev_y1
-                    if gap >= 0:
-                        gaps.append(gap)
+        for i in range(1, len(text_blocks)):
+            prev_bbox = getattr(text_blocks[i - 1], "bbox", None) or {}
+            cur_bbox = getattr(text_blocks[i], "bbox", None) or {}
+            prev_y1 = self._bbox_y1(prev_bbox)
+            cur_y0 = self._bbox_y0(cur_bbox)
+            if prev_y1 is not None and cur_y0 is not None:
+                gap = cur_y0 - prev_y1
+                if gap >= 0:
+                    gaps.append(gap)
 
         page_left_edge = min(left_edges) if left_edges else 50.0
         median_gap = self._median(gaps) if gaps else 10.0
         is_dense = self._check_dense_layout(text_blocks)
+
+        # 分栏检测：按 x0 分布找左右栏分界，双栏时每栏各算左边缘
+        column_boundary, left_edge_by_col = self._detect_columns(text_blocks)
 
         return PageStats(
             page_no=page_no,
             left_edge=page_left_edge,
             median_gap=max(median_gap, 1.0),
             is_dense=is_dense,
+            column_boundary=column_boundary,
+            left_edge_by_col=left_edge_by_col,
         )
+
+    def _detect_columns(
+        self, text_blocks: List[Any]
+    ) -> Tuple[Optional[float], Optional[Dict[int, float]]]:
+        """检测页面是否双栏排版，返回 (分界x坐标, 每栏左边缘)。
+
+        判据：block 的 x0 分布若明显聚成两簇（簇间存在宽间隙），即为双栏。
+        单栏或样本不足返回 (None, None)。分界取两簇之间的中点。
+        """
+        x0s = sorted(
+            x0 for b in text_blocks
+            if (x0 := self._bbox_x0(getattr(b, "bbox", None) or {})) is not None
+        )
+        if len(x0s) < 6:
+            return None, None
+
+        # 找相邻 x0 的最大间隙，作为候选栏边界
+        max_gap = 0.0
+        gap_at = None
+        for a, b in zip(x0s, x0s[1:]):
+            if b - a > max_gap:
+                max_gap = b - a
+                gap_at = (a + b) / 2
+        # 最大间隙需足够宽，且左右两侧都有足够 block，才认定为双栏
+        if gap_at is None or max_gap < COLUMN_GAP_MIN:
+            return None, None
+
+        left = [x for x in x0s if x < gap_at]
+        right = [x for x in x0s if x >= gap_at]
+        if len(left) < COLUMN_MIN_BLOCKS_PER_COL or len(right) < COLUMN_MIN_BLOCKS_PER_COL:
+            return None, None
+
+        return gap_at, {0: min(left), 1: min(right)}
+
+    def _column_of(self, block: Any, stats: PageStats) -> int:
+        """返回 block 所在栏（0=左,1=右）；单栏恒为 0。"""
+        if stats.column_boundary is None:
+            return 0
+        x0 = self._bbox_x0(getattr(block, "bbox", None) or {})
+        if x0 is None:
+            return 0
+        return 1 if x0 >= stats.column_boundary else 0
+
+    def _order_page_blocks(self, page_blocks: List[Any], stats: PageStats) -> List[Any]:
+        """按阅读顺序重排一页内的 block。
+
+        单栏：保持原 order_no（MinerU 输出顺序）。
+        双栏：左栏整列（按 y 升序）→ 右栏整列（按 y 升序），修正 MinerU 跨栏交错。
+        媒体/噪声块按其 y 坐标归入所在栏，保持与文本的相对位置。
+        """
+        if stats.column_boundary is None:
+            return list(page_blocks)
+
+        left_col: List[Any] = []
+        right_col: List[Any] = []
+        for b in page_blocks:
+            col = self._column_of(b, stats)
+            (left_col if col == 0 else right_col).append(b)
+
+        def _y0(b: Any) -> float:
+            v = self._bbox_y0(getattr(b, "bbox", None) or {})
+            return v if v is not None else 0.0
+
+        left_col.sort(key=_y0)
+        right_col.sort(key=_y0)
+        return left_col + right_col
 
     def _check_dense_layout(self, page_blocks: List[Any]) -> bool:
         """统计同 y 坐标的 block 数量，判断是否多栏排版"""
@@ -1114,6 +1191,14 @@ class QuestionLayoutGrouper:
 
     # ---- Phase 2: 逐 block 打标 ----
 
+    @staticmethod
+    def _col_left_edge(stats: PageStats, x0: Optional[float]) -> float:
+        """取 block 所属栏的左边缘。单栏或无坐标时回退到全页左边缘。"""
+        if x0 is None or stats.column_boundary is None or not stats.left_edge_by_col:
+            return stats.left_edge
+        col = 0 if x0 < stats.column_boundary else 1
+        return stats.left_edge_by_col.get(col, stats.left_edge)
+
     def _tag_block(self, block: Any, stats: PageStats, prev_block: Optional[Any]) -> BlockTag:
         bbox = getattr(block, "bbox", None) or {}
         text = getattr(block, "content_text", None) or getattr(block, "content_md", None) or ""
@@ -1122,7 +1207,9 @@ class QuestionLayoutGrouper:
         x0 = self._bbox_x0(bbox)
         at_left_edge = False
         if x0 is not None:
-            at_left_edge = (x0 - stats.left_edge) < LEFT_EDGE_MARGIN
+            # 双栏时用所属栏的左边缘，右栏题号（x0≈右栏起点）才能被判为贴边
+            col_edge = self._col_left_edge(stats, x0)
+            at_left_edge = (x0 - col_edge) < LEFT_EDGE_MARGIN
 
         has_q_number = bool(QUESTION_NUMERIC_RE.match(text.strip()))
         has_option = bool(OPTION_BLOCK_RE.match(text.strip()))
@@ -1175,7 +1262,9 @@ class QuestionLayoutGrouper:
 
         all_blocks_ordered: List[Any] = []
         for page_no in sorted(pages.keys()):
-            all_blocks_ordered.extend(pages[page_no])
+            all_blocks_ordered.extend(
+                self._order_page_blocks(pages[page_no], self.page_stats.get(page_no))
+            )
 
         for i, block in enumerate(all_blocks_ordered):
             page_no = getattr(block, "page_no", None) or 1
@@ -2049,6 +2138,22 @@ class EntityExtractionService:
         # Step 7: 最终验证
         final_report = comprehensive_validation(questions)
         logger.info(f"最终: {len(questions)} 道题目, {final_report['summary']['total_issues']} 个剩余问题")
+
+        # Step 7.5: 基于修复后的最终 options 重算 extraction_meta。
+        # meta 首次在组题阶段(Step 2)生成，但 Step 4 规则修复会补齐跨 block 的选项
+        # （如第3题的 D 选项单独成块后被合并），若不重算，few_options/option_count
+        # 等诊断仍是修复前的快照，导致"选项已补全却标选项不足"的误标。
+        for q in questions:
+            prev_meta = q.get('extraction_meta') or {}
+            new_meta = self._build_extraction_meta(
+                blocks=q.get('blocks') or [],
+                options=q.get('options') or [],
+                question_type=q.get('question_type') or q.get('type') or "short_answer",
+                question_no=q.get('question_no'),
+                has_figures=bool(q.get('figures')),
+                group_label_reason=prev_meta.get('group_label_reason'),
+            )
+            q['extraction_meta'] = new_meta
 
         # Step 8: 保存诊断报告（存储到document的metadata中）
         diagnostic_report = {
