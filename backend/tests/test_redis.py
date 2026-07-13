@@ -55,37 +55,45 @@ class TestRedisClient:
         """测试设置和获取"""
         with patch("app.db.redis.aioredis.from_url") as mock_from_url:
             mock_client = AsyncMock()
-            mock_client.setex = AsyncMock(return_value=True)
-            mock_client.get = AsyncMock(return_value='{"name": "周杰伦"}')
+            mock_client.set = AsyncMock(return_value=True)
+            mock_client.get = AsyncMock(return_value="running")
             mock_from_url.return_value = mock_client
             
             await client.connect()
             
             # 设置
-            result = await client.set("test-key", '{"name": "周杰伦"}', "person")
+            result = await client.set("extract-123", "running", "task")
             assert result is True
             
             # 获取
-            value = await client.get("test-key", "person")
-            assert value == '{"name": "周杰伦"}'
+            value = await client.get("extract-123", "task")
+            assert value == "running"
+            mock_client.set.assert_awaited_once_with(
+                "crawler:task:extract-123",
+                "running",
+                ex=client.DEFAULT_TTL["task"],
+            )
+            mock_client.get.assert_awaited_once_with("crawler:task:extract-123")
     
     @pytest.mark.asyncio
     async def test_json_operations(self, client):
         """测试JSON操作"""
         with patch("app.db.redis.aioredis.from_url") as mock_from_url:
             mock_client = AsyncMock()
-            mock_client.setex = AsyncMock(return_value=True)
-            mock_client.get = AsyncMock(return_value='{"id": "jay", "name": "周杰伦"}')
+            mock_client.set = AsyncMock(return_value=True)
+            mock_client.get = AsyncMock(
+                return_value='{"model": "test-model", "status": "completed"}'
+            )
             mock_from_url.return_value = mock_client
             
             await client.connect()
             
             # 设置JSON
-            data = {"id": "jay", "name": "周杰伦"}
-            await client.set_json("person:jay", data, "person")
+            data = {"model": "test-model", "status": "completed"}
+            await client.set_json("call-123", data, "llm")
             
             # 获取JSON
-            result = await client.get_json("person:jay", "person")
+            result = await client.get_json("call-123", "llm")
             assert result == data
     
     @pytest.mark.asyncio
@@ -93,7 +101,7 @@ class TestRedisClient:
         """测试会话操作"""
         with patch("app.db.redis.aioredis.from_url") as mock_from_url:
             mock_client = AsyncMock()
-            mock_client.setex = AsyncMock(return_value=True)
+            mock_client.set = AsyncMock(return_value=True)
             mock_client.get = AsyncMock(return_value='{"messages": []}')
             mock_client.delete = AsyncMock(return_value=1)
             mock_from_url.return_value = mock_client
@@ -121,11 +129,14 @@ class TestRedisClient:
     @pytest.mark.asyncio
     async def test_key_prefix(self, client):
         """测试键前缀"""
-        key = client._make_key("person", "jay-chou")
-        assert key == "starmap:person:jay-chou"
+        key = client._make_key("session", "sess-123")
+        assert key == "crawler:session:sess-123"
         
-        key = client._make_key("search", "query:周杰伦")
-        assert key == "starmap:search:query:周杰伦"
+        key = client._make_key("task", "extract-123")
+        assert key == "crawler:task:extract-123"
+
+        key = client._make_key("unknown", "value")
+        assert key == "crawler:default:value"
 
 
 class TestRedisIntegration:
@@ -175,14 +186,14 @@ class TestRedisIntegration:
         if not await real_client.health_check():
             pytest.skip("Redis服务未启动")
         
-        data = {"name": "周杰伦", "category": "singer"}
+        data = {"model": "integration-test", "status": "completed"}
         
         # 设置
-        await real_client.set_json("test:person", data, "person", ttl=60)
+        await real_client.set_json("test:llm", data, "llm", ttl=60)
         
         # 获取
-        result = await real_client.get_json("test:person", "person")
+        result = await real_client.get_json("test:llm", "llm")
         assert result == data
         
         # 清理
-        await real_client.delete("test:person", "person")
+        await real_client.delete("test:llm", "llm")

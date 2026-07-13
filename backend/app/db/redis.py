@@ -103,7 +103,7 @@ class RedisClient:
         构建带前缀的键
         
         Args:
-            key_type: 键类型（person/search/relation/session/llm）
+            key_type: 键类型（session/llm/task）
             key: 原始键
             
         Returns:
@@ -152,8 +152,8 @@ class RedisClient:
             ttl = self.DEFAULT_TTL.get(key_type)
         
         if ttl:
-            return await self._client.setex(full_key, ttl, value)
-        return await self._client.set(full_key, value)
+            return bool(await self._client.set(full_key, value, ex=ttl))
+        return bool(await self._client.set(full_key, value))
     
     async def delete(self, key: str, key_type: str = "default") -> int:
         """
@@ -290,7 +290,7 @@ class RedisClient:
                 ttl = self.DEFAULT_TTL.get(key_type)
             
             if ttl:
-                await self._client.setex(full_key, ttl, data)
+                await self._client.set(full_key, data, ex=ttl)
             else:
                 await self._client.set(full_key, data)
             return True

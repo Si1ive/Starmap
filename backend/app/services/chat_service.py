@@ -178,13 +178,17 @@ class ChatService:
             if not existing:
                 title = preview[:80] if role == "user" else None
                 first_msg = preview if role == "user" else None
-                session.add(ChatSession(
+                chat_session = ChatSession(
                     id=session_id,
                     title=title,
                     first_message=first_msg,
                     last_message=preview,
                     message_count=1,
-                ))
+                )
+                session.add(chat_session)
+                # The session factory disables autoflush. Persist the parent row
+                # before inserting its first message to satisfy the foreign key.
+                await session.flush()
             else:
                 existing.message_count = (existing.message_count or 0) + 1
                 existing.last_message = preview

@@ -8,8 +8,30 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.models.transaction import ChatHistory, ChatResponse
+from app.services.chat_service import get_chat_service
 
 client = TestClient(app)
+
+
+class StubChatService:
+    async def process_chat(self, request):
+        return ChatResponse(
+            session_id=request.session_id or "sess_test_generated",
+            message=f"已收到：{request.message}",
+            sources=[],
+            suggestions=["继续复习"],
+        )
+
+    async def get_session_history(self, session_id):
+        return ChatHistory(session_id=session_id, messages=[])
+
+
+@pytest.fixture(autouse=True)
+def override_chat_service():
+    app.dependency_overrides[get_chat_service] = StubChatService
+    yield
+    app.dependency_overrides.pop(get_chat_service, None)
 
 
 class TestHealthAPI:
@@ -36,87 +58,6 @@ class TestHealthAPI:
         assert "message" in data
         assert "docs" in data
         assert "health" in data
-
-
-class TestPersonAPI:
-    """人物API测试"""
-    
-    def test_get_person_detail(self):
-        """测试获取人物详情"""
-        response = client.get("/api/v1/persons/jay-chou")
-        assert response.status_code == 200
-        
-        data = response.json()
-        # 当前是mock数据，验证结构
-        assert "id" in data
-        assert "name" in data
-    
-    def test_get_person_not_found(self):
-        """测试人物不存在"""
-        response = client.get("/api/v1/persons/not-exist")
-        # 当前mock返回200，后续应返回404
-        assert response.status_code in [200, 404]
-    
-    def test_get_person_relations(self):
-        """测试获取人物关系"""
-        response = client.get("/api/v1/persons/jay-chou/relations?depth=2")
-        assert response.status_code == 200
-        
-        data = response.json()
-        assert "center" in data
-        assert "nodes" in data
-        assert "edges" in data
-    
-    def test_get_person_relations_invalid_depth(self):
-        """测试无效的关系深度"""
-        response = client.get("/api/v1/persons/jay-chou/relations?depth=5")
-        assert response.status_code == 422  # 验证错误
-    
-    def test_get_similar_persons(self):
-        """测试获取相似人物"""
-        response = client.get("/api/v1/persons/jay-chou/similar?limit=5")
-        assert response.status_code == 200
-        
-        data = response.json()
-        assert "items" in data
-
-
-class TestSearchAPI:
-    """搜索API测试"""
-    
-    def test_search_persons(self):
-        """测试搜索人物"""
-        response = client.get("/api/v1/persons/search?q=周杰伦")
-        assert response.status_code == 200
-        
-        data = response.json()
-        assert "items" in data
-        assert "total" in data
-        assert "page" in data
-        assert "page_size" in data
-        assert "total_pages" in data
-    
-    def test_search_with_category(self):
-        """测试按分类搜索"""
-        response = client.get("/api/v1/persons/search?q=周&category=singer")
-        assert response.status_code == 200
-        
-        data = response.json()
-        assert "items" in data
-    
-    def test_search_missing_query(self):
-        """测试缺少搜索词"""
-        response = client.get("/api/v1/persons/search")
-        assert response.status_code == 422  # 验证错误
-    
-    def test_search_pagination(self):
-        """测试分页"""
-        response = client.get("/api/v1/persons/search?q=周&page=2&page_size=10")
-        assert response.status_code == 200
-        
-        data = response.json()
-        assert data["page"] == 2
-        assert data["page_size"] == 10
 
 
 class TestChatAPI:
