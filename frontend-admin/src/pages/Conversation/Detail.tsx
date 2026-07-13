@@ -32,7 +32,7 @@ const ConversationDetail = () => {
 
   const { data, isLoading } = useQuery({
     queryKey: ['conversation', id],
-    queryFn: () => getConversationDetail(id!) as Promise<unknown> as Promise<{ data: ConversationDetailData }>,
+    queryFn: () => getConversationDetail(id ?? '') as Promise<unknown> as Promise<{ data: ConversationDetailData }>,
     enabled: !!id,
   })
 

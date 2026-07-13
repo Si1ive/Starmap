@@ -114,8 +114,8 @@ export interface PdfParserSwitchHistoryItem {
 }
 
 export const getPdfParserHistory = (
-  page: number = 1,
-  pageSize: number = 20,
+  page = 1,
+  pageSize = 20,
 ): Promise<ApiResponse<{ items: PdfParserSwitchHistoryItem[]; total: number; page: number; page_size: number }>> => {
   return adminClient.get('/settings/pdf-parser/history', { params: { page, page_size: pageSize } })
 }

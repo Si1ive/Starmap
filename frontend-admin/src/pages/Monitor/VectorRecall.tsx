@@ -234,7 +234,7 @@ const VectorRecallMonitor = () => {
               <Progress
                 style={{ marginTop: 12 }}
                 percent={100}
-                success={{ percent: Math.round((stats!.hit_count / stats!.total_recalls) * 100) }}
+                success={{ percent: Math.round(((stats?.hit_count ?? 0) / (stats?.total_recalls ?? 1)) * 100) }}
                 showInfo={false}
               />
             )}

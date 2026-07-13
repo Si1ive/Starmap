@@ -36,8 +36,6 @@ const roleConfig: Record<string, { color: string; text: string; desc: string }> 
 
 const permissionOptions = [
   { label: '数据看板', value: 'dashboard:view' },
-  { label: '艺人管理', value: 'person:manage' },
-  { label: '作品管理', value: 'work:manage' },
   { label: '爬虫管理', value: 'crawler:manage' },
   { label: '对话管理', value: 'conversation:view' },
   { label: '系统监控', value: 'monitor:view' },
@@ -114,7 +112,7 @@ const SettingsUsers = () => {
       // 角色映射到默认权限
       const roleDefaultPermissions: Record<string, string[]> = {
         super_admin: permissionOptions.map((p) => p.value),
-        data_admin: ['dashboard:view', 'person:manage', 'work:manage', 'crawler:manage', 'monitor:view'],
+        data_admin: ['dashboard:view', 'crawler:manage', 'monitor:view'],
         operator: ['dashboard:view', 'conversation:view'],
       }
       values.permissions = values.permissions || roleDefaultPermissions[values.role] || []

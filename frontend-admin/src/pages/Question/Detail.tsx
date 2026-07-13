@@ -34,7 +34,7 @@ const QuestionDetail = () => {
 
   const { data, isLoading } = useQuery({
     queryKey: ['question', id],
-    queryFn: () => getQuestionDetail(id!),
+    queryFn: () => getQuestionDetail(id ?? ''),
     enabled: !!id,
   })
 
@@ -49,7 +49,7 @@ const QuestionDetail = () => {
 
   const { data: chaptersData } = useQuery({
     queryKey: ['chapters', question?.subject_id],
-    queryFn: () => getChapters(question!.subject_id),
+    queryFn: () => getChapters(question?.subject_id ?? ''),
     enabled: !!question?.subject_id,
   })
 

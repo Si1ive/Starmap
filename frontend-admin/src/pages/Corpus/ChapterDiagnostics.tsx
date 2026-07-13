@@ -87,7 +87,7 @@ const ChapterDiagnostics = ({ documentId, totalPages }: ChapterDiagnosticsProps)
 
   const diagnostics = overviewQuery.data?.data
   const blockDiagnostics = blockQuery.data?.data
-  const allPages = diagnostics?.pages || []
+  const allPages = useMemo(() => diagnostics?.pages ?? [], [diagnostics?.pages])
   const blocks = blockDiagnostics?.blocks || []
   const summary = diagnostics?.summary
   const isExam = !!diagnostics?.is_exam_doc

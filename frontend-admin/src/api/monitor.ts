@@ -1,7 +1,7 @@
 import adminClient from './client'
 import type { ApiResponse } from '@/types'
 
-export const getApiMonitor = (hours: number = 24): Promise<ApiResponse<Record<string, unknown>>> => {
+export const getApiMonitor = (hours = 24): Promise<ApiResponse<Record<string, unknown>>> => {
   return adminClient.get('/monitor/api', { params: { hours } })
 }
 
@@ -72,7 +72,7 @@ export const listLLMCalls = (params: {
   return adminClient.get('/monitor/llm-calls', { params })
 }
 
-export const getLLMCallStats = (hours: number = 24): Promise<ApiResponse<LLMCallStats>> => {
+export const getLLMCallStats = (hours = 24): Promise<ApiResponse<LLMCallStats>> => {
   return adminClient.get('/monitor/llm-calls/stats', { params: { hours } })
 }
 
@@ -114,7 +114,7 @@ export const getServiceLogs = (params?: {
   return adminClient.get('/monitor/logs', { params })
 }
 
-export const getServiceLogStats = (hours: number = 24): Promise<ApiResponse<{
+export const getServiceLogStats = (hours = 24): Promise<ApiResponse<{
   window_hours: number
   by_level: Array<{ level: string; count: number }>
   top_loggers: Array<{ logger: string; count: number }>
@@ -145,7 +145,7 @@ export interface SystemMetricSample {
   sampled_at: string
 }
 
-export const getSystemMetrics = (hours: number = 24): Promise<ApiResponse<{
+export const getSystemMetrics = (hours = 24): Promise<ApiResponse<{
   latest: SystemMetricSample | null
   series: SystemMetricSample[]
   window_hours: number
@@ -203,7 +203,7 @@ export const listVectorRecalls = (params: {
   return adminClient.get('/monitor/vector-recalls', { params })
 }
 
-export const getVectorRecallStats = (hours: number = 24): Promise<ApiResponse<VectorRecallStats>> => {
+export const getVectorRecallStats = (hours = 24): Promise<ApiResponse<VectorRecallStats>> => {
   return adminClient.get('/monitor/vector-recalls/stats', { params: { hours } })
 }
 

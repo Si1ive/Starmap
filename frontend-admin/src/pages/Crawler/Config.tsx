@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { Card, Form, Input, Select, Switch, InputNumber, Button, message, Row, Col } from 'antd'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getSettings, updateSettings } from '@/api'
@@ -23,7 +23,10 @@ const CrawlerConfig = () => {
     },
   })
 
-  const settings = (((data?.data as any)?.crawler) || {}) as Record<string, any>
+  const settings = useMemo(
+    () => (((data?.data as any)?.crawler) || {}) as Record<string, any>,
+    [data?.data],
+  )
 
   useEffect(() => {
     form.setFieldsValue({

@@ -26,7 +26,7 @@ const KnowledgeDetail = () => {
 
   const { data, isLoading } = useQuery({
     queryKey: ['knowledgePoint', id],
-    queryFn: () => getKnowledgePointDetail(id!),
+    queryFn: () => getKnowledgePointDetail(id ?? ''),
     enabled: !!id,
   })
 
@@ -41,7 +41,7 @@ const KnowledgeDetail = () => {
 
   const { data: chaptersData } = useQuery({
     queryKey: ['chapters', point?.subject_id],
-    queryFn: () => getChapters(point!.subject_id),
+    queryFn: () => getChapters(point?.subject_id ?? ''),
     enabled: !!point?.subject_id,
   })
 

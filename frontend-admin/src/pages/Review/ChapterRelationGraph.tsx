@@ -58,14 +58,14 @@ const ChapterRelationGraphPage = () => {
   const outlines = outlinesData?.data || []
 
   // 大纲章节树
-  const { data: chaptersData } = useQuery({
+  const { data: chaptersData, refetch: refetchChapters } = useQuery({
     queryKey: ['outlineChapters', selectedOutlineId, selectedSubjectId],
-    queryFn: () => getOutlineChapters(selectedOutlineId!, selectedSubjectId),
+    queryFn: () => getOutlineChapters(selectedOutlineId ?? '', selectedSubjectId),
     enabled: !!selectedOutlineId,
   })
 
   // 考点关系列表
-  const { data: relationsData, isLoading } = useQuery({
+  const { data: relationsData, isLoading, refetch: refetchRelations } = useQuery({
     queryKey: ['chapterRelationsForGraph', maxRelations],
     queryFn: () => listChapterRelations({
       review_status: 'approved',
@@ -217,7 +217,12 @@ const ChapterRelationGraphPage = () => {
           <Form.Item label="最大关系数" style={{ marginBottom: 0 }}>
             <InputNumber min={10} max={200} value={maxRelations} onChange={(v) => setMaxRelations(v || 50)} />
           </Form.Item>
-          <Button icon={<ReloadOutlined />} onClick={() => {}}>刷新</Button>
+          <Button
+            icon={<ReloadOutlined />}
+            onClick={() => void Promise.all([refetchChapters(), refetchRelations()])}
+          >
+            刷新
+          </Button>
         </Space>
       </Card>
 

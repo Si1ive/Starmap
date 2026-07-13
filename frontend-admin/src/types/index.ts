@@ -20,64 +20,6 @@ export interface LoginResponse {
   user: AdminUser
 }
 
-// 艺人数据
-export interface Person {
-  id: string
-  name: string
-  name_en?: string
-  avatar?: string
-  gender?: 'male' | 'female' | 'unknown'
-  birth_date?: string
-  birth_place?: string
-  nationality?: string
-  height?: number
-  categories: string[]
-  summary?: string
-  biography?: string
-  status: 'complete' | 'partial' | 'pending' | 'processing'
-  source: 'wikipedia' | 'manual'
-  created_at: string
-  updated_at: string
-}
-
-// 作品数据
-export interface Work {
-  id: string
-  title: string
-  title_en?: string
-  type: 'movie' | 'tv' | 'album' | 'single' | 'book'
-  year?: number
-  release_date?: string
-  description?: string
-  summary?: string
-  cover?: string
-  // 电影特有
-  director?: string[]
-  actors?: string[]
-  box_office?: number
-  // 电视剧特有
-  episodes?: number
-  platform?: string
-  // 音乐特有
-  artist?: string[]
-  record_company?: string
-  track_list?: string[]
-  // 书籍特有
-  author?: string[]
-  publisher?: string
-  isbn?: string
-  // 关联艺人
-  related_persons?: { id: string; name: string; role: string }[]
-  // 通用
-  genres?: string[]
-  tags?: string[]
-  rating?: number
-  status: 'complete' | 'partial' | 'pending'
-  source: 'wikipedia' | 'manual'
-  created_at: string
-  updated_at: string
-}
-
 // 爬虫任务
 export interface CrawlerTask {
   id: string

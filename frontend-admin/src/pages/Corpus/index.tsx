@@ -272,7 +272,7 @@ const CorpusPage = () => {
 
     try {
       const regRes = await registerCorpusFileByDownload(file.id)
-      const corpusFileId = regRes.data!.corpus_file_id
+      const corpusFileId = regRes.data.corpus_file_id
       steps.register = 'finish'
       setPipelineSteps({ ...steps })
       await runPipeline(corpusFileId)

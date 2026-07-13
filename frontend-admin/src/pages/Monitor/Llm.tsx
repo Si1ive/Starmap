@@ -42,7 +42,7 @@ const LLMMonitor = () => {
 
   const { data: detailRes, isLoading: detailLoading } = useQuery({
     queryKey: ['llmCallDetail', detailId],
-    queryFn: () => getLLMCallDetail(detailId!),
+    queryFn: () => getLLMCallDetail(detailId ?? ''),
     enabled: !!detailId,
   })
 

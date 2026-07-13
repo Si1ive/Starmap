@@ -120,14 +120,18 @@ const OutlineList = () => {
   }
 
   const importMut = useMutation({
-    mutationFn: (values: any) =>
-      importOutlineFromLLM({
+    mutationFn: (values: any) => {
+      if (!splitSubjects) {
+        throw new Error('没有可导入的科目数据')
+      }
+      return importOutlineFromLLM({
         name: values.name,
         year: values.year,
         version: values.version || 'v1.0',
         set_default: !!values.set_default,
-        subjects: splitSubjects!,
-      }),
+        subjects: splitSubjects,
+      })
+    },
     onSuccess: (res) => {
       const r = res.data
       message.success(`导入成功：新建 ${r?.created_chapters} 个，更新 ${r?.updated_chapters} 个章节`)
@@ -158,22 +162,28 @@ const OutlineList = () => {
   })
 
   // 章节查看：先取该大纲的科目列表，再按选中科目取章节树
+  const selectedOutlineId = chapterDrawer.outline?.id
   const { data: outlineSubjectsRes } = useQuery({
-    queryKey: ['outlineSubjects', chapterDrawer.outline?.id],
-    queryFn: () => getOutlineSubjects(chapterDrawer.outline!.id),
-    enabled: !!chapterDrawer.open && !!chapterDrawer.outline,
+    queryKey: ['outlineSubjects', selectedOutlineId],
+    queryFn: () => getOutlineSubjects(selectedOutlineId ?? ''),
+    enabled: chapterDrawer.open && !!selectedOutlineId,
   })
   const outlineSubjects = outlineSubjectsRes?.data || []
   const currentSubject = activeSubject || outlineSubjects[0]?.subject_id || ''
 
   const { data: chaptersRes, isLoading: chaptersLoading } = useQuery({
-    queryKey: ['outlineChapters', chapterDrawer.outline?.id, currentSubject],
-    queryFn: () => getOutlineChapters(chapterDrawer.outline!.id, currentSubject),
-    enabled: !!chapterDrawer.open && !!chapterDrawer.outline && !!currentSubject,
+    queryKey: ['outlineChapters', selectedOutlineId, currentSubject],
+    queryFn: () => getOutlineChapters(selectedOutlineId ?? '', currentSubject),
+    enabled: chapterDrawer.open && !!selectedOutlineId && !!currentSubject,
   })
 
   const guidanceMut = useMutation({
-    mutationFn: (subjectId: string) => generateOutlineGuidance(chapterDrawer.outline!.id, subjectId),
+    mutationFn: (subjectId: string) => {
+      if (!selectedOutlineId) {
+        throw new Error('请先选择考试大纲')
+      }
+      return generateOutlineGuidance(selectedOutlineId, subjectId)
+    },
     onSuccess: (res) => {
       message.success(`复习指导已生成：${res.data?.updated_chapters}/${res.data?.total_chapters} 个章节`)
       qc.invalidateQueries({ queryKey: ['outlineSubjects', chapterDrawer.outline?.id] })
