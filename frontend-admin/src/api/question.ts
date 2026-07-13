@@ -1,5 +1,12 @@
 import adminClient from './client'
-import type { ApiResponse, ContentReviewResult, PaginatedResponse, Question } from '@/types'
+import type {
+  ApiResponse,
+  ContentBatchDeleteResult,
+  ContentMutationResult,
+  ContentReviewResult,
+  PaginatedResponse,
+  Question,
+} from '@/types'
 
 // ========== 参数类型 ==========
 
@@ -18,13 +25,18 @@ export interface QuestionListParams {
 }
 
 export interface UpdateQuestionData {
+  subject_id?: string
+  chapter_id?: string
+  type?: Question['type']
   content?: string
   options?: { key: string; text: string }[]
   answer?: string
   explanation?: string
-  difficulty?: string
+  difficulty?: Question['difficulty']
+  source?: string
+  exam_year?: number
   tags?: string[]
-  status?: string
+  status?: 'active' | 'pending'
 }
 
 // ========== 题目 ==========
@@ -44,19 +56,19 @@ export const getQuestionDetail = (
 export const updateQuestion = (
   id: string,
   data: UpdateQuestionData
-): Promise<ApiResponse<null>> => {
+): Promise<ApiResponse<ContentMutationResult>> => {
   return adminClient.put(`/questions/${id}`, data)
 }
 
 export const deleteQuestion = (
   id: string
-): Promise<ApiResponse<{ id: string }>> => {
+): Promise<ApiResponse<ContentMutationResult>> => {
   return adminClient.delete(`/questions/${id}`)
 }
 
 export const batchDeleteQuestions = (
   ids: string[]
-): Promise<ApiResponse<{ deleted_count: number; requested_count: number }>> => {
+): Promise<ApiResponse<ContentBatchDeleteResult>> => {
   return adminClient.post('/questions/batch-delete', { ids })
 }
 

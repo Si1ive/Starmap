@@ -2,6 +2,8 @@ import adminClient from './client'
 import type {
   ApiResponse,
   Chapter,
+  ContentBatchDeleteResult,
+  ContentMutationResult,
   ContentReviewResult,
   KnowledgePoint,
   PaginatedResponse,
@@ -22,13 +24,15 @@ export interface KnowledgePointListParams {
 }
 
 export interface UpdateKnowledgePointData {
+  subject_id?: string
+  chapter_id?: string
   title?: string
   content?: string
-  difficulty?: string
-  exam_frequency?: string
+  difficulty?: KnowledgePoint['difficulty']
+  exam_frequency?: KnowledgePoint['exam_frequency']
   tags?: string[]
   key_points?: string[]
-  status?: string
+  status?: 'active' | 'pending'
 }
 
 // ========== 学科 ==========
@@ -62,19 +66,19 @@ export const getKnowledgePointDetail = (
 export const updateKnowledgePoint = (
   id: string,
   data: UpdateKnowledgePointData
-): Promise<ApiResponse<null>> => {
+): Promise<ApiResponse<ContentMutationResult>> => {
   return adminClient.put(`/knowledge/points/${id}`, data)
 }
 
 export const deleteKnowledgePoint = (
   id: string
-): Promise<ApiResponse<{ id: string }>> => {
+): Promise<ApiResponse<ContentMutationResult>> => {
   return adminClient.delete(`/knowledge/points/${id}`)
 }
 
 export const batchDeleteKnowledgePoints = (
   ids: string[]
-): Promise<ApiResponse<{ deleted_count: number; requested_count: number }>> => {
+): Promise<ApiResponse<ContentBatchDeleteResult>> => {
   return adminClient.post('/knowledge/points/batch-delete', { ids })
 }
 

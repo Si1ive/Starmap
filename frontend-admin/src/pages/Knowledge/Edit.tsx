@@ -16,8 +16,6 @@ const KnowledgeEdit = () => {
   const [previewContent, setPreviewContent] = useState('')
   const [isFormDirty, setIsFormDirty] = useState(false)
 
-  const isNew = !id || id === 'new'
-
   // 监听内容变化，用于实时预览
   const watchContent = Form.useWatch('content', form)
 
@@ -45,8 +43,8 @@ const KnowledgeEdit = () => {
 
   const { data, isLoading } = useQuery({
     queryKey: ['knowledgePoint', id],
-    queryFn: () => getKnowledgePointDetail(id!),
-    enabled: !!id && !isNew,
+    queryFn: () => getKnowledgePointDetail(id || ''),
+    enabled: !!id,
   })
 
   const { data: subjectsData } = useQuery({
@@ -56,7 +54,7 @@ const KnowledgeEdit = () => {
 
   const { data: chaptersData } = useQuery({
     queryKey: ['chapters', selectedSubject],
-    queryFn: () => getChapters(selectedSubject!),
+    queryFn: () => getChapters(selectedSubject || ''),
     enabled: !!selectedSubject,
   })
 
@@ -89,9 +87,19 @@ const KnowledgeEdit = () => {
   }, [watchContent])
 
   const mutation = useMutation({
-    mutationFn: (values: any) => updateKnowledgePoint(id!, values),
-    onSuccess: () => {
-      message.success('保存成功')
+    mutationFn: (values: any) => {
+      if (!id) throw new Error('知识点 ID 缺失')
+      return updateKnowledgePoint(id, values)
+    },
+    onSuccess: (res) => {
+      const indexingStatus = res.data?.indexing?.status
+      if (indexingStatus === 'failed') {
+        message.warning('内容已保存，但检索索引更新失败，可稍后重试')
+      } else if (indexingStatus === 'warning') {
+        message.warning('内容和新索引已保存，但旧向量清理失败')
+      } else {
+        message.success('保存成功')
+      }
       setIsFormDirty(false)
       queryClient.invalidateQueries({ queryKey: ['knowledgePoints'] })
       queryClient.invalidateQueries({ queryKey: ['knowledgePoint', id] })
@@ -126,7 +134,7 @@ const KnowledgeEdit = () => {
           <Button icon={<ArrowLeftOutlined />} onClick={handleBack}>
             返回
           </Button>
-          <h2 style={{ margin: 0 }}>{isNew ? '新增知识点' : '编辑知识点'}</h2>
+          <h2 style={{ margin: 0 }}>编辑知识点</h2>
           {isFormDirty && (
             <Tag color="orange">未保存</Tag>
           )}
@@ -200,13 +208,12 @@ const KnowledgeEdit = () => {
                 ]}
               />
             </Form.Item>
-            <Form.Item name="status" label="状态" initialValue="active">
+            <Form.Item name="status" label="可用状态" initialValue="active">
               <Select
                 style={{ width: 120 }}
                 options={[
-                  { label: '已发布', value: 'active' },
-                  { label: '待审核', value: 'pending' },
-                  { label: '草稿', value: 'draft' },
+                  { label: '可用', value: 'active' },
+                  { label: '停用', value: 'pending' },
                 ]}
               />
             </Form.Item>

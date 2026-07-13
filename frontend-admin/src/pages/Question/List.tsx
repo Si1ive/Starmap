@@ -71,7 +71,11 @@ const QuestionList = () => {
   const batchDeleteMutation = useMutation({
     mutationFn: batchDeleteQuestions,
     onSuccess: (res) => {
-      message.success(`已删除 ${res.data?.deleted_count || 0} 道题目`)
+      if (res.data?.indexing?.status === 'warning') {
+        message.warning(`已删除 ${res.data.deleted_count} 道题目，但旧向量清理失败`)
+      } else {
+        message.success(`已删除 ${res.data?.deleted_count || 0} 道题目`)
+      }
       setSelectedRowKeys([])
       queryClient.invalidateQueries({ queryKey: ['questions'] })
     },

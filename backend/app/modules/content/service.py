@@ -6,6 +6,7 @@ from fastapi import HTTPException
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.logging import get_logger
 from app.models.mysql_models import (
     EntitySourceLink,
     KnowledgePoint,
@@ -14,13 +15,39 @@ from app.models.mysql_models import (
     Question,
     QuestionChapterLink,
     QuestionKnowledgeLink,
-    RetrievalSegment,
 )
 from app.services.entity_asset_service import get_entity_assets
+from app.services.segment_service import SegmentService
+
+logger = get_logger(__name__)
 
 
 class ContentService:
     """Manage content independently from its human-review state."""
+
+    KNOWLEDGE_INDEX_FIELDS = {
+        "subject_id",
+        "chapter_id",
+        "title",
+        "content",
+        "difficulty",
+        "exam_frequency",
+        "tags",
+        "status",
+    }
+    QUESTION_INDEX_FIELDS = {
+        "subject_id",
+        "chapter_id",
+        "type",
+        "content",
+        "options",
+        "explanation",
+        "difficulty",
+        "source",
+        "exam_year",
+        "tags",
+        "status",
+    }
 
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -94,25 +121,44 @@ class ContentService:
         self,
         point_id: str,
         changes: Dict[str, Any],
-    ) -> None:
+    ) -> Dict[str, Any]:
         point = await self.db.get(KnowledgePoint, point_id)
         if not point or point.status == "deleted":
             raise HTTPException(status_code=404, detail="知识点不存在")
 
+        changed_fields = {
+            field
+            for field, value in changes.items()
+            if getattr(point, field) != value
+        }
         for field, value in changes.items():
             setattr(point, field, value)
-        await self.db.commit()
 
-    async def delete_knowledge_point(self, point_id: str) -> None:
+        if point.status != "active":
+            return await SegmentService(self.db).commit_entity_segment_removal(
+                "knowledge_point",
+                [point_id],
+            )
+
+        await self.db.commit()
+        if changed_fields & self.KNOWLEDGE_INDEX_FIELDS:
+            return await self._rebuild_entity_index("knowledge_point", point_id)
+        return {"status": "skipped"}
+
+    async def delete_knowledge_point(self, point_id: str) -> Dict[str, Any]:
         point = await self.db.get(KnowledgePoint, point_id)
         if not point or point.status == "deleted":
             raise HTTPException(status_code=404, detail="知识点不存在")
 
         point.status = "deleted"
         await self._delete_knowledge_dependencies([point_id])
-        await self.db.commit()
+        indexing = await SegmentService(self.db).commit_entity_segment_removal(
+            "knowledge_point",
+            [point_id],
+        )
+        return {"id": point_id, "indexing": indexing}
 
-    async def batch_delete_knowledge_points(self, ids: List[str]) -> Dict[str, int]:
+    async def batch_delete_knowledge_points(self, ids: List[str]) -> Dict[str, Any]:
         unique_ids = list(dict.fromkeys(ids))
         result = await self.db.execute(
             select(KnowledgePoint.id).where(
@@ -130,10 +176,14 @@ class ContentService:
             .values(status="deleted")
         )
         await self._delete_knowledge_dependencies(existing_ids)
-        await self.db.commit()
+        indexing = await SegmentService(self.db).commit_entity_segment_removal(
+            "knowledge_point",
+            existing_ids,
+        )
         return {
             "deleted_count": len(existing_ids),
             "requested_count": len(unique_ids),
+            "indexing": indexing,
         }
 
     async def list_questions(
@@ -232,25 +282,44 @@ class ContentService:
         self,
         question_id: str,
         changes: Dict[str, Any],
-    ) -> None:
+    ) -> Dict[str, Any]:
         question = await self.db.get(Question, question_id)
         if not question or question.status == "deleted":
             raise HTTPException(status_code=404, detail="题目不存在")
 
+        changed_fields = {
+            field
+            for field, value in changes.items()
+            if getattr(question, field) != value
+        }
         for field, value in changes.items():
             setattr(question, field, value)
-        await self.db.commit()
 
-    async def delete_question(self, question_id: str) -> None:
+        if question.status != "active":
+            return await SegmentService(self.db).commit_entity_segment_removal(
+                "question",
+                [question_id],
+            )
+
+        await self.db.commit()
+        if changed_fields & self.QUESTION_INDEX_FIELDS:
+            return await self._rebuild_entity_index("question", question_id)
+        return {"status": "skipped"}
+
+    async def delete_question(self, question_id: str) -> Dict[str, Any]:
         question = await self.db.get(Question, question_id)
         if not question or question.status == "deleted":
             raise HTTPException(status_code=404, detail="题目不存在")
 
         question.status = "deleted"
         await self._delete_question_dependencies([question_id])
-        await self.db.commit()
+        indexing = await SegmentService(self.db).commit_entity_segment_removal(
+            "question",
+            [question_id],
+        )
+        return {"id": question_id, "indexing": indexing}
 
-    async def batch_delete_questions(self, ids: List[str]) -> Dict[str, int]:
+    async def batch_delete_questions(self, ids: List[str]) -> Dict[str, Any]:
         unique_ids = list(dict.fromkeys(ids))
         result = await self.db.execute(
             select(Question.id).where(
@@ -268,19 +337,17 @@ class ContentService:
             .values(status="deleted")
         )
         await self._delete_question_dependencies(existing_ids)
-        await self.db.commit()
+        indexing = await SegmentService(self.db).commit_entity_segment_removal(
+            "question",
+            existing_ids,
+        )
         return {
             "deleted_count": len(existing_ids),
             "requested_count": len(unique_ids),
+            "indexing": indexing,
         }
 
     async def _delete_knowledge_dependencies(self, ids: List[str]) -> None:
-        await self.db.execute(
-            delete(RetrievalSegment).where(
-                RetrievalSegment.entity_type == "knowledge_point",
-                RetrievalSegment.entity_id.in_(ids),
-            )
-        )
         await self.db.execute(
             delete(KnowledgePointChapterLink).where(
                 KnowledgePointChapterLink.knowledge_point_id.in_(ids)
@@ -308,12 +375,6 @@ class ContentService:
 
     async def _delete_question_dependencies(self, ids: List[str]) -> None:
         await self.db.execute(
-            delete(RetrievalSegment).where(
-                RetrievalSegment.entity_type == "question",
-                RetrievalSegment.entity_id.in_(ids),
-            )
-        )
-        await self.db.execute(
             delete(QuestionChapterLink).where(
                 QuestionChapterLink.question_id.in_(ids)
             )
@@ -329,6 +390,32 @@ class ContentService:
                 EntitySourceLink.entity_id.in_(ids),
             )
         )
+
+    async def _rebuild_entity_index(
+        self,
+        entity_type: str,
+        entity_id: str,
+    ) -> Dict[str, Any]:
+        try:
+            result = await SegmentService(self.db).rebuild_entity_segments(
+                entity_type,
+                entity_id,
+            )
+        except Exception as exc:
+            await self.db.rollback()
+            logger.exception(
+                "内容编辑后的索引重建失败",
+                entity_type=entity_type,
+                entity_id=entity_id,
+                error=str(exc),
+            )
+            return {
+                "status": "failed",
+                "error": str(exc)[:500],
+            }
+
+        status = "warning" if result.get("cleanup_warning") else "success"
+        return {"status": status, **result}
 
     @staticmethod
     def _knowledge_point_to_dict(

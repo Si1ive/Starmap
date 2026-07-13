@@ -57,11 +57,11 @@ async def update_knowledge_point(
     req: UpdateKnowledgePointRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    await ContentService(db).update_knowledge_point(
+    result = await ContentService(db).update_knowledge_point(
         point_id,
         req.model_dump(exclude_unset=True),
     )
-    return ApiResponse(message="更新成功")
+    return ApiResponse(message="更新成功", data={"id": point_id, "indexing": result})
 
 
 @router.delete("/knowledge/points/{point_id}", response_model=ApiResponse)
@@ -69,8 +69,8 @@ async def delete_knowledge_point(
     point_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    await ContentService(db).delete_knowledge_point(point_id)
-    return ApiResponse(message="删除成功", data={"id": point_id})
+    result = await ContentService(db).delete_knowledge_point(point_id)
+    return ApiResponse(message="删除成功", data=result)
 
 
 @router.post("/knowledge/points/batch-delete", response_model=ApiResponse)
@@ -127,11 +127,11 @@ async def update_question(
     req: UpdateQuestionRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    await ContentService(db).update_question(
+    result = await ContentService(db).update_question(
         question_id,
         req.model_dump(exclude_unset=True),
     )
-    return ApiResponse(message="更新成功")
+    return ApiResponse(message="更新成功", data={"id": question_id, "indexing": result})
 
 
 @router.delete("/questions/{question_id}", response_model=ApiResponse)
@@ -139,8 +139,8 @@ async def delete_question(
     question_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    await ContentService(db).delete_question(question_id)
-    return ApiResponse(message="删除成功", data={"id": question_id})
+    result = await ContentService(db).delete_question(question_id)
+    return ApiResponse(message="删除成功", data=result)
 
 
 @router.post("/questions/batch-delete", response_model=ApiResponse)

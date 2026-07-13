@@ -13,12 +13,10 @@ const QuestionEdit = () => {
   const [selectedSubject, setSelectedSubject] = useState<string | undefined>()
   const [selectedType, setSelectedType] = useState<string>('choice')
 
-  const isNew = !id || id === 'new'
-
   const { data, isLoading } = useQuery({
     queryKey: ['question', id],
-    queryFn: () => getQuestionDetail(id!),
-    enabled: !!id && !isNew,
+    queryFn: () => getQuestionDetail(id || ''),
+    enabled: !!id,
   })
 
   const { data: subjectsData } = useQuery({
@@ -28,7 +26,7 @@ const QuestionEdit = () => {
 
   const { data: chaptersData } = useQuery({
     queryKey: ['chapters', selectedSubject],
-    queryFn: () => getChapters(selectedSubject!),
+    queryFn: () => getChapters(selectedSubject || ''),
     enabled: !!selectedSubject,
   })
 
@@ -36,13 +34,12 @@ const QuestionEdit = () => {
   const subjects = subjectsData?.data || []
   const chapters = chaptersData?.data || []
 
-  const normalizedOptions = (question?.options || []).map((opt: any, index: number) => ({
-    key: opt.key || opt.label || opt.option_label || String.fromCharCode(65 + index),
-    text: opt.text || '',
-  }))
-
   useEffect(() => {
     if (question) {
+      const normalizedOptions = (question.options || []).map((opt, index) => ({
+        key: opt.key || opt.label || opt.option_label || String.fromCharCode(65 + index),
+        text: opt.text || '',
+      }))
       setSelectedSubject(question.subject_id)
       setSelectedType(question.type)
       form.setFieldsValue({
@@ -63,9 +60,19 @@ const QuestionEdit = () => {
   }, [question, form])
 
   const mutation = useMutation({
-    mutationFn: (values: any) => updateQuestion(id!, values),
-    onSuccess: () => {
-      message.success('更新成功')
+    mutationFn: (values: any) => {
+      if (!id) throw new Error('题目 ID 缺失')
+      return updateQuestion(id, values)
+    },
+    onSuccess: (res) => {
+      const indexingStatus = res.data?.indexing?.status
+      if (indexingStatus === 'failed') {
+        message.warning('题目已保存，但检索索引更新失败，可稍后重试')
+      } else if (indexingStatus === 'warning') {
+        message.warning('题目和新索引已保存，但旧向量清理失败')
+      } else {
+        message.success('更新成功')
+      }
       queryClient.invalidateQueries({ queryKey: ['questions'] })
       queryClient.invalidateQueries({ queryKey: ['question', id] })
       navigate('/admin/questions')
@@ -93,7 +100,7 @@ const QuestionEdit = () => {
           <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/admin/questions')}>
             返回
           </Button>
-          <h2 style={{ margin: 0 }}>{isNew ? '新增题目' : '编辑题目'}</h2>
+          <h2 style={{ margin: 0 }}>编辑题目</h2>
         </Space>
         <Button
           type="primary"
@@ -149,12 +156,12 @@ const QuestionEdit = () => {
                 ]}
               />
             </Form.Item>
-            <Form.Item name="status" label="状态" initialValue="active">
+            <Form.Item name="status" label="可用状态" initialValue="active">
               <Select
                 style={{ width: 120 }}
                 options={[
-                  { label: '已发布', value: 'active' },
-                  { label: '待审核', value: 'pending' },
+                  { label: '可用', value: 'active' },
+                  { label: '停用', value: 'pending' },
                 ]}
               />
             </Form.Item>

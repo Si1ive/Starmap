@@ -305,6 +305,17 @@ export interface ContentReviewResult {
   indexing: ContentIndexingResult
 }
 
+export interface ContentMutationResult {
+  id: string
+  indexing: ContentIndexingResult
+}
+
+export interface ContentBatchDeleteResult {
+  deleted_count: number
+  requested_count: number
+  indexing: ContentIndexingResult
+}
+
 // 通用分页响应
 export interface PaginatedResponse<T> {
   items: T[]
