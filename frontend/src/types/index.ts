@@ -63,17 +63,27 @@ export interface IQuestion {
   tags?: string[]
 }
 
+export type ChatRetrievalTarget = 'mixed' | 'knowledge' | 'question'
+
+export interface IChatSource {
+  type: string
+  title?: string | null
+  content?: string | null
+  url?: string | null
+  entity_id?: string | null
+  document_id?: string | null
+  page_no?: number | null
+  score?: number | null
+}
+
 // 消息类型
 export interface IMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
   content: string
   timestamp?: string | null
-  sources?: Array<{
-    type: string
-    title?: string | null
-    content?: string | null
-  }>
+  sources?: IChatSource[]
+  suggestions?: string[]
 }
 
 // 对话响应
@@ -81,11 +91,7 @@ export interface IChatResponse {
   session_id: string
   message: string
   type: 'answer' | 'clarification' | 'error'
-  sources: Array<{
-    type: string
-    title?: string | null
-    content?: string | null
-  }>
+  sources: IChatSource[]
   suggestions: string[]
 }
 

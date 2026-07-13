@@ -5,14 +5,27 @@
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
 
+class SourceItem(BaseModel):
+    """回答来源"""
+
+    type: str = Field(..., description="来源类型", examples=["knowledge_point", "question"])
+    title: Optional[str] = Field(default=None, description="来源标题")
+    content: Optional[str] = Field(default=None, description="来源内容摘要")
+    url: Optional[str] = Field(default=None, description="来源链接")
+    entity_id: Optional[str] = Field(default=None, description="知识点或题目 ID")
+    document_id: Optional[str] = Field(default=None, description="来源文档 ID")
+    page_no: Optional[int] = Field(default=None, description="来源页码")
+    score: Optional[float] = Field(default=None, description="检索相关性分数")
+
+
 class ChatMessage(BaseModel):
     """对话消息"""
-    
+
     role: str = Field(
         ...,
         description="消息角色",
@@ -22,6 +35,10 @@ class ChatMessage(BaseModel):
     timestamp: Optional[datetime] = Field(
         default=None,
         description="消息时间"
+    )
+    sources: List[SourceItem] = Field(
+        default_factory=list,
+        description="助手消息引用的知识点或题目",
     )
 
 
@@ -42,25 +59,24 @@ class ChatRequest(BaseModel):
         default=None,
         description="额外上下文信息"
     )
-    
+    subject_id: Optional[str] = Field(
+        default=None,
+        description="限定检索学科",
+    )
+    retrieval_target: Literal["mixed", "knowledge", "question"] = Field(
+        default="mixed",
+        description="检索范围：混合、仅知识点或仅题目",
+    )
+
     model_config = {
         "json_schema_extra": {
             "example": {
-                "message": "周杰伦的妻子是谁？",
+                "message": "什么是进程？",
                 "session_id": "sess_abc123",
-                "context": {"source": "web"}
+                "retrieval_target": "knowledge",
             }
         }
     }
-
-
-class SourceItem(BaseModel):
-    """回答来源"""
-    
-    type: str = Field(..., description="来源类型", examples=["vector_db", "chromadb", "llm"])
-    title: Optional[str] = Field(default=None, description="来源标题")
-    content: Optional[str] = Field(default=None, description="来源内容摘要")
-    url: Optional[str] = Field(default=None, description="来源链接")
 
 
 class ChatResponse(BaseModel):
@@ -74,11 +90,11 @@ class ChatResponse(BaseModel):
         examples=["answer", "clarification", "error"]
     )
     sources: List[SourceItem] = Field(
-        default=[],
+        default_factory=list,
         description="信息来源"
     )
     suggestions: List[str] = Field(
-        default=[],
+        default_factory=list,
         description="建议的后续问题"
     )
     
@@ -108,7 +124,7 @@ class ChatHistory(BaseModel):
     """会话历史"""
     
     session_id: str = Field(..., description="会话ID")
-    messages: List[ChatMessage] = Field(default=[], description="消息列表")
+    messages: List[ChatMessage] = Field(default_factory=list, description="消息列表")
     created_at: Optional[datetime] = Field(default=None, description="创建时间")
     updated_at: Optional[datetime] = Field(default=None, description="更新时间")
 

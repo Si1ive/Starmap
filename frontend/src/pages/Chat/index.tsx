@@ -1,17 +1,57 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
-import { Input, Button, List, Avatar, Typography, message } from 'antd'
-import { UserOutlined, RobotOutlined } from '@ant-design/icons'
+import { Input, Button, List, Avatar, Typography, message, Segmented, Space, Tag } from 'antd'
+import { FileTextOutlined, RobotOutlined, SendOutlined, UserOutlined } from '@ant-design/icons'
+import { Link } from 'react-router-dom'
 import { sendMessage, getChatHistory } from '@/api/chat'
 import { useAppStore } from '@/store'
-import type { IMessage } from '@/types'
+import type { ChatRetrievalTarget, IChatSource, IMessage } from '@/types'
 
 const { TextArea } = Input
 const { Text } = Typography
+
+const sourceTypeLabel: Record<string, string> = {
+  knowledge_point: '知识点',
+  question: '题目',
+  document: '文档',
+  legacy: '历史引用',
+}
+
+const SourceLink = ({ source }: { source: IChatSource }) => {
+  const label = source.title || sourceTypeLabel[source.type] || '知识库内容'
+  const content = (
+    <>
+      <FileTextOutlined />
+      <span>{label}</span>
+      {source.page_no ? <Text type="secondary">第 {source.page_no} 页</Text> : null}
+    </>
+  )
+
+  return (
+    <div style={{ minWidth: 0 }}>
+      <Space size={6} wrap>
+        <Tag style={{ marginInlineEnd: 0 }}>
+          {sourceTypeLabel[source.type] || source.type}
+        </Tag>
+        {source.url ? <Link to={source.url}>{content}</Link> : <Text>{content}</Text>}
+      </Space>
+      {source.content ? (
+        <Text
+          type="secondary"
+          ellipsis={{ tooltip: source.content }}
+          style={{ display: 'block', marginTop: 4, maxWidth: 520 }}
+        >
+          {source.content}
+        </Text>
+      ) : null}
+    </div>
+  )
+}
 
 const ChatPage: React.FC = () => {
   const [messages, setMessages] = useState<IMessage[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [retrievalTarget, setRetrievalTarget] = useState<ChatRetrievalTarget>('mixed')
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const sessionId = useAppStore((state) => state.sessionId)
@@ -36,7 +76,8 @@ const ChatPage: React.FC = () => {
             id: `${sessionId}-${index}`,
             role: msg.role as 'user' | 'assistant' | 'system',
             content: msg.content,
-            timestamp: msg.timestamp || new Date().toISOString()
+            timestamp: msg.timestamp || new Date().toISOString(),
+            sources: msg.sources || [],
           })))
         }
       } catch (error) {
@@ -63,7 +104,8 @@ const ChatPage: React.FC = () => {
     try {
       const data = await sendMessage({
         message: userMessage.content,
-        session_id: sessionId || undefined
+        session_id: sessionId || undefined,
+        retrieval_target: retrievalTarget,
       })
 
       // 保存 session_id
@@ -75,7 +117,9 @@ const ChatPage: React.FC = () => {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
         content: data.message || '抱歉，我没有理解您的问题。',
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        sources: data.sources || [],
+        suggestions: data.suggestions || [],
       }
 
       setMessages((prev) => [...prev, assistantMessage])
@@ -93,7 +137,7 @@ const ChatPage: React.FC = () => {
     } finally {
       setLoading(false)
     }
-  }, [input, sessionId, setSessionId])
+  }, [input, retrievalTarget, sessionId, setSessionId])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -185,6 +229,48 @@ const ChatPage: React.FC = () => {
                   <div style={{ lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
                     {msg.content}
                   </div>
+                  {msg.role === 'assistant' && msg.sources && msg.sources.length > 0 ? (
+                    <div
+                      style={{
+                        borderTop: '1px solid #e8e8e8',
+                        display: 'grid',
+                        gap: 10,
+                        marginTop: 12,
+                        paddingTop: 10,
+                      }}
+                    >
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        引用来源
+                      </Text>
+                      {msg.sources.map((source, index) => (
+                        <SourceLink
+                          key={`${source.type}-${source.entity_id || source.document_id || index}`}
+                          source={source}
+                        />
+                      ))}
+                    </div>
+                  ) : null}
+                  {msg.role === 'assistant' && msg.suggestions && msg.suggestions.length > 0 ? (
+                    <div
+                      style={{
+                        borderTop: '1px solid #e8e8e8',
+                        marginTop: 12,
+                        paddingTop: 8,
+                      }}
+                    >
+                      {msg.suggestions.map((suggestion) => (
+                        <Button
+                          key={suggestion}
+                          type="link"
+                          size="small"
+                          onClick={() => setInput(suggestion)}
+                          style={{ height: 'auto', paddingInline: 0, marginRight: 12 }}
+                        >
+                          {suggestion}
+                        </Button>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               </List.Item>
             )}
@@ -195,6 +281,16 @@ const ChatPage: React.FC = () => {
 
       {/* 输入区域 */}
       <div style={{ padding: '16px 0', borderTop: '1px solid #e8e8e8' }}>
+        <Segmented
+          value={retrievalTarget}
+          onChange={(value) => setRetrievalTarget(value as ChatRetrievalTarget)}
+          options={[
+            { label: '混合检索', value: 'mixed' },
+            { label: '仅知识点', value: 'knowledge' },
+            { label: '仅题目', value: 'question' },
+          ]}
+          style={{ marginBottom: 12 }}
+        />
         <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end' }}>
           <TextArea
             value={input}
@@ -210,14 +306,12 @@ const ChatPage: React.FC = () => {
             onClick={handleSend}
             loading={loading}
             disabled={!input.trim()}
+            icon={<SendOutlined />}
             style={{ height: 40 }}
           >
             发送
           </Button>
         </div>
-        <Text type="secondary" style={{ fontSize: 12, marginTop: 4, display: 'block' }}>
-          按 Enter 发送，Shift + Enter 换行
-        </Text>
       </div>
     </div>
   )

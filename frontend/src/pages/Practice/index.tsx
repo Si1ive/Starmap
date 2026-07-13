@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react'
+import React, { useCallback, useState, useEffect } from 'react'
 import { Card, Select, Space, Typography, Tag, Button, Radio, message, Empty, Spin } from 'antd'
 import { FormOutlined, CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons'
-import { getQuestions, getSubjects } from '@/api/knowledge'
+import { useSearchParams } from 'react-router-dom'
+import { getQuestionDetail, getQuestions, getSubjects } from '@/api/knowledge'
 import type { IQuestion, ISubject } from '@/types'
 
 const { Title, Paragraph, Text } = Typography
@@ -22,6 +23,7 @@ const difficultyConfig: Record<string, { color: string; text: string }> = {
 }
 
 const PracticePage: React.FC = () => {
+  const [searchParams, setSearchParams] = useSearchParams()
   const [subjects, setSubjects] = useState<ISubject[]>([])
   const [questions, setQuestions] = useState<IQuestion[]>([])
   const [currentIndex, setCurrentIndex] = useState(0)
@@ -30,6 +32,7 @@ const PracticePage: React.FC = () => {
   const [showAnswer, setShowAnswer] = useState(false)
   const [subjectId, setSubjectId] = useState<string>('')
   const [questionType, setQuestionType] = useState<string>('choice')
+  const questionId = searchParams.get('question_id')
 
   // Load subjects
   useEffect(() => {
@@ -39,25 +42,39 @@ const PracticePage: React.FC = () => {
   }, [])
 
   // Load questions
-  const loadQuestions = () => {
+  const loadQuestions = useCallback(() => {
     setLoading(true)
-    getQuestions({
-      subject_id: subjectId || undefined,
-      type: questionType || undefined,
-      page_size: 10,
-    }).then((res) => {
-      if (res.data?.items) {
-        setQuestions(res.data.items)
+    const request = questionId
+      ? getQuestionDetail(questionId).then((res) => {
+        setQuestions(res.data ? [res.data] : [])
         setCurrentIndex(0)
         setSelectedAnswer('')
         setShowAnswer(false)
-      }
-    }).finally(() => setLoading(false))
-  }
+      })
+      : getQuestions({
+        subject_id: subjectId || undefined,
+        type: questionType || undefined,
+        page_size: 10,
+      }).then((res) => {
+        if (res.data?.items) {
+          setQuestions(res.data.items)
+          setCurrentIndex(0)
+          setSelectedAnswer('')
+          setShowAnswer(false)
+        }
+      })
+
+    request
+      .catch(() => {
+        setQuestions([])
+        message.error(questionId ? '引用题目不存在或已删除' : '题目加载失败')
+      })
+      .finally(() => setLoading(false))
+  }, [questionId, questionType, subjectId])
 
   useEffect(() => {
     loadQuestions()
-  }, [subjectId, questionType])
+  }, [loadQuestions])
 
   const currentQuestion = questions[currentIndex]
 
@@ -92,29 +109,36 @@ const PracticePage: React.FC = () => {
 
       {/* 筛选 */}
       <Card style={{ marginBottom: 16 }}>
-        <Space wrap>
-          <Select
-            value={subjectId || 'all'}
-            style={{ width: 150 }}
-            onChange={(value) => setSubjectId(value === 'all' ? '' : value)}
-            options={[
-              { label: '全部学科', value: 'all' },
-              ...subjects.map((s) => ({ label: s.name, value: s.id })),
-            ]}
-          />
-          <Select
-            value={questionType}
-            style={{ width: 120 }}
-            onChange={setQuestionType}
-            options={[
-              { label: '选择题', value: 'choice' },
-              { label: '填空题', value: 'fill' },
-              { label: '判断题', value: 'judge' },
-              { label: '简答题', value: 'short_answer' },
-            ]}
-          />
-          <Button onClick={loadQuestions}>换一批</Button>
-        </Space>
+        {questionId ? (
+          <Space>
+            <Tag color="blue">引用题目</Tag>
+            <Button onClick={() => setSearchParams({})}>返回题库</Button>
+          </Space>
+        ) : (
+          <Space wrap>
+            <Select
+              value={subjectId || 'all'}
+              style={{ width: 150 }}
+              onChange={(value) => setSubjectId(value === 'all' ? '' : value)}
+              options={[
+                { label: '全部学科', value: 'all' },
+                ...subjects.map((s) => ({ label: s.name, value: s.id })),
+              ]}
+            />
+            <Select
+              value={questionType}
+              style={{ width: 120 }}
+              onChange={setQuestionType}
+              options={[
+                { label: '选择题', value: 'choice' },
+                { label: '填空题', value: 'fill' },
+                { label: '判断题', value: 'judge' },
+                { label: '简答题', value: 'short_answer' },
+              ]}
+            />
+            <Button onClick={loadQuestions}>换一批</Button>
+          </Space>
+        )}
       </Card>
 
       {/* 题目 */}

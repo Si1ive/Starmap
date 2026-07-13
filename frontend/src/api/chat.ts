@@ -1,10 +1,12 @@
 import apiClient from './client'
-import type { IChatResponse, IChatHistory } from '@/types'
+import type { ChatRetrievalTarget, IChatResponse, IChatHistory } from '@/types'
 
 export interface ChatRequest {
   message: string
   session_id?: string
-  context?: Record<string, any>
+  context?: Record<string, unknown>
+  subject_id?: string
+  retrieval_target?: ChatRetrievalTarget
 }
 
 // 发送消息 - 直接返回 ChatResponse（后端不包装）

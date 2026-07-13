@@ -10,7 +10,7 @@
 """
 
 import uuid
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -91,12 +91,33 @@ class ChatService:
                         return session_id
                 except Exception:
                     pass
-            logger.warning("会话不存在或Redis不可用，创建新会话", session_id=session_id)
+            if await self._session_exists_in_db(session_id):
+                return session_id
+            logger.warning("会话不存在，创建新会话", session_id=session_id)
         
         # 创建新会话
         new_session_id = f"sess_{uuid.uuid4().hex[:12]}"
         logger.info("新会话已创建", session_id=new_session_id)
         return new_session_id
+
+    async def _session_exists_in_db(self, session_id: str) -> bool:
+        """Redis 不可用时使用 MySQL 验证持久化会话。"""
+        from sqlalchemy import select
+        from app.models.mysql_models import ChatSession
+
+        try:
+            async with mysql_client.session() as session:
+                result = await session.execute(
+                    select(ChatSession.id).where(ChatSession.id == session_id)
+                )
+                return result.scalar_one_or_none() is not None
+        except Exception as exc:
+            logger.warning(
+                "MySQL 会话验证失败",
+                error=str(exc),
+                session_id=session_id,
+            )
+            return False
     
     async def get_session_history(self, session_id: str) -> ChatHistory:
         """
@@ -124,19 +145,83 @@ class ChatService:
                     )
             except Exception as e:
                 logger.warning("Redis读取失败", error=str(e))
-        
-        return ChatHistory(session_id=session_id, messages=[])
+
+        return await self._get_session_history_from_db(session_id)
+
+    async def _get_session_history_from_db(self, session_id: str) -> ChatHistory:
+        """Redis 缓存缺失时从 MySQL 恢复完整历史和引用。"""
+        from sqlalchemy import select
+        from app.models.mysql_models import ChatMessageRecord, ChatSession
+
+        try:
+            async with mysql_client.session() as session:
+                chat_session = (await session.execute(
+                    select(ChatSession).where(ChatSession.id == session_id)
+                )).scalar_one_or_none()
+                if not chat_session:
+                    return ChatHistory(session_id=session_id)
+
+                records = (await session.execute(
+                    select(ChatMessageRecord)
+                    .where(ChatMessageRecord.session_id == session_id)
+                    .order_by(ChatMessageRecord.created_at.asc(), ChatMessageRecord.id.asc())
+                )).scalars().all()
+
+                return ChatHistory(
+                    session_id=session_id,
+                    messages=[
+                        ChatMessage(
+                            role=record.role,
+                            content=record.content,
+                            timestamp=record.created_at,
+                            sources=self._deserialize_sources(record.citations),
+                        )
+                        for record in records
+                    ],
+                    created_at=chat_session.created_at,
+                    updated_at=chat_session.updated_at,
+                )
+        except Exception as exc:
+            logger.warning(
+                "MySQL 会话历史读取失败",
+                error=str(exc),
+                session_id=session_id,
+            )
+            return ChatHistory(session_id=session_id)
+
+    @staticmethod
+    def _deserialize_sources(raw_sources: Any) -> List[SourceItem]:
+        """兼容历史 citation ID 列表与当前结构化来源。"""
+        sources: List[SourceItem] = []
+        for raw in raw_sources or []:
+            try:
+                if isinstance(raw, dict):
+                    sources.append(SourceItem.model_validate(raw))
+                elif isinstance(raw, str):
+                    sources.append(SourceItem(
+                        type="legacy",
+                        title="历史引用",
+                        entity_id=raw,
+                    ))
+            except Exception:
+                continue
+        return sources
     
     async def save_message(
         self,
         session_id: str,
         role: str,
-        content: str
+        content: str,
+        sources: Optional[List[SourceItem]] = None,
     ) -> None:
         """
         保存消息到会话历史（双写：Redis 短缓存 + MySQL 持久化）。
         """
         from datetime import datetime
+
+        serialized_sources = [
+            source.model_dump(mode="json") for source in (sources or [])
+        ]
 
         # 1) Redis 缓存（用于上下文检索）
         redis = await self._get_redis()
@@ -146,11 +231,14 @@ class ChatService:
                     "messages": [],
                     "created_at": datetime.now().isoformat()
                 }
-                data["messages"].append({
+                message_data: Dict[str, Any] = {
                     "role": role,
                     "content": content,
                     "timestamp": datetime.now().isoformat()
-                })
+                }
+                if serialized_sources:
+                    message_data["sources"] = serialized_sources
+                data["messages"].append(message_data)
                 if len(data["messages"]) > self.MAX_HISTORY:
                     data["messages"] = data["messages"][-self.MAX_HISTORY:]
                 data["updated_at"] = datetime.now().isoformat()
@@ -160,11 +248,22 @@ class ChatService:
 
         # 2) MySQL 持久化（用于历史查询）
         try:
-            await self._persist_message_to_db(session_id, role, content)
+            await self._persist_message_to_db(
+                session_id,
+                role,
+                content,
+                serialized_sources,
+            )
         except Exception as e:
             logger.warning("MySQL 消息持久化失败", error=str(e), session_id=session_id)
 
-    async def _persist_message_to_db(self, session_id: str, role: str, content: str) -> None:
+    async def _persist_message_to_db(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        sources: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
         from app.db.mysql import mysql_client
         from app.models.mysql_models import ChatSession, ChatMessageRecord
         from sqlalchemy import select
@@ -196,11 +295,14 @@ class ChatService:
                     existing.first_message = preview
                 if not existing.title and role == "user":
                     existing.title = preview[:80]
+                if sources:
+                    existing.has_knowledge = True
 
             session.add(ChatMessageRecord(
                 session_id=session_id,
                 role=role,
                 content=content,
+                citations=sources or None,
             ))
             await session.commit()
     
@@ -248,9 +350,14 @@ class ChatService:
                     logger.warning("读取问答 LLM 配置失败，回退环境变量", error=str(cfg_err))
 
                 retrieval_service = RetrievalService(db)
+                retrieval_entity_type = {
+                    "knowledge": "knowledge_point",
+                    "question": "question",
+                }.get(request.retrieval_target)
                 results = await retrieval_service.search_with_outline_expansion(
                     query=request.message,
-                    subject_id=getattr(request, "subject_id", None),
+                    subject_id=request.subject_id,
+                    entity_type=retrieval_entity_type,
                     limit=5,
                 )
 
@@ -266,6 +373,7 @@ class ChatService:
                         f"[大纲定位] 用户问题涉及考点: {', '.join(chapter_names)}"
                     )
 
+                seen_sources = set()
                 for i, item in enumerate(primary, 1):
                     content = item.get("context_text") or item.get("content_text", "")
                     if content:
@@ -278,13 +386,39 @@ class ChatService:
                             source_info += "]"
                         context_parts.append(f"[{i}]{source_info}\n{content}")
 
-                    # 收集来源引用
-                    if item.get("source", {}).get("document_id"):
-                        sources.append(SourceItem(
-                            title=item["source"].get("filename", "未知文档"),
-                            url=f"/documents/{item['source']['document_id']}",
-                            score=item.get("score", 0),
-                        ))
+                    # 收集来源引用。实体链接优先，文档和页码用于追溯原文。
+                    entity_type = item.get("entity_type")
+                    entity_id = item.get("entity_id")
+                    document_id = item.get("source", {}).get("document_id")
+                    source_key = (entity_type, entity_id, document_id)
+                    if source_key in seen_sources or not any(source_key):
+                        continue
+                    seen_sources.add(source_key)
+
+                    if entity_type == "knowledge_point" and entity_id:
+                        source_url = f"/knowledge/{entity_id}"
+                    elif entity_type == "question" and entity_id:
+                        source_url = f"/practice?question_id={entity_id}"
+                    else:
+                        source_url = None
+
+                    source_title = item.get("source", {}).get("filename")
+                    if not source_title:
+                        source_title = {
+                            "knowledge_point": "知识点",
+                            "question": "题目",
+                        }.get(entity_type, "知识库内容")
+
+                    sources.append(SourceItem(
+                        type=entity_type or "document",
+                        title=source_title,
+                        content=(item.get("content_text") or "")[:240] or None,
+                        url=source_url,
+                        entity_id=entity_id,
+                        document_id=document_id,
+                        page_no=item.get("source", {}).get("page_no"),
+                        score=item.get("score"),
+                    ))
 
         except Exception as e:
             logger.warning("检索服务异常，降级为直接回答", error=str(e))
@@ -314,7 +448,12 @@ class ChatService:
         )
 
         # 保存助手消息
-        await self.save_message(session_id, "assistant", response_message)
+        await self.save_message(
+            session_id,
+            "assistant",
+            response_message,
+            sources=sources,
+        )
 
         return ChatResponse(
             session_id=session_id,

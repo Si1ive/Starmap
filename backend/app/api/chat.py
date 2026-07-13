@@ -28,6 +28,8 @@ async def chat(
     - **message**: 用户消息（必填，1-2000字符）
     - **session_id**: 会话ID（可选，首次为空）
     - **context**: 额外上下文（可选）
+    - **subject_id**: 限定检索学科（可选）
+    - **retrieval_target**: mixed / knowledge / question，默认 mixed
     
     **响应**: 包含AI回复、信息来源和建议问题
     """
