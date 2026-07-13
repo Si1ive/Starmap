@@ -28,7 +28,9 @@ from app.services.source_service import CrawlerSourceService
 from app.services.stats_service import CrawlerStatsService
 from app.services.schedule_service import CrawlerScheduleService
 from app.services.log_service import CrawlerLogService
-from app.models.mysql_models import DownloadedFile, CorpusFile, ParseRun, Document
+from app.models.mysql_models import (
+    DownloadedFile, CorpusFile, ParseRun, Document, EntityExtractionRun,
+)
 
 logger = get_logger(__name__)
 
@@ -3752,23 +3754,100 @@ async def extract_document_entities(
     subject_id: Optional[str] = Query(None, description="章节映射不足时使用的兜底学科ID"),
     db: AsyncSession = Depends(get_db),
 ):
-    """从文档中抽取知识点和题目"""
+    """创建实体抽取任务并立即返回，由后台会话执行。"""
     from app.services.entity_extraction_service import EntityExtractionService
 
-    service = EntityExtractionService(db)
-    try:
-        result = await service.extract_entities(
-            document_id=document_id,
-            extract_knowledge=extract_knowledge,
-            extract_questions=extract_questions,
-            fallback_subject_id=subject_id,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"抽取失败: {str(e)[:200]}")
+    document = await db.get(Document, document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="文档不存在")
 
-    return ApiResponse(data=result)
+    running_run = (await db.execute(
+        select(EntityExtractionRun)
+        .where(
+            EntityExtractionRun.document_id == document_id,
+            EntityExtractionRun.status == "running",
+        )
+        .order_by(EntityExtractionRun.created_at.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+    if running_run:
+        return ApiResponse(
+            message="抽取任务正在执行",
+            data=_entity_extraction_run_payload(running_run),
+        )
+
+    run = EntityExtractionRun(
+        id=uuid.uuid4().hex[:32],
+        document_id=document_id,
+        status="running",
+        extract_knowledge=extract_knowledge,
+        extract_questions=extract_questions,
+        subject_id=subject_id,
+    )
+    db.add(run)
+    try:
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"创建抽取任务失败: {str(e)[:200]}")
+
+    async def _run_extraction_in_background(run_id: str):
+        from app.db.mysql import mysql_client
+
+        async with mysql_client.session() as bg_session:
+            service = EntityExtractionService(bg_session)
+            try:
+                await service.extract_entities_with_run_id(run_id)
+            except Exception as e:
+                logger.error("后台实体抽取任务失败", run_id=run_id, error=str(e))
+
+    asyncio.ensure_future(_run_extraction_in_background(run.id))
+
+    return ApiResponse(
+        message="抽取任务已启动",
+        data=_entity_extraction_run_payload(run),
+    )
+
+
+def _entity_extraction_run_payload(run: EntityExtractionRun) -> Dict[str, Any]:
+    return {
+        "id": run.id,
+        "document_id": run.document_id,
+        "status": run.status,
+        "extract_knowledge": run.extract_knowledge,
+        "extract_questions": run.extract_questions,
+        "subject_id": run.subject_id,
+        "knowledge_count": run.knowledge_count or 0,
+        "question_count": run.question_count or 0,
+        "error_detail": run.error_detail,
+        "result": run.result_json,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+        "updated_at": run.updated_at.isoformat() if run.updated_at else None,
+    }
+
+
+@router.get(
+    "/corpus/documents/{document_id}/extraction-status",
+    response_model=ApiResponse,
+)
+async def get_document_entity_extraction_status(
+    document_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """返回文档最近一次实体抽取运行，供页面恢复与轮询状态。"""
+    document = await db.get(Document, document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="文档不存在")
+
+    run = (await db.execute(
+        select(EntityExtractionRun)
+        .where(EntityExtractionRun.document_id == document_id)
+        .order_by(EntityExtractionRun.created_at.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+    return ApiResponse(data=_entity_extraction_run_payload(run) if run else None)
 
 
 # ========== 标准章节管理 ==========

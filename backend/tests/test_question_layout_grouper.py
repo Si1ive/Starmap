@@ -336,6 +336,28 @@ class TestExtractStem:
 
 
 class TestExtractOptions:
+    def test_recovers_inline_a_before_separate_bcd_blocks(self):
+        """A 粘在题干末尾、B/C/D 分块时，应把 A 从题干恢复为选项。"""
+        blocks = [
+            _block(
+                text="30。下列关于文件系统的叙述中，正确的是（）。A 文件系统负责文件存储空间的管理",
+                block_type="paragraph",
+                block_id="stem",
+            ),
+            _block(text="B 文件系统负责文件的逻辑结构管理", block_type="paragraph", block_id="b"),
+            _block(text="C 文件系统负责文件的物理结构管理", block_type="paragraph", block_id="c"),
+            _block(text="D 文件系统负责文件保护和共享", block_type="paragraph", block_id="d"),
+        ]
+        group = QuestionGroup(blocks=blocks, page_no=1)
+        grouper = QuestionLayoutGrouper(blocks)
+
+        stem = grouper._extract_stem(group)
+        options = grouper._extract_options(group)
+
+        assert stem == "30。下列关于文件系统的叙述中，正确的是（）。"
+        assert [option["label"] for option in options] == ["A", "B", "C", "D"]
+        assert options[0]["text"] == "文件系统负责文件存储空间的管理"
+
     def test_extract_four_options(self):
         blocks = [
             _block(text="1。题干（ ）", block_type="paragraph"),

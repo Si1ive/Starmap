@@ -7,8 +7,10 @@
 import re
 import uuid
 import asyncio
+import json
 from collections import Counter
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -20,7 +22,7 @@ from app.core.logging import get_logger
 from app.models.mysql_models import (
     Document, DocumentBlock, DocumentSection, DocumentSectionMapping,
     KnowledgePoint, Question, KnowledgePointChapterLink, QuestionChapterLink,
-    EntitySourceLink, CanonicalChapter, RetrievalSegment
+    EntitySourceLink, CanonicalChapter, RetrievalSegment, EntityExtractionRun
 )
 from app.services.chapter_compat_service import resolve_legacy_chapter_id
 from app.services.system_settings_service import SystemSettingsService
@@ -746,6 +748,7 @@ class LLMFallbackFixer:
                 logger.warning("LLM fallback skipped invalid issue index", issue=issue)
                 continue
             if not questions[idx].get('fixed_by_rule'):
+                self._remember_original_issue(questions[idx], issue)
                 unfixed_issues.append(issue)
 
         if not unfixed_issues:
@@ -759,9 +762,9 @@ class LLMFallbackFixer:
                 logger.warning("LLM fallback skipped stale issue index", issue=issue)
                 continue
 
-            # 构造上下文
-            context_start = max(0, idx - 2)
-            context_end = min(len(questions), idx + 3)
+            # 异常只会波及相邻题：前一题 + 目标题 + 后一题。
+            context_start = max(0, idx - 1)
+            context_end = min(len(questions), idx + 2)
             context_questions = questions[context_start:context_end]
 
             # 调用LLM
@@ -772,11 +775,15 @@ class LLMFallbackFixer:
             )
 
             try:
-                llm_response = await self.llm_client.chat(prompt)
+                llm_response = await self.llm_client.chat(
+                    prompt,
+                    purpose="题目结构修复",
+                )
 
                 # 应用LLM建议
                 fix_action = self._parse_llm_fix_result(llm_response)
-                if fix_action and fix_action.get('should_merge'):
+                if fix_action and fix_action.get("action") != "none":
+                    fix_action["issue"] = issue
                     questions = self._apply_llm_fix(questions, idx, context_start, fix_action)
                     logger.info(f"LLM fixed question {idx}")
             except Exception as e:
@@ -784,25 +791,68 @@ class LLMFallbackFixer:
 
         return questions
 
+    @staticmethod
+    def _remember_original_issue(question: Dict[str, Any], issue: Dict[str, Any]) -> None:
+        """保留修复前诊断，避免最终重算质量元数据时抹掉原问题。"""
+        meta = dict(question.get("extraction_meta") or {})
+        original_issues = list(meta.get("original_issues") or [])
+        issue_snapshot = {
+            key: issue.get(key)
+            for key in (
+                "question_number",
+                "page_no",
+                "issue_type",
+                "missing_options",
+                "missing_number",
+                "from_number",
+                "to_number",
+                "gap",
+            )
+            if key in issue
+        }
+        identity = (
+            issue_snapshot.get("issue_type"),
+            tuple(issue_snapshot.get("missing_options") or []),
+            issue_snapshot.get("missing_number"),
+        )
+        existing_identities = {
+            (
+                item.get("issue_type"),
+                tuple(item.get("missing_options") or []),
+                item.get("missing_number"),
+            )
+            for item in original_issues
+            if isinstance(item, dict)
+        }
+        if identity not in existing_identities:
+            original_issues.append(issue_snapshot)
+        meta["original_issues"] = original_issues
+        question["extraction_meta"] = meta
+
     def _build_fix_prompt(
         self,
         context: List[Dict[str, Any]],
         target_idx: int,
         issue: Dict[str, Any]
     ) -> str:
-        """构造LLM判断prompt"""
+        """构造 LLM 判断/修复 prompt。"""
         # 将题目列表格式化为文本
         formatted = []
         for i, q in enumerate(context):
             marker = " ← 【目标】" if i == target_idx else ""
             stem = q.get('stem') or q.get('content', '')
+            raw_text = q.get("raw_text") or q.get("content") or stem
             options = q.get('options', [])
-            options_text = ', '.join([f"{_get_option_label(o)}. {o.get('text', '')[:20]}" for o in options])
+            options_text = ', '.join(
+                f"{_get_option_label(o)}. {o.get('text', '')[:80]}"
+                for o in options
+            )
 
             formatted.append(f"""
 题目{i+1}{marker}:
 页码: {q.get('page_no', '?')}
-题干: {stem[:200]}...
+题干: {stem[:500]}
+原始提取文本: {raw_text[:1200]}
 选项: {options_text}
 ---
 """)
@@ -813,35 +863,48 @@ class LLMFallbackFixer:
 """
 
         return f"""
-你是一个教材题目结构分析专家。以下是从PDF中提取的题目片段，可能存在跨页/跨列导致的分离问题。
+你是一个教材题目结构分析专家。以下是从PDF中提取的目标题及其相邻题，共最多三题。
 
 {chr(10).join(formatted)}
 
 【当前问题】
 {issue_desc}
 
-【任务】分析标记为【目标】的题目，判断：
-1. 它是否是一道完整的独立题目？
-2. 如果不完整，它应该与前面哪个题目合并？还是与后面的合并？
-3. 如果需要合并，请给出合并后的完整题目结构（题干+选项）
+【任务】分析标记为【目标】的题目，并选择一种动作：
+1. repair_options：目标题独立，但选项缺失或选项粘在题干中。
+   - 优先从“原始提取文本”和相邻题原文中逐字恢复缺失选项。
+   - 原文确实不存在时，允许生成合理选项。
+   - 每个补充选项必须标 source：原文恢复为 extracted，AI 生成则为 ai_generated。
+   - 返回完整题干和 A-D 选项；不要改写已有选项。
+2. merge：目标题被错误拆开，需要与前题或后题合并。
+3. none：无需修改或无法可靠修复。
 
 merge_indices 使用上方上下文题目列表的 0 基索引，例如第一道题是 0，第二道题是 1。
 
 【输出格式】JSON:
 {{
+  "action": "repair_options" / "merge" / "none",
   "is_complete": true/false,
   "should_merge": true/false,
   "merge_with": "previous" / "next" / "none",
   "merge_indices": [0, 1],
+  "repaired_question": {{
+    "stem": "修复后的题干",
+    "options": [
+      {{"key": "A", "text": "...", "source": "extracted"}},
+      {{"key": "B", "text": "...", "source": "ai_generated"}}
+    ]
+  }},
   "merged_question": {{
     "stem": "合并后的题干",
     "options": [{{"label": "A", "text": "..."}}, ...]
-  }}
+  }},
+  "reason": "简短说明"
 }}
 """
 
     def _parse_llm_fix_result(self, llm_response: str) -> Optional[Dict[str, Any]]:
-        """解析LLM返回的合并指令"""
+        """解析 LLM 返回的修复指令。"""
         try:
             # 尝试提取JSON
             import json
@@ -849,17 +912,32 @@ merge_indices 使用上方上下文题目列表的 0 基索引，例如第一道
             json_match = re.search(r'\{.*\}', llm_response, re.DOTALL)
             if json_match:
                 result = json.loads(json_match.group(0))
+                action = str(result.get("action") or "").strip().lower()
+                repaired_question = (
+                    result.get("repaired_question")
+                    or result.get("fixed_question")
+                )
+                if action not in {"repair_options", "merge", "none"}:
+                    if result.get("should_merge"):
+                        action = "merge"
+                    elif isinstance(repaired_question, dict):
+                        action = "repair_options"
+                    else:
+                        action = "none"
                 return {
+                    'action': action,
                     'should_merge': result.get('should_merge', False),
                     'merge_with': result.get('merge_with', 'none'),
                     'merge_indices': result.get('merge_indices', []),
-                    'merged_question': result.get('merged_question')
+                    'merged_question': result.get('merged_question'),
+                    'repaired_question': repaired_question,
+                    'reason': result.get('reason'),
                 }
         except Exception as e:
             logger.warning(f"Failed to parse LLM response: {e}")
 
         # LLM返回格式错误，保守处理：不合并
-        return {'should_merge': False}
+        return {'action': 'none', 'should_merge': False}
 
     def _apply_llm_fix(
         self,
@@ -869,6 +947,11 @@ merge_indices 使用上方上下文题目列表的 0 基索引，例如第一道
         fix_action: Dict[str, Any]
     ) -> List[Dict[str, Any]]:
         """应用LLM的修复建议"""
+        if fix_action.get("action") == "repair_options":
+            return self._apply_option_repair(questions, idx, fix_action)
+        if fix_action.get("action") != "merge" and not fix_action.get("should_merge"):
+            return questions
+
         merged_question = fix_action.get('merged_question')
         if not merged_question:
             return questions
@@ -906,6 +989,14 @@ merge_indices 使用上方上下文题目列表的 0 基索引，例如第一道
             if q.get('page_no') is not None:
                 page_numbers.append(q['page_no'])
 
+        merged_meta = dict(questions[keep_idx].get("extraction_meta") or {})
+        original_issues = list(merged_meta.get("original_issues") or [])
+        for global_idx in global_indices:
+            source_meta = questions[global_idx].get("extraction_meta") or {}
+            for original_issue in source_meta.get("original_issues") or []:
+                if original_issue not in original_issues:
+                    original_issues.append(original_issue)
+
         # 替换保留题目，保留原始归属与来源信息
         questions[keep_idx].update(merged_question)
         if 'stem' in merged_question and 'content' not in merged_question:
@@ -920,12 +1011,170 @@ merge_indices 使用上方上下文题目列表的 0 基索引，例如第一道
             questions[keep_idx]['page_no'] = min(page_numbers)
             questions[keep_idx]['page_range'] = f"{min(page_numbers)}-{max(page_numbers)}"
         questions[keep_idx]['fixed_by_llm'] = True
+        merged_meta["original_issues"] = original_issues
+        self._append_llm_fix_action(
+            questions[keep_idx],
+            merged_meta,
+            action={
+                "action": "merge",
+                "merged_question_indices": global_indices,
+                "reason": fix_action.get("reason"),
+            },
+        )
 
         # 如果需要删除其他题目（合并的情况）
         for remove_idx in sorted([i for i in global_indices if i != keep_idx], reverse=True):
             del questions[remove_idx]
 
         return questions
+
+    def _apply_option_repair(
+        self,
+        questions: List[Dict[str, Any]],
+        idx: int,
+        fix_action: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """只补缺失标签，已有选项保持原文；自动核验补充选项来源。"""
+        if idx < 0 or idx >= len(questions):
+            return questions
+        repaired = fix_action.get("repaired_question")
+        if not isinstance(repaired, dict):
+            return questions
+
+        target = questions[idx]
+        existing_options = list(target.get("options") or [])
+        existing_labels = {
+            _get_option_label(option)
+            for option in existing_options
+            if _get_option_label(option)
+        }
+        issue = fix_action.get("issue") or {}
+        missing_labels = {
+            str(label).strip().upper()[:1]
+            for label in issue.get("missing_options") or []
+            if str(label).strip().upper()[:1] in {"A", "B", "C", "D"}
+        }
+        if not missing_labels:
+            missing_labels = {"A", "B", "C", "D"} - existing_labels
+
+        source_text = self._collect_source_text(questions, idx)
+        added_options: List[Dict[str, Any]] = []
+        for option in repaired.get("options") or []:
+            if not isinstance(option, dict):
+                continue
+            label = _get_option_label(option)
+            text = str(option.get("text") or option.get("content") or "").strip()
+            if (
+                label not in {"A", "B", "C", "D"}
+                or label in existing_labels
+                or label not in missing_labels
+                or not text
+            ):
+                continue
+            source = (
+                "extracted"
+                if self._text_exists_in_source(text, source_text)
+                else "ai_generated"
+            )
+            added_options.append({
+                "key": label,
+                "label": label,
+                "option_label": label,
+                "text": text,
+                "source": source,
+            })
+            existing_labels.add(label)
+
+        if not added_options:
+            return questions
+
+        target["options"] = sorted(
+            [*existing_options, *added_options],
+            key=lambda option: _get_option_label(option),
+        )
+
+        current_stem = target.get("stem") or target.get("content") or ""
+        repaired_stem = str(repaired.get("stem") or repaired.get("content") or "").strip()
+        if self._is_safe_repaired_stem(current_stem, repaired_stem):
+            target["stem"] = repaired_stem
+            target["content"] = repaired_stem
+
+        meta = dict(target.get("extraction_meta") or {})
+        self._append_llm_fix_action(
+            target,
+            meta,
+            action={
+                "action": "repair_options",
+                "issue_type": issue.get("issue_type"),
+                "added_options": [
+                    {"key": option["key"], "source": option["source"]}
+                    for option in added_options
+                ],
+                "reason": fix_action.get("reason"),
+            },
+        )
+        return questions
+
+    @staticmethod
+    def _collect_source_text(questions: List[Dict[str, Any]], idx: int) -> str:
+        """收集目标题及相邻题原文，作为 extracted/ai_generated 的事实依据。"""
+        parts: List[str] = []
+        for question in questions[max(0, idx - 1):min(len(questions), idx + 2)]:
+            for key in ("raw_text", "stem", "content"):
+                value = question.get(key)
+                if value:
+                    parts.append(str(value))
+            for option in question.get("options") or []:
+                text = option.get("text") if isinstance(option, dict) else None
+                if text:
+                    parts.append(str(text))
+            for block in question.get("blocks") or []:
+                if isinstance(block, dict):
+                    text = block.get("content_text") or block.get("content_md") or ""
+                else:
+                    text = (
+                        getattr(block, "content_text", None)
+                        or getattr(block, "content_md", None)
+                        or ""
+                    )
+                if text:
+                    parts.append(str(text))
+        return "\n".join(parts)
+
+    @staticmethod
+    def _normalize_source_text(text: str) -> str:
+        return re.sub(r"[\s　]+", "", text or "")
+
+    @classmethod
+    def _text_exists_in_source(cls, text: str, source_text: str) -> bool:
+        normalized = cls._normalize_source_text(text)
+        return bool(normalized and normalized in cls._normalize_source_text(source_text))
+
+    @classmethod
+    def _is_safe_repaired_stem(cls, current_stem: str, repaired_stem: str) -> bool:
+        if not repaired_stem:
+            return False
+        current_normalized = cls._normalize_source_text(current_stem)
+        repaired_normalized = cls._normalize_source_text(repaired_stem)
+        return bool(
+            repaired_normalized
+            and current_normalized
+            and repaired_normalized in current_normalized
+        )
+
+    @staticmethod
+    def _append_llm_fix_action(
+        question: Dict[str, Any],
+        meta: Dict[str, Any],
+        action: Dict[str, Any],
+    ) -> None:
+        actions = list(meta.get("llm_fix_actions") or [])
+        actions.append(action)
+        meta["llm_fix_actions"] = actions
+        meta["fixed_by_llm"] = True
+        question["fixed_by_llm"] = True
+        question["llm_fix_actions"] = actions
+        question["extraction_meta"] = meta
 
 
 def comprehensive_validation(questions: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -1378,7 +1627,8 @@ class QuestionLayoutGrouper:
     def _extract_stem(self, group: QuestionGroup) -> str:
         parts: List[str] = []
         in_options = False
-        for block in group.blocks:
+        recoverable_inline = self._find_recoverable_inline_option(group)
+        for block_idx, block in enumerate(group.blocks):
             text = getattr(block, "content_text", None) or getattr(block, "content_md", None) or ""
             text = text.strip()
             if not text:
@@ -1394,6 +1644,12 @@ class QuestionLayoutGrouper:
                 # 纯图表（无题号文字）仍跳过。
                 if QUESTION_NUMERIC_RE.match(text):
                     parts.append(text)
+                continue
+            if recoverable_inline and block_idx == recoverable_inline[0]:
+                stem_part = text[:recoverable_inline[1]].strip()
+                if stem_part:
+                    parts.append(stem_part)
+                in_options = True
                 continue
             # 题干+选项同块：只保留选项标记之前的题干，选项部分留给 _extract_options 处理
             if self._has_inline_options(text):
@@ -1415,12 +1671,21 @@ class QuestionLayoutGrouper:
         last_option_block: Optional[Any] = None
 
         option_phase = False
-        for block in group.blocks:
+        recoverable_inline = self._find_recoverable_inline_option(group)
+        for block_idx, block in enumerate(group.blocks):
             text = getattr(block, "content_text", None) or getattr(block, "content_md", None) or ""
             text = text.strip()
             block_type = getattr(block, "block_type", "") or ""
 
-            if OPTION_BLOCK_RE.match(text):
+            if recoverable_inline and block_idx == recoverable_inline[0]:
+                option_phase = True
+                option_blocks.append({
+                    "text": text[recoverable_inline[1]:],
+                    "block": block,
+                    "is_option": True,
+                })
+                last_option_block = block
+            elif OPTION_BLOCK_RE.match(text):
                 option_phase = True
                 option_blocks.append({"text": text, "block": block, "is_option": True})
                 last_option_block = block
@@ -1458,6 +1723,46 @@ class QuestionLayoutGrouper:
                 options[-1]["text"] = options[-1]["text"] + " " + trailing_text
 
         return options
+
+    @staticmethod
+    def _find_recoverable_inline_option(group: QuestionGroup) -> Optional[Tuple[int, int]]:
+        """识别“A 粘在题干末尾、后续 B/C/D 分块”的 MinerU 常见输出。"""
+        first_option_block_idx: Optional[int] = None
+        first_option_label = ""
+        for block_idx, block in enumerate(group.blocks):
+            text = (
+                getattr(block, "content_text", None)
+                or getattr(block, "content_md", None)
+                or ""
+            ).strip()
+            match = OPTION_BLOCK_RE.match(text)
+            if match:
+                first_option_block_idx = block_idx
+                first_option_label = match.group(1).upper()
+                break
+
+        if first_option_block_idx is None or first_option_label != "B":
+            return None
+
+        for block_idx in range(first_option_block_idx - 1, -1, -1):
+            block = group.blocks[block_idx]
+            text = (
+                getattr(block, "content_text", None)
+                or getattr(block, "content_md", None)
+                or ""
+            ).strip()
+            matches = [
+                match
+                for match in OPTION_MARKER_RE.finditer(text)
+                if match.group(1).upper() == "A"
+            ]
+            if matches:
+                start = matches[-1].start(1)
+                if start > 0 and text[matches[-1].end():].strip():
+                    return block_idx, start
+            if QUESTION_NUMERIC_RE.match(text):
+                break
+        return None
 
     def _should_append_to_last_option(self, option_block: Any, continuation_block: Any) -> bool:
         text = (
@@ -1711,6 +2016,39 @@ class EntityExtractionService:
 
     def __init__(self, db: AsyncSession):
         self.db = db
+
+    async def extract_entities_with_run_id(self, run_id: str) -> Dict[str, Any]:
+        """执行已创建的抽取任务，并将最终状态持久化到运行记录。"""
+        run = await self.db.get(EntityExtractionRun, run_id)
+        if not run:
+            raise ValueError(f"抽取任务不存在: {run_id}")
+
+        try:
+            result = await self.extract_entities(
+                document_id=run.document_id,
+                extract_knowledge=run.extract_knowledge,
+                extract_questions=run.extract_questions,
+                fallback_subject_id=run.subject_id,
+            )
+            run.status = "success"
+            run.knowledge_count = int(result.get("knowledge_count") or 0)
+            run.question_count = int(result.get("question_count") or 0)
+            run.result_json = json.loads(
+                json.dumps(result, ensure_ascii=False, default=str)
+            )
+            run.error_detail = None
+            run.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            await self.db.commit()
+            return result
+        except Exception as exc:
+            await self.db.rollback()
+            failed_run = await self.db.get(EntityExtractionRun, run_id)
+            if failed_run:
+                failed_run.status = "failed"
+                failed_run.error_detail = str(exc)[:4000]
+                failed_run.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                await self.db.commit()
+            raise
 
     async def extract_entities(
         self,
@@ -2173,7 +2511,7 @@ class EntityExtractionService:
                 has_figures=bool(q.get('figures')),
                 group_label_reason=prev_meta.get('group_label_reason'),
             )
-            q['extraction_meta'] = new_meta
+            q['extraction_meta'] = {**prev_meta, **new_meta}
 
         # Step 8: 保存诊断报告（存储到document的metadata中）
         diagnostic_report = {
@@ -2624,9 +2962,9 @@ class EntityExtractionService:
             cleaned = re.sub(r'^([^<]{0,60})</sub>', r'\1', cleaned, count=1).strip()
         return re.sub(r'^\s*[.．、:：。]\s*', '', cleaned).strip()
 
-    def _normalize_options(self, options: Optional[List[Dict[str, Any]]]) -> List[Dict[str, str]]:
+    def _normalize_options(self, options: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
         """统一选择题选项结构，兼容前端 key/text 和校验器 label/text。"""
-        normalized: List[Dict[str, str]] = []
+        normalized: List[Dict[str, Any]] = []
         seen_labels = set()
         for option in options or []:
             label = _get_option_label(option)
@@ -2634,12 +2972,15 @@ class EntityExtractionService:
             text = self._strip_leading_option_marker(text, expected_label=label)
             if not label or not text or label in seen_labels:
                 continue
-            normalized.append({
+            normalized_option = {
                 "key": label,
                 "label": label,
                 "option_label": label,
                 "text": text,
-            })
+            }
+            if option.get("source") in {"extracted", "ai_generated"}:
+                normalized_option["source"] = option["source"]
+            normalized.append(normalized_option)
             seen_labels.add(label)
         return normalized
 
@@ -2937,11 +3278,21 @@ class EntityExtractionService:
                     }
                 })
             if q.get('fixed_by_llm'):
+                llm_actions = (
+                    (q.get("extraction_meta") or {}).get("llm_fix_actions")
+                    or q.get("llm_fix_actions")
+                    or []
+                )
                 history.append({
                     'question_index': i,
                     'question_id': q.get('id'),
                     'fix_type': 'llm',
-                    'fix_action': 'llm_merge',
+                    'fix_action': (
+                        llm_actions[-1].get("action")
+                        if llm_actions and isinstance(llm_actions[-1], dict)
+                        else 'llm_fix'
+                    ),
+                    'details': llm_actions,
                 })
         return history
 

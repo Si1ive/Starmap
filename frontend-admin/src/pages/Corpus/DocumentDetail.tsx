@@ -1,9 +1,15 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { Card, Button, Tag, Space, Descriptions, message, Spin, Empty, Select, Modal, Alert, Tabs } from 'antd'
 import { ArrowLeftOutlined, ExperimentOutlined } from '@ant-design/icons'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getDocumentDetail, extractDocumentEntities, getSubjects, getDocumentContentOverview } from '@/api'
+import {
+  getDocumentDetail,
+  extractDocumentEntities,
+  getDocumentEntityExtractionStatus,
+  getSubjects,
+  getDocumentContentOverview,
+} from '@/api'
 import PageAnalysis from './PageAnalysis'
 import ContentOverview from './ContentOverview'
 
@@ -40,27 +46,57 @@ const DocumentDetailPage = () => {
     enabled: !!id,
   })
 
+  const { data: extractionStatusData } = useQuery({
+    queryKey: ['entityExtractionStatus', id],
+    queryFn: () => getDocumentEntityExtractionStatus(id!),
+    enabled: !!id,
+    refetchInterval: (queryData) =>
+      queryData?.data?.status === 'running' ? 2000 : false,
+  })
+
   const document = docData?.data
   const subjects = subjectsData?.data || []
   const isExamDoc = !!document && EXAM_DOC_TYPES.has(document.doc_type || '')
+  const extractionRun = extractionStatusData?.data
 
   const summary = overviewData?.data?.summary
   const extractedCount = (summary?.knowledge_count ?? 0) + (summary?.question_count ?? 0)
   const hasExtracted = extractedCount > 0
+  const isExtracting = extractionRun?.status === 'running'
+  const observedRunningId = useRef<string | null>(null)
 
   const extractEntitiesMut = useMutation({
     mutationFn: () => extractDocumentEntities(id!, selectedSubject || document?.subject_id),
     onSuccess: (res) => {
-      const result = res?.data
-      message.success(`抽取完成：知识点 ${result?.knowledge_count ?? 0}，题目 ${result?.question_count ?? 0}`)
-      queryClient.invalidateQueries({ queryKey: ['document', id] })
-      queryClient.invalidateQueries({ queryKey: ['contentOverview', id] })
+      queryClient.setQueryData(['entityExtractionStatus', id], res)
+      observedRunningId.current = res.data?.id || null
+      message.success(res.message || '抽取任务已启动')
     },
     onError: (err: any) => {
       const detail = err?.response?.data?.detail
       message.error(typeof detail === 'string' ? detail : '抽取失败')
     },
   })
+
+  useEffect(() => {
+    if (!extractionRun) return
+    if (extractionRun.status === 'running') {
+      observedRunningId.current = extractionRun.id
+      return
+    }
+    if (observedRunningId.current !== extractionRun.id) return
+
+    observedRunningId.current = null
+    if (extractionRun.status === 'success') {
+      message.success(
+        `抽取完成：知识点 ${extractionRun.knowledge_count ?? 0}，题目 ${extractionRun.question_count ?? 0}`
+      )
+      queryClient.invalidateQueries({ queryKey: ['document', id] })
+      queryClient.invalidateQueries({ queryKey: ['contentOverview', id] })
+    } else {
+      message.error(extractionRun.error_detail || '抽取失败')
+    }
+  }, [extractionRun, id, queryClient])
 
   if (isLoading) {
     return <div style={{ textAlign: 'center', padding: 100 }}><Spin size="large" /></div>
@@ -98,11 +134,14 @@ const DocumentDetailPage = () => {
         title={
           <Space>
             <span>第二步 · 抽取知识点/题目</span>
-            {hasExtracted ? (
+            {isExtracting ? (
+              <Tag color="processing">抽取中</Tag>
+            ) : hasExtracted ? (
               <Tag color="green">已抽取 {extractedCount} 项</Tag>
             ) : (
               <Tag color="default">尚未抽取</Tag>
             )}
+            {extractionRun?.status === 'failed' && <Tag color="red">最近抽取失败</Tag>}
           </Space>
         }
       >
@@ -121,11 +160,12 @@ const DocumentDetailPage = () => {
             onChange={setSelectedSubject}
             allowClear
             options={subjectOptions}
+            disabled={isExtracting || extractEntitiesMut.isPending}
           />
           <Button
             type="primary"
             icon={<ExperimentOutlined />}
-            loading={extractEntitiesMut.isPending}
+            loading={isExtracting || extractEntitiesMut.isPending}
             onClick={() => Modal.confirm({
               title: hasExtracted ? '确认重新抽取' : '确认抽取',
               content: hasExtracted
@@ -136,7 +176,11 @@ const DocumentDetailPage = () => {
               onOk: () => extractEntitiesMut.mutate(),
             })}
           >
-            {hasExtracted ? '重新抽取' : (isExamDoc ? '抽取题目' : '抽取知识点/题目')}
+            {isExtracting
+              ? '抽取中'
+              : hasExtracted
+                ? '重新抽取'
+                : (isExamDoc ? '抽取题目' : '抽取知识点/题目')}
           </Button>
         </Space>
       </Card>

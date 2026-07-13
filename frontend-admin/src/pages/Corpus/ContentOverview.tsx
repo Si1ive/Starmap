@@ -20,6 +20,14 @@ const questionTypeText: Record<string, string> = {
   analysis: '分析',
 }
 
+const originalIssueText: Record<string, string> = {
+  missing_all: '原问题：选项全部缺失',
+  missing_start: '原问题：开头选项缺失',
+  missing_middle: '原问题：中间选项缺失',
+  missing_end: '原问题：末尾选项缺失',
+  too_few: '原问题：选项不足',
+}
+
 function ReviewTag({ status }: { status: string }) {
   const cfg = reviewStatusConfig[status] || { color: 'default', text: status }
   return <Tag color={cfg.color}>{cfg.text}</Tag>
@@ -29,6 +37,21 @@ function ReviewTag({ status }: { status: string }) {
 function QualityBadges({ meta }: { meta?: Record<string, any> | null }) {
   if (!meta) return <Text type="secondary">-</Text>
   const badges: Array<{ color: string; text: string; title: string }> = []
+  if (meta.fixed_by_llm) {
+    badges.push({ color: 'cyan', text: 'LLM 已修复', title: '该题已由 LLM 修复，原问题仍保留在后续标签中' })
+  }
+  const originalIssueTypes = Array.from(new Set(
+    (meta.original_issues || [])
+      .map((issue: { issue_type?: string }) => issue?.issue_type)
+      .filter(Boolean)
+  )) as string[]
+  originalIssueTypes.forEach((issueType) => {
+    badges.push({
+      color: 'gold',
+      text: originalIssueText[issueType] || `原问题：${issueType}`,
+      title: '修复前检测到的问题',
+    })
+  })
   if (meta.suspected_truncated_options) {
     badges.push({ color: 'red', text: '选项截断', title: '选项文本疑似被 MinerU 截断（过短）' })
   }
@@ -213,7 +236,11 @@ const ContentOverview = ({ documentId }: { documentId: string }) => {
                   {q.options?.length > 0 && (
                     <Space direction="vertical" size={2}>
                       {q.options.map((opt, i) => (
-                        <Text key={i}>{opt.key}. {opt.text}</Text>
+                        <Space key={i} size={6} align="start">
+                          <Text>{opt.key || opt.label}. {opt.text}</Text>
+                          {opt.source === 'extracted' && <Tag color="blue">原文恢复</Tag>}
+                          {opt.source === 'ai_generated' && <Tag color="gold">AI 生成</Tag>}
+                        </Space>
                       ))}
                     </Space>
                   )}

@@ -798,6 +798,47 @@ class Document(Base):
     )
 
 
+class EntityExtractionRun(Base):
+    """文档实体抽取执行记录"""
+    __tablename__ = "entity_extraction_runs"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="抽取任务ID")
+    document_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("documents.id", ondelete="CASCADE"),
+        nullable=False, comment="文档ID"
+    )
+    status: Mapped[str] = mapped_column(
+        Enum("running", "success", "failed"),
+        default="running", comment="执行状态"
+    )
+    extract_knowledge: Mapped[bool] = mapped_column(
+        Boolean, default=True, comment="是否抽取知识点"
+    )
+    extract_questions: Mapped[bool] = mapped_column(
+        Boolean, default=True, comment="是否抽取题目"
+    )
+    subject_id: Mapped[Optional[str]] = mapped_column(
+        String(32), comment="章节映射不足时使用的兜底学科ID"
+    )
+    knowledge_count: Mapped[int] = mapped_column(Integer, default=0, comment="抽取知识点数")
+    question_count: Mapped[int] = mapped_column(Integer, default=0, comment="抽取题目数")
+    error_detail: Mapped[Optional[str]] = mapped_column(Text, comment="失败原因")
+    result_json: Mapped[Optional[dict]] = mapped_column(JSON, comment="完整抽取结果")
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    __table_args__ = (
+        Index("idx_entity_extraction_runs_document_id", "document_id"),
+        Index("idx_entity_extraction_runs_status", "status"),
+        Index("idx_entity_extraction_runs_created_at", "created_at"),
+        {"comment": "文档实体抽取执行记录"}
+    )
+
+
 class DocumentPage(Base):
     """文档页表"""
     __tablename__ = "document_pages"

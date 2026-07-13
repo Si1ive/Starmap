@@ -114,11 +114,36 @@ export const getDocumentChapterDiagnostics = (
   return adminClient.get(`/corpus/documents/${id}/chapter-diagnostics`, { params })
 }
 
-export const extractDocumentEntities = (id: string, subjectId?: string): Promise<ApiResponse<any>> => {
+export interface EntityExtractionRun {
+  id: string
+  document_id: string
+  status: 'running' | 'success' | 'failed'
+  extract_knowledge: boolean
+  extract_questions: boolean
+  subject_id?: string | null
+  knowledge_count: number
+  question_count: number
+  error_detail?: string | null
+  result?: Record<string, unknown> | null
+  started_at?: string | null
+  completed_at?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export const extractDocumentEntities = (
+  id: string,
+  subjectId?: string
+): Promise<ApiResponse<EntityExtractionRun>> => {
   return adminClient.post(`/corpus/documents/${id}/extract-entities`, null, {
     params: subjectId ? { subject_id: subjectId } : undefined,
-    timeout: 10 * 60 * 1000, // 抽取含多次 LLM 调用（block 分类/题目分组/答案回连），给 10 分钟
   })
+}
+
+export const getDocumentEntityExtractionStatus = (
+  id: string
+): Promise<ApiResponse<EntityExtractionRun | null>> => {
+  return adminClient.get(`/corpus/documents/${id}/extraction-status`)
 }
 
 export interface ContentOverviewKPBrief {
@@ -152,6 +177,26 @@ export interface QuestionExtractionMeta {
   few_options?: boolean
   group_label_reason?: string
   unassigned?: boolean
+  fixed_by_llm?: boolean | string
+  original_issues?: Array<{
+    question_number?: string | null
+    page_no?: number | null
+    issue_type?: string
+    missing_options?: string[]
+    missing_number?: number | string | null
+    from_number?: number | string | null
+    to_number?: number | string | null
+    gap?: number | null
+  }>
+  llm_fix_actions?: Array<{
+    action?: string
+    issue_type?: string
+    added_options?: Array<{
+      key?: string
+      source?: 'extracted' | 'ai_generated'
+    }>
+    reason?: string | null
+  }>
 }
 
 export interface ContentOverviewQuestion {
@@ -159,7 +204,12 @@ export interface ContentOverviewQuestion {
   question_no?: string | null
   type: string
   content_preview: string
-  options: Array<{ key?: string; text?: string }>
+  options: Array<{
+    key?: string
+    label?: string
+    text?: string
+    source?: 'extracted' | 'ai_generated'
+  }>
   exam_year: number
   review_status: string
   status: string

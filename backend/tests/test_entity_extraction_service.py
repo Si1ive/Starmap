@@ -1,6 +1,11 @@
+from types import SimpleNamespace
+
+import pytest
+
 from app.services.entity_extraction_service import (
     OptionIntegrityChecker,
     EntityExtractionService,
+    LLMFallbackFixer,
 )
 
 
@@ -52,9 +57,223 @@ class _MockLLM:
     """返回预设 JSON 的假 LLM client。"""
     def __init__(self, response: str):
         self._response = response
+        self.prompts = []
 
     async def chat(self, prompt: str, purpose=None) -> str:
+        self.prompts.append(prompt)
         return self._response
+
+
+def _choice(no: int, labels: str, *, raw_text: str = ""):
+    return {
+        "id": f"q{no}",
+        "question_no": str(no),
+        "question_type": "choice",
+        "type": "choice",
+        "stem": f"{no}。题干",
+        "content": f"{no}。题干",
+        "raw_text": raw_text or f"{no}。题干",
+        "page_no": 1,
+        "options": [{"key": label, "text": f"{label}选项"} for label in labels],
+        "extraction_meta": {"few_options": len(labels) < 4},
+    }
+
+
+async def test_llm_fallback_uses_only_previous_target_next_questions():
+    llm = _MockLLM('{"action":"none","should_merge":false}')
+    questions = [_choice(no, "ABCD") for no in range(1, 6)]
+    report = {
+        "summary": {
+            "critical_issues": [{
+                "question_index": 2,
+                "issue_type": "too_few",
+                "missing_options": ["D"],
+            }]
+        }
+    }
+
+    await LLMFallbackFixer(llm).fix_remaining_issues(questions, report)
+
+    assert len(llm.prompts) == 1
+    assert "2。题干" in llm.prompts[0]
+    assert "3。题干" in llm.prompts[0]
+    assert "4。题干" in llm.prompts[0]
+    assert "1。题干" not in llm.prompts[0]
+    assert "5。题干" not in llm.prompts[0]
+
+
+async def test_llm_fallback_repairs_missing_option_and_tracks_source():
+    response = """{
+      "action": "repair_options",
+      "should_merge": false,
+      "repaired_question": {
+        "stem": "30。下列关于文件系统的叙述中，正确的是（）。",
+        "options": [
+          {"key": "A", "text": "文件系统负责文件存储空间的管理", "source": "extracted"},
+          {"key": "B", "text": "B选项", "source": "extracted"},
+          {"key": "C", "text": "C选项", "source": "extracted"},
+          {"key": "D", "text": "D选项", "source": "extracted"}
+        ]
+      }
+    }"""
+    question = _choice(
+        30,
+        "BCD",
+        raw_text=(
+            "30。下列关于文件系统的叙述中，正确的是（）。"
+            "A 文件系统负责文件存储空间的管理 B B选项 C C选项 D D选项"
+        ),
+    )
+    question["stem"] = question["content"] = (
+        "30。下列关于文件系统的叙述中，正确的是（）。"
+        "A 文件系统负责文件存储空间的管理"
+    )
+    report = {
+        "summary": {
+            "critical_issues": [{
+                "question_index": 0,
+                "question_number": 30,
+                "issue_type": "missing_start",
+                "missing_options": ["A"],
+            }]
+        }
+    }
+
+    fixed = await LLMFallbackFixer(_MockLLM(response)).fix_remaining_issues([question], report)
+
+    assert fixed[0]["stem"] == "30。下列关于文件系统的叙述中，正确的是（）。"
+    assert [option["key"] for option in fixed[0]["options"]] == ["A", "B", "C", "D"]
+    assert fixed[0]["options"][0]["source"] == "extracted"
+    assert fixed[0]["fixed_by_llm"] is True
+    assert fixed[0]["extraction_meta"]["fixed_by_llm"] is True
+    assert fixed[0]["extraction_meta"]["original_issues"][0]["issue_type"] == "missing_start"
+    assert fixed[0]["extraction_meta"]["llm_fix_actions"][0]["action"] == "repair_options"
+
+
+async def test_llm_fallback_marks_option_as_ai_generated_when_not_in_source():
+    response = """{
+      "action": "repair_options",
+      "should_merge": false,
+      "repaired_question": {
+        "stem": "2。题干",
+        "options": [
+          {"key": "A", "text": "A选项", "source": "extracted"},
+          {"key": "B", "text": "B选项", "source": "extracted"},
+          {"key": "C", "text": "C选项", "source": "extracted"},
+          {"key": "D", "text": "LLM补出的D选项", "source": "ai_generated"}
+        ]
+      }
+    }"""
+    question = _choice(2, "ABC", raw_text="2。题干 A A选项 B B选项 C C选项")
+    report = {
+        "summary": {
+            "critical_issues": [{
+                "question_index": 0,
+                "question_number": 2,
+                "issue_type": "too_few",
+                "missing_options": ["D"],
+            }]
+        }
+    }
+
+    fixed = await LLMFallbackFixer(_MockLLM(response)).fix_remaining_issues([question], report)
+
+    generated = next(option for option in fixed[0]["options"] if option["key"] == "D")
+    assert generated["source"] == "ai_generated"
+    assert fixed[0]["extraction_meta"]["original_issues"][0]["missing_options"] == ["D"]
+
+
+def test_normalize_options_preserves_llm_option_source():
+    normalized = EntityExtractionService(None)._normalize_options([
+        {"key": "D", "text": "AI 补充选项", "source": "ai_generated"},
+    ])
+
+    assert normalized[0]["source"] == "ai_generated"
+
+
+class _RunSession:
+    def __init__(self, run):
+        self.run = run
+        self.commit_count = 0
+        self.rollback_count = 0
+
+    async def get(self, _model, _run_id):
+        return self.run
+
+    async def commit(self):
+        self.commit_count += 1
+
+    async def rollback(self):
+        self.rollback_count += 1
+
+
+@pytest.mark.asyncio
+async def test_extraction_run_persists_success(monkeypatch):
+    run = SimpleNamespace(
+        id="run-1",
+        document_id="doc-1",
+        extract_knowledge=True,
+        extract_questions=True,
+        subject_id="subject-1",
+        status="running",
+        knowledge_count=0,
+        question_count=0,
+        result_json=None,
+        error_detail=None,
+        completed_at=None,
+    )
+    session = _RunSession(run)
+    service = EntityExtractionService(session)
+
+    async def fake_extract_entities(**kwargs):
+        assert kwargs["document_id"] == "doc-1"
+        return {"knowledge_count": 3, "question_count": 4}
+
+    monkeypatch.setattr(service, "extract_entities", fake_extract_entities)
+
+    result = await service.extract_entities_with_run_id("run-1")
+
+    assert result == {"knowledge_count": 3, "question_count": 4}
+    assert run.status == "success"
+    assert run.knowledge_count == 3
+    assert run.question_count == 4
+    assert run.result_json == result
+    assert run.completed_at is not None
+    assert session.commit_count == 1
+    assert session.rollback_count == 0
+
+
+@pytest.mark.asyncio
+async def test_extraction_run_persists_failure(monkeypatch):
+    run = SimpleNamespace(
+        id="run-2",
+        document_id="doc-2",
+        extract_knowledge=False,
+        extract_questions=True,
+        subject_id=None,
+        status="running",
+        knowledge_count=0,
+        question_count=0,
+        result_json=None,
+        error_detail=None,
+        completed_at=None,
+    )
+    session = _RunSession(run)
+    service = EntityExtractionService(session)
+
+    async def fake_extract_entities(**_kwargs):
+        raise RuntimeError("LLM timeout")
+
+    monkeypatch.setattr(service, "extract_entities", fake_extract_entities)
+
+    with pytest.raises(RuntimeError, match="LLM timeout"):
+        await service.extract_entities_with_run_id("run-2")
+
+    assert run.status == "failed"
+    assert run.error_detail == "LLM timeout"
+    assert run.completed_at is not None
+    assert session.rollback_count == 1
+    assert session.commit_count == 1
 
 
 async def test_llm_split_parses_two_questions():
