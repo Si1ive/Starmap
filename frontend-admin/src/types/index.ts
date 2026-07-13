@@ -238,6 +238,8 @@ export interface KnowledgePoint {
   id: string
   chapter_id: string
   subject_id: string
+  primary_chapter_id?: string
+  source_section_path?: string
   title: string
   content: string
   difficulty: 'easy' | 'medium' | 'hard'
@@ -248,6 +250,10 @@ export interface KnowledgePoint {
   source?: string
   source_page?: string
   status: 'active' | 'pending' | 'deleted'
+  review_status: 'pending' | 'approved' | 'rejected'
+  review_notes?: string
+  reviewed_by?: string
+  reviewed_at?: string
   created_at?: string
   updated_at?: string
 }
@@ -257,6 +263,8 @@ export interface Question {
   id: string
   subject_id: string
   chapter_id: string
+  primary_chapter_id?: string
+  source_section_path?: string
   type: 'choice' | 'fill' | 'judge' | 'short_answer' | 'design' | 'analysis'
   content: string
   options?: { key?: string; label?: string; option_label?: string; text: string }[]
@@ -274,6 +282,10 @@ export interface Question {
   knowledge_points?: { id: string; title: string; relevance: number }[]
   tags?: string[]
   status: 'active' | 'pending' | 'deleted'
+  review_status: 'pending' | 'approved' | 'rejected'
+  review_notes?: string
+  reviewed_by?: string
+  reviewed_at?: string
   created_at?: string
   updated_at?: string
 }

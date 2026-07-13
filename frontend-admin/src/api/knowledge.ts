@@ -10,6 +10,8 @@ export interface KnowledgePointListParams {
   chapter_id?: string
   difficulty?: string
   keyword?: string
+  review_status?: string
+  status?: string
 }
 
 export interface UpdateKnowledgePointData {
@@ -67,6 +69,18 @@ export const batchDeleteKnowledgePoints = (
   ids: string[]
 ): Promise<ApiResponse<{ deleted_count: number; requested_count: number }>> => {
   return adminClient.post('/knowledge/points/batch-delete', { ids })
+}
+
+export const reviewKnowledgePoint = (
+  id: string,
+  data: {
+    review_status: 'approved' | 'rejected'
+    review_notes?: string
+    primary_chapter_id?: string
+    topic_terms?: string[]
+  },
+): Promise<ApiResponse<KnowledgePoint>> => {
+  return adminClient.post(`/review/knowledge/${id}`, null, { params: data })
 }
 
 // ========== 旧版 PDF 入库接口 ==========

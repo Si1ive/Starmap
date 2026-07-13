@@ -1,9 +1,20 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { Card, Table, Tag, Button, Select, Space, Modal, message } from 'antd'
-import { DeleteOutlined, EyeOutlined, EditOutlined } from '@ant-design/icons'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Card, Table, Tag, Button, Input, Select, Space, Modal, message } from 'antd'
+import { AuditOutlined, DeleteOutlined, EyeOutlined, EditOutlined } from '@ant-design/icons'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { batchDeleteQuestions, getQuestions, getSubjects, getChapters } from '@/api'
+import {
+  batchDeleteQuestions,
+  getQuestions,
+  getSubjects,
+  getChapters,
+  reviewQuestion,
+} from '@/api'
+import ContentReviewDrawer, {
+  ReviewStatusTag,
+  type ReviewStatus,
+} from '@/components/ContentReviewDrawer'
+import type { QuestionListParams } from '@/api/question'
 import type { Question } from '@/types'
 
 const typeConfig: Record<string, { color: string; text: string }> = {
@@ -21,18 +32,20 @@ const difficultyConfig: Record<string, { color: string; text: string }> = {
   hard: { color: 'red', text: '困难' },
 }
 
+const parseReviewStatus = (value: string | null): ReviewStatus | undefined =>
+  value === 'pending' || value === 'approved' || value === 'rejected' ? value : undefined
+
 const QuestionList = () => {
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const queryClient = useQueryClient()
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
-  const [params, setParams] = useState<{
-    page: number
-    page_size: number
-    subject_id?: string
-    chapter_id?: string
-    type?: string
-    difficulty?: string
-  }>({ page: 1, page_size: 20 })
+  const [reviewItem, setReviewItem] = useState<Question | null>(null)
+  const [params, setParams] = useState<QuestionListParams>(() => ({
+    page: 1,
+    page_size: 20,
+    review_status: parseReviewStatus(searchParams.get('review_status')),
+  }))
 
   const { data, isLoading } = useQuery({
     queryKey: ['questions', params],
@@ -46,7 +59,7 @@ const QuestionList = () => {
 
   const { data: chaptersData } = useQuery({
     queryKey: ['chapters', params.subject_id],
-    queryFn: () => getChapters(params.subject_id!),
+    queryFn: () => getChapters(params.subject_id || ''),
     enabled: !!params.subject_id,
   })
 
@@ -68,6 +81,34 @@ const QuestionList = () => {
     },
   })
 
+  const reviewMutation = useMutation({
+    mutationFn: ({
+      id,
+      reviewStatus,
+      reviewNotes,
+      primaryChapterId,
+    }: {
+      id: string
+      reviewStatus: 'approved' | 'rejected'
+      reviewNotes?: string
+      primaryChapterId?: string
+    }) =>
+      reviewQuestion(id, {
+        review_status: reviewStatus,
+        review_notes: reviewNotes,
+        primary_chapter_id: primaryChapterId,
+      }),
+    onSuccess: (_, variables) => {
+      message.success(variables.reviewStatus === 'approved' ? '人工核验已通过' : '已标记为未通过')
+      setReviewItem(null)
+      queryClient.invalidateQueries({ queryKey: ['questions'] })
+    },
+    onError: (err: any) => {
+      const detail = err?.response?.data?.detail
+      message.error(typeof detail === 'string' ? detail : '审核保存失败')
+    },
+  })
+
   const handleBatchDelete = () => {
     if (selectedRowKeys.length === 0) return
     Modal.confirm({
@@ -78,6 +119,19 @@ const QuestionList = () => {
       cancelText: '取消',
       onOk: () => batchDeleteMutation.mutate(selectedRowKeys.map(String)),
     })
+  }
+
+  const handleReviewStatusChange = (value: string) => {
+    const reviewStatus = value === 'all' ? undefined : (value as ReviewStatus)
+    setParams((prev) => ({ ...prev, page: 1, review_status: reviewStatus }))
+
+    const nextSearchParams = new URLSearchParams(searchParams)
+    if (reviewStatus) {
+      nextSearchParams.set('review_status', reviewStatus)
+    } else {
+      nextSearchParams.delete('review_status')
+    }
+    setSearchParams(nextSearchParams, { replace: true })
   }
 
   const columns = [
@@ -127,22 +181,36 @@ const QuestionList = () => {
       render: (y: number) => (y > 0 ? y : '-'),
     },
     {
-      title: '状态',
+      title: '使用状态',
       dataIndex: 'status',
-      width: 80,
+      width: 100,
       render: (s: string) => (
         <Tag color={s === 'active' ? 'green' : 'default'}>
-          {s === 'active' ? '已发布' : '待审核'}
+          {s === 'active' ? '使用中' : '已停用'}
         </Tag>
       ),
     },
     {
+      title: '人工核验',
+      dataIndex: 'review_status',
+      width: 110,
+      render: (status: string) => <ReviewStatusTag status={status} />,
+    },
+    {
       title: '操作',
       key: 'action',
-      width: 150,
+      width: 210,
       fixed: 'right' as const,
       render: (_: unknown, record: Question) => (
         <Space size="small">
+          <Button
+            type="link"
+            size="small"
+            icon={<AuditOutlined />}
+            onClick={() => setReviewItem(record)}
+          >
+            审核
+          </Button>
           <Button
             type="link"
             size="small"
@@ -181,6 +249,14 @@ const QuestionList = () => {
 
       <Card>
         <Space wrap style={{ marginBottom: 16 }}>
+          <Input.Search
+            placeholder="搜索题干"
+            style={{ width: 220 }}
+            allowClear
+            onSearch={(value) =>
+              setParams((prev) => ({ ...prev, page: 1, keyword: value.trim() || undefined }))
+            }
+          />
           <Select
             value={params.subject_id || 'all'}
             style={{ width: 150 }}
@@ -239,6 +315,29 @@ const QuestionList = () => {
               { label: '困难', value: 'hard' },
             ]}
           />
+          <Select
+            value={params.status || 'all'}
+            style={{ width: 120 }}
+            onChange={(value) =>
+              setParams((prev) => ({ ...prev, page: 1, status: value === 'all' ? undefined : value }))
+            }
+            options={[
+              { label: '全部使用状态', value: 'all' },
+              { label: '使用中', value: 'active' },
+              { label: '已停用', value: 'pending' },
+            ]}
+          />
+          <Select
+            value={params.review_status || 'all'}
+            style={{ width: 140 }}
+            onChange={handleReviewStatusChange}
+            options={[
+              { label: '全部人工核验', value: 'all' },
+              { label: '待人工核验', value: 'pending' },
+              { label: '已通过', value: 'approved' },
+              { label: '未通过', value: 'rejected' },
+            ]}
+          />
         </Space>
 
         <Table
@@ -252,7 +351,7 @@ const QuestionList = () => {
           }}
           loading={isLoading}
           size="small"
-          scroll={{ x: 1200 }}
+          scroll={{ x: 1450 }}
           pagination={{
             current: params.page,
             pageSize: params.page_size,
@@ -269,6 +368,49 @@ const QuestionList = () => {
           }
         />
       </Card>
+
+      <ContentReviewDrawer
+        open={!!reviewItem}
+        title="题目人工核验"
+        item={reviewItem}
+        submitting={reviewMutation.isPending}
+        onClose={() => setReviewItem(null)}
+        onSubmit={(review) => {
+          if (!reviewItem) return
+          reviewMutation.mutate({
+            id: reviewItem.id,
+            reviewStatus: review.review_status,
+            reviewNotes: review.review_notes,
+            primaryChapterId: review.primary_chapter_id,
+          })
+        }}
+        details={
+          reviewItem
+            ? [
+                {
+                  key: 'type',
+                  label: '题型',
+                  content: typeConfig[reviewItem.type]?.text || reviewItem.type,
+                },
+                {
+                  key: 'content',
+                  label: '题干',
+                  content: <div style={{ maxHeight: 180, overflow: 'auto' }}>{reviewItem.content}</div>,
+                },
+                {
+                  key: 'difficulty',
+                  label: '难度',
+                  content: (
+                    <Tag color={difficultyConfig[reviewItem.difficulty]?.color}>
+                      {difficultyConfig[reviewItem.difficulty]?.text || reviewItem.difficulty}
+                    </Tag>
+                  ),
+                },
+                { key: 'source', label: '来源', content: reviewItem.source || '-' },
+              ]
+            : []
+        }
+      />
     </div>
   )
 }

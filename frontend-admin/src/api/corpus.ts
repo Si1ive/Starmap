@@ -9,7 +9,6 @@ import type {
   DocumentSection,
   SectionMapping,
   ChapterDiagnostics,
-  ReviewItem,
   RelationReview,
   SearchResult,
   SearchDebugResult,
@@ -274,41 +273,6 @@ export const batchDeleteSectionMappings = (
   ids: string[]
 ): Promise<ApiResponse<{ deleted_count: number; requested_count: number }>> => {
   return adminClient.post('/review/sections/batch-delete', { ids })
-}
-
-export const listKnowledgeReviews = (params: {
-  subject_id?: string
-  chapter_id?: string
-  review_status?: string
-  page?: number
-  page_size?: number
-}): Promise<ApiResponse<PaginatedResponse<ReviewItem>>> => {
-  return adminClient.get('/review/knowledge', { params })
-}
-
-export const reviewKnowledgePoint = (
-  id: string,
-  data: { review_status: string; review_notes?: string; primary_chapter_id?: string; topic_terms?: string[] }
-): Promise<ApiResponse<any>> => {
-  return adminClient.post(`/review/knowledge/${id}`, null, { params: data })
-}
-
-export const listQuestionReviews = (params: {
-  subject_id?: string
-  chapter_id?: string
-  question_type?: string
-  review_status?: string
-  page?: number
-  page_size?: number
-}): Promise<ApiResponse<PaginatedResponse<ReviewItem>>> => {
-  return adminClient.get('/review/questions', { params })
-}
-
-export const reviewQuestion = (
-  id: string,
-  data: { review_status: string; review_notes?: string; primary_chapter_id?: string }
-): Promise<ApiResponse<any>> => {
-  return adminClient.post(`/review/questions/${id}`, null, { params: data })
 }
 
 export const listRelationReviews = (params: {

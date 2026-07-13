@@ -1,6 +1,6 @@
 import { useNavigate, useLocation } from 'react-router-dom'
 import { Layout, Menu } from 'antd'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import {
   DashboardOutlined,
   BookOutlined,
@@ -38,10 +38,8 @@ const menuItems = [
   {
     key: '/admin/review-group',
     icon: <AuditOutlined />,
-    label: '审核中心',
+    label: '关系管理',
     children: [
-      { key: '/admin/review/knowledge', label: '知识点审核' },
-      { key: '/admin/review/questions', label: '题目审核' },
       { key: '/admin/review/relations', icon: <BranchesOutlined />, label: '关系审核' },
       { key: '/admin/review/chapter-relations', icon: <ApartmentOutlined />, label: '考点关联审核' },
       { key: '/admin/review/chapter-relation-graph', icon: <ShareAltOutlined />, label: '考点关联图谱' },
@@ -129,8 +127,12 @@ const AppSider = () => {
 
   // 获取当前选中的菜单key和展开的子菜单key
   const selectedKey = location.pathname
-  const defaultOpenKeys = ['/admin/crawler-group', '/admin/monitor-group', '/admin/settings-group', '/admin/review-group'].filter(
-    (key) => location.pathname.startsWith(key.replace('-group', '').replace('/admin/settings-group', '/admin/settings'))
+  const defaultOpenKeys = useMemo(
+    () =>
+      ['/admin/crawler-group', '/admin/monitor-group', '/admin/settings-group', '/admin/review-group'].filter(
+        (key) => location.pathname.startsWith(key.replace('-group', '').replace('/admin/settings-group', '/admin/settings')),
+      ),
+    [location.pathname],
   )
 
   // 使用 state 管理展开的菜单（受控组件）
@@ -143,7 +145,7 @@ const AppSider = () => {
     } else {
       setOpenKeys(defaultOpenKeys)
     }
-  }, [collapsed, location.pathname])
+  }, [collapsed, defaultOpenKeys])
 
   return (
     <Sider

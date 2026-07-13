@@ -10,6 +10,11 @@ export interface QuestionListParams {
   chapter_id?: string
   type?: string
   difficulty?: string
+  exam_scope?: string
+  exam_year?: number
+  keyword?: string
+  review_status?: string
+  status?: string
 }
 
 export interface UpdateQuestionData {
@@ -53,4 +58,15 @@ export const batchDeleteQuestions = (
   ids: string[]
 ): Promise<ApiResponse<{ deleted_count: number; requested_count: number }>> => {
   return adminClient.post('/questions/batch-delete', { ids })
+}
+
+export const reviewQuestion = (
+  id: string,
+  data: {
+    review_status: 'approved' | 'rejected'
+    review_notes?: string
+    primary_chapter_id?: string
+  },
+): Promise<ApiResponse<Question>> => {
+  return adminClient.post(`/review/questions/${id}`, null, { params: data })
 }

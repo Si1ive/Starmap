@@ -28,8 +28,6 @@ import QuestionDetail from '@/pages/Question/Detail'
 import QuestionEdit from '@/pages/Question/Edit'
 import CorpusPage from '@/pages/Corpus'
 import DocumentDetailPage from '@/pages/Corpus/DocumentDetail'
-import KnowledgeReviewPage from '@/pages/Review/Knowledge'
-import QuestionReviewPage from '@/pages/Review/Questions'
 import RelationReviewPage from '@/pages/Review/Relations'
 import ChapterRelationReviewPage from '@/pages/Review/ChapterRelations'
 import ChapterRelationGraphPage from '@/pages/Review/ChapterRelationGraph'
@@ -117,9 +115,15 @@ const AppRoutes = () => {
         <Route path="corpus/:id" element={<DocumentDetailPage />} />
         <Route path="outlines" element={<OutlineList />} />
 
-        {/* 审核中心 */}
-        <Route path="review/knowledge" element={<KnowledgeReviewPage />} />
-        <Route path="review/questions" element={<QuestionReviewPage />} />
+        {/* 旧审核入口保留兼容，审核能力已合并到管理页 */}
+        <Route
+          path="review/knowledge"
+          element={<Navigate to="/admin/knowledge?review_status=pending" replace />}
+        />
+        <Route
+          path="review/questions"
+          element={<Navigate to="/admin/questions?review_status=pending" replace />}
+        />
         <Route path="review/relations" element={<RelationReviewPage />} />
         <Route path="review/chapter-relations" element={<ChapterRelationReviewPage />} />
         <Route path="review/chapter-relation-graph" element={<ChapterRelationGraphPage />} />
