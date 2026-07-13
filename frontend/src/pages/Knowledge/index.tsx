@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Card, List, Tag, Input, Select, Space, Typography, Empty, Spin } from 'antd'
-import { BookOutlined, FireOutlined, StarOutlined } from '@ant-design/icons'
+import { BookOutlined, FireOutlined } from '@ant-design/icons'
 import { searchKnowledgePoints, getSubjects, getChapters } from '@/api/knowledge'
 import type { IKnowledgePointListItem, ISubject, IChapter } from '@/types'
 
-const { Title, Paragraph, Text } = Typography
+const { Title, Text } = Typography
 const { Search } = Input
 
 const difficultyConfig: Record<string, { color: string; text: string }> = {

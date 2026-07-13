@@ -5,7 +5,7 @@ import { ArrowLeftOutlined, BookOutlined, FireOutlined } from '@ant-design/icons
 import { useQuery } from '@tanstack/react-query'
 import { getKnowledgePointDetail } from '@/api/knowledge'
 
-const { Title, Paragraph, Text } = Typography
+const { Title, Text } = Typography
 
 const difficultyConfig: Record<string, { color: string; text: string }> = {
   easy: { color: 'green', text: '简单' },
@@ -26,7 +26,7 @@ const KnowledgeDetailPage: React.FC = () => {
 
   const { data, isLoading } = useQuery({
     queryKey: ['knowledgePoint', id],
-    queryFn: () => getKnowledgePointDetail(id!),
+    queryFn: () => getKnowledgePointDetail(id || ''),
     enabled: !!id,
   })
 
