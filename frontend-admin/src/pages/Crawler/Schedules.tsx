@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Card, Table, Tag, Button, Modal, Form, Input, Select, InputNumber, Row, Col, Statistic, Popconfirm, message } from 'antd'
+import { Alert, Button, Card, Checkbox, Col, Form, Input, InputNumber, message, Modal, Popconfirm, Row, Select, Statistic, Table, Tag } from 'antd'
 import {
   PlusOutlined,
   PlayCircleOutlined,
@@ -29,6 +29,10 @@ const CrawlerSchedules = () => {
   const [runsModalVisible, setRunsModalVisible] = useState(false)
   const [selectedScheduleId, setSelectedScheduleId] = useState<string>('')
   const [form] = Form.useForm()
+  const selectedTaskType = Form.useWatch('task_type', form) || 'targeted'
+  const selectedSpiderType = Form.useWatch(['target_config', 'spider_type'], form) || 'github'
+  const isCrawlTask = ['full', 'incremental', 'targeted'].includes(selectedTaskType)
+  const requiresSource = isCrawlTask || selectedTaskType === 'health_check'
 
   const { data, isLoading } = useQuery({
     queryKey: ['crawlerSchedules', params],
@@ -103,11 +107,16 @@ const CrawlerSchedules = () => {
       task_type: 'targeted',
       source_ids: sources[0]?.id ? [sources[0].id] : [],
       target_config: {
-        spider_type: 'person',
-        keywords: [],
+        spider_type: 'github',
+        repo_url: '',
+        search_query: '',
+        pdf_path: '',
+        file_types: ['pdf'],
+        cleanup_types: ['duplicate', 'expired', 'orphan'],
+        retention_days: 90,
         concurrent_limit: 3,
         delay: 1.0,
-        timeout: 30,
+        timeout: 60,
       },
       cron_expression: '0 2 * * *',
       timezone: 'Asia/Shanghai',
@@ -121,13 +130,19 @@ const CrawlerSchedules = () => {
   }
 
   const handleEdit = (schedule: CrawlerSchedule) => {
+    const targetConfig = schedule.target_config || {}
+    const configuredSpider = targetConfig.spider_type
+    const spiderType = configuredSpider === 'knowledge' ? 'knowledge' : 'github'
     setEditingSchedule(schedule)
     form.setFieldsValue({
       name: schedule.name,
       description: schedule.description,
       task_type: schedule.task_type,
       source_ids: schedule.source_ids || [],
-      target_config: schedule.target_config || {},
+      target_config: {
+        ...targetConfig,
+        spider_type: spiderType,
+      },
       cron_expression: schedule.cron_expression,
       timezone: schedule.timezone || 'Asia/Shanghai',
       max_retries: schedule.max_retries || 3,
@@ -140,10 +155,38 @@ const CrawlerSchedules = () => {
 
   const handleSubmit = () => {
     form.validateFields().then((values) => {
+      const taskType = values.task_type
+      const crawlTask = ['full', 'incremental', 'targeted'].includes(taskType)
+      const taskRequiresSource = crawlTask || taskType === 'health_check'
+      const rawConfig = values.target_config || {}
+      let targetConfig: Record<string, unknown> = {}
+      if (crawlTask && rawConfig.spider_type === 'knowledge') {
+        targetConfig = {
+          spider_type: 'knowledge',
+          pdf_path: rawConfig.pdf_path,
+        }
+      } else if (crawlTask) {
+        targetConfig = {
+          spider_type: 'github',
+          repo_url: rawConfig.repo_url,
+          search_query: rawConfig.search_query,
+          file_types: rawConfig.file_types,
+        }
+      } else if (taskType === 'cleanup') {
+        targetConfig = {
+          cleanup_types: rawConfig.cleanup_types,
+          retention_days: rawConfig.retention_days,
+        }
+      }
+      const submittedValues = {
+        ...values,
+        source_ids: taskRequiresSource ? values.source_ids : [],
+        target_config: targetConfig,
+      }
       if (editingSchedule) {
-        updateMutation.mutate({ id: editingSchedule.id, data: values })
+        updateMutation.mutate({ id: editingSchedule.id, data: submittedValues })
       } else {
-        createMutation.mutate(values)
+        createMutation.mutate(submittedValues)
       }
     })
   }
@@ -355,29 +398,133 @@ const CrawlerSchedules = () => {
             </Col>
           </Row>
           <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item label="数据源" name="source_ids" rules={[{ required: true, message: '请选择数据源' }]}>
+            {requiresSource && (
+              <Col span={12}>
+                <Form.Item
+                  label="数据源"
+                  name="source_ids"
+                  preserve={false}
+                  rules={[{ required: true, message: '请选择数据源' }]}
+                >
+                  <Select
+                    mode="multiple"
+                    options={sources.map((source) => ({
+                      label: source.name,
+                      value: source.id,
+                    }))}
+                  />
+                </Form.Item>
+              </Col>
+            )}
+            {isCrawlTask && (
+              <Col span={12}>
+                <Form.Item
+                  label="爬虫类型"
+                  name={['target_config', 'spider_type']}
+                  initialValue="github"
+                  preserve={false}
+                  rules={[{ required: true, message: '请选择爬虫类型' }]}
+                >
+                  <Select options={[
+                    { label: 'GitHub 仓库爬虫', value: 'github' },
+                    { label: 'PDF 知识抽取', value: 'knowledge' },
+                  ]} />
+                </Form.Item>
+              </Col>
+            )}
+          </Row>
+          {isCrawlTask && selectedSpiderType === 'github' && (
+            <>
+              <Form.Item
+                label="仓库地址"
+                name={['target_config', 'repo_url']}
+                preserve={false}
+                dependencies={[['target_config', 'search_query']]}
+                rules={[
+                  ({ getFieldValue }) => ({
+                    validator(_, value) {
+                      if (value || getFieldValue(['target_config', 'search_query'])) {
+                        return Promise.resolve()
+                      }
+                      return Promise.reject(new Error('仓库地址和搜索关键词至少填写一项'))
+                    },
+                  }),
+                ]}
+              >
+                <Input placeholder="https://github.com/user/repo" />
+              </Form.Item>
+              <Form.Item
+                label="搜索关键词"
+                name={['target_config', 'search_query']}
+                preserve={false}
+              >
+                <Input placeholder="408考研 数据结构" />
+              </Form.Item>
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginBottom: 16 }}
+                message="仓库地址和搜索关键词二选一。"
+              />
+              <Form.Item
+                label="文件类型"
+                name={['target_config', 'file_types']}
+                initialValue={['pdf']}
+                preserve={false}
+              >
                 <Select
                   mode="multiple"
-                  options={sources.map((source) => ({
-                    label: source.name,
-                    value: source.id,
-                  }))}
+                  options={[
+                    { label: 'PDF', value: 'pdf' },
+                    { label: 'Word (doc/docx)', value: 'doc' },
+                    { label: 'PPT (ppt/pptx)', value: 'ppt' },
+                  ]}
                 />
               </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item label="爬虫类型" name={['target_config', 'spider_type']} initialValue="person">
-                <Select options={[
-                  { label: '人物爬虫', value: 'person' },
-                  { label: '作品爬虫', value: 'work' },
-                ]} />
-              </Form.Item>
-            </Col>
-          </Row>
-          <Form.Item label="关键词" name={['target_config', 'keywords']}>
-            <Select mode="tags" placeholder="输入关键词后按回车；健康检查/清理可留空" />
-          </Form.Item>
+            </>
+          )}
+          {isCrawlTask && selectedSpiderType === 'knowledge' && (
+            <Form.Item
+              label="PDF 路径"
+              name={['target_config', 'pdf_path']}
+              preserve={false}
+              rules={[{ required: true, message: '请输入后端可访问的 PDF 路径' }]}
+            >
+              <Input placeholder="/data/corpus/example.pdf" />
+            </Form.Item>
+          )}
+          {selectedTaskType === 'cleanup' && (
+            <Row gutter={16}>
+              <Col span={16}>
+                <Form.Item
+                  label="清理范围"
+                  name={['target_config', 'cleanup_types']}
+                  initialValue={['duplicate', 'expired', 'orphan']}
+                  preserve={false}
+                  rules={[{ required: true, message: '至少选择一种清理类型' }]}
+                >
+                  <Checkbox.Group
+                    options={[
+                      { label: '重复下载记录', value: 'duplicate' },
+                      { label: '过期日志/失败文件', value: 'expired' },
+                      { label: '孤立任务引用', value: 'orphan' },
+                    ]}
+                  />
+                </Form.Item>
+              </Col>
+              <Col span={8}>
+                <Form.Item
+                  label="保留天数"
+                  name={['target_config', 'retention_days']}
+                  initialValue={90}
+                  preserve={false}
+                  rules={[{ required: true, message: '请输入保留天数' }]}
+                >
+                  <InputNumber min={1} max={3650} precision={0} style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+            </Row>
+          )}
           <Row gutter={16}>
             <Col span={8}>
               <Form.Item label="最大重试" name="max_retries" initialValue={3}>

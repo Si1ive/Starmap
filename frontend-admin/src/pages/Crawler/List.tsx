@@ -20,6 +20,7 @@ import {
   Tooltip,
   Badge,
   Alert,
+  Checkbox,
 } from 'antd'
 import {
   PlayCircleOutlined,
@@ -116,6 +117,9 @@ const CrawlerList = () => {
   const [filesModalVisible, setFilesModalVisible] = useState(false)
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   const [filePage, setFilePage] = useState({ page: 1, page_size: 20 })
+  const selectedTaskType = Form.useWatch('task_type', createForm) || 'targeted'
+  const isCrawlTask = ['full', 'incremental', 'targeted'].includes(selectedTaskType)
+  const requiresSource = isCrawlTask || selectedTaskType === 'health_check'
 
   const { data, isLoading } = useQuery({
     queryKey: ['crawlerTasks', params],
@@ -137,7 +141,7 @@ const CrawlerList = () => {
 
   const { data: filesData, isLoading: filesLoading } = useQuery({
     queryKey: ['taskFiles', selectedTaskId, filePage],
-    queryFn: () => getDownloadedFiles({ task_id: selectedTaskId!, ...filePage }),
+    queryFn: () => getDownloadedFiles({ task_id: selectedTaskId || '', ...filePage }),
     enabled: !!selectedTaskId && filesModalVisible,
   })
   const taskFiles = (filesData?.data?.items || []) as DownloadedFile[]
@@ -173,10 +177,14 @@ const CrawlerList = () => {
       config: {
         spider_type: 'github',
         source: 'github',
+        repo_url: '',
+        search_query: '',
         file_types: ['pdf'],
         concurrent_limit: 3,
         delay: 1.0,
         timeout: 60,
+        cleanup_types: ['duplicate', 'expired', 'orphan'],
+        retention_days: 90,
       },
       execute_now: true,
     })
@@ -547,13 +555,34 @@ const CrawlerList = () => {
         onOk={() => {
           createForm.validateFields().then((values) => {
             const selectedSource = sources.find((source) => source.id === values.source_id)
-            const sourceIds = values.source_id ? [values.source_id] : []
+            const taskType = values.task_type
+            const crawlTask = ['full', 'incremental', 'targeted'].includes(taskType)
+            const taskRequiresSource = crawlTask || taskType === 'health_check'
+            const sourceIds = taskRequiresSource && values.source_id ? [values.source_id] : []
+            const rawConfig = values.config || {}
+            let config: Record<string, unknown> = {}
+            if (crawlTask) {
+              config = {
+                spider_type: 'github',
+                repo_url: rawConfig.repo_url,
+                search_query: rawConfig.search_query,
+                file_types: rawConfig.file_types,
+                concurrent_limit: rawConfig.concurrent_limit,
+                delay: rawConfig.delay,
+                timeout: rawConfig.timeout,
+              }
+            } else if (taskType === 'cleanup') {
+              config = {
+                cleanup_types: rawConfig.cleanup_types,
+                retention_days: rawConfig.retention_days,
+              }
+            }
             createMutation.mutate({
               name: values.name,
-              task_type: values.task_type,
+              task_type: taskType,
               source_ids: sourceIds,
               config: {
-                ...(values.config || {}),
+                ...config,
                 source: selectedSource?.code,
                 source_ids: sourceIds,
               },
@@ -573,56 +602,151 @@ const CrawlerList = () => {
               options={[
                 { label: '定向爬取', value: 'targeted' },
                 { label: '全量爬取', value: 'full' },
+                { label: '增量更新', value: 'incremental' },
+                { label: '健康检查', value: 'health_check' },
+                { label: '数据清理', value: 'cleanup' },
               ]}
             />
           </Form.Item>
-          <Form.Item label="爬虫类型" name={['config', 'spider_type']} initialValue="github">
-            <Select
-              options={[
-                { label: 'GitHub 仓库爬虫', value: 'github' },
-              ]}
-            />
-          </Form.Item>
-          <Form.Item label="仓库地址" name={['config', 'repo_url']}>
-            <Input placeholder="https://github.com/user/repo（直接指定仓库）" />
-          </Form.Item>
-          <Form.Item label="搜索关键词" name={['config', 'search_query']}>
-            <Input placeholder="408考研 数据结构（在 GitHub 搜索仓库）" />
-          </Form.Item>
-          <Alert
-            type="info"
-            showIcon
-            style={{ marginBottom: 16 }}
-            message="仓库地址和搜索关键词二选一。填写仓库地址则直接爬取该仓库，填写关键词则搜索 GitHub 仓库。"
-          />
-          <Form.Item label="文件类型" name={['config', 'file_types']} initialValue={['pdf']}>
-            <Select
-              mode="multiple"
-              options={[
-                { label: 'PDF', value: 'pdf' },
-                { label: 'Word (doc/docx)', value: 'doc' },
-                { label: 'PPT (ppt/pptx)', value: 'ppt' },
-              ]}
-              placeholder="选择要下载的文件类型"
-            />
-          </Form.Item>
-          <Row gutter={16}>
-            <Col span={8}>
-              <Form.Item label="并发限制" name={['config', 'concurrent_limit']} initialValue={3}>
-                <InputNumber min={1} max={20} style={{ width: '100%' }} />
+          {requiresSource && (
+            <Form.Item
+              label="数据源"
+              name="source_id"
+              preserve={false}
+              rules={[{ required: true, message: '请选择数据源' }]}
+            >
+              <Select
+                options={sources.map((source) => ({
+                  label: source.name,
+                  value: source.id,
+                }))}
+                placeholder="选择数据源"
+              />
+            </Form.Item>
+          )}
+          {isCrawlTask && (
+            <>
+              <Form.Item
+                label="爬虫类型"
+                name={['config', 'spider_type']}
+                initialValue="github"
+                preserve={false}
+              >
+                <Select
+                  options={[
+                    { label: 'GitHub 仓库爬虫', value: 'github' },
+                  ]}
+                />
               </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item label="请求延迟(秒)" name={['config', 'delay']} initialValue={1.0}>
-                <InputNumber min={0} max={60} step={0.5} style={{ width: '100%' }} />
+              <Form.Item
+                label="仓库地址"
+                name={['config', 'repo_url']}
+                preserve={false}
+                dependencies={[['config', 'search_query']]}
+                rules={[
+                  ({ getFieldValue }) => ({
+                    validator(_, value) {
+                      if (value || getFieldValue(['config', 'search_query'])) {
+                        return Promise.resolve()
+                      }
+                      return Promise.reject(new Error('仓库地址和搜索关键词至少填写一项'))
+                    },
+                  }),
+                ]}
+              >
+                <Input placeholder="https://github.com/user/repo（直接指定仓库）" />
               </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item label="超时(秒)" name={['config', 'timeout']} initialValue={60}>
-                <InputNumber min={5} max={300} style={{ width: '100%' }} />
+              <Form.Item
+                label="搜索关键词"
+                name={['config', 'search_query']}
+                preserve={false}
+              >
+                <Input placeholder="408考研 数据结构（在 GitHub 搜索仓库）" />
               </Form.Item>
-            </Col>
-          </Row>
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginBottom: 16 }}
+                message="仓库地址和搜索关键词二选一。填写仓库地址则直接爬取该仓库，填写关键词则搜索 GitHub 仓库。"
+              />
+              <Form.Item
+                label="文件类型"
+                name={['config', 'file_types']}
+                initialValue={['pdf']}
+                preserve={false}
+              >
+                <Select
+                  mode="multiple"
+                  options={[
+                    { label: 'PDF', value: 'pdf' },
+                    { label: 'Word (doc/docx)', value: 'doc' },
+                    { label: 'PPT (ppt/pptx)', value: 'ppt' },
+                  ]}
+                  placeholder="选择要下载的文件类型"
+                />
+              </Form.Item>
+              <Row gutter={16}>
+                <Col span={8}>
+                  <Form.Item
+                    label="并发限制"
+                    name={['config', 'concurrent_limit']}
+                    initialValue={3}
+                    preserve={false}
+                  >
+                    <InputNumber min={1} max={20} style={{ width: '100%' }} />
+                  </Form.Item>
+                </Col>
+                <Col span={8}>
+                  <Form.Item
+                    label="请求延迟(秒)"
+                    name={['config', 'delay']}
+                    initialValue={1.0}
+                    preserve={false}
+                  >
+                    <InputNumber min={0} max={60} step={0.5} style={{ width: '100%' }} />
+                  </Form.Item>
+                </Col>
+                <Col span={8}>
+                  <Form.Item
+                    label="超时(秒)"
+                    name={['config', 'timeout']}
+                    initialValue={60}
+                    preserve={false}
+                  >
+                    <InputNumber min={5} max={300} style={{ width: '100%' }} />
+                  </Form.Item>
+                </Col>
+              </Row>
+            </>
+          )}
+          {selectedTaskType === 'cleanup' && (
+            <>
+              <Form.Item
+                label="清理范围"
+                name={['config', 'cleanup_types']}
+                initialValue={['duplicate', 'expired', 'orphan']}
+                preserve={false}
+                rules={[{ required: true, message: '至少选择一种清理类型' }]}
+              >
+                <Checkbox.Group
+                  options={[
+                    { label: '重复下载记录', value: 'duplicate' },
+                    { label: '过期日志与失败文件', value: 'expired' },
+                    { label: '孤立任务引用', value: 'orphan' },
+                  ]}
+                />
+              </Form.Item>
+              <Form.Item
+                label="保留天数"
+                name={['config', 'retention_days']}
+                initialValue={90}
+                preserve={false}
+                rules={[{ required: true, message: '请输入保留天数' }]}
+              >
+                <InputNumber min={1} max={3650} precision={0} style={{ width: '100%' }} />
+              </Form.Item>
+            </>
+          )}
           <Form.Item label="执行方式" name="execute_now" initialValue={true}>
             <Select
               options={[
