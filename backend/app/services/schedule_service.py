@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.models.mysql_models import CrawlSchedule, CrawlScheduleRun
+from app.services.task_service import CrawlerTaskService
 
 logger = get_logger(__name__)
 
@@ -70,13 +71,18 @@ class CrawlerScheduleService:
 
     async def create_schedule(self, data: Dict[str, Any]) -> CrawlSchedule:
         """创建定时任务"""
+        task_type = data["task_type"]
+        target_config = CrawlerTaskService.normalize_task_config(
+            task_type,
+            data.get("target_config"),
+        )
         schedule = CrawlSchedule(
             id=f"sch_{uuid.uuid4().hex[:8]}",
             name=data["name"],
             description=data.get("description"),
-            task_type=data["task_type"],
+            task_type=task_type,
             source_ids=data.get("source_ids"),
-            target_config=data.get("target_config"),
+            target_config=target_config,
             cron_expression=data["cron_expression"],
             timezone=data.get("timezone", "Asia/Shanghai"),
             is_enabled=data.get("is_enabled", True),
@@ -112,6 +118,16 @@ class CrawlerScheduleService:
         schedule = await self.get_schedule_by_id(schedule_id)
         if not schedule:
             return None
+
+        if "task_type" in data or "target_config" in data:
+            task_type = data.get("task_type", schedule.task_type)
+            data = {
+                **data,
+                "target_config": CrawlerTaskService.normalize_task_config(
+                    task_type,
+                    data.get("target_config", schedule.target_config),
+                ),
+            }
 
         for key, value in data.items():
             if hasattr(schedule, key) and value is not None:
@@ -163,6 +179,10 @@ class CrawlerScheduleService:
 
         schedule.is_enabled = enabled
         if enabled:
+            schedule.target_config = CrawlerTaskService.normalize_task_config(
+                schedule.task_type,
+                schedule.target_config,
+            )
             schedule.next_run_at = self._calculate_next_run(
                 schedule.cron_expression, schedule.timezone
             )

@@ -14,6 +14,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
+from app.modules.crawler.cleanup_service import CrawlerCleanupService
 from app.models.mysql_models import CrawlTask, CrawlLog, CrawlSource
 from app.services.log_service import CrawlerLogService
 from app.services.scrapy_bridge import ScrapyBridgeService
@@ -24,6 +25,12 @@ logger = get_logger(__name__)
 
 class CrawlerTaskService:
     """爬虫任务执行服务"""
+
+    TASK_TYPES = {"full", "incremental", "targeted", "health_check", "cleanup"}
+    SPIDER_SOURCES = {
+        "github": {"github"},
+        "knowledge": {"github", "pdf"},
+    }
 
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -50,7 +57,8 @@ class CrawlerTaskService:
         Returns:
             创建的 CrawlTask 实例
         """
-        config = dict(target_config or {})
+        config = self.normalize_task_config(task_type, target_config)
+
         source_ids = self._normalize_source_ids(source_ids or config.get("source_ids") or [])
         keywords = self._normalize_keywords(config.get("keywords") or config.get("targets") or [])
         config["keywords"] = keywords
@@ -75,19 +83,26 @@ class CrawlerTaskService:
                 source_ids = [source.id]
 
         if not source and task_type in {"full", "incremental", "targeted"}:
-            sources, _ = await source_service.get_sources(skip=0, limit=1, status="active")
-            source = sources[0] if sources else None
+            compatible_source_codes = self.SPIDER_SOURCES[config["spider_type"]]
+            result = await self.db.execute(
+                select(CrawlSource)
+                .where(
+                    CrawlSource.status == "active",
+                    CrawlSource.code.in_(compatible_source_codes),
+                )
+                .order_by(CrawlSource.code)
+                .limit(1)
+            )
+            source = result.scalar_one_or_none()
             if source:
                 source_ids = [source.id]
 
         if task_type in {"full", "incremental", "targeted"}:
             if not source:
                 raise ValueError("请选择有效的数据源")
-            if not self._is_supported_source(config.get("spider_type", "github"), source.code):
-                raise ValueError(f"{config.get('spider_type', 'github')} 爬虫暂不支持数据源 {source.name}")
-            spider_type = config.get("spider_type", "github")
-            if spider_type not in ("github", "knowledge") and not keywords:
-                raise ValueError("请输入至少一个爬取关键词")
+            spider_type = config["spider_type"]
+            if not self._is_supported_source(spider_type, source.code):
+                raise ValueError(f"{spider_type} 爬虫暂不支持数据源 {source.name}")
 
         if source:
             config["source"] = source.code
@@ -143,14 +158,54 @@ class CrawlerTaskService:
             return [keyword.strip() for keyword in keywords.split(",") if keyword.strip()]
         return []
 
+    @classmethod
+    def normalize_task_config(
+        cls,
+        task_type: str,
+        target_config: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Validate and normalize configuration shared by manual and scheduled tasks."""
+        if task_type not in cls.TASK_TYPES:
+            raise ValueError(f"不支持的任务类型: {task_type}")
+
+        config = dict(target_config or {})
+        if task_type in {"full", "incremental", "targeted"}:
+            return cls._validate_crawl_config(config)
+        if task_type == "cleanup":
+            cleanup_types, retention_days = CrawlerCleanupService.validate_options(
+                config.get("cleanup_types"),
+                config.get("retention_days", 90),
+            )
+            config["cleanup_types"] = cleanup_types
+            config["retention_days"] = retention_days
+        return config
+
+    @classmethod
+    def _validate_crawl_config(cls, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate supported spider inputs before persisting a task."""
+        normalized = dict(config)
+        spider_type = str(normalized.get("spider_type") or "github").strip()
+        if spider_type not in cls.SPIDER_SOURCES:
+            supported = ", ".join(sorted(cls.SPIDER_SOURCES))
+            raise ValueError(
+                f"不支持的爬虫类型: {spider_type}，当前支持: {supported}"
+            )
+        normalized["spider_type"] = spider_type
+
+        if spider_type == "github":
+            if not normalized.get("repo_url") and not normalized.get("search_query"):
+                raise ValueError("GitHub 爬虫必须填写仓库地址或搜索关键词")
+        elif spider_type == "knowledge" and not normalized.get("pdf_path"):
+            raise ValueError("知识抽取爬虫必须填写 PDF 路径")
+        return normalized
+
     @staticmethod
     def _is_supported_source(spider_type: str, source_code: str) -> bool:
         """Check whether a Scrapy spider supports the selected source."""
-        supported_sources = {
-            "github": {"github"},
-            "knowledge": {"github", "pdf"},
-        }
-        return source_code in supported_sources.get(spider_type, {source_code})
+        return source_code in CrawlerTaskService.SPIDER_SOURCES.get(
+            spider_type,
+            set(),
+        )
 
     async def create_task_from_schedule(
         self,
@@ -428,134 +483,36 @@ class CrawlerTaskService:
                 logger.error(f"Health check failed for {source_id}: {e}")
 
     async def _execute_cleanup(self, task: CrawlTask) -> None:
-        """执行数据清洗任务"""
+        """执行爬虫运维数据清理任务。"""
         logger.info(f"Executing cleanup task: {task.id}")
-        
+
         config = task.config or {}
-        cleanup_types = config.get("cleanup_types", ["duplicate", "expired", "orphan"])
-        
-        total_cleaned = 0
-        
-        # 1. 清理重复数据
-        if "duplicate" in cleanup_types:
-            await self.update_task_progress(task.id, 10)
-            logger.info(f"Cleaning duplicates for task: {task.id}")
-            
-            from sqlalchemy import select, func
-            from app.models.mysql_models import Person
-            
-            # 查找重复的人物（按名称分组）
-            result = await self.db.execute(
-                select(Person.name, func.count(Person.id).label("count"))
-                .group_by(Person.name)
-                .having(func.count(Person.id) > 1)
-            )
-            duplicates = result.all()
-            
-            duplicate_count = len(duplicates)
-            logger.info(f"Found {duplicate_count} duplicate person names")
-            
-            # 合并重复数据（保留最新的一条）
-            for name, count in duplicates:
-                result = await self.db.execute(
-                    select(Person)
-                    .where(Person.name == name)
-                    .order_by(Person.updated_at.desc())
-                )
-                persons = result.scalars().all()
-                
-                # 保留第一条（最新的），其余标记为删除
-                for person in persons[1:]:
-                    person.status = "deleted"
-                    total_cleaned += 1
-            
-            await self.db.commit()
-            logger.info(f"Cleaned {total_cleaned} duplicate records")
-        
-        # 2. 清理过期数据
-        if "expired" in cleanup_types:
-            await self.update_task_progress(task.id, 50)
-            logger.info(f"Cleaning expired data for task: {task.id}")
-            
-            from datetime import timedelta
-            from app.models.mysql_models import Person, Work
-            
-            # 清理超过 90 天未更新的 pending 数据
-            expiry_date = datetime.utcnow() - timedelta(days=90)
-            
-            # 清理过期人物
-            result = await self.db.execute(
-                select(Person)
-                .where(
-                    Person.status == "pending",
-                    Person.updated_at < expiry_date,
-                )
-            )
-            expired_persons = result.scalars().all()
-            for person in expired_persons:
-                person.status = "deleted"
-                total_cleaned += 1
-            
-            # 清理过期作品
-            result = await self.db.execute(
-                select(Work)
-                .where(
-                    Work.status == "pending",
-                    Work.updated_at < expiry_date,
-                )
-            )
-            expired_works = result.scalars().all()
-            for work in expired_works:
-                work.status = "deleted"
-                total_cleaned += 1
-            
-            await self.db.commit()
-            logger.info(f"Cleaned {len(expired_persons)} expired persons, {len(expired_works)} expired works")
-        
-        # 3. 清理孤立数据
-        if "orphan" in cleanup_types:
-            await self.update_task_progress(task.id, 80)
-            logger.info(f"Cleaning orphan data for task: {task.id}")
-            
-            from app.models.mysql_models import PersonWork, PersonRelation
-            
-            # 清理指向已删除人物的关联
-            result = await self.db.execute(
-                select(PersonWork)
-                .join(Person, PersonWork.person_id == Person.id)
-                .where(Person.status == "deleted")
-            )
-            orphan_pws = result.scalars().all()
-            for pw in orphan_pws:
-                await self.db.delete(pw)
-                total_cleaned += 1
-            
-            # 清理指向已删除人物的关系
-            result = await self.db.execute(
-                select(PersonRelation)
-                .join(Person, PersonRelation.source_id == Person.id)
-                .where(Person.status == "deleted")
-            )
-            orphan_rels = result.scalars().all()
-            for rel in orphan_rels:
-                await self.db.delete(rel)
-                total_cleaned += 1
-            
-            await self.db.commit()
-            logger.info(f"Cleaned {len(orphan_pws)} orphan person_works, {len(orphan_rels)} orphan relations")
-        
-        # 更新进度和统计
-        await self.update_task_progress(task.id, 100)
-        
-        # 记录清洗结果
+        await self.update_task_progress(task.id, 10)
+        result = await CrawlerCleanupService(self.db).run(
+            cleanup_types=config.get("cleanup_types"),
+            retention_days=config.get("retention_days", 90),
+        )
+
+        total_cleaned = result["total_cleaned"]
+        task.target_count = total_cleaned
+        task.completed_count = total_cleaned
+        await self.update_task_progress(
+            task.id,
+            100,
+            total_requests=total_cleaned,
+            success_count=total_cleaned,
+            failed_count=0,
+        )
+
         await self.log_service.create_log({
             "task_id": task.id,
             "level": "INFO",
             "stage": "cleanup",
             "status": "success",
             "message": f"Cleanup completed: {total_cleaned} records cleaned",
+            "details": result,
         })
-        
+
         logger.info(f"Cleanup task completed: {task.id}, total_cleaned={total_cleaned}")
 
     async def _crawl_source(self, task: CrawlTask, source: CrawlSource) -> None:

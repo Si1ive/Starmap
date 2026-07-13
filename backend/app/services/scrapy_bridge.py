@@ -8,7 +8,7 @@ Handles task publishing, progress subscription, and status synchronization.
 import asyncio
 import json
 from typing import Optional, Dict, Any, Callable
-from datetime import datetime
+from datetime import datetime, timezone
 
 import redis.asyncio as aioredis
 from sqlalchemy import select
@@ -99,12 +99,12 @@ class ScrapyBridgeService:
             task_message = {
                 "task_id": task.id,
                 "task_type": task.task_type,
-                "spider_type": config.get("spider_type", "person"),
+                "spider_type": config.get("spider_type", "github"),
                 "source": source_code,
                 "source_id": source_id,
                 "keywords": keywords,
                 "config": config,
-                "published_at": datetime.utcnow().isoformat(),
+                "published_at": datetime.now(timezone.utc).isoformat(),
             }
             
             # Push to Redis queue

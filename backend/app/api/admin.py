@@ -356,16 +356,16 @@ async def create_crawler_task(
     请求示例:
     ```json
     {
-        "name": "爬取周杰伦信息",
+        "name": "下载 408 资料",
         "task_type": "targeted",
         "source_ids": ["source_001"],
         "config": {
-            "spider_type": "person",
-            "source": "baike",
-            "keywords": ["周杰伦"],
+            "spider_type": "github",
+            "source": "github",
+            "search_query": "408 考研 数据结构",
             "concurrent_limit": 3,
             "delay": 1.0,
-            "timeout": 30
+            "timeout": 60
         },
         "execute_now": true
     }
@@ -816,7 +816,10 @@ async def create_crawler_schedule(
 ):
     """创建定时任务"""
     service = CrawlerScheduleService(db)
-    schedule = await service.create_schedule(data)
+    try:
+        schedule = await service.create_schedule(data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ApiResponse(code=200, message="创建成功", data={"id": schedule.id})
 
 
@@ -870,7 +873,10 @@ async def update_crawler_schedule(
 ):
     """更新定时任务"""
     service = CrawlerScheduleService(db)
-    schedule = await service.update_schedule(schedule_id, data)
+    try:
+        schedule = await service.update_schedule(schedule_id, data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not schedule:
         return ApiResponse(code=404, message="定时任务不存在")
     return ApiResponse(code=200, message="更新成功", data={"id": schedule.id})
@@ -897,7 +903,10 @@ async def toggle_crawler_schedule(
 ):
     """启用/禁用定时任务"""
     service = CrawlerScheduleService(db)
-    schedule = await service.toggle_schedule(schedule_id, enabled)
+    try:
+        schedule = await service.toggle_schedule(schedule_id, enabled)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not schedule:
         return ApiResponse(code=404, message="定时任务不存在")
     return ApiResponse(
