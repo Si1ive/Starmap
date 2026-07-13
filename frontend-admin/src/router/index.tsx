@@ -16,6 +16,7 @@ import ApiMonitor from '@/pages/Monitor/Api'
 import DatabaseMonitor from '@/pages/Monitor/Database'
 import MonitorErrors from '@/pages/Monitor/Errors'
 import LLMMonitor from '@/pages/Monitor/Llm'
+import VectorRecallMonitor from '@/pages/Monitor/VectorRecall'
 import OutlineList from '@/pages/Outline'
 import Settings from '@/pages/Settings'
 import SettingsUsers from '@/pages/Settings/Users'
@@ -197,6 +198,14 @@ const AppRoutes = () => {
           element={
             <PrivateRoute permission="monitor:view">
               <LLMMonitor />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="monitor/vector-recall"
+          element={
+            <PrivateRoute permission="monitor:view">
+              <VectorRecallMonitor />
             </PrivateRoute>
           }
         />

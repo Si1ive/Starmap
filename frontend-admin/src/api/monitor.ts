@@ -152,3 +152,63 @@ export const getSystemMetrics = (hours: number = 24): Promise<ApiResponse<{
 }>> => {
   return adminClient.get('/monitor/system', { params: { hours } })
 }
+
+// ===== 向量召回日志 =====
+
+export interface VectorRecallTopResult {
+  rank: number
+  chapter_id?: string
+  chapter_name?: string | null
+  score: number
+  is_primary: boolean
+}
+
+export interface VectorRecallItem {
+  id: string
+  called_by?: string
+  purpose?: string
+  query_text?: string
+  query_entity_id?: string
+  subject_id?: string
+  top_results: VectorRecallTopResult[]
+  top_score: number
+  result_count: number
+  threshold_hit: boolean
+  latency_ms: number
+  status: string
+  error_msg?: string
+  created_at?: string
+}
+
+export interface VectorRecallStats {
+  window_hours: number
+  total_recalls: number
+  hit_count: number
+  miss_count: number
+  error_count: number
+  hit_rate: number
+  threshold_hit_rate: number
+  avg_top_score: number
+  avg_latency_ms: number
+  p95_latency_ms: number
+}
+
+export const listVectorRecalls = (params: {
+  page?: number
+  page_size?: number
+  called_by?: string
+  status?: string
+  keyword?: string
+}): Promise<ApiResponse<{ total: number; page: number; page_size: number; items: VectorRecallItem[] }>> => {
+  return adminClient.get('/monitor/vector-recalls', { params })
+}
+
+export const getVectorRecallStats = (hours: number = 24): Promise<ApiResponse<VectorRecallStats>> => {
+  return adminClient.get('/monitor/vector-recalls/stats', { params: { hours } })
+}
+
+export const deleteVectorRecalls = (params: {
+  older_than_days?: number
+}): Promise<ApiResponse<{ deleted: number }>> => {
+  return adminClient.delete('/monitor/vector-recalls', { params })
+}

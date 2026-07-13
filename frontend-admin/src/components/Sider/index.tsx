@@ -22,6 +22,7 @@ import {
   ThunderboltOutlined,
   ApartmentOutlined,
   ShareAltOutlined,
+  AimOutlined,
 } from '@ant-design/icons'
 import { useAdminStore } from '@/store'
 import { usePermission } from '@/hooks/usePermission'
@@ -70,7 +71,8 @@ const menuItems = [
       { key: '/admin/monitor/llm', icon: <ThunderboltOutlined />, label: 'LLM 调用' },
       { key: '/admin/monitor/api', icon: <ApiOutlined />, label: 'API性能' },
       { key: '/admin/monitor/database', icon: <DatabaseOutlined />, label: '数据库' },
-      { key: '/admin/monitor/errors', icon: <WarningOutlined />, label: '错误日志' },
+      { key: '/admin/monitor/errors', icon: <WarningOutlined />, label: '服务日志' },
+      { key: '/admin/monitor/vector-recall', icon: <AimOutlined />, label: '向量召回' },
     ],
   },
   {
