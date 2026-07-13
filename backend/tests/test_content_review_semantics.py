@@ -100,6 +100,71 @@ async def test_approving_knowledge_point_records_audit_without_publishing_side_e
 
 
 @pytest.mark.asyncio
+async def test_knowledge_review_commits_before_rebuilding_changed_index(monkeypatch):
+    events = []
+    point = SimpleNamespace(
+        id="knowledge-2",
+        status="active",
+        primary_chapter_id="chapter-1",
+        review_status="pending",
+        review_notes=None,
+        reviewed_by=None,
+        reviewed_at=None,
+        topic_terms=["旧术语"],
+    )
+    db = AsyncMock()
+    db.execute.return_value = _ScalarOneResult(point)
+
+    async def commit():
+        events.append("commit")
+
+    async def rebuild(entity_type, entity_id):
+        events.append(("rebuild", entity_type, entity_id))
+        return {"status": "success", "segments_count": 2}
+
+    db.commit.side_effect = commit
+    service = ReviewService(db)
+    monkeypatch.setattr(service, "_rebuild_entity_index", rebuild)
+
+    result = await service.review_knowledge_point(
+        knowledge_point_id=point.id,
+        review_status="approved",
+        topic_terms=["新术语"],
+    )
+
+    assert events == [
+        "commit",
+        ("rebuild", "knowledge_point", point.id),
+    ]
+    assert result["indexing"] == {"status": "success", "segments_count": 2}
+
+
+@pytest.mark.asyncio
+async def test_review_index_failure_is_returned_without_undoing_audit(monkeypatch):
+    db = AsyncMock()
+
+    async def fail_rebuild(_service, entity_type, entity_id):
+        raise RuntimeError(f"index unavailable: {entity_type}/{entity_id}")
+
+    monkeypatch.setattr(
+        SegmentService,
+        "rebuild_entity_segments",
+        fail_rebuild,
+    )
+
+    result = await ReviewService(db)._rebuild_entity_index(
+        "question",
+        "question-2",
+    )
+
+    assert result == {
+        "status": "failed",
+        "error": "index unavailable: question/question-2",
+    }
+    db.rollback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_review_list_filter_does_not_reintroduce_publication_gate():
     db = AsyncMock()
     db.scalar.return_value = 0

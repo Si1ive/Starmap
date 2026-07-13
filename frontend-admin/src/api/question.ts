@@ -1,5 +1,5 @@
 import adminClient from './client'
-import type { ApiResponse, PaginatedResponse, Question } from '@/types'
+import type { ApiResponse, ContentReviewResult, PaginatedResponse, Question } from '@/types'
 
 // ========== 参数类型 ==========
 
@@ -67,6 +67,6 @@ export const reviewQuestion = (
     review_notes?: string
     primary_chapter_id?: string
   },
-): Promise<ApiResponse<Question>> => {
+): Promise<ApiResponse<ContentReviewResult>> => {
   return adminClient.post(`/review/questions/${id}`, null, { params: data })
 }

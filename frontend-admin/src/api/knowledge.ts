@@ -1,5 +1,12 @@
 import adminClient from './client'
-import type { ApiResponse, PaginatedResponse, KnowledgePoint, Subject, Chapter } from '@/types'
+import type {
+  ApiResponse,
+  Chapter,
+  ContentReviewResult,
+  KnowledgePoint,
+  PaginatedResponse,
+  Subject,
+} from '@/types'
 
 // ========== 参数类型 ==========
 
@@ -79,7 +86,7 @@ export const reviewKnowledgePoint = (
     primary_chapter_id?: string
     topic_terms?: string[]
   },
-): Promise<ApiResponse<KnowledgePoint>> => {
+): Promise<ApiResponse<ContentReviewResult>> => {
   return adminClient.post(`/review/knowledge/${id}`, null, { params: data })
 }
 

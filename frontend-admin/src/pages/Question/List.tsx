@@ -98,8 +98,15 @@ const QuestionList = () => {
         review_notes: reviewNotes,
         primary_chapter_id: primaryChapterId,
       }),
-    onSuccess: (_, variables) => {
-      message.success(variables.reviewStatus === 'approved' ? '人工核验已通过' : '已标记为未通过')
+    onSuccess: (res, variables) => {
+      const indexingStatus = res.data?.indexing?.status
+      if (indexingStatus === 'failed') {
+        message.warning('人工核验已保存，但检索索引更新失败，可稍后重试')
+      } else if (indexingStatus === 'warning') {
+        message.warning('人工核验和新索引已保存，但旧向量清理失败')
+      } else {
+        message.success(variables.reviewStatus === 'approved' ? '人工核验已通过' : '已标记为未通过')
+      }
       setReviewItem(null)
       queryClient.invalidateQueries({ queryKey: ['questions'] })
     },

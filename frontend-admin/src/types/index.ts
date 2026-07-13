@@ -290,6 +290,21 @@ export interface Question {
   updated_at?: string
 }
 
+export interface ContentIndexingResult {
+  status: 'success' | 'warning' | 'failed' | 'skipped'
+  segments_count?: number
+  cleanup_warning?: string
+  error?: string
+}
+
+export interface ContentReviewResult {
+  id: string
+  review_status: 'pending' | 'approved' | 'rejected'
+  status: string
+  reviewed_at: string
+  indexing: ContentIndexingResult
+}
+
 // 通用分页响应
 export interface PaginatedResponse<T> {
   items: T[]

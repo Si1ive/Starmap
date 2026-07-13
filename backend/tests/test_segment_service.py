@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -48,3 +48,91 @@ async def test_build_document_segments_initializes_collections_and_scopes_work(
         "knowledge_segments": {"segments_count": 4},
         "question_segments": {"segments_count": 0, "skipped": True},
     }
+
+
+@pytest.mark.asyncio
+async def test_store_segments_cleans_old_vectors_only_after_mysql_commit(monkeypatch):
+    events = []
+    db = SimpleNamespace(
+        add_all=Mock(side_effect=lambda _segments: events.append("add_all")),
+        commit=AsyncMock(side_effect=lambda: events.append("commit")),
+        rollback=AsyncMock(),
+    )
+    service = SegmentService(db)
+    service.qdrant = SimpleNamespace(
+        upsert_points=Mock(
+            side_effect=lambda _collection, _points: events.append("upsert")
+        ),
+    )
+
+    async def get_old_segments(_entity_type, _entity_ids):
+        return [SimpleNamespace(qdrant_point_id="old-point")]
+
+    async def delete_rows(_entity_type, _entity_ids):
+        events.append("delete_rows")
+
+    def delete_points(_collection, point_ids):
+        events.append(("delete_points", point_ids))
+
+    monkeypatch.setattr(service, "_get_entity_segments", get_old_segments)
+    monkeypatch.setattr(service, "_delete_segment_rows", delete_rows)
+    monkeypatch.setattr(service, "_delete_qdrant_points", delete_points)
+
+    warning = await service._store_segments(
+        entity_type="question",
+        entity_ids=["question-1"],
+        collection="question_segments",
+        segments=[SimpleNamespace(id="new-segment")],
+        qdrant_points=[SimpleNamespace(id="new-point")],
+        rebuild=True,
+    )
+
+    assert warning is None
+    assert events == [
+        "upsert",
+        "delete_rows",
+        "add_all",
+        "commit",
+        ("delete_points", ["old-point"]),
+    ]
+    db.rollback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_store_segments_commit_failure_keeps_old_vector_and_cleans_new(
+    monkeypatch,
+):
+    deleted_point_ids = []
+    db = SimpleNamespace(
+        add_all=Mock(),
+        commit=AsyncMock(side_effect=RuntimeError("mysql unavailable")),
+        rollback=AsyncMock(),
+    )
+    service = SegmentService(db)
+    service.qdrant = SimpleNamespace(upsert_points=Mock())
+
+    async def get_old_segments(_entity_type, _entity_ids):
+        return [SimpleNamespace(qdrant_point_id="old-point")]
+
+    async def delete_rows(_entity_type, _entity_ids):
+        return None
+
+    def delete_points(_collection, point_ids):
+        deleted_point_ids.append(point_ids)
+
+    monkeypatch.setattr(service, "_get_entity_segments", get_old_segments)
+    monkeypatch.setattr(service, "_delete_segment_rows", delete_rows)
+    monkeypatch.setattr(service, "_delete_qdrant_points", delete_points)
+
+    with pytest.raises(RuntimeError, match="mysql unavailable"):
+        await service._store_segments(
+            entity_type="knowledge_point",
+            entity_ids=["knowledge-1"],
+            collection="knowledge_segments",
+            segments=[SimpleNamespace(id="new-segment")],
+            qdrant_points=[SimpleNamespace(id="new-point")],
+            rebuild=True,
+        )
+
+    assert deleted_point_ids == [["new-point"]]
+    db.rollback.assert_awaited_once()

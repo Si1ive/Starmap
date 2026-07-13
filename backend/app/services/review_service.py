@@ -15,9 +15,9 @@ from app.core.logging import get_logger
 from app.models.mysql_models import (
     KnowledgePoint, Question, DocumentSectionMapping, CanonicalChapter,
     KnowledgeRelation, KnowledgePointChapterLink, QuestionChapterLink,
-    RetrievalSegment
 )
 from app.services.chapter_compat_service import resolve_legacy_chapter_id
+from app.services.segment_service import SegmentService
 
 logger = get_logger(__name__)
 
@@ -92,8 +92,11 @@ class ReviewService:
         if not kp:
             raise ValueError(f"知识点不存在: {knowledge_point_id}")
 
+        should_rebuild_index = False
+
         # 更新章节归属
         if primary_chapter_id and primary_chapter_id != kp.primary_chapter_id:
+            should_rebuild_index = True
             canonical_chapter = await self.db.get(CanonicalChapter, primary_chapter_id)
             kp.primary_chapter_id = primary_chapter_id
             if canonical_chapter and canonical_chapter.subject_id:
@@ -111,11 +114,9 @@ class ReviewService:
                 "knowledge_point", knowledge_point_id, primary_chapter_id
             )
 
-            # 标记需要重建 segment
-            await self._mark_segment_rebuild("knowledge_point", knowledge_point_id)
-
         # 更新主题术语
         if topic_terms is not None:
+            should_rebuild_index = should_rebuild_index or topic_terms != (kp.topic_terms or [])
             kp.topic_terms = topic_terms
 
         kp.review_status = review_status
@@ -124,11 +125,17 @@ class ReviewService:
         kp.reviewed_at = datetime.now(UTC).replace(tzinfo=None)
 
         await self.db.commit()
+        indexing = (
+            await self._rebuild_entity_index("knowledge_point", knowledge_point_id)
+            if should_rebuild_index
+            else {"status": "skipped"}
+        )
 
         logger.info(
             "知识点审核完成",
             knowledge_point_id=knowledge_point_id,
             review_status=review_status,
+            indexing_status=indexing["status"],
         )
 
         return {
@@ -136,6 +143,7 @@ class ReviewService:
             "review_status": review_status,
             "status": kp.status,
             "reviewed_at": kp.reviewed_at.isoformat(),
+            "indexing": indexing,
         }
 
     # ========== 题目审核 ==========
@@ -210,8 +218,11 @@ class ReviewService:
         if not q:
             raise ValueError(f"题目不存在: {question_id}")
 
+        should_rebuild_index = False
+
         # 更新章节归属
         if primary_chapter_id and primary_chapter_id != q.primary_chapter_id:
+            should_rebuild_index = True
             canonical_chapter = await self.db.get(CanonicalChapter, primary_chapter_id)
             q.primary_chapter_id = primary_chapter_id
             if canonical_chapter and canonical_chapter.subject_id:
@@ -229,20 +240,23 @@ class ReviewService:
                 "question", question_id, primary_chapter_id
             )
 
-            # 标记需要重建 segment
-            await self._mark_segment_rebuild("question", question_id)
-
         q.review_status = review_status
         q.review_notes = review_notes
         q.reviewed_by = reviewed_by
         q.reviewed_at = datetime.now(UTC).replace(tzinfo=None)
 
         await self.db.commit()
+        indexing = (
+            await self._rebuild_entity_index("question", question_id)
+            if should_rebuild_index
+            else {"status": "skipped"}
+        )
 
         logger.info(
             "题目审核完成",
             question_id=question_id,
             review_status=review_status,
+            indexing_status=indexing["status"],
         )
 
         return {
@@ -250,6 +264,7 @@ class ReviewService:
             "review_status": review_status,
             "status": q.status,
             "reviewed_at": q.reviewed_at.isoformat(),
+            "indexing": indexing,
         }
 
     # ========== 关系审核 ==========
@@ -510,21 +525,32 @@ class ReviewService:
                 )
                 self.db.add(link)
 
-    async def _mark_segment_rebuild(self, entity_type: str, entity_id: str):
-        """标记需要重建 segment"""
-        result = await self.db.execute(
-            select(RetrievalSegment).where(
-                and_(
-                    RetrievalSegment.entity_type == entity_type,
-                    RetrievalSegment.entity_id == entity_id,
-                )
+    async def _rebuild_entity_index(
+        self,
+        entity_type: str,
+        entity_id: str,
+    ) -> Dict[str, Any]:
+        """审核已落库后增量重建索引，失败不回滚人工审核。"""
+        try:
+            result = await SegmentService(self.db).rebuild_entity_segments(
+                entity_type,
+                entity_id,
             )
-        )
-        segments = result.scalars().all()
+        except Exception as exc:
+            await self.db.rollback()
+            logger.exception(
+                "审核后的索引重建失败",
+                entity_type=entity_type,
+                entity_id=entity_id,
+                error=str(exc),
+            )
+            return {
+                "status": "failed",
+                "error": str(exc)[:500],
+            }
 
-        for segment in segments:
-            # 标记需要重建（可以删除或设置状态）
-            await self.db.delete(segment)
+        status = "warning" if result.get("cleanup_warning") else "success"
+        return {"status": status, **result}
 
     def _knowledge_point_to_dict(self, kp: KnowledgePoint) -> Dict[str, Any]:
         return {
