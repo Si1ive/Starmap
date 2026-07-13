@@ -5,6 +5,7 @@
 - [技术选型](./tech-stack.md) - 当前平台技术栈
 - [数据模型](./data-model.md) - 数据结构与检索模型
 - [架构设计](./architecture.md) - 系统架构
+- [后端模块化单体演进方案](./backend-modular-monolith.md) - 后端边界、依赖规则与分阶段重构路线
 - [多模态入库与检索设计](./multimodal-ingestion-retrieval-design.md) - 语料入库与检索方案
 - [PDF 解析器切换设计](./pdf-parser-switching-design.md) - Docling / MinerU 单活切换方案
 - [PDF 解析器部署方案](./pdf-parser-deployment.md) - Podman 下的单活部署建议

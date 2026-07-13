@@ -21,7 +21,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, func, or_, and_, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.logging import get_logger, get_request_id
+from app.api.schemas import ApiResponse, BatchIdsRequest
+from app.core.logging import get_logger
 from app.core.websocket import log_websocket_manager
 from app.db import get_db, get_optional_db
 from app.services.source_service import CrawlerSourceService
@@ -61,19 +62,6 @@ class LoginResponse(BaseModel):
     """登录响应"""
     token: str
     user: AdminUserResponse
-
-
-class ApiResponse(BaseModel):
-    """通用 API 响应"""
-    code: int = 200
-    message: str = "success"
-    data: Optional[Any] = None
-    request_id: str = Field(default_factory=get_request_id)
-
-
-class BatchIdsRequest(BaseModel):
-    """批量 ID 请求"""
-    ids: List[str] = Field(..., min_length=1, max_length=500, description="待处理 ID 列表")
 
 
 # 模拟管理员数据（开发调试用）
@@ -2033,56 +2021,6 @@ def _hash_admin_password(password: str) -> str:
         base64.b64encode(salt).decode("ascii"),
         base64.b64encode(digest).decode("ascii"),
     )
-
-
-# ========== 学科管理 ==========
-
-@router.get("/subjects", response_model=ApiResponse)
-async def get_subjects(db: AsyncSession = Depends(get_db)):
-    """获取学科列表"""
-    from app.models.mysql_models import Subject
-    result = await db.execute(
-        select(Subject).where(Subject.status == "active").order_by(Subject.sort_order)
-    )
-    subjects = result.scalars().all()
-    return ApiResponse(data={
-        "items": [
-            {
-                "id": s.id,
-                "name": s.name,
-                "code": s.code,
-                "description": s.description,
-                "icon": s.icon,
-                "sort_order": s.sort_order
-            }
-            for s in subjects
-        ],
-        "total": len(subjects)
-    })
-
-
-@router.get("/subjects/{subject_id}/chapters", response_model=ApiResponse)
-async def get_chapters(subject_id: str, db: AsyncSession = Depends(get_db)):
-    """获取学科下的章节列表"""
-    from app.models.mysql_models import Chapter
-    result = await db.execute(
-        select(Chapter)
-        .where(Chapter.subject_id == subject_id, Chapter.status == "active")
-        .order_by(Chapter.sort_order)
-    )
-    chapters = result.scalars().all()
-    return ApiResponse(data={
-        "items": [
-            {
-                "id": c.id,
-                "name": c.name,
-                "description": c.description,
-                "sort_order": c.sort_order
-            }
-            for c in chapters
-        ],
-        "total": len(chapters)
-    })
 
 
 # ========== 知识点管理 ==========
@@ -5147,51 +5085,6 @@ async def import_outline_from_llm(request: OutlineFromLLMRequest, db: AsyncSessi
         return ApiResponse(data=result)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
-
-@router.get("/outlines/runs/{run_id}", response_model=ApiResponse)
-async def get_outline_ingestion_progress(run_id: str, db: AsyncSession = Depends(get_db)):
-    """
-    查询大纲入库任务进度
-
-    返回:
-    {
-        "run_id": "...",
-        "status": "running / completed / partial_success / failed",
-        "outline_name": "2024年408统考大纲",
-        "total_subjects": 4,
-        "processed_subjects": 2,
-        "current_subject": "数据结构",
-        "created_at": "...",
-        "completed_at": "...",
-        "error_message": null
-    }
-    """
-    from app.models.mysql_models import OutlineIngestionRun
-
-    run = await db.get(OutlineIngestionRun, run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="任务不存在")
-
-    return ApiResponse(data={
-        "id": run.id,
-        "document_id": run.document_id,
-        "outline_id": run.outline_id,
-        "outline_name": run.outline_name,
-        "file_name": (run.result_summary or {}).get("file_name") if isinstance(run.result_summary, dict) else None,
-        "status": run.status,
-        "current_stage": run.current_stage,
-        "stage_detail": run.stage_detail,
-        "total_subjects": run.total_subjects,
-        "processed_subjects": run.processed_subjects,
-        "successful_subjects": run.successful_subjects,
-        "current_subject_name": run.current_subject_name,
-        "error_detail": run.error_detail,
-        "result_summary": run.result_summary,
-        "started_at": run.started_at.isoformat() if run.started_at else None,
-        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
-        "created_at": run.created_at.isoformat() if run.created_at else None,
-    })
 
 
 @router.delete("/outlines/{outline_id}", response_model=ApiResponse)

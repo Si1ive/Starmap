@@ -6,11 +6,11 @@
 ┌──────────────────────────────────────────────────────────────┐
 │                    FastAPI API Gateway                      │
 ├──────────────────────┬───────────────────────────────────────┤
-│ 管理端接口           │ 对话与检索接口                        │
+│ 领域模块路由         │ 对话与检索接口                        │
 │ /api/v1/admin/*      │ /api/v1/chat  /api/v1/admin/search    │
 ├──────────────────────┴───────────────────────────────────────┤
-│                       Service Layer                          │
-│ Dashboard / Crawler / Corpus / Review / Retrieval / Chat    │
+│                 Modular Application Layer                   │
+│ Catalog / Content / Corpus / Retrieval / Crawler / Ops      │
 ├──────────────────────────────────────────────────────────────┤
 │                    Async Infrastructure                      │
 │ Redis Cache / Task Queue / Log Stream / Session Store       │
@@ -30,6 +30,8 @@
 - `MySQL` 是业务事实源
 - `Redis` 负责缓存、会话、任务队列和实时日志
 - `Scrapy Service` 负责 PDF / 文件解析与结构化入库
+- 后端正在从巨型管理路由和共享 Service 目录演进为领域化模块单体
+- 新模块边界和迁移顺序见[后端模块化单体演进方案](./backend-modular-monolith.md)
 
 ## 技术栈
 
@@ -56,7 +58,7 @@
 
 ### 管理端接口
 
-当前 `backend/app/api/admin.py` 已覆盖以下主要能力：
+管理端 URL 保持 `/api/v1/admin/*` 不变，内部按领域模块逐步拆分：
 
 - 认证：`/admin/auth/*`
 - 看板：`/admin/dashboard/*`
@@ -67,6 +69,10 @@
 - 语料与解析：`/admin/corpus/*`
 - 审核：`/admin/review/*`
 - 检索调试：`/admin/search`、`/admin/search/with-relations`
+
+已迁移模块：
+
+- `backend/app/modules/catalog/router.py`：学科与章节目录
 
 ### 对话接口
 
