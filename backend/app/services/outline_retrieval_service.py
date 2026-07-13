@@ -285,7 +285,7 @@ async def retrieve_by_chapters(
     if chapter_id_list:
         conds = [
             QuestionChapterLink.canonical_chapter_id.in_(chapter_id_list),
-            Question.review_status == "approved",
+            Question.status == "active",
         ]
         if exclude_question_id:
             conds.append(Question.id != exclude_question_id)
@@ -298,7 +298,7 @@ async def retrieve_by_chapters(
         knowledge_points = (await db.execute(
             select(KnowledgePoint).join(KnowledgePointChapterLink).where(
                 KnowledgePointChapterLink.canonical_chapter_id.in_(chapter_id_list),
-                KnowledgePoint.review_status == "approved",
+                KnowledgePoint.status == "active",
             )
         )).scalars().all()
 

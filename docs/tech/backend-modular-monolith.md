@@ -61,11 +61,27 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - 迁移学科/章节目录路由
 - 增加路由路径、方法和重复注册契约测试
 
+状态：已完成。
+
 ### 阶段 2：内容与审核
 
 - 迁移题目、知识点管理及其审核接口
 - 将“是否可用”和“是否人工审核”拆成两个独立维度
 - 入库后默认可用，审核只记录人工结论和备注
+
+状态：已完成。题目与知识点路由位于 `app/modules/content`，原 URL 保持不变。
+
+内容状态约定：
+
+- `status=active`：内容可用于管理、章节关联、富化、分段和检索
+- `status=pending`：显式暂停使用，不代表待人工审核
+- `status=deleted`：软删除
+- `review_status`：人工核验结论，只用于审计和筛选，不控制内容发布
+- `review_notes`、`reviewed_by`、`reviewed_at`：保留人工核验记录
+
+实体抽取写入的题目和知识点默认 `status=active`、
+`review_status=pending`。审核通过或拒绝都不会自动改变 `status`，
+也不会隐式触发富化或章节关联。
 
 ### 阶段 3：语料流水线
 

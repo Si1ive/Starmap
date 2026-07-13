@@ -2383,6 +2383,7 @@ class EntityExtractionService:
             content=content,
             topic_terms=topic_terms,
             review_status="pending",
+            status="active",
         )
         self.db.add(knowledge_point)
 
@@ -3040,8 +3041,9 @@ class EntityExtractionService:
                     topic_terms=topic_terms,
                     question_no=str(_extract_question_number_simple(question_dict) or "") or None,
                     review_status="pending",
-                    # status 一律用默认 pending 走审核流程，不因归属与否跳过审核；
-                    # 归属状态只记在 extraction_meta.unassigned，供前端区分与指认。
+                    status="active",
+                    # 归属状态只记在 extraction_meta.unassigned，供前端区分与指认；
+                    # 是否可用与人工审核状态独立。
                     extraction_meta={
                         **(question_dict.get('extraction_meta') or {}),
                         "unassigned": unassigned,
@@ -3441,6 +3443,7 @@ class EntityExtractionService:
             content=content,
             answer="",  # 需要后续从 blocks 中提取或人工补充
             review_status="pending",
+            status="active",
         )
         self.db.add(question)
 

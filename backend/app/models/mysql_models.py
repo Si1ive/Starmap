@@ -472,10 +472,12 @@ class KnowledgePoint(Base):
         default="pending", comment="审核状态"
     )
     review_notes: Mapped[Optional[str]] = mapped_column(Text, comment="审核备注")
+    reviewed_by: Mapped[Optional[str]] = mapped_column(String(32), comment="审核人")
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, comment="审核时间")
     status: Mapped[str] = mapped_column(
         Enum("active", "pending", "deleted"),
-        default="pending",
-        comment="状态"
+        default="active",
+        comment="可用状态；与人工审核状态独立"
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -575,10 +577,12 @@ class Question(Base):
         default="pending", comment="审核状态"
     )
     review_notes: Mapped[Optional[str]] = mapped_column(Text, comment="审核备注")
+    reviewed_by: Mapped[Optional[str]] = mapped_column(String(32), comment="审核人")
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, comment="审核时间")
     status: Mapped[str] = mapped_column(
         Enum("active", "pending", "deleted"),
-        default="pending",
-        comment="状态"
+        default="active",
+        comment="可用状态；与人工审核状态独立"
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(

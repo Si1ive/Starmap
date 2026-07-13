@@ -1,7 +1,7 @@
 """
 语料富化增强服务
 
-审核通过后用 LLM 富化题目/知识点，并建立题↔知识点关联：
+按需用 LLM 富化当前可用的题目/知识点，并建立题↔知识点关联：
 
 题目富化 enrich_question：
 - 若 answer_source=="extracted"（PDF 答案区已回连）不覆盖答案，只补解析；
@@ -259,17 +259,17 @@ class EnrichmentService:
     # ========== 批量入口 ==========
 
     async def enrich_document(self, document_id: str, batch_size: int = 15) -> Dict[str, Any]:
-        """批量富化某文档下所有已审核的题目和知识点。单个失败不阻塞其他。"""
+        """批量富化某文档下所有可用的题目和知识点。单个失败不阻塞其他。"""
         q_rows = (await self.db.execute(
             select(Question.id).where(
                 Question.source_document_id == document_id,
-                Question.review_status == "approved",
+                Question.status == "active",
             )
         )).scalars().all()
         kp_rows = (await self.db.execute(
             select(KnowledgePoint.id).where(
                 KnowledgePoint.source_document_id == document_id,
-                KnowledgePoint.review_status == "approved",
+                KnowledgePoint.status == "active",
             )
         )).scalars().all()
 

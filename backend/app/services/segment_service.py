@@ -1,7 +1,7 @@
 """
 Segment 构建服务
 
-从已审核的知识点和题目构建检索单元（RetrievalSegment），
+从当前可用的知识点和题目构建检索单元（RetrievalSegment），
 生成 embedding 并写入 Qdrant。
 
 支持：
@@ -78,7 +78,7 @@ class SegmentService:
         """
         # 1. 查询知识点
         query = select(KnowledgePoint).where(
-            KnowledgePoint.review_status == "approved"
+            KnowledgePoint.status == "active"
         )
         if subject_id:
             query = query.where(KnowledgePoint.subject_id == subject_id)
@@ -91,7 +91,7 @@ class SegmentService:
         kps = result.scalars().all()
 
         if not kps:
-            return {"segments_count": 0, "message": "没有已审核的知识点"}
+            return {"segments_count": 0, "message": "没有可用的知识点"}
 
         # 2. 如需重建，先删除旧 segments
         if rebuild:
@@ -396,7 +396,7 @@ class SegmentService:
         - explanation segment: 解析（如有）
         - option segment: 选项（如有）
         """
-        query = select(Question).where(Question.review_status == "approved")
+        query = select(Question).where(Question.status == "active")
         if subject_id:
             query = query.where(Question.subject_id == subject_id)
         if document_id:
@@ -408,7 +408,7 @@ class SegmentService:
         questions = result.scalars().all()
 
         if not questions:
-            return {"segments_count": 0, "message": "没有已审核的题目"}
+            return {"segments_count": 0, "message": "没有可用的题目"}
 
         if rebuild:
             q_ids = [q.id for q in questions]

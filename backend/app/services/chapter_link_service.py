@@ -1,7 +1,7 @@
 """
 语料 ↔ 大纲章节关联服务
 
-当知识点/题目审核通过后，自动建立与大纲章节的关联。
+为当前可用的知识点/题目建立与大纲章节的关联。
 
 匹配策略（4层）:
 1. 直接读取: entity.primary_chapter_id（已有关联）
@@ -71,7 +71,7 @@ class ChapterLinkService:
 
     async def batch_link_document(self, document_id: str) -> Dict[str, Any]:
         """
-        批量处理一个文档下的所有已审核实体
+        批量处理一个文档下的所有可用实体
 
         返回:
         {
@@ -79,19 +79,19 @@ class ChapterLinkService:
             "questions": {"linked": N, "failed": M}
         }
         """
-        # 查询该文档下的所有已审核知识点
+        # 查询该文档下的所有可用知识点
         kps = (await self.db.execute(
             select(KnowledgePoint).where(
                 KnowledgePoint.source_document_id == document_id,
-                KnowledgePoint.review_status == "approved"
+                KnowledgePoint.status == "active"
             )
         )).scalars().all()
 
-        # 查询该文档下的所有已审核题目
+        # 查询该文档下的所有可用题目
         questions = (await self.db.execute(
             select(Question).where(
                 Question.source_document_id == document_id,
-                Question.review_status == "approved"
+                Question.status == "active"
             )
         )).scalars().all()
 
@@ -129,7 +129,7 @@ class ChapterLinkService:
     async def backfill_question_chapters(
         self,
         review_status: str = "pending",
-        status: str = "pending",
+        status: str = "active",
         subject_id: Optional[str] = None,
         limit: int = 500,
         force: bool = False,
@@ -138,7 +138,7 @@ class ChapterLinkService:
         """
         批量回填题目的章节归属。
 
-        用于新章节解析策略上线后修正历史 pending 题目：
+        用于新章节解析策略上线后修正历史题目：
         - 默认只处理待审核题目
         - force=False 时跳过已有 primary_chapter_id 的题目
         - force=True 时重新解析并覆盖 subject_id / primary_chapter_id / chapter_id

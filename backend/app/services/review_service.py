@@ -4,7 +4,7 @@
 统一处理知识点、题目、章节映射、关系的审核操作。
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Dict, Any, List, Optional
 
 from sqlalchemy import select, and_, func, or_
@@ -55,10 +55,6 @@ class ReviewService:
             )
         if review_status:
             conditions.append(KnowledgePoint.review_status == review_status)
-            if review_status == "pending":
-                conditions.append(KnowledgePoint.status == "pending")
-            elif review_status == "approved":
-                conditions.append(KnowledgePoint.status == "active")
 
         if conditions:
             query = query.where(and_(*conditions))
@@ -123,33 +119,11 @@ class ReviewService:
             kp.topic_terms = topic_terms
 
         kp.review_status = review_status
-        if review_status == "approved":
-            kp.status = "active"
-        else:
-            kp.status = "pending"
         kp.review_notes = review_notes
+        kp.reviewed_by = reviewed_by
+        kp.reviewed_at = datetime.now(UTC).replace(tzinfo=None)
 
         await self.db.commit()
-
-        # 审核通过 → 自动富化（LLM 生成摘要/别名/要点）。未配置 enrich_llm 时优雅降级，不阻塞审核。
-        enrich_result = None
-        chapter_link_result = None
-        if review_status == "approved":
-            try:
-                from app.services.enrichment_service import EnrichmentService
-                enrich_result = await EnrichmentService(self.db).enrich_knowledge_point(knowledge_point_id)
-            except Exception as e:
-                logger.warning("知识点审核后富化失败，不影响审核", knowledge_point_id=knowledge_point_id, error=str(e))
-
-            # 自动关联大纲章节（富化后执行，利用富化生成的 summary 提升匹配准确率）
-            try:
-                from app.services.chapter_link_service import ChapterLinkService
-                chapter_link_result = await ChapterLinkService(self.db).link_knowledge_point_to_chapters(knowledge_point_id)
-                logger.info("知识点自动关联章节", knowledge_point_id=knowledge_point_id,
-                           linked_count=chapter_link_result.get("linked_count", 0),
-                           strategy=chapter_link_result.get("strategy_used"))
-            except Exception as e:
-                logger.warning("知识点自动关联章节失败，不影响审核", knowledge_point_id=knowledge_point_id, error=str(e))
 
         logger.info(
             "知识点审核完成",
@@ -160,8 +134,8 @@ class ReviewService:
         return {
             "id": knowledge_point_id,
             "review_status": review_status,
-            "enrich": enrich_result,
-            "chapter_link": chapter_link_result,
+            "status": kp.status,
+            "reviewed_at": kp.reviewed_at.isoformat(),
         }
 
     # ========== 题目审核 ==========
@@ -200,10 +174,6 @@ class ReviewService:
             conditions.append(Question.type == question_type)
         if review_status:
             conditions.append(Question.review_status == review_status)
-            if review_status == "pending":
-                conditions.append(Question.status == "pending")
-            elif review_status == "approved":
-                conditions.append(Question.status == "active")
 
         if conditions:
             query = query.where(and_(*conditions))
@@ -263,33 +233,11 @@ class ReviewService:
             await self._mark_segment_rebuild("question", question_id)
 
         q.review_status = review_status
-        if review_status == "approved":
-            q.status = "active"
-        else:
-            q.status = "pending"
         q.review_notes = review_notes
+        q.reviewed_by = reviewed_by
+        q.reviewed_at = datetime.now(UTC).replace(tzinfo=None)
 
         await self.db.commit()
-
-        # 审核通过 → 自动富化（答案/解析 + 考点回连知识点）。未配置 enrich_llm 时优雅降级。
-        enrich_result = None
-        chapter_link_result = None
-        if review_status == "approved":
-            try:
-                from app.services.enrichment_service import EnrichmentService
-                enrich_result = await EnrichmentService(self.db).enrich_question(question_id)
-            except Exception as e:
-                logger.warning("题目审核后富化失败，不影响审核", question_id=question_id, error=str(e))
-
-            # 自动关联大纲章节
-            try:
-                from app.services.chapter_link_service import ChapterLinkService
-                chapter_link_result = await ChapterLinkService(self.db).link_question_to_chapters(question_id)
-                logger.info("题目自动关联章节", question_id=question_id,
-                           linked_count=chapter_link_result.get("linked_count", 0),
-                           strategy=chapter_link_result.get("strategy_used"))
-            except Exception as e:
-                logger.warning("题目自动关联章节失败，不影响审核", question_id=question_id, error=str(e))
 
         logger.info(
             "题目审核完成",
@@ -300,8 +248,8 @@ class ReviewService:
         return {
             "id": question_id,
             "review_status": review_status,
-            "enrich": enrich_result,
-            "chapter_link": chapter_link_result,
+            "status": q.status,
+            "reviewed_at": q.reviewed_at.isoformat(),
         }
 
     # ========== 关系审核 ==========
@@ -598,6 +546,8 @@ class ReviewService:
             "related_point_ids": kp.related_point_ids,
             "review_status": kp.review_status,
             "review_notes": kp.review_notes,
+            "reviewed_by": kp.reviewed_by,
+            "reviewed_at": kp.reviewed_at.isoformat() if kp.reviewed_at else None,
             "status": kp.status,
             "created_at": kp.created_at.isoformat() if kp.created_at else None,
             "updated_at": kp.updated_at.isoformat() if kp.updated_at else None,
@@ -626,6 +576,8 @@ class ReviewService:
             "knowledge_point_ids": q.knowledge_point_ids,
             "review_status": q.review_status,
             "review_notes": q.review_notes,
+            "reviewed_by": q.reviewed_by,
+            "reviewed_at": q.reviewed_at.isoformat() if q.reviewed_at else None,
             "status": q.status,
             "created_at": q.created_at.isoformat() if q.created_at else None,
             "updated_at": q.updated_at.isoformat() if q.updated_at else None,

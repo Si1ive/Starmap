@@ -34,6 +34,18 @@ def test_catalog_routes_are_owned_by_catalog_module():
     )
 
 
+def test_content_routes_are_owned_by_content_module():
+    routes = _routes_by_path()
+
+    for path in (
+        "/api/v1/admin/knowledge/points",
+        "/api/v1/admin/questions",
+        "/api/v1/admin/review/knowledge",
+        "/api/v1/admin/review/questions",
+    ):
+        assert routes[path].endpoint.__module__ == "app.modules.content.router"
+
+
 def test_application_has_no_duplicate_method_path_pairs():
     seen = set()
     duplicates = []
