@@ -123,7 +123,13 @@ export interface EntityExtractionRun {
   knowledge_count: number
   question_count: number
   error_detail?: string | null
-  result?: Record<string, unknown> | null
+  result?: {
+    indexing?: {
+      knowledge_segments?: { segments_count?: number }
+      question_segments?: { segments_count?: number }
+    }
+    [key: string]: unknown
+  } | null
   started_at?: string | null
   completed_at?: string | null
   created_at?: string | null

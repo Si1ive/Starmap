@@ -3,10 +3,12 @@ from types import SimpleNamespace
 import pytest
 
 from app.services.entity_extraction_service import (
+    cleanup_document_entities,
     OptionIntegrityChecker,
     EntityExtractionService,
     LLMFallbackFixer,
 )
+from app.models.mysql_models import CorpusFile, Document, EntityExtractionRun
 
 
 def test_option_integrity_accepts_key_field():
@@ -192,13 +194,21 @@ def test_normalize_options_preserves_llm_option_source():
 
 
 class _RunSession:
-    def __init__(self, run):
+    def __init__(self, run, document=None, corpus_file=None):
         self.run = run
+        self.document = document
+        self.corpus_file = corpus_file
         self.commit_count = 0
         self.rollback_count = 0
 
-    async def get(self, _model, _run_id):
-        return self.run
+    async def get(self, model, record_id):
+        if model is EntityExtractionRun and record_id == self.run.id:
+            return self.run
+        if model is Document and self.document and record_id == self.document.id:
+            return self.document
+        if model is CorpusFile and self.corpus_file and record_id == self.corpus_file.id:
+            return self.corpus_file
+        return None
 
     async def commit(self):
         self.commit_count += 1
@@ -222,24 +232,55 @@ async def test_extraction_run_persists_success(monkeypatch):
         error_detail=None,
         completed_at=None,
     )
-    session = _RunSession(run)
+    document = SimpleNamespace(id="doc-1", corpus_file_id="file-1")
+    corpus_file = SimpleNamespace(
+        id="file-1",
+        status="parsed",
+        error_detail="previous error",
+    )
+    session = _RunSession(run, document, corpus_file)
     service = EntityExtractionService(session)
 
     async def fake_extract_entities(**kwargs):
         assert kwargs["document_id"] == "doc-1"
         return {"knowledge_count": 3, "question_count": 4}
 
+    async def fake_index_document_entities(**kwargs):
+        assert kwargs == {
+            "document_id": "doc-1",
+            "include_knowledge": True,
+            "include_questions": True,
+        }
+        return {
+            "knowledge_segments": {"segments_count": 6},
+            "question_segments": {"segments_count": 8},
+        }
+
     monkeypatch.setattr(service, "extract_entities", fake_extract_entities)
+    monkeypatch.setattr(
+        service,
+        "_index_document_entities",
+        fake_index_document_entities,
+    )
 
     result = await service.extract_entities_with_run_id("run-1")
 
-    assert result == {"knowledge_count": 3, "question_count": 4}
+    assert result == {
+        "knowledge_count": 3,
+        "question_count": 4,
+        "indexing": {
+            "knowledge_segments": {"segments_count": 6},
+            "question_segments": {"segments_count": 8},
+        },
+    }
     assert run.status == "success"
     assert run.knowledge_count == 3
     assert run.question_count == 4
     assert run.result_json == result
     assert run.completed_at is not None
-    assert session.commit_count == 1
+    assert corpus_file.status == "indexed"
+    assert corpus_file.error_detail is None
+    assert session.commit_count == 2
     assert session.rollback_count == 0
 
 
@@ -258,7 +299,9 @@ async def test_extraction_run_persists_failure(monkeypatch):
         error_detail=None,
         completed_at=None,
     )
-    session = _RunSession(run)
+    document = SimpleNamespace(id="doc-2", corpus_file_id="file-2")
+    corpus_file = SimpleNamespace(id="file-2", status="parsed", error_detail=None)
+    session = _RunSession(run, document, corpus_file)
     service = EntityExtractionService(session)
 
     async def fake_extract_entities(**_kwargs):
@@ -272,8 +315,97 @@ async def test_extraction_run_persists_failure(monkeypatch):
     assert run.status == "failed"
     assert run.error_detail == "LLM timeout"
     assert run.completed_at is not None
+    assert corpus_file.status == "failed"
+    assert corpus_file.error_detail == "LLM timeout"
     assert session.rollback_count == 1
-    assert session.commit_count == 1
+    assert session.commit_count == 2
+
+
+@pytest.mark.asyncio
+async def test_extraction_run_fails_when_indexing_fails(monkeypatch):
+    run = SimpleNamespace(
+        id="run-3",
+        document_id="doc-3",
+        extract_knowledge=True,
+        extract_questions=False,
+        subject_id=None,
+        status="running",
+        knowledge_count=0,
+        question_count=0,
+        result_json=None,
+        error_detail=None,
+        completed_at=None,
+    )
+    document = SimpleNamespace(id="doc-3", corpus_file_id="file-3")
+    corpus_file = SimpleNamespace(id="file-3", status="parsed", error_detail=None)
+    session = _RunSession(run, document, corpus_file)
+    service = EntityExtractionService(session)
+
+    async def fake_extract_entities(**_kwargs):
+        return {"knowledge_count": 2, "question_count": 0}
+
+    async def fake_index_document_entities(**_kwargs):
+        raise RuntimeError("Qdrant unavailable")
+
+    monkeypatch.setattr(service, "extract_entities", fake_extract_entities)
+    monkeypatch.setattr(
+        service,
+        "_index_document_entities",
+        fake_index_document_entities,
+    )
+
+    with pytest.raises(RuntimeError, match="Qdrant unavailable"):
+        await service.extract_entities_with_run_id("run-3")
+
+    assert run.status == "failed"
+    assert run.error_detail == "Qdrant unavailable"
+    assert corpus_file.status == "failed"
+    assert corpus_file.error_detail == "Qdrant unavailable"
+    assert session.rollback_count == 1
+    assert session.commit_count == 2
+
+
+class _CleanupResult:
+    def all(self):
+        return [("question-1",)]
+
+
+class _CleanupSession:
+    async def execute(self, _statement):
+        return _CleanupResult()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_document_entities_deletes_qdrant_segments(monkeypatch):
+    deleted = []
+
+    async def fake_cleanup_entity_links(*_args, **_kwargs):
+        return None
+
+    async def fake_delete_entity_segments(
+        _service,
+        entity_type,
+        entity_ids,
+    ):
+        deleted.append((entity_type, entity_ids))
+
+    monkeypatch.setattr(
+        "app.services.entity_asset_service.cleanup_entity_links",
+        fake_cleanup_entity_links,
+    )
+    monkeypatch.setattr(
+        "app.services.segment_service.SegmentService.delete_entity_segments",
+        fake_delete_entity_segments,
+    )
+
+    removed = await cleanup_document_entities(
+        _CleanupSession(),
+        document_id="doc-1",
+        entity_type="question",
+    )
+
+    assert removed == {"question": 1}
+    assert deleted == [("question", ["question-1"])]
 
 
 async def test_llm_split_parses_two_questions():

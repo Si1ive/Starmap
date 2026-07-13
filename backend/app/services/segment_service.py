@@ -592,6 +592,48 @@ class SegmentService:
             "chapter_segments": ch_result,
         }
 
+    async def build_document_segments(
+        self,
+        document_id: str,
+        include_knowledge: bool = True,
+        include_questions: bool = True,
+        rebuild: bool = True,
+    ) -> Dict[str, Any]:
+        """构建单个文档的实体 segments，不重复重建全量大纲章节。"""
+        await self._ensure_embedding()
+        self.qdrant.init_default_collections(vector_size=self.embedding.dimension)
+
+        knowledge_result = (
+            await self.build_knowledge_segments(
+                document_id=document_id,
+                rebuild=rebuild,
+            )
+            if include_knowledge
+            else {"segments_count": 0, "skipped": True}
+        )
+        question_result = (
+            await self.build_question_segments(
+                document_id=document_id,
+                rebuild=rebuild,
+            )
+            if include_questions
+            else {"segments_count": 0, "skipped": True}
+        )
+
+        return {
+            "knowledge_segments": knowledge_result,
+            "question_segments": question_result,
+        }
+
+    async def delete_entity_segments(
+        self,
+        entity_type: str,
+        entity_ids: List[str],
+    ) -> None:
+        """同步删除实体在 MySQL 与 Qdrant 中的检索单元。"""
+        if entity_ids:
+            await self._delete_segments(entity_type, entity_ids)
+
     # ========== 辅助方法 ==========
 
     async def _delete_segments(self, entity_type: str, entity_ids: List[str]):

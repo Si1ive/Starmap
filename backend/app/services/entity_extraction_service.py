@@ -20,9 +20,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.models.mysql_models import (
-    Document, DocumentBlock, DocumentSection, DocumentSectionMapping,
+    CorpusFile, Document, DocumentBlock, DocumentSection, DocumentSectionMapping,
     KnowledgePoint, Question, KnowledgePointChapterLink, QuestionChapterLink,
-    EntitySourceLink, CanonicalChapter, RetrievalSegment, EntityExtractionRun
+    EntitySourceLink, CanonicalChapter, EntityExtractionRun
 )
 from app.services.chapter_compat_service import resolve_legacy_chapter_id
 from app.services.system_settings_service import SystemSettingsService
@@ -69,14 +69,9 @@ async def cleanup_document_entities(
             await cleanup_entity_links(db, entity_type=etype, entity_ids=entity_ids)
         except Exception:
             pass
-        await db.execute(
-            delete(RetrievalSegment).where(
-                and_(
-                    RetrievalSegment.entity_type == etype,
-                    RetrievalSegment.entity_id.in_(entity_ids),
-                )
-            )
-        )
+        from app.services.segment_service import SegmentService
+
+        await SegmentService(db).delete_entity_segments(etype, entity_ids)
         await db.execute(delete(model).where(model.id.in_(entity_ids)))
     return removed
 
@@ -2024,12 +2019,22 @@ class EntityExtractionService:
             raise ValueError(f"抽取任务不存在: {run_id}")
 
         try:
+            await self._set_corpus_file_status(run.document_id, "extracting")
+            await self.db.commit()
+
             result = await self.extract_entities(
                 document_id=run.document_id,
                 extract_knowledge=run.extract_knowledge,
                 extract_questions=run.extract_questions,
                 fallback_subject_id=run.subject_id,
             )
+            indexing_result = await self._index_document_entities(
+                document_id=run.document_id,
+                include_knowledge=run.extract_knowledge,
+                include_questions=run.extract_questions,
+            )
+            result = {**result, "indexing": indexing_result}
+
             run.status = "success"
             run.knowledge_count = int(result.get("knowledge_count") or 0)
             run.question_count = int(result.get("question_count") or 0)
@@ -2038,6 +2043,7 @@ class EntityExtractionService:
             )
             run.error_detail = None
             run.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            await self._set_corpus_file_status(run.document_id, "indexed")
             await self.db.commit()
             return result
         except Exception as exc:
@@ -2047,8 +2053,46 @@ class EntityExtractionService:
                 failed_run.status = "failed"
                 failed_run.error_detail = str(exc)[:4000]
                 failed_run.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                await self._set_corpus_file_status(
+                    failed_run.document_id,
+                    "failed",
+                    error_detail=str(exc)[:4000],
+                )
                 await self.db.commit()
             raise
+
+    async def _index_document_entities(
+        self,
+        document_id: str,
+        include_knowledge: bool,
+        include_questions: bool,
+    ) -> Dict[str, Any]:
+        """将本次抽取产物立即构建为可检索 segments。"""
+        from app.services.segment_service import SegmentService
+
+        return await SegmentService(self.db).build_document_segments(
+            document_id=document_id,
+            include_knowledge=include_knowledge,
+            include_questions=include_questions,
+            rebuild=True,
+        )
+
+    async def _set_corpus_file_status(
+        self,
+        document_id: str,
+        status: str,
+        error_detail: Optional[str] = None,
+    ) -> None:
+        document = await self.db.get(Document, document_id)
+        if not document or not document.corpus_file_id:
+            return
+
+        corpus_file = await self.db.get(CorpusFile, document.corpus_file_id)
+        if not corpus_file:
+            return
+
+        corpus_file.status = status
+        corpus_file.error_detail = error_detail
 
     async def extract_entities(
         self,

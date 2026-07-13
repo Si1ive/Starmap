@@ -77,7 +77,7 @@
 |------|------|------|
 | Phase0 大纲扩展 | ✅ | 集成到 RetrievalService + search/with-outline API |
 | chat_service 检索升级 | ✅ | 接入 Phase0 大纲扩展 |
-| segment 自动构建 | ✅ | segment auto-build + API endpoint |
+| segment 自动构建 | ✅ | 抽取任务成功前按文档重建题目/知识点 segment，同步 MySQL + Qdrant，并保留手动 API（7-14） |
 
 ### 监控与对话
 

@@ -25,14 +25,15 @@ const docTypeText: Record<string, string> = {
 
 const DocumentDetailPage = () => {
   const { id } = useParams<{ id: string }>()
+  const documentId = id ?? ''
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [selectedSubject, setSelectedSubject] = useState('')
 
   const { data: docData, isLoading } = useQuery({
-    queryKey: ['document', id],
-    queryFn: () => getDocumentDetail(id!),
-    enabled: !!id,
+    queryKey: ['document', documentId],
+    queryFn: () => getDocumentDetail(documentId),
+    enabled: !!documentId,
   })
 
   const { data: subjectsData } = useQuery({
@@ -41,15 +42,15 @@ const DocumentDetailPage = () => {
   })
 
   const { data: overviewData } = useQuery({
-    queryKey: ['contentOverview', id],
-    queryFn: () => getDocumentContentOverview(id!),
-    enabled: !!id,
+    queryKey: ['contentOverview', documentId],
+    queryFn: () => getDocumentContentOverview(documentId),
+    enabled: !!documentId,
   })
 
   const { data: extractionStatusData } = useQuery({
-    queryKey: ['entityExtractionStatus', id],
-    queryFn: () => getDocumentEntityExtractionStatus(id!),
-    enabled: !!id,
+    queryKey: ['entityExtractionStatus', documentId],
+    queryFn: () => getDocumentEntityExtractionStatus(documentId),
+    enabled: !!documentId,
     refetchInterval: (queryData) =>
       queryData?.data?.status === 'running' ? 2000 : false,
   })
@@ -66,9 +67,9 @@ const DocumentDetailPage = () => {
   const observedRunningId = useRef<string | null>(null)
 
   const extractEntitiesMut = useMutation({
-    mutationFn: () => extractDocumentEntities(id!, selectedSubject || document?.subject_id),
+    mutationFn: () => extractDocumentEntities(documentId, selectedSubject || document?.subject_id),
     onSuccess: (res) => {
-      queryClient.setQueryData(['entityExtractionStatus', id], res)
+      queryClient.setQueryData(['entityExtractionStatus', documentId], res)
       observedRunningId.current = res.data?.id || null
       message.success(res.message || '抽取任务已启动')
     },
@@ -88,15 +89,19 @@ const DocumentDetailPage = () => {
 
     observedRunningId.current = null
     if (extractionRun.status === 'success') {
+      const indexing = extractionRun.result?.indexing
+      const segmentCount =
+        (indexing?.knowledge_segments?.segments_count ?? 0)
+        + (indexing?.question_segments?.segments_count ?? 0)
       message.success(
-        `抽取完成：知识点 ${extractionRun.knowledge_count ?? 0}，题目 ${extractionRun.question_count ?? 0}`
+        `抽取并索引完成：知识点 ${extractionRun.knowledge_count ?? 0}，题目 ${extractionRun.question_count ?? 0}，检索单元 ${segmentCount}`
       )
-      queryClient.invalidateQueries({ queryKey: ['document', id] })
-      queryClient.invalidateQueries({ queryKey: ['contentOverview', id] })
+      queryClient.invalidateQueries({ queryKey: ['document', documentId] })
+      queryClient.invalidateQueries({ queryKey: ['contentOverview', documentId] })
     } else {
       message.error(extractionRun.error_detail || '抽取失败')
     }
-  }, [extractionRun, id, queryClient])
+  }, [extractionRun, documentId, queryClient])
 
   if (isLoading) {
     return <div style={{ textAlign: 'center', padding: 100 }}><Spin size="large" /></div>
@@ -192,14 +197,14 @@ const DocumentDetailPage = () => {
             {
               key: 'content-overview',
               label: '内容总览（抽取产物）',
-              children: <ContentOverview documentId={id!} />,
+              children: <ContentOverview documentId={documentId} />,
             },
             {
               key: 'page-analysis',
               label: '页级对比（解析产物）',
               children: (
                 <PageAnalysis
-                  documentId={id!}
+                  documentId={documentId}
                   totalPages={document?.page_count || document?.pages?.length || 0}
                 />
               ),
