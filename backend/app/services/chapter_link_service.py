@@ -524,6 +524,53 @@ class ChapterLinkService:
     async def _match_by_vector_search(
         self, entity, entity_type: str
     ) -> List[Dict[str, Any]]:
+        """用实体内容在 canonical_chapter segments 中检索，返回最多 top-3 相关章节。
+
+        包装层：负责向量召回日志记录（side-effect，失败不影响召回）。
+        核心检索逻辑在 _vector_search_core。
+        """
+        from app.services.vector_recall_recorder import VectorRecallRecorder
+
+        # 构造入参文本（与 core 内一致的口径，用于日志展示）
+        if entity_type == "knowledge_point":
+            query_text = f"{getattr(entity, 'title', '') or ''}\n{(getattr(entity, 'content', '') or '')[:500]}"
+        else:
+            query_text = (getattr(entity, "content", "") or "")[:300]
+
+        rec = VectorRecallRecorder(
+            called_by=entity_type,
+            purpose="章节归属向量召回",
+            query_text=query_text,
+            query_entity_id=getattr(entity, "id", None),
+            subject_id=getattr(entity, "subject_id", None),
+        ).start()
+
+        try:
+            candidates = await self._vector_search_core(entity, entity_type)
+        except Exception as e:
+            rec.record_error(e)
+            await rec.persist()
+            raise
+
+        # 补充 chapter 名称，便于日志可读
+        name_map: Dict[str, str] = {}
+        try:
+            for c in candidates:
+                cid = c.get("chapter_id")
+                if cid and cid not in name_map:
+                    ch = await self.db.get(CanonicalChapter, cid)
+                    if ch:
+                        name_map[cid] = ch.name
+        except Exception:
+            name_map = {}
+
+        rec.record_results(candidates, threshold=VECTOR_MATCH_THRESHOLD, chapter_name_map=name_map)
+        await rec.persist()
+        return candidates
+
+    async def _vector_search_core(
+        self, entity, entity_type: str
+    ) -> List[Dict[str, Any]]:
         """
         用实体内容在 canonical_chapter segments 中检索
 

@@ -187,7 +187,8 @@ class TestQuestionBoundary:
         grouper = QuestionLayoutGrouper([])
         assert grouper._is_new_question_start(tag, _block()) is True
 
-    def test_left_edge_with_paren_q_and_gap(self):
+    def test_paren_subquestion_not_new_question(self):
+        """括号号 (1)(2) 是题内小问，归属当前题，不作为新题起点。"""
         tag = BlockTag(
             block=_block(text="（1）子题内容", bbox={"x1": 50, "y1": 200, "x2": 200, "y2": 220}),
             at_left_edge=True, has_q_number=False,
@@ -195,7 +196,7 @@ class TestQuestionBoundary:
             is_noise=False, gap_ratio=2.0,
         )
         grouper = QuestionLayoutGrouper([])
-        assert grouper._is_new_question_start(tag, _block()) is True
+        assert grouper._is_new_question_start(tag, _block()) is False
 
     def test_paren_q_low_gap_not_new_question(self):
         tag = BlockTag(
@@ -207,7 +208,8 @@ class TestQuestionBoundary:
         grouper = QuestionLayoutGrouper([])
         assert grouper._is_new_question_start(tag, _block()) is False
 
-    def test_large_gap_with_text(self):
+    def test_large_gap_without_q_number_stays_in_question(self):
+        """大间距但无题号 → 归属当前题（表格/图会撑大间距，不能据此切题）。"""
         tag = BlockTag(
             block=_block(text="这是一道没有题号的题目内容", bbox={"x1": 50, "y1": 400, "x2": 200, "y2": 420}),
             at_left_edge=False, has_q_number=False,
@@ -215,7 +217,7 @@ class TestQuestionBoundary:
             is_noise=False, gap_ratio=4.0,
         )
         grouper = QuestionLayoutGrouper([])
-        assert grouper._is_new_question_start(tag, _block()) is True
+        assert grouper._is_new_question_start(tag, _block()) is False
 
     def test_option_block_not_new_question(self):
         tag = BlockTag(
@@ -511,26 +513,24 @@ class TestEdgeCases:
         assert groups[0].page_no == 1
         assert groups[1].page_no == 2
 
-    def test_large_gap_without_q_number_creates_new_question(self):
-        """gap_ratio > 3.0 且有实质文本 → 新题目"""
-        # 需要多个正常间距的 block 让 median_gap 保持较小，然后一个大间距触发
+    def test_large_gap_without_q_number_stays_in_prev_question(self):
+        """大间距无题号块归属前一题（题号锚定），不再凭间距拆出新题。"""
         blocks = [
             _block(page_no=1, bbox={"x1": 50, "y1": 100, "x2": 200, "y2": 120},
                    text="1。第一题"),
             _block(page_no=1, bbox={"x1": 50, "y1": 130, "x2": 200, "y2": 150},
                    text="A。选项 B。选项"),
-            # 两个正常间距的 block 让 median_gap 稳定在 ~10
             _block(page_no=1, bbox={"x1": 50, "y1": 160, "x2": 200, "y2": 180},
                    text="2。第二题"),
             _block(page_no=1, bbox={"x1": 50, "y1": 190, "x2": 200, "y2": 210},
                    text="A。选项 B。选项"),
-            # 大间距：gap=190, median_gap≈10, ratio≈19 > 3.0
+            # 大间距无题号：归属题2，不再单独成题
             _block(page_no=1, bbox={"x1": 50, "y1": 400, "x2": 200, "y2": 420},
                    text="没有题号但内容足够长的题目文本"),
         ]
         grouper = QuestionLayoutGrouper(blocks)
         groups = grouper.group_into_questions()
-        assert len(groups) == 3
+        assert len(groups) == 2
 
     def test_small_gap_continuation(self):
         """小间距无题号 → 延续当前题"""

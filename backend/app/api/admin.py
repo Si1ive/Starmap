@@ -4863,6 +4863,56 @@ async def delete_llm_call_logs(
     return ApiResponse(data={"deleted": deleted})
 
 
+@router.get("/monitor/vector-recalls", response_model=ApiResponse)
+async def list_vector_recall_logs(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    called_by: Optional[str] = Query(None, description="question / knowledge_point"),
+    status: Optional[str] = Query(None, description="hit / miss / error"),
+    keyword: Optional[str] = Query(None, description="查询文本模糊搜索"),
+    db: AsyncSession = Depends(get_db),
+):
+    """向量召回列表（分页 + 过滤）"""
+    from app.services.vector_recall_recorder import list_vector_recalls
+
+    result = await list_vector_recalls(
+        session=db,
+        page=page,
+        page_size=page_size,
+        called_by=called_by,
+        status=status,
+        keyword=keyword,
+    )
+    return ApiResponse(data=result)
+
+
+@router.get("/monitor/vector-recalls/stats", response_model=ApiResponse)
+async def get_vector_recalls_stats(
+    hours: int = Query(24, ge=1, le=720, description="时间窗口（小时）"),
+    db: AsyncSession = Depends(get_db),
+):
+    """向量召回聚合统计：命中率 / 有效召回率 / 平均分数 / 延迟"""
+    from app.services.vector_recall_recorder import get_vector_recall_stats
+
+    result = await get_vector_recall_stats(session=db, hours=hours)
+    return ApiResponse(data=result)
+
+
+@router.delete("/monitor/vector-recalls", response_model=ApiResponse)
+async def delete_vector_recall_logs(
+    older_than_days: Optional[int] = Query(None, ge=0, description="按时间清理：删除 N 天前的记录"),
+    db: AsyncSession = Depends(get_db),
+):
+    """清理向量召回日志"""
+    from app.services.vector_recall_recorder import delete_vector_recalls
+
+    deleted = await delete_vector_recalls(
+        session=db,
+        older_than_days=older_than_days,
+    )
+    return ApiResponse(data={"deleted": deleted})
+
+
 
 # ===== 大纲（考试章节体系）独立入库 =====
 

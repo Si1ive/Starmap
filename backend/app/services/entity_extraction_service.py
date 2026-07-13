@@ -2245,6 +2245,79 @@ class EntityExtractionService:
             logger.warning("读取PDF结构解析LLM配置失败，跳过LLM兜底", error=str(e))
             return None
 
+    @staticmethod
+    def _detect_merged_question_nos(text: str, base_no: Optional[int]) -> List[int]:
+        """检测一段文本里是否粘连了后继题目的题号。
+
+        MinerU 偶尔把相邻两题输出进同一 block（如第8题的题号"8。"粘在第7题
+        选项之后）。这里在 base_no 之后找 base_no+1..base_no+3 的题号标记，
+        命中说明本组疑似多题粘连，返回粘进来的题号列表。
+        base_no 为空时无法判断后继，返回空。
+        """
+        if base_no is None or not text:
+            return []
+        found: List[int] = []
+        # 题号标记：文本中的"<数字>。/、"，只认 base_no 之后的连续后继题号
+        for m in re.finditer(r'(?<!\d)(\d{1,3})\s*[.、．。]\s*(?=\S)', text):
+            n = int(m.group(1))
+            if base_no < n <= base_no + 3 and n not in found:
+                found.append(n)
+        return found
+
+    async def _llm_split_merged_questions(
+        self,
+        llm_client: "PDFStructureLLMClient",
+        raw_text: str,
+        base_no: int,
+        successor_nos: List[int],
+    ) -> Optional[List[Dict[str, Any]]]:
+        """用 LLM 把粘在一起的多道题切开。
+
+        只做切分（信息都在 raw_text 里），不补选项、不改写内容。
+        返回 [{question_no, stem, options:[{key,text}]}, ...]；失败返回 None。
+        """
+        import json
+        nos = ", ".join(str(n) for n in [base_no, *successor_nos])
+        prompt = f"""下面这段文本是从试卷 PDF 中提取的，疑似把多道题（题号 {nos}）粘连在了一起。
+请按题号把它们切分成独立题目。严格要求：
+1. 只做切分，不要补全、改写、编造任何内容——所有文字都必须来自原文。
+2. 每道题输出题号、题干、选项（如果是选择题）。选项格式 {{"key":"A","text":"..."}}。
+3. 若某题没有选项（简答/大题），options 为空数组。
+
+原始文本：
+{raw_text}
+
+只输出 JSON 数组，格式：
+[{{"question_no": {base_no}, "stem": "...", "options": [{{"key":"A","text":"..."}}]}}, ...]"""
+        try:
+            resp = await llm_client.chat(prompt, purpose="题目粘连切分")
+            start = resp.find("[")
+            end = resp.rfind("]")
+            if start < 0 or end <= start:
+                logger.warning("LLM 切分返回无有效 JSON 数组", base_no=base_no)
+                return None
+            parsed = json.loads(resp[start:end + 1])
+            if not isinstance(parsed, list) or len(parsed) < 2:
+                return None
+            out: List[Dict[str, Any]] = []
+            for item in parsed:
+                if not isinstance(item, dict) or not (item.get("stem") or "").strip():
+                    continue
+                opts = []
+                for o in item.get("options") or []:
+                    if isinstance(o, dict) and o.get("text"):
+                        key = str(o.get("key") or o.get("label") or "").strip().upper()[:1]
+                        opts.append({"key": key, "label": key, "option_label": key, "text": o["text"].strip()})
+                out.append({
+                    "question_no": item.get("question_no"),
+                    "stem": item["stem"].strip(),
+                    "options": opts,
+                })
+            return out if len(out) >= 2 else None
+        except Exception as e:
+            logger.warning("LLM 切分失败，保留原组", base_no=base_no, error=str(e))
+            return None
+
     async def _extract_questions_v2(
         self,
         document_id: str,
@@ -2262,15 +2335,91 @@ class EntityExtractionService:
         grouper = QuestionLayoutGrouper(list(blocks))
         groups = grouper.group_into_questions()
 
+        # LLM 切分兜底：只在组文本粘连了后继题号时触发（预筛确定性、成本可控）。
+        # client 取一次；不可用则整个切分能力静默跳过，不影响主流程。
+        split_llm = await self._get_pdf_structure_llm_client()
+        split_enabled = bool(split_llm and split_llm.is_available)
+
         questions: List[Dict[str, Any]] = []
         for group in groups:
             q_dict = await self._question_group_to_dict(
                 document_id, fallback_subject_id, group, section_mappings, grouper
             )
-            if q_dict:
-                questions.append(q_dict)
+            if not q_dict:
+                continue
+
+            base_no = _extract_question_number_simple(q_dict)
+            successors = self._detect_merged_question_nos(q_dict.get("raw_text") or "", base_no)
+            if split_enabled and successors:
+                parts = await self._llm_split_merged_questions(
+                    split_llm, q_dict.get("raw_text") or "", base_no, successors
+                )
+                if parts:
+                    logger.info("LLM 切分多题粘连", base_no=base_no, successors=successors, into=len(parts))
+                    for part in parts:
+                        questions.append(await self._build_split_question(
+                            document_id, fallback_subject_id, q_dict, part, section_mappings
+                        ))
+                    continue
+
+            questions.append(q_dict)
 
         return questions
+
+    async def _build_split_question(
+        self,
+        document_id: str,
+        fallback_subject_id: str,
+        base: Dict[str, Any],
+        part: Dict[str, Any],
+        section_mappings: Dict[int, Dict[str, Optional[str]]],
+    ) -> Dict[str, Any]:
+        """由 LLM 切分结果 + 原组基底构造一道独立题目。
+
+        复用原组的页码/来源/block 归属，但题干/选项/题号用切分结果，
+        并按切出的题干重新解析章节归属；标 fixed_by_llm 可追溯。
+        """
+        q = dict(base)  # 浅拷贝原组的页码/source/exam_year/blocks 等
+        stem = part.get("stem") or ""
+        options = part.get("options") or []
+        q_no = part.get("question_no")
+        question_type = "choice" if options else base.get("question_type") or "short_answer"
+
+        q["id"] = generate_id()
+        q["stem"] = stem
+        q["content"] = stem
+        q["raw_text"] = stem
+        q["options"] = options
+        q["question_no"] = str(q_no) if q_no is not None else None
+        q["question_type"] = question_type
+        q["type"] = question_type
+
+        # 切出的题各自重新解析章节（可能分属不同考点）
+        primary_chapter_id = base.get("primary_chapter_id")
+        subject_id = base.get("subject_id")
+        resolved_source = base.get("chapter_link_source")
+        try:
+            from app.services.chapter_link_service import ChapterLinkService
+            resolved = await ChapterLinkService(self.db).resolve_chapter_for_entity(
+                title=stem[:200], content=stem, subject_id=subject_id,
+                entity_type="question", options=options,
+            )
+            if resolved:
+                primary_chapter_id = resolved["chapter_id"]
+                subject_id = resolved["subject_id"] or subject_id
+                resolved_source = resolved.get("source", "vector_search")
+        except Exception as e:
+            logger.warning("切分题章节解析失败，沿用原组归属", error=str(e))
+        q["primary_chapter_id"] = primary_chapter_id
+        q["subject_id"] = subject_id
+        q["chapter_link_source"] = resolved_source
+
+        meta = dict(base.get("extraction_meta") or {})
+        meta["fixed_by_llm"] = "split"
+        meta["option_count"] = len(options)
+        meta["few_options"] = question_type == "choice" and 0 < len(options) < 4
+        q["extraction_meta"] = meta
+        return q
 
     async def _question_group_to_dict(
         self,

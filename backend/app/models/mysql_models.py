@@ -1465,6 +1465,46 @@ class LLMCallLog(Base):
     )
 
 
+class VectorRecallLog(Base):
+    """向量召回日志：记录每次 Qdrant 章节召回的入参、top-N 结果与分数。
+
+    与 LLMCallLog 同为"外部调用可观测"日志，但语义不同——召回是向量检索，
+    无 model/token/cost，核心是 query + top 结果 + 分数，供分析召回质量/命中率。
+    """
+    __tablename__ = "vector_recall_logs"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    called_by: Mapped[Optional[str]] = mapped_column(String(100), comment="调用方：question / knowledge_point")
+    purpose: Mapped[Optional[str]] = mapped_column(String(100), comment="召回用途说明")
+
+    query_text: Mapped[Optional[str]] = mapped_column(Text, comment="向量化的查询文本（入参）")
+    query_entity_id: Mapped[Optional[str]] = mapped_column(String(32), comment="触发召回的题目/知识点ID")
+    subject_id: Mapped[Optional[str]] = mapped_column(String(32), comment="检索范围学科ID（空=全学科）")
+
+    top_results: Mapped[Optional[list]] = mapped_column(
+        JSON, comment="top-N 召回结果：[{rank, chapter_id, chapter_name, score, is_primary}]"
+    )
+    top_score: Mapped[float] = mapped_column(DECIMAL(6, 4), default=0, comment="最高召回分数")
+    result_count: Mapped[int] = mapped_column(Integer, default=0, comment="召回结果数")
+    threshold_hit: Mapped[bool] = mapped_column(Boolean, default=False, comment="最高分是否达到采信阈值")
+
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(
+        Enum("hit", "miss", "error"),
+        default="hit", comment="召回状态：hit有结果/miss无结果/error异常"
+    )
+    error_msg: Mapped[Optional[str]] = mapped_column(Text, comment="错误信息")
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_vec_recall_created_at", "created_at"),
+        Index("idx_vec_recall_called_by", "called_by"),
+        Index("idx_vec_recall_status", "status"),
+        {"comment": "向量召回日志"}
+    )
+
+
 class ServiceLog(Base):
     """后端服务日志：structlog 输出会被 sink 到这里供查询"""
     __tablename__ = "service_logs"
