@@ -1,41 +1,50 @@
+import { lazy, Suspense, type ReactNode } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
+import { Spin } from 'antd'
 import { useAdminStore } from '@/store'
 import Layout from '@/components/Layout'
-import Login from '@/pages/Login'
-import Dashboard from '@/pages/Dashboard'
-import CrawlerList from '@/pages/Crawler/List'
-import CrawlerStats from '@/pages/Crawler/Stats'
-import CrawlerConfig from '@/pages/Crawler/Config'
-import CrawlerSources from '@/pages/Crawler/Sources'
-import CrawlerSchedules from '@/pages/Crawler/Schedules'
-import CrawlerLogs from '@/pages/Crawler/Logs'
-import ConversationList from '@/pages/Conversation/List'
-import ConversationDetail from '@/pages/Conversation/Detail'
-import MonitorOverview from '@/pages/Monitor/Overview'
-import ApiMonitor from '@/pages/Monitor/Api'
-import DatabaseMonitor from '@/pages/Monitor/Database'
-import MonitorErrors from '@/pages/Monitor/Errors'
-import LLMMonitor from '@/pages/Monitor/Llm'
-import VectorRecallMonitor from '@/pages/Monitor/VectorRecall'
-import OutlineList from '@/pages/Outline'
-import Settings from '@/pages/Settings'
-import SettingsUsers from '@/pages/Settings/Users'
-import KnowledgeList from '@/pages/Knowledge/List'
-import KnowledgeDetail from '@/pages/Knowledge/Detail'
-import KnowledgeEdit from '@/pages/Knowledge/Edit'
-import QuestionList from '@/pages/Question/List'
-import QuestionDetail from '@/pages/Question/Detail'
-import QuestionEdit from '@/pages/Question/Edit'
-import CorpusPage from '@/pages/Corpus'
-import DocumentDetailPage from '@/pages/Corpus/DocumentDetail'
-import RelationReviewPage from '@/pages/Review/Relations'
-import ChapterRelationReviewPage from '@/pages/Review/ChapterRelations'
-import ChapterRelationGraphPage from '@/pages/Review/ChapterRelationGraph'
-import SearchDebugPage from '@/pages/Search'
 import { usePermission } from '@/hooks/usePermission'
 
+const Login = lazy(() => import('@/pages/Login'))
+const Dashboard = lazy(() => import('@/pages/Dashboard'))
+const CrawlerList = lazy(() => import('@/pages/Crawler/List'))
+const CrawlerStats = lazy(() => import('@/pages/Crawler/Stats'))
+const CrawlerConfig = lazy(() => import('@/pages/Crawler/Config'))
+const CrawlerSources = lazy(() => import('@/pages/Crawler/Sources'))
+const CrawlerSchedules = lazy(() => import('@/pages/Crawler/Schedules'))
+const CrawlerLogs = lazy(() => import('@/pages/Crawler/Logs'))
+const ConversationList = lazy(() => import('@/pages/Conversation/List'))
+const ConversationDetail = lazy(() => import('@/pages/Conversation/Detail'))
+const MonitorOverview = lazy(() => import('@/pages/Monitor/Overview'))
+const ApiMonitor = lazy(() => import('@/pages/Monitor/Api'))
+const DatabaseMonitor = lazy(() => import('@/pages/Monitor/Database'))
+const MonitorErrors = lazy(() => import('@/pages/Monitor/Errors'))
+const LLMMonitor = lazy(() => import('@/pages/Monitor/Llm'))
+const VectorRecallMonitor = lazy(() => import('@/pages/Monitor/VectorRecall'))
+const OutlineList = lazy(() => import('@/pages/Outline'))
+const Settings = lazy(() => import('@/pages/Settings'))
+const SettingsUsers = lazy(() => import('@/pages/Settings/Users'))
+const KnowledgeList = lazy(() => import('@/pages/Knowledge/List'))
+const KnowledgeDetail = lazy(() => import('@/pages/Knowledge/Detail'))
+const KnowledgeEdit = lazy(() => import('@/pages/Knowledge/Edit'))
+const QuestionList = lazy(() => import('@/pages/Question/List'))
+const QuestionDetail = lazy(() => import('@/pages/Question/Detail'))
+const QuestionEdit = lazy(() => import('@/pages/Question/Edit'))
+const CorpusPage = lazy(() => import('@/pages/Corpus'))
+const DocumentDetailPage = lazy(() => import('@/pages/Corpus/DocumentDetail'))
+const RelationReviewPage = lazy(() => import('@/pages/Review/Relations'))
+const ChapterRelationReviewPage = lazy(() => import('@/pages/Review/ChapterRelations'))
+const ChapterRelationGraphPage = lazy(() => import('@/pages/Review/ChapterRelationGraph'))
+const SearchDebugPage = lazy(() => import('@/pages/Search'))
+
+const PageFallback = () => (
+  <div style={{ display: 'grid', minHeight: 320, placeItems: 'center' }}>
+    <Spin size="large" />
+  </div>
+)
+
 // 路由守卫组件
-const PrivateRoute = ({ children, permission }: { children: React.ReactNode; permission?: string }) => {
+const PrivateRoute = ({ children, permission }: { children: ReactNode; permission?: string }) => {
   const { token } = useAdminStore()
   const { hasPermission } = usePermission()
 
@@ -50,7 +59,7 @@ const PrivateRoute = ({ children, permission }: { children: React.ReactNode; per
   return <>{children}</>
 }
 
-const PublicRoute = ({ children }: { children: React.ReactNode }) => {
+const PublicRoute = ({ children }: { children: ReactNode }) => {
   const { token } = useAdminStore()
 
   if (token) {
@@ -62,28 +71,29 @@ const PublicRoute = ({ children }: { children: React.ReactNode }) => {
 
 const AppRoutes = () => {
   return (
-    <Routes>
-      {/* 公开路由 */}
-      <Route
-        path="/admin/login"
-        element={
-          <PublicRoute>
-            <Login />
-          </PublicRoute>
-        }
-      />
+    <Suspense fallback={<PageFallback />}>
+      <Routes>
+        {/* 公开路由 */}
+        <Route
+          path="/admin/login"
+          element={
+            <PublicRoute>
+              <Login />
+            </PublicRoute>
+          }
+        />
 
-      {/* 需要认证的路由 */}
-      <Route
-        path="/admin"
-        element={
-          <PrivateRoute>
-            <Layout />
-          </PrivateRoute>
-        }
-      >
-        <Route index element={<Navigate to="/admin/dashboard" replace />} />
-        <Route path="dashboard" element={<Dashboard />} />
+        {/* 需要认证的路由 */}
+        <Route
+          path="/admin"
+          element={
+            <PrivateRoute>
+              <Layout />
+            </PrivateRoute>
+          }
+        >
+          <Route index element={<Navigate to="/admin/dashboard" replace />} />
+          <Route path="dashboard" element={<Dashboard />} />
 
         {/* 知识点管理 */}
         <Route path="knowledge" element={<KnowledgeList />} />
@@ -231,11 +241,12 @@ const AppRoutes = () => {
             </PrivateRoute>
           }
         />
-      </Route>
+        </Route>
 
-      {/* 默认重定向 */}
-      <Route path="*" element={<Navigate to="/admin/login" replace />} />
-    </Routes>
+        {/* 默认重定向 */}
+        <Route path="*" element={<Navigate to="/admin/login" replace />} />
+      </Routes>
+    </Suspense>
   )
 }
 
