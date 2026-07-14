@@ -20,6 +20,10 @@ from app.modules.content.chapter_assignment import (
     PrimaryChapterAssignmentService,
 )
 from app.modules.content.entity_assets import get_entity_assets
+from app.modules.content.entity_serializers import (
+    serialize_managed_knowledge_point,
+    serialize_managed_question,
+)
 from app.modules.retrieval.segment_service import SegmentService
 
 logger = get_logger(__name__)
@@ -103,7 +107,10 @@ class ContentService:
         )
         items = result.scalars().all()
         return {
-            "items": [self._knowledge_point_to_dict(item, truncate=True) for item in items],
+            "items": [
+                serialize_managed_knowledge_point(item, truncate=True)
+                for item in items
+            ],
             "total": total,
             "page": page,
             "page_size": page_size,
@@ -114,7 +121,7 @@ class ContentService:
         if not point or point.status == "deleted":
             raise HTTPException(status_code=404, detail="知识点不存在")
 
-        data = self._knowledge_point_to_dict(point)
+        data = serialize_managed_knowledge_point(point)
         data["assets"] = await get_entity_assets(
             self.db,
             entity_type="knowledge_point",
@@ -244,7 +251,10 @@ class ContentService:
         )
         items = result.scalars().all()
         return {
-            "items": [self._question_to_dict(item, truncate=True) for item in items],
+            "items": [
+                serialize_managed_question(item, truncate=True)
+                for item in items
+            ],
             "total": total,
             "page": page,
             "page_size": page_size,
@@ -255,7 +265,7 @@ class ContentService:
         if not question or question.status == "deleted":
             raise HTTPException(status_code=404, detail="题目不存在")
 
-        data = self._question_to_dict(question)
+        data = serialize_managed_question(question)
         data["assets"] = await get_entity_assets(
             self.db,
             entity_type="question",
@@ -456,81 +466,3 @@ class ContentService:
 
         status = "warning" if result.get("cleanup_warning") else "success"
         return {"status": status, **result}
-
-    @staticmethod
-    def _knowledge_point_to_dict(
-        point: KnowledgePoint,
-        *,
-        truncate: bool = False,
-    ) -> Dict[str, Any]:
-        content = point.content or ""
-        return {
-            "id": point.id,
-            "chapter_id": point.chapter_id,
-            "subject_id": point.subject_id,
-            "primary_chapter_id": point.primary_chapter_id,
-            "source_document_id": point.source_document_id,
-            "source_section_path": point.source_section_path,
-            "title": point.title,
-            "canonical_title": point.canonical_title,
-            "content": content[:200] if truncate else content,
-            "difficulty": point.difficulty,
-            "exam_frequency": point.exam_frequency,
-            "topic_terms": point.topic_terms,
-            "aliases": point.aliases,
-            "tags": point.tags,
-            "key_points": point.key_points,
-            "related_point_ids": point.related_point_ids,
-            "summary": point.summary,
-            "source": point.source,
-            "source_page": point.source_page,
-            "review_status": point.review_status,
-            "review_notes": point.review_notes,
-            "reviewed_by": point.reviewed_by,
-            "reviewed_at": point.reviewed_at.isoformat() if point.reviewed_at else None,
-            "status": point.status,
-            "created_at": point.created_at.isoformat() if point.created_at else None,
-            "updated_at": point.updated_at.isoformat() if point.updated_at else None,
-        }
-
-    @staticmethod
-    def _question_to_dict(
-        question: Question,
-        *,
-        truncate: bool = False,
-    ) -> Dict[str, Any]:
-        content = question.content or ""
-        explanation = question.explanation or ""
-        return {
-            "id": question.id,
-            "subject_id": question.subject_id,
-            "chapter_id": question.chapter_id,
-            "primary_chapter_id": question.primary_chapter_id,
-            "source_document_id": question.source_document_id,
-            "source_section_path": question.source_section_path,
-            "type": question.type,
-            "content": content[:200] if truncate else content,
-            "options": question.options,
-            "answer": question.answer,
-            "explanation": explanation[:300] if truncate else explanation,
-            "answer_source": question.answer_source,
-            "explanation_source": question.explanation_source,
-            "enrich_status": question.enrich_status,
-            "difficulty": question.difficulty,
-            "source": question.source,
-            "exam_scope": question.exam_scope,
-            "exam_year": question.exam_year,
-            "paper_name": question.paper_name,
-            "question_no": question.question_no,
-            "topic_terms": question.topic_terms,
-            "knowledge_point_ids": question.knowledge_point_ids,
-            "tags": question.tags,
-            "extraction_meta": question.extraction_meta,
-            "review_status": question.review_status,
-            "review_notes": question.review_notes,
-            "reviewed_by": question.reviewed_by,
-            "reviewed_at": question.reviewed_at.isoformat() if question.reviewed_at else None,
-            "status": question.status,
-            "created_at": question.created_at.isoformat() if question.created_at else None,
-            "updated_at": question.updated_at.isoformat() if question.updated_at else None,
-        }

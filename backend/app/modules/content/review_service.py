@@ -21,6 +21,10 @@ from app.models.mysql_models import (
 from app.modules.content.chapter_assignment import (
     PrimaryChapterAssignmentService,
 )
+from app.modules.content.entity_serializers import (
+    serialize_review_knowledge_point,
+    serialize_review_question,
+)
 from app.modules.retrieval.segment_service import SegmentService
 
 logger = get_logger(__name__)
@@ -72,7 +76,7 @@ class ReviewService:
         items = result.scalars().all()
 
         return {
-            "items": [self._knowledge_point_to_dict(kp) for kp in items],
+            "items": [serialize_review_knowledge_point(kp) for kp in items],
             "total": total,
             "page": page,
             "page_size": page_size,
@@ -189,7 +193,7 @@ class ReviewService:
         items = result.scalars().all()
 
         return {
-            "items": [self._question_to_dict(q) for q in items],
+            "items": [serialize_review_question(q) for q in items],
             "total": total,
             "page": page,
             "page_size": page_size,
@@ -459,60 +463,3 @@ class ReviewService:
 
         status = "warning" if result.get("cleanup_warning") else "success"
         return {"status": status, **result}
-
-    def _knowledge_point_to_dict(self, kp: KnowledgePoint) -> Dict[str, Any]:
-        return {
-            "id": kp.id,
-            "subject_id": kp.subject_id,
-            "chapter_id": kp.chapter_id,
-            "primary_chapter_id": kp.primary_chapter_id,
-            "source_document_id": kp.source_document_id,
-            "source_section_path": kp.source_section_path,
-            "title": kp.title,
-            "canonical_title": kp.canonical_title,
-            "content": kp.content[:500] if kp.content else None,  # 截断
-            "difficulty": kp.difficulty,
-            "exam_frequency": kp.exam_frequency,
-            "topic_terms": kp.topic_terms,
-            "aliases": kp.aliases,
-            "tags": kp.tags,
-            "key_points": kp.key_points,
-            "related_point_ids": kp.related_point_ids,
-            "review_status": kp.review_status,
-            "review_notes": kp.review_notes,
-            "reviewed_by": kp.reviewed_by,
-            "reviewed_at": kp.reviewed_at.isoformat() if kp.reviewed_at else None,
-            "status": kp.status,
-            "created_at": kp.created_at.isoformat() if kp.created_at else None,
-            "updated_at": kp.updated_at.isoformat() if kp.updated_at else None,
-        }
-
-    def _question_to_dict(self, q: Question) -> Dict[str, Any]:
-        return {
-            "id": q.id,
-            "subject_id": q.subject_id,
-            "chapter_id": q.chapter_id,
-            "primary_chapter_id": q.primary_chapter_id,
-            "source_document_id": q.source_document_id,
-            "source_section_path": q.source_section_path,
-            "type": q.type,
-            "content": q.content[:500] if q.content else None,  # 截断
-            "options": q.options,
-            "answer": q.answer,
-            "explanation": q.explanation[:300] if q.explanation else None,
-            "difficulty": q.difficulty,
-            "source": q.source,
-            "exam_scope": q.exam_scope,
-            "exam_year": q.exam_year,
-            "paper_name": q.paper_name,
-            "question_no": q.question_no,
-            "topic_terms": q.topic_terms,
-            "knowledge_point_ids": q.knowledge_point_ids,
-            "review_status": q.review_status,
-            "review_notes": q.review_notes,
-            "reviewed_by": q.reviewed_by,
-            "reviewed_at": q.reviewed_at.isoformat() if q.reviewed_at else None,
-            "status": q.status,
-            "created_at": q.created_at.isoformat() if q.created_at else None,
-            "updated_at": q.updated_at.isoformat() if q.updated_at else None,
-        }
