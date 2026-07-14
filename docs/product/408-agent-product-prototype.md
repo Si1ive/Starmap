@@ -455,3 +455,4 @@ Agent 明确说明证据不足，可以提出澄清问题或只给出标记为�
 - [交互规格](./408-agent-interaction-spec.md)
 - [原型样例库](./408-agent-prototype-fixtures.md)
 - [用户旅程与评测脚本](./408-agent-journeys-and-evaluation.md)
+- [高保真设计执行简报](./408-agent-visual-design-brief.md)

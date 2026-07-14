@@ -14,6 +14,8 @@
   - 基于试卷4真实结构的题目、考点、Agent run、练习和来源样例
 - [用户旅程与评测脚本](./408-agent-journeys-and-evaluation.md)
   - 核心旅程、可用性测试、Agent 离线评测集和设计开发交接条件
+- [高保真设计执行简报](./408-agent-visual-design-brief.md)
+  - 视觉方向、组件语言、D1-D5 可点击路径、真实样例映射和高保真交付门禁
 - [用户端 Agent 技术架构](../tech/user-agent-client-architecture.md)
   - Web/桌面选型、Agent Runtime、客户端能力适配、数据模型和安全边界
 - [用户端实施路线](../roadmap/user-agent-delivery-plan.md)
@@ -28,4 +30,4 @@
 5. 只有在真实工作流证明需要持续目录访问、文件监听或系统级快捷键后，才使用 Tauri 复用现有 React 用户端。
 6. 首批按单人自用和邀请制内测设计，但数据从第一天归属真实 `user_id`。
 7. 首发以“提问到验证”为第一主线，主观题只提供评分点辅助反馈。
-8. 视觉与品牌方向暂不锁定，等待设计 Skill 介入后输出高保真原型。
+8. 推荐视觉方向为“专注型学术工作台”；具体视觉 token 和最终品牌名由设计 Skill 在既定交互与可信边界内完成。

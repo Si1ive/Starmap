@@ -9,6 +9,7 @@
 - [交互规格](../product/408-agent-interaction-spec.md)：P01-P20 页面、状态矩阵、响应式和内容压力测试。
 - [真实原型样例](../product/408-agent-prototype-fixtures.md)：来自当前 408 语料的题目、知识点、来源和异常样例。
 - [用户旅程与评测](../product/408-agent-journeys-and-evaluation.md)：核心流程、恢复场景、可用性测试和 Agent 离线评测。
+- [高保真设计执行简报](../product/408-agent-visual-design-brief.md)：视觉方向、组件语法、D1-D5 可点击脚本、真实素材和交付门禁。
 
 ## 1. 交付策略
 
@@ -30,6 +31,7 @@
 
 - 对齐文字原型中的产品主线。
 - 接入设计 Skill，完成桌面和移动端高保真原型。
+- 在 `prototypes/408-agent/` 建立不依赖后端的可点击原型，不提前覆盖正式用户端。
 - 确定用户端视觉系统和组件策略。
 - 清理现有用户端模板状态与过时页面结构。
 - 建立用户端独立路由前缀与认证方案。
