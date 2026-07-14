@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.logging import get_logger
+from app.modules.corpus.question_type import is_subjective_question_text
 
 logger = get_logger(__name__)
 
@@ -399,6 +400,9 @@ class QuestionLayoutGrouper:
         return -1
 
     def _extract_stem(self, group: QuestionGroup) -> str:
+        if is_subjective_question_text(self._group_text(group)):
+            return self._extract_full_stem(group)
+
         parts: List[str] = []
         in_options = False
         recoverable_inline = self._find_recoverable_inline_option(group)
@@ -440,6 +444,9 @@ class QuestionLayoutGrouper:
 
     def _extract_options(self, group: QuestionGroup) -> List[Dict[str, str]]:
         """从组内提取选项（含跨 block 合并）"""
+        if is_subjective_question_text(self._group_text(group)):
+            return []
+
         option_blocks: List[Dict[str, Any]] = []
         non_option_after: List[Any] = []
         last_option_block: Optional[Any] = None
@@ -497,6 +504,50 @@ class QuestionLayoutGrouper:
                 options[-1]["text"] = options[-1]["text"] + " " + trailing_text
 
         return options
+
+    @staticmethod
+    def _group_text(group: QuestionGroup) -> str:
+        return " ".join(
+            (
+                getattr(block, "content_text", None)
+                or getattr(block, "content_md", None)
+                or ""
+            ).strip()
+            for block in group.blocks
+            if (
+                getattr(block, "content_text", None)
+                or getattr(block, "content_md", None)
+                or ""
+            ).strip()
+        )
+
+    @staticmethod
+    def _extract_full_stem(group: QuestionGroup) -> str:
+        parts: List[str] = []
+        for block in group.blocks:
+            text = (
+                getattr(block, "content_text", None)
+                or getattr(block, "content_md", None)
+                or ""
+            ).strip()
+            if not text:
+                continue
+            block_type = (
+                getattr(block, "block_type", "") or ""
+            ).lower()
+            if (
+                block_type in (
+                    "figure",
+                    "table",
+                    "formula",
+                    "image",
+                    "chart",
+                )
+                and not QUESTION_NUMERIC_RE.match(text)
+            ):
+                continue
+            parts.append(text)
+        return " ".join(parts)
 
     @staticmethod
     def _find_recoverable_inline_option(group: QuestionGroup) -> Optional[Tuple[int, int]]:

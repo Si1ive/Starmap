@@ -16,6 +16,7 @@ from app.modules.corpus.question_layout import (
     QuestionGroup,
     QuestionLayoutGrouper,
 )
+from app.modules.corpus.question_type import infer_question_type
 from app.services.chapter_compat_service import resolve_legacy_chapter_id
 
 logger = get_logger(__name__)
@@ -196,11 +197,9 @@ class QuestionBuilder:
         stem = part.get("stem") or ""
         options = part.get("options") or []
         question_no = part.get("question_no")
-        question_type = (
-            "choice"
-            if options
-            else base.get("question_type") or "short_answer"
-        )
+        question_type = infer_question_type(stem, options)
+        if question_type != "choice":
+            options = []
 
         question["id"] = generate_id()
         question["stem"] = stem
@@ -312,6 +311,11 @@ class QuestionBuilder:
         if not content:
             return None
 
+        question_type = infer_question_type(content, options)
+        if question_type != "choice":
+            options = []
+            stem = content
+
         if not primary_chapter_id:
             from app.services.chapter_link_service import ChapterLinkService
 
@@ -350,14 +354,6 @@ class QuestionBuilder:
                 canonical_chapter_id=primary_chapter_id,
                 subject_id=subject_id,
             )
-
-        question_type = "short_answer"
-        if options:
-            question_type = "choice"
-        elif "判断" in content[:50]:
-            question_type = "judge"
-        elif "填空" in content[:50]:
-            question_type = "fill"
 
         doc_meta = doc_meta or {}
         stem_year = detect_stem_year(content)

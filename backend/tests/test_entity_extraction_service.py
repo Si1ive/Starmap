@@ -288,6 +288,123 @@ async def test_llm_fallback_marks_option_as_ai_generated_when_not_in_source():
     assert fixed[0]["extraction_meta"]["original_issues"][0]["missing_options"] == ["D"]
 
 
+def _subjective_register_question():
+    raw_text = (
+        "43 （12 分） 假设有两个整数 x 和 y，分别存放在寄存器 "
+        "A 和 B 中。另外，还有两个寄存器 C 和 D。"
+        "请回答下列问题：（1）寄存器 A 和 B 中的内容分别是什么？"
+        "（2）相加结果存放在 C 寄存器中，内容是什么？"
+        "（3）相减结果存放在 D 寄存器中，内容是什么？"
+    )
+    return {
+        "id": "q43",
+        "question_no": "43",
+        "question_type": "choice",
+        "type": "choice",
+        "stem": raw_text.split(" A 和 B 中")[0],
+        "content": raw_text.split(" A 和 B 中")[0],
+        "raw_text": raw_text,
+        "page_no": 4,
+        "options": [
+            {"key": "A", "text": "和"},
+            {"key": "B", "text": "中。另外，还有两个寄存器"},
+            {"key": "C", "text": "和"},
+        ],
+        "extraction_meta": {"few_options": True, "option_count": 3},
+    }
+
+
+async def test_llm_fallback_restores_false_choice_without_calling_llm():
+    llm = _MockLLM('{"action":"none","should_merge":false}')
+    question = _subjective_register_question()
+    report = {
+        "summary": {
+            "critical_issues": [{
+                "question_index": 0,
+                "question_number": 43,
+                "issue_type": "too_few",
+                "missing_options": ["D"],
+            }]
+        }
+    }
+
+    fixed = await LLMFallbackFixer(llm).fix_remaining_issues(
+        [question],
+        report,
+    )
+
+    assert llm.prompts == []
+    assert fixed[0]["question_type"] == "short_answer"
+    assert fixed[0]["type"] == "short_answer"
+    assert fixed[0]["options"] == []
+    assert fixed[0]["stem"] == fixed[0]["raw_text"]
+    assert fixed[0]["extraction_meta"]["few_options"] is False
+    correction = fixed[0]["extraction_meta"]["structure_corrections"][0]
+    assert correction["discarded_option_labels"] == ["A", "B", "C"]
+
+
+def test_llm_fallback_uses_subjective_repair_prompt():
+    question = _subjective_register_question()
+    prompt = LLMFallbackFixer(_MockLLM(""))._build_fix_prompt(
+        [question],
+        target_idx=0,
+        issue={"issue_type": "duplicate"},
+    )
+
+    assert "教材主观题结构分析专家" in prompt
+    assert "repair_subjective" in prompt
+    assert "不得生成选择题选项" in prompt
+    assert "ai_generated" not in prompt
+
+
+def test_llm_fallback_parses_subjective_repair_compatibly():
+    response = """{
+      "action": "fix_subjective",
+      "should_merge": false,
+      "repaired_question": {
+        "stem": "43。完整主观题",
+        "question_type": "short_answer",
+        "options": []
+      }
+    }"""
+
+    result = LLMFallbackFixer(
+        _MockLLM(response)
+    )._parse_llm_fix_result(response)
+
+    assert result["action"] == "repair_subjective"
+
+
+def test_llm_fallback_rejects_option_repair_for_subjective_question():
+    question = _subjective_register_question()
+    fixer = LLMFallbackFixer(_MockLLM(""))
+
+    fixed = fixer._apply_llm_fix(
+        [question],
+        index=0,
+        context_start=0,
+        fix_action={
+            "action": "repair_options",
+            "issue": {
+                "issue_type": "too_few",
+                "missing_options": ["D"],
+            },
+            "repaired_question": {
+                "stem": question["raw_text"],
+                "options": [{"key": "D", "text": "错误生成的选项"}],
+            },
+        },
+    )
+
+    assert fixed[0]["question_type"] == "choice"
+    assert [item["key"] for item in fixed[0]["options"]] == [
+        "A",
+        "B",
+        "C",
+    ]
+    assert fixed[0].get("fixed_by_llm") is None
+
+
 def test_normalize_options_preserves_llm_option_source():
     normalized = EntityExtractionService(None)._normalize_options([
         {"key": "D", "text": "AI 补充选项", "source": "ai_generated"},

@@ -336,6 +336,49 @@ class TestExtractStem:
 
 
 class TestExtractOptions:
+    def test_register_names_in_subjective_question_are_not_options(self):
+        text = (
+            "43 （12 分） 假设有两个整数 x 和 y，分别存放在寄存器 "
+            "A 和 B 中。另外，还有两个寄存器 C 和 D。"
+            "A、B、C、D 都是 8 位寄存器。请回答下列问题："
+            "（1）寄存器 A 和 B 中的内容分别是什么？"
+            "（2）相加结果存放在 C 寄存器中，内容是什么？"
+            "（3）相减结果存放在 D 寄存器中，内容是什么？"
+        )
+        blocks = [
+            _block(
+                text=text,
+                block_type="paragraph",
+                block_id="q43",
+            ),
+        ]
+        group = QuestionGroup(blocks=blocks, page_no=4)
+        grouper = QuestionLayoutGrouper(blocks)
+
+        assert grouper._extract_stem(group) == text
+        assert grouper._extract_options(group) == []
+
+    def test_choice_with_numbered_statements_remains_choice(self):
+        text = (
+            "12。下列说法正确的是（ ）。"
+            "（1）第一项表述；（2）第二项表述。"
+            "A 仅（1） B 仅（2） C 两项都正确 D 两项都错误"
+        )
+        blocks = [
+            _block(
+                text=text,
+                block_type="paragraph",
+                block_id="choice-12",
+            ),
+        ]
+        group = QuestionGroup(blocks=blocks, page_no=1)
+        grouper = QuestionLayoutGrouper(blocks)
+
+        assert [
+            option["label"]
+            for option in grouper._extract_options(group)
+        ] == ["A", "B", "C", "D"]
+
     def test_recovers_inline_a_before_separate_bcd_blocks(self):
         """A 粘在题干末尾、B/C/D 分块时，应把 A 从题干恢复为选项。"""
         blocks = [
