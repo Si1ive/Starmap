@@ -12,7 +12,7 @@
 """
 
 import uuid
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
 from datetime import datetime
 
 from sqlalchemy import select, and_, or_
@@ -23,6 +23,9 @@ from app.models.mysql_models import (
     KnowledgePoint, KnowledgeRelation
 )
 from app.modules.retrieval.relation_detector import KnowledgeRelationDetector
+from app.modules.retrieval.semantic_relation_detector import (
+    KnowledgeSemanticRelationDetector,
+)
 
 logger = get_logger(__name__)
 
@@ -37,6 +40,7 @@ class RelationService:
     def __init__(self, db: AsyncSession):
         self.db = db
         self.detector = KnowledgeRelationDetector()
+        self.semantic_detector = KnowledgeSemanticRelationDetector(db)
 
     async def build_relations(
         self,
@@ -123,10 +127,30 @@ class RelationService:
                     self.db.add(relation)
                     relations_count += 1
 
-        # 3.5 语义相似度边：用知识点 summary/title 的 embedding 算余弦，
-        # 超阈值且尚无关系的配对补 similar_to（source_type="embedding"）。
         try:
-            semantic_count = await self._build_semantic_edges(kp_list)
+            semantic_count = 0
+            semantic_candidates = await self.semantic_detector.detect(kp_list)
+            for candidate in semantic_candidates:
+                if await self._check_relation_exists(
+                    candidate.source.id,
+                    candidate.target.id,
+                    "similar_to",
+                ):
+                    continue
+                self.db.add(
+                    KnowledgeRelation(
+                        id=generate_id(),
+                        source_knowledge_id=candidate.source.id,
+                        target_knowledge_id=candidate.target.id,
+                        relation_type="similar_to",
+                        directionality="undirected",
+                        evidence_text=f"语义相似度 {candidate.similarity:.2f}",
+                        confidence=round(float(candidate.similarity), 4),
+                        source_type="embedding",
+                        review_status="pending",
+                    )
+                )
+                semantic_count += 1
             relations_count += semantic_count
         except Exception as e:
             semantic_count = 0
@@ -145,75 +169,6 @@ class RelationService:
             "relations_count": relations_count,
             "knowledge_points_count": len(knowledge_points),
         }
-
-    # 语义相似度阈值（cosine）：超过则建 similar_to 边
-    SEMANTIC_SIM_THRESHOLD = 0.82
-    # 每个知识点最多补的语义边数，避免稠密爆炸
-    SEMANTIC_TOP_N = 3
-
-    async def _build_semantic_edges(self, kp_list: List[KnowledgePoint]) -> int:
-        """
-        语义相似度边：对每个知识点取 summary/title 的 embedding，
-        两两算 cosine，超阈值且尚无关系的配对补 similar_to（source_type="embedding"）。
-        """
-        if len(kp_list) < 2:
-            return 0
-
-        from app.infrastructure.ai.embedding_service import (
-            get_embedding_service_from_settings,
-        )
-
-        embedding = await get_embedding_service_from_settings(self.db)
-        # 富化后优先用 summary，没有则退回 title + topic_terms
-        texts: List[str] = []
-        for kp in kp_list:
-            base = (getattr(kp, "summary", None) or kp.title or "").strip()
-            if kp.topic_terms:
-                base = f"{base} {' '.join(kp.topic_terms)}"
-            texts.append(base or kp.title or "")
-        vectors = await embedding.embed_batch(texts)
-
-        def _cosine(a: List[float], b: List[float]) -> float:
-            import math
-            dot = sum(x * y for x, y in zip(a, b))
-            na = math.sqrt(sum(x * x for x in a))
-            nb = math.sqrt(sum(y * y for y in b))
-            if na == 0 or nb == 0:
-                return 0.0
-            return dot / (na * nb)
-
-        count = 0
-        n = len(kp_list)
-        for i in range(n):
-            # 收集 i 与其它点的相似度，取 top-N 超阈值
-            sims: List[Tuple[int, float]] = []
-            for j in range(n):
-                if i == j:
-                    continue
-                sim = _cosine(vectors[i], vectors[j])
-                if sim >= self.SEMANTIC_SIM_THRESHOLD:
-                    sims.append((j, sim))
-            sims.sort(key=lambda x: x[1], reverse=True)
-            for j, sim in sims[: self.SEMANTIC_TOP_N]:
-                kp1, kp2 = kp_list[i], kp_list[j]
-                # 无向去重：只在 i<j 方向落库
-                if i >= j:
-                    continue
-                if await self._check_relation_exists(kp1.id, kp2.id, "similar_to"):
-                    continue
-                self.db.add(KnowledgeRelation(
-                    id=generate_id(),
-                    source_knowledge_id=kp1.id,
-                    target_knowledge_id=kp2.id,
-                    relation_type="similar_to",
-                    directionality="undirected",
-                    evidence_text=f"语义相似度 {sim:.2f}",
-                    confidence=round(float(sim), 4),
-                    source_type="embedding",
-                    review_status="pending",
-                ))
-                count += 1
-        return count
 
     async def _check_relation_exists(
         self,

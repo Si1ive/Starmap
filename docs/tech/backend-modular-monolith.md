@@ -195,8 +195,9 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
   `app/modules/retrieval/outline_service.py` 和
   `app/services/outline_retrieval_service.py` 均已删除
 - 知识点标题、术语和内容关键词的纯规则关系检测已拆分到
-  `app/modules/retrieval/relation_detector.py`；候选查询、语义相似边、关系落库和审核
-  由 `app/modules/retrieval/relation_service.py` 负责，
+  `app/modules/retrieval/relation_detector.py`；Embedding 文本构建、余弦计算和 Top-N
+  语义候选筛选已拆分到 `app/modules/retrieval/semantic_relation_detector.py`；
+  候选查询、关系去重落库和审核由 `app/modules/retrieval/relation_service.py` 负责，
   `app/services/relation_service.py` 已删除
 - `POST /api/v1/admin/relations/build` 已迁移到检索模块路由，关系重建入口与
   `RelationService` 归属保持一致
