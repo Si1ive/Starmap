@@ -74,6 +74,33 @@ def test_quality_gate_passes_clean_exam_content():
     assert gate["issues"] == []
 
 
+def test_quality_gate_ignores_stale_document_diagnostic_after_repair():
+    diagnostic = {
+        "validation": {
+            "initial_issue_count": 2,
+            "final_issue_count": 1,
+            "final_critical_issue_count": 1,
+        },
+        "unsaved_samples": [],
+    }
+
+    gate = CorpusContentOverviewService.build_quality_gate(
+        document=_document(),
+        knowledge_points=[],
+        questions=[_question()],
+        summary=_summary(),
+        latest_run=_run(diagnostic=diagnostic),
+    )
+
+    assert gate["status"] == "passed"
+    assert gate["metrics"]["unresolved_question_count"] == 0
+    assert gate["metrics"]["final_issue_count"] == 1
+    assert all(
+        issue["key"] != "question-structure-unlocated"
+        for issue in gate["issues"]
+    )
+
+
 def test_quality_gate_warns_for_generated_option_and_missing_assignment():
     question = _question(
         subject_id=None,

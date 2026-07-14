@@ -377,9 +377,6 @@ class CorpusContentOverviewService:
         final_issue_count = cls._as_non_negative_int(
             validation.get("final_issue_count")
         )
-        final_critical_issue_count = cls._as_non_negative_int(
-            validation.get("final_critical_issue_count")
-        )
         unsaved_samples = (
             diagnostic.get("unsaved_samples")
             if isinstance(diagnostic.get("unsaved_samples"), list)
@@ -398,28 +395,10 @@ class CorpusContentOverviewService:
                 entity_label=cls._unsaved_question_label(sample),
                 message=cls._unsaved_question_message(sample),
             )
-        unresolved_question_count = max(
-            len(question_issue_ids),
-            final_critical_issue_count,
-        )
-        unlocated_critical_count = max(
-            0,
-            final_critical_issue_count - len(question_issue_ids),
-        )
-        if unlocated_critical_count:
-            cls._add_issue(
-                issues,
-                key="question-structure-unlocated",
-                check_key="question_integrity",
-                severity="fail",
-                entity_type="extraction_result",
-                entity_id=None,
-                entity_label="抽取诊断",
-                message=(
-                    f"另有 {unlocated_critical_count} 个关键结构问题未能映射到"
-                    "已入库题目，建议重新抽取后核对"
-                ),
-            )
+        # The document-run aggregate is historical after targeted re-extraction.
+        # Current persisted entities and explicit unsaved samples are the gate's
+        # source of truth, so a repaired question can immediately clear its issue.
+        unresolved_question_count = len(question_issue_ids)
 
         metrics = {
             **summary,

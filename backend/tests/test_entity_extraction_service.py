@@ -293,6 +293,119 @@ async def test_llm_fallback_marks_option_as_ai_generated_when_not_in_source():
     assert fixed[0]["extraction_meta"]["original_issues"][0]["missing_options"] == ["D"]
 
 
+async def test_llm_fallback_restores_source_verified_truncated_options():
+    response = """{
+      "action": "repair_options",
+      "should_merge": false,
+      "repaired_question": {
+        "stem": "1。循环队列的队首元素位置是（）。",
+        "options": [
+          {"key": "A", "text": "rear−length", "source": "extracted"},
+          {"key": "B", "text": "(rear−length+m) MOD m", "source": "extracted"},
+          {"key": "C", "text": "(1+rear+m−length) MOD m", "source": "extracted"},
+          {"key": "D", "text": "(rear+length−1) MOD m", "source": "extracted"}
+        ]
+      }
+    }"""
+    question = {
+        **_choice(
+            1,
+            "ABD",
+            raw_text=(
+                "1。循环队列的队首元素位置是（）。"
+                "A rear−length B (rear−length+m) MOD m "
+                "C (1+rear+m−length) MOD m "
+                "D (rear+length−1) MOD m"
+            ),
+        ),
+        "stem": "1。循环队列的队首元素位置是（）。",
+        "content": "1。循环队列的队首元素位置是（）。",
+        "options": [
+            {"key": "A", "text": "rear−length"},
+            {"key": "B", "text": "(rear−length+m) MO"},
+            {"key": "D", "text": "m"},
+        ],
+        "extraction_meta": {
+            "few_options": True,
+            "suspected_truncated_options": True,
+        },
+    }
+    report = {
+        "summary": {
+            "critical_issues": [{
+                "question_index": 0,
+                "question_number": 1,
+                "issue_type": "missing_middle",
+                "missing_options": ["C"],
+            }]
+        }
+    }
+
+    fixed = await LLMFallbackFixer(
+        _MockLLM(response)
+    ).fix_remaining_issues([question], report)
+    QuestionExtractionPipeline._refresh_extraction_metadata(fixed)
+
+    options = {
+        option["key"]: option
+        for option in fixed[0]["options"]
+    }
+    assert options["B"]["text"] == "(rear−length+m) MOD m"
+    assert options["B"]["source"] == "extracted"
+    assert options["C"]["text"] == "(1+rear+m−length) MOD m"
+    assert options["D"]["text"] == "(rear+length−1) MOD m"
+    action = fixed[0]["extraction_meta"]["llm_fix_actions"][0]
+    assert [item["key"] for item in action["added_options"]] == ["C"]
+    assert [item["key"] for item in action["replaced_options"]] == ["B", "D"]
+    assert fixed[0]["extraction_meta"]["few_options"] is False
+    assert fixed[0]["extraction_meta"]["suspected_truncated_options"] is False
+
+
+async def test_llm_fallback_does_not_rewrite_existing_option_without_source():
+    response = """{
+      "action": "repair_options",
+      "should_merge": false,
+      "repaired_question": {
+        "stem": "2。题干",
+        "options": [
+          {"key": "A", "text": "LLM改写的A选项", "source": "ai_generated"},
+          {"key": "B", "text": "B选项", "source": "extracted"},
+          {"key": "C", "text": "C选项", "source": "extracted"},
+          {"key": "D", "text": "LLM补出的D选项", "source": "ai_generated"}
+        ]
+      }
+    }"""
+    question = _choice(
+        2,
+        "ABC",
+        raw_text="2。题干 A A选项 B B选项 C C选项",
+    )
+    report = {
+        "summary": {
+            "critical_issues": [{
+                "question_index": 0,
+                "question_number": 2,
+                "issue_type": "too_few",
+                "missing_options": ["D"],
+            }]
+        }
+    }
+
+    fixed = await LLMFallbackFixer(
+        _MockLLM(response)
+    ).fix_remaining_issues([question], report)
+
+    options = {
+        option["key"]: option
+        for option in fixed[0]["options"]
+    }
+    assert options["A"]["text"] == "A选项"
+    assert options["D"]["source"] == "ai_generated"
+    assert fixed[0]["extraction_meta"]["llm_fix_actions"][0][
+        "replaced_options"
+    ] == []
+
+
 def _subjective_register_question():
     raw_text = (
         "43 （12 分） 假设有两个整数 x 和 y，分别存放在寄存器 "

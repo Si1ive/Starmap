@@ -219,7 +219,9 @@ class LLMFallbackFixer:
    - 优先从“原始提取文本”和相邻题原文中逐字恢复缺失选项。
    - 原文确实不存在时，允许生成合理选项。
    - 每个补充选项必须标 source：原文恢复为 extracted，AI 生成则为 ai_generated。
-   - 返回完整题干和 A-D 选项；不要改写已有选项。
+   - 返回完整题干和 A-D 选项。
+   - 不要改写内容完整的已有选项；若已有选项明显被截断，且完整文本能在目标题
+     原始提取文本中逐字找到，应返回恢复后的完整文本。
 2. merge：目标题被错误拆开，需要与前题或后题合并。
 3. none：无需修改或无法可靠修复。
 
@@ -482,7 +484,7 @@ merge_indices 使用上方上下文题目列表的 0 基索引。
         index: int,
         fix_action: Dict[str, Any],
     ) -> List[Dict[str, Any]]:
-        """Only add missing labels and verify each added option's source."""
+        """Add missing options and restore source-verified truncations."""
         if index < 0 or index >= len(questions):
             return questions
         repaired = fix_action.get("repaired_question")
@@ -496,11 +498,18 @@ merge_indices 使用上方上下文题目列表的 0 基索引。
                 question_index=index,
             )
             return questions
-        existing_options = list(target.get("options") or [])
-        existing_labels = {
-            get_option_label(option)
+        existing_options = [
+            dict(option)
+            for option in target.get("options") or []
+            if isinstance(option, dict)
+        ]
+        existing_by_label = {
+            get_option_label(option): option
             for option in existing_options
             if get_option_label(option)
+        }
+        existing_labels = {
+            label for label in existing_by_label if label
         }
         issue = fix_action.get("issue") or {}
         missing_labels = {
@@ -512,7 +521,9 @@ merge_indices 使用上方上下文题目列表的 0 基索引。
             missing_labels = {"A", "B", "C", "D"} - existing_labels
 
         source_text = self._collect_source_text(questions, index)
+        target_source_text = self._collect_target_source_text(target)
         added_options: List[Dict[str, Any]] = []
+        replaced_options: List[Dict[str, Any]] = []
         for option in repaired.get("options") or []:
             if not isinstance(option, dict):
                 continue
@@ -520,28 +531,50 @@ merge_indices 使用上方上下文题目列表的 0 基索引。
             text = str(
                 option.get("text") or option.get("content") or ""
             ).strip()
-            if (
-                label not in {"A", "B", "C", "D"}
-                or label in existing_labels
-                or label not in missing_labels
-                or not text
-            ):
+            if label not in {"A", "B", "C", "D"} or not text:
+                continue
+            existing_option = existing_by_label.get(label)
+            if existing_option:
+                previous_text = str(
+                    existing_option.get("text")
+                    or existing_option.get("content")
+                    or ""
+                ).strip()
+                if not self._is_safe_option_replacement(
+                    previous_text,
+                    text,
+                    target_source_text,
+                ):
+                    continue
+                existing_option["text"] = text
+                existing_option.pop("content", None)
+                existing_option["source"] = "extracted"
+                replaced_options.append({
+                    "key": label,
+                    "previous_text": previous_text,
+                    "text": text,
+                    "source": "extracted",
+                })
+                continue
+            if label not in missing_labels:
                 continue
             source = (
                 "extracted"
                 if self._text_exists_in_source(text, source_text)
                 else "ai_generated"
             )
-            added_options.append({
+            added_option = {
                 "key": label,
                 "label": label,
                 "option_label": label,
                 "text": text,
                 "source": source,
-            })
+            }
+            added_options.append(added_option)
+            existing_by_label[label] = added_option
             existing_labels.add(label)
 
-        if not added_options:
+        if not added_options and not replaced_options:
             return questions
         target["options"] = sorted(
             [*existing_options, *added_options],
@@ -570,6 +603,7 @@ merge_indices 使用上方上下文题目列表的 0 基索引。
                     }
                     for option in added_options
                 ],
+                "replaced_options": replaced_options,
                 "reason": fix_action.get("reason"),
             },
         )
@@ -716,6 +750,29 @@ merge_indices 使用上方上下文题目列表的 0 基索引。
             repaired_normalized
             and current_normalized
             and repaired_normalized in current_normalized
+        )
+
+    @classmethod
+    def _is_safe_option_replacement(
+        cls,
+        current_text: str,
+        repaired_text: str,
+        source_text: str,
+    ) -> bool:
+        """Accept only a longer source-backed completion of existing text."""
+        current_normalized = cls._normalize_source_text(current_text)
+        repaired_normalized = cls._normalize_source_text(repaired_text)
+        if (
+            not current_normalized
+            or len(repaired_normalized) <= len(current_normalized)
+            or not cls._text_exists_in_source(repaired_text, source_text)
+        ):
+            return False
+        if len(current_normalized) == 1:
+            return current_normalized in repaired_normalized
+        return (
+            repaired_normalized.startswith(current_normalized)
+            or repaired_normalized.endswith(current_normalized)
         )
 
     @staticmethod
