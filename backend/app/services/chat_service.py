@@ -480,7 +480,7 @@ class ChatService:
         try:
             import openai
             import asyncio
-            from app.services.llm_call_recorder import LLMCallRecorder
+            from app.modules.monitoring.llm_calls import LLMCallRecorder
 
             async with LLMCallRecorder(
                 model=settings.OPENAI_MODEL,
@@ -523,7 +523,7 @@ class ChatService:
         try:
             import openai
             import asyncio
-            from app.services.llm_call_recorder import LLMCallRecorder
+            from app.modules.monitoring.llm_calls import LLMCallRecorder
 
             async with LLMCallRecorder(
                 model=settings.OPENAI_MODEL,
@@ -594,7 +594,7 @@ class ChatService:
             try:
                 import openai
                 import asyncio
-                from app.services.llm_call_recorder import LLMCallRecorder
+                from app.modules.monitoring.llm_calls import LLMCallRecorder
 
                 async with LLMCallRecorder(
                     model=settings.OPENAI_MODEL,

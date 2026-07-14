@@ -200,6 +200,10 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - 登录改为读取 `admin_users`，所有后台接口使用签名 JWT 并在请求时重新校验账号状态
 - 当前 PBKDF2 密码格式兼容旧 bcrypt，旧哈希登录成功后自动升级
 - 非开发环境启动时强制校验 `ADMIN_JWT_SECRET`，避免默认密钥进入生产
+- LLM 调用记录、聚合统计和向量召回质量日志已迁移到
+  `app/modules/monitoring`，对应管理接口保持 `/api/v1/admin/monitor/*`
+  不变，`app/services/llm_call_recorder.py` 与
+  `app/services/vector_recall_recorder.py` 已删除
 
 每个阶段都必须满足：
 

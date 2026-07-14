@@ -112,7 +112,7 @@ class ChapterMatcher:
         search_core: Optional[VectorSearchCore] = None,
     ) -> List[Dict[str, Any]]:
         """Search canonical chapter segments and record the vector recall."""
-        from app.services.vector_recall_recorder import VectorRecallRecorder
+        from app.modules.monitoring.vector_recalls import VectorRecallRecorder
 
         if entity_type == "knowledge_point":
             query_text = (

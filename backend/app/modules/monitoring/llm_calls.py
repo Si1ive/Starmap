@@ -1,5 +1,4 @@
-"""
-LLM 调用记录器
+"""LLM 调用记录与监控查询。
 
 封装 OpenAI 兼容 API 调用，记录每次调用的请求/响应/Token/耗时/成本到 llm_call_logs。
 
@@ -9,7 +8,6 @@ LLM 调用记录器
 - 记录与业务在同一事务外（独立 session），避免回滚污染
 """
 
-import asyncio
 import json
 import time
 import uuid
@@ -19,7 +17,6 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.mysql import mysql_client
 from app.models.mysql_models import LLMCallLog
@@ -40,8 +37,8 @@ DEFAULT_PRICING: Dict[str, Dict[str, float]] = {
     "qwen-max": {"prompt": 0.0024, "completion": 0.0096},
 }
 
-MAX_PROMPT_PERSIST_LEN = 20000   # request_messages 单条文本上限（够看清输入构造）
-MAX_RESPONSE_PERSIST_LEN = 20000 # response_text 上限（够看清输出是否符合预期）
+MAX_PROMPT_PERSIST_LEN = 20000  # request_messages 单条文本上限（够看清输入构造）
+MAX_RESPONSE_PERSIST_LEN = 20000  # response_text 上限（够看清输出是否符合预期）
 
 
 def _generate_id() -> str:
@@ -56,7 +53,9 @@ def _truncate(text: Optional[str], limit: int) -> Optional[str]:
     return text[:limit] + f"...[truncated, total {len(text)}]"
 
 
-def _truncate_messages(messages: List[Dict[str, Any]], limit: int = MAX_PROMPT_PERSIST_LEN) -> List[Dict[str, Any]]:
+def _truncate_messages(
+    messages: List[Dict[str, Any]], limit: int = MAX_PROMPT_PERSIST_LEN
+) -> List[Dict[str, Any]]:
     safe: List[Dict[str, Any]] = []
     for msg in messages or []:
         if not isinstance(msg, dict):
@@ -69,7 +68,11 @@ def _truncate_messages(messages: List[Dict[str, Any]], limit: int = MAX_PROMPT_P
     return safe
 
 
-def _estimate_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
+def _estimate_cost(
+    model: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+) -> float:
     rates = DEFAULT_PRICING.get(model.lower())
     if not rates:
         # 模糊匹配前缀
@@ -80,7 +83,8 @@ def _estimate_cost(model: str, prompt_tokens: int, completion_tokens: int) -> fl
     if not rates:
         return 0.0
     return round(
-        prompt_tokens / 1000.0 * rates["prompt"] + completion_tokens / 1000.0 * rates["completion"],
+        prompt_tokens / 1000.0 * rates["prompt"]
+        + completion_tokens / 1000.0 * rates["completion"],
         6,
     )
 
@@ -147,9 +151,13 @@ class LLMCallRecorder:
         response_text: Optional[str] = None,
         response_obj: Any = None,
     ) -> None:
-        """从 OpenAI 风格的响应对象抽取 token 用量；response_text 是抽取后的文本。"""
-        self._response_text = _truncate(response_text or "", MAX_RESPONSE_PERSIST_LEN)
-        self._latency_ms = int((time.perf_counter() - (self._start_time or time.perf_counter())) * 1000)
+        """从 OpenAI 风格的响应对象抽取 token 用量和响应文本。"""
+        self._response_text = _truncate(
+            response_text or "",
+            MAX_RESPONSE_PERSIST_LEN,
+        )
+        started_at = self._start_time or time.perf_counter()
+        self._latency_ms = int((time.perf_counter() - started_at) * 1000)
 
         usage = None
         full: Optional[Dict[str, Any]] = None
@@ -171,15 +179,21 @@ class LLMCallRecorder:
 
         if usage:
             self._prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
-            self._completion_tokens = int(usage.get("completion_tokens", 0) or 0)
-            self._total_tokens = int(usage.get("total_tokens", self._prompt_tokens + self._completion_tokens) or 0)
+            completion_tokens = usage.get("completion_tokens", 0)
+            self._completion_tokens = int(completion_tokens or 0)
+            default_total = self._prompt_tokens + self._completion_tokens
+            total_tokens = usage.get("total_tokens", default_total)
+            self._total_tokens = int(total_tokens or 0)
 
-        self._cost_usd = _estimate_cost(self.model, self._prompt_tokens, self._completion_tokens)
+        self._cost_usd = _estimate_cost(
+            self.model, self._prompt_tokens, self._completion_tokens
+        )
         self._response_full = self._truncate_full_dump(full) if full else None
         self._status = "success"
 
     def record_error(self, exc: Exception) -> None:
-        self._latency_ms = int((time.perf_counter() - (self._start_time or time.perf_counter())) * 1000)
+        started_at = self._start_time or time.perf_counter()
+        self._latency_ms = int((time.perf_counter() - started_at) * 1000)
         msg = str(exc)
         self._error_msg = msg[:2000]
         self._status = "timeout" if "timeout" in msg.lower() else "error"
@@ -192,7 +206,10 @@ class LLMCallRecorder:
             return {"_serialization_error": True}
         if len(text_repr) <= MAX_RESPONSE_PERSIST_LEN:
             return payload
-        return {"_truncated": True, "_excerpt": text_repr[:MAX_RESPONSE_PERSIST_LEN]}
+        return {
+            "_truncated": True,
+            "_excerpt": text_repr[:MAX_RESPONSE_PERSIST_LEN],
+        }
 
     async def persist(self) -> None:
         if self._finalized:
@@ -257,9 +274,8 @@ async def list_llm_calls(
         count_query = count_query.where(LLMCallLog.response_text.like(like))
 
     total = (await session.execute(count_query)).scalar_one()
-    rows = (await session.execute(
-        query.offset((page - 1) * page_size).limit(page_size)
-    )).scalars().all()
+    paged_query = query.offset((page - 1) * page_size).limit(page_size)
+    rows = (await session.execute(paged_query)).scalars().all()
 
     return {
         "total": int(total or 0),
@@ -269,16 +285,22 @@ async def list_llm_calls(
     }
 
 
-async def get_llm_call_detail(session: AsyncSession, call_id: str) -> Optional[Dict[str, Any]]:
+async def get_llm_call_detail(
+    session: AsyncSession, call_id: str
+) -> Optional[Dict[str, Any]]:
     row = await session.get(LLMCallLog, call_id)
     if not row:
         return None
     return _log_to_detail(row)
 
 
-async def get_llm_call_stats(session: AsyncSession, hours: int = 24) -> Dict[str, Any]:
+async def get_llm_call_stats(
+    session: AsyncSession,
+    hours: int = 24,
+) -> Dict[str, Any]:
     """汇总最近 hours 小时的 LLM 调用情况。"""
     from datetime import timedelta
+
     since = datetime.utcnow() - timedelta(hours=hours)
 
     base_query = select(LLMCallLog).where(LLMCallLog.created_at >= since)
@@ -301,7 +323,9 @@ async def get_llm_call_stats(session: AsyncSession, hours: int = 24) -> Dict[str
     by_model: Dict[str, Dict[str, Any]] = {}
     for r in rows:
         m = r.model or "unknown"
-        slot = by_model.setdefault(m, {"count": 0, "tokens": 0, "cost_usd": 0.0, "errors": 0})
+        slot = by_model.setdefault(
+            m, {"count": 0, "tokens": 0, "cost_usd": 0.0, "errors": 0}
+        )
         slot["count"] += 1
         slot["tokens"] += int(r.total_tokens or 0)
         slot["cost_usd"] += float(r.cost_usd or 0)
@@ -309,8 +333,11 @@ async def get_llm_call_stats(session: AsyncSession, hours: int = 24) -> Dict[str
             slot["errors"] += 1
     by_model_list = [
         {"model": k, **v, "cost_usd": round(v["cost_usd"], 6)}
-        for k, v in sorted(by_model.items(), key=lambda kv: kv[1]["count"], reverse=True)
+        for k, v in sorted(
+            by_model.items(), key=lambda kv: kv[1]["count"], reverse=True
+        )
     ]
+    avg_latency = int(sum(latencies) / len(latencies)) if latencies else 0
 
     return {
         "window_hours": hours,
@@ -320,7 +347,7 @@ async def get_llm_call_stats(session: AsyncSession, hours: int = 24) -> Dict[str
         "error_rate": round(error / total, 4) if total else 0,
         "total_tokens": total_tokens,
         "total_cost_usd": round(total_cost, 6),
-        "avg_latency_ms": int(sum(latencies) / len(latencies)) if latencies else 0,
+        "avg_latency_ms": avg_latency,
         "p50_latency_ms": percentile(latencies, 0.5),
         "p95_latency_ms": percentile(latencies, 0.95),
         "p99_latency_ms": percentile(latencies, 0.99),
@@ -355,6 +382,7 @@ async def delete_llm_calls(
 
 
 def _log_to_summary(row: LLMCallLog) -> Dict[str, Any]:
+    created_at = row.created_at.isoformat() + "Z" if row.created_at else None
     return {
         "id": row.id,
         "provider": row.provider,
@@ -368,17 +396,19 @@ def _log_to_summary(row: LLMCallLog) -> Dict[str, Any]:
         "cost_usd": float(row.cost_usd or 0),
         "latency_ms": int(row.latency_ms or 0),
         "error_msg": row.error_msg,
-        "created_at": (row.created_at.isoformat() + "Z") if row.created_at else None,
+        "created_at": created_at,
     }
 
 
 def _log_to_detail(row: LLMCallLog) -> Dict[str, Any]:
     summary = _log_to_summary(row)
-    summary.update({
-        "base_url": row.base_url,
-        "request_messages": row.request_messages,
-        "request_params": row.request_params,
-        "response_text": row.response_text,
-        "response_full": row.response_full,
-    })
+    summary.update(
+        {
+            "base_url": row.base_url,
+            "request_messages": row.request_messages,
+            "request_params": row.request_params,
+            "response_text": row.response_text,
+            "response_full": row.response_full,
+        }
+    )
     return summary

@@ -1,5 +1,4 @@
-"""
-向量召回记录器
+"""向量召回记录与监控查询。
 
 记录每次 Qdrant 章节召回的入参（query）、top-N 结果与分数到 vector_recall_logs，
 供分析召回质量、命中率、多 top 结果对比。
@@ -80,7 +79,8 @@ class VectorRecallRecorder:
         return self
 
     def _elapsed_ms(self) -> int:
-        return int((time.perf_counter() - (self._start_time or time.perf_counter())) * 1000)
+        started_at = self._start_time or time.perf_counter()
+        return int((time.perf_counter() - started_at) * 1000)
 
     def record_results(
         self,
@@ -88,19 +88,21 @@ class VectorRecallRecorder:
         threshold: float = 0.0,
         chapter_name_map: Optional[Dict[str, str]] = None,
     ) -> None:
-        """candidates: _match_by_vector_search 聚合后的候选，含 chapter_id/relevance/is_primary。"""
+        """记录向量搜索聚合后的章节候选及主关联标记。"""
         self._latency_ms = self._elapsed_ms()
         name_map = chapter_name_map or {}
         top: List[Dict[str, Any]] = []
         for rank, c in enumerate(candidates):
             score = float(c.get("relevance", 0) or 0)
-            top.append({
-                "rank": rank,
-                "chapter_id": c.get("chapter_id"),
-                "chapter_name": name_map.get(c.get("chapter_id")),
-                "score": round(score, 4),
-                "is_primary": bool(c.get("is_primary")),
-            })
+            top.append(
+                {
+                    "rank": rank,
+                    "chapter_id": c.get("chapter_id"),
+                    "chapter_name": name_map.get(c.get("chapter_id")),
+                    "score": round(score, 4),
+                    "is_primary": bool(c.get("is_primary")),
+                }
+            )
         self._top_results = top
         self._result_count = len(top)
         self._top_score = top[0]["score"] if top else 0.0
@@ -165,9 +167,8 @@ async def list_vector_recalls(
         count_query = count_query.where(VectorRecallLog.query_text.like(like))
 
     total = (await session.execute(count_query)).scalar_one()
-    rows = (await session.execute(
-        query.offset((page - 1) * page_size).limit(page_size)
-    )).scalars().all()
+    paged_query = query.offset((page - 1) * page_size).limit(page_size)
+    rows = (await session.execute(paged_query)).scalars().all()
 
     return {
         "total": int(total or 0),
@@ -177,11 +178,13 @@ async def list_vector_recalls(
     }
 
 
-async def get_vector_recall_stats(session: AsyncSession, hours: int = 24) -> Dict[str, Any]:
+async def get_vector_recall_stats(
+    session: AsyncSession, hours: int = 24
+) -> Dict[str, Any]:
     since = datetime.utcnow() - timedelta(hours=hours)
-    rows = (await session.execute(
-        select(VectorRecallLog).where(VectorRecallLog.created_at >= since)
-    )).scalars().all()
+    recent_query = select(VectorRecallLog)
+    recent_query = recent_query.where(VectorRecallLog.created_at >= since)
+    rows = (await session.execute(recent_query)).scalars().all()
 
     total = len(rows)
     hits = sum(1 for r in rows if r.status == "hit")
@@ -190,6 +193,7 @@ async def get_vector_recall_stats(session: AsyncSession, hours: int = 24) -> Dic
     threshold_hits = sum(1 for r in rows if r.threshold_hit)
     scores = [float(r.top_score or 0) for r in rows if r.status == "hit"]
     latencies = sorted(int(r.latency_ms or 0) for r in rows if r.latency_ms)
+    avg_latency = int(sum(latencies) / len(latencies)) if latencies else 0
 
     def percentile(arr: List[int], p: float) -> int:
         if not arr:
@@ -208,7 +212,7 @@ async def get_vector_recall_stats(session: AsyncSession, hours: int = 24) -> Dic
         # 有效召回率：最高分达到采信阈值的比例
         "threshold_hit_rate": round(threshold_hits / total, 4) if total else 0,
         "avg_top_score": round(sum(scores) / len(scores), 4) if scores else 0,
-        "avg_latency_ms": int(sum(latencies) / len(latencies)) if latencies else 0,
+        "avg_latency_ms": avg_latency,
         "p95_latency_ms": percentile(latencies, 0.95),
     }
 
@@ -221,15 +225,17 @@ async def delete_vector_recalls(
 
     if older_than_days is not None and older_than_days >= 0:
         cutoff = datetime.utcnow() - timedelta(days=older_than_days)
-        result = await session.execute(
-            sa_delete(VectorRecallLog).where(VectorRecallLog.created_at < cutoff)
+        delete_query = sa_delete(VectorRecallLog).where(
+            VectorRecallLog.created_at < cutoff
         )
+        result = await session.execute(delete_query)
         await session.commit()
         return int(result.rowcount or 0)
     return 0
 
 
 def _recall_to_dict(row: VectorRecallLog) -> Dict[str, Any]:
+    created_at = row.created_at.isoformat() + "Z" if row.created_at else None
     return {
         "id": row.id,
         "called_by": row.called_by,
@@ -244,5 +250,5 @@ def _recall_to_dict(row: VectorRecallLog) -> Dict[str, Any]:
         "latency_ms": int(row.latency_ms or 0),
         "status": row.status,
         "error_msg": row.error_msg,
-        "created_at": (row.created_at.isoformat() + "Z") if row.created_at else None,
+        "created_at": created_at,
     }

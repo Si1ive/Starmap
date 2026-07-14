@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.services.llm_call_recorder import LLMCallRecorder
+from app.modules.monitoring.llm_calls import LLMCallRecorder
 
 logger = get_logger(__name__)
 
