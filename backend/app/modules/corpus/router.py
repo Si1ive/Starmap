@@ -28,7 +28,7 @@ from app.modules.corpus.schemas import (
     ScanRequest,
 )
 from app.modules.corpus.service import CorpusApplicationService
-from app.services.document_parsers import ParserUnavailableError
+from app.modules.corpus.document_parsers import ParserUnavailableError
 
 router = APIRouter(prefix="/admin", tags=["语料库"])
 

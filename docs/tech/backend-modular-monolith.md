@@ -114,6 +114,9 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - 文档解析编排已迁移到 `app/modules/corpus/document_parse_service.py`，
   页面、块、资产持久化和文档详情查询位于
   `app/modules/corpus/document_store.py`，旧 Service 文件已删除
+- Docling、MinerU 和远程解析服务的统一适配层已迁移到
+  `app/modules/corpus/document_parsers.py`；主后端、独立 parser 进程及测试均直接
+  依赖语料模块，`app/services/document_parsers.py` 已删除
 - 实体抽取任务使用文档行锁避免并发重复创建，运行记录先落库再派发后台任务
 - PDF 页渲染移入线程池，避免同步转换阻塞 FastAPI 事件循环
 - 阶段 3C 进行中：题目选项完整性、题号连续性、综合诊断和确定性规则修复已迁移到

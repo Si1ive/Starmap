@@ -25,7 +25,7 @@ from app.modules.corpus.document_store import (
     generate_id,
 )
 from app.modules.corpus.entity_persistence import cleanup_document_entities
-from app.services.document_parsers import (
+from app.modules.corpus.document_parsers import (
     ParserUnavailableError,
     choose_parser,
 )

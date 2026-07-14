@@ -71,7 +71,7 @@
 
 ## 4.1 解析适配层
 
-文件：`backend/app/services/document_parsers.py`
+文件：`backend/app/modules/corpus/document_parsers.py`
 
 核心对象：
 
@@ -296,7 +296,7 @@
 
 ## 10. 相关文件
 
-- `backend/app/services/document_parsers.py`
+- `backend/app/modules/corpus/document_parsers.py`
 - `backend/app/services/document_parse_service.py`
 - `backend/app/services/system_settings_service.py`
 - `backend/app/api/admin.py`

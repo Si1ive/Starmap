@@ -2,7 +2,7 @@ import base64
 
 import pytest
 
-from app.services.document_parsers import (
+from app.modules.corpus.document_parsers import (
     MinerUParser,
     ParsedDocumentResult,
     _normalize_payload_block_type,
@@ -167,7 +167,7 @@ def test_remote_parser_service_posts_file_with_runtime_options(monkeypatch, tmp_
             },
         })
 
-    monkeypatch.setattr("app.services.document_parsers.requests.post", fake_post)
+    monkeypatch.setattr("app.modules.corpus.document_parsers.requests.post", fake_post)
 
     parser = choose_parser(None, _remote_runtime_config())
     result = parser.parse(str(pdf_path), task_id="run-1")
@@ -198,7 +198,7 @@ def test_remote_parser_service_fetches_progress(monkeypatch):
             },
         })
 
-    monkeypatch.setattr("app.services.document_parsers.requests.get", fake_get)
+    monkeypatch.setattr("app.modules.corpus.document_parsers.requests.get", fake_get)
 
     parser = choose_parser(None, _remote_runtime_config())
     progress = parser.fetch_progress("run-2")
@@ -225,7 +225,7 @@ def test_remote_parser_health_uses_configured_service(monkeypatch):
             },
         })
 
-    monkeypatch.setattr("app.services.document_parsers.requests.get", fake_get)
+    monkeypatch.setattr("app.modules.corpus.document_parsers.requests.get", fake_get)
 
     health = inspect_parser_health("mineru", _remote_runtime_config())
 

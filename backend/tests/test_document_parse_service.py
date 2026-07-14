@@ -7,7 +7,12 @@ from app.modules.corpus.document_store import (
     ParsedDocumentStore,
     normalize_asset_type,
 )
-from app.services.document_parsers import ParsedDocumentResult, ParsedPage, ParsedBlock, ParsedAsset
+from app.modules.corpus.document_parsers import (
+    ParsedAsset,
+    ParsedBlock,
+    ParsedDocumentResult,
+    ParsedPage,
+)
 
 
 class _ScalarResult:

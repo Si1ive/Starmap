@@ -204,7 +204,10 @@ async def get_settings(db: Optional[AsyncSession] = Depends(get_optional_db)):
     
     返回当前系统配置，优先读取数据库持久化内容。
     """
-    from app.services.document_parsers import get_supported_parser_names, inspect_parser_health
+    from app.modules.corpus.document_parsers import (
+        get_supported_parser_names,
+        inspect_parser_health,
+    )
     from app.services.system_settings_service import SystemSettingsService, LLM_CONFIG_KEYS
 
     runtime_settings = await SystemSettingsService(db).load()
