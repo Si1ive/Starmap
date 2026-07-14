@@ -16,6 +16,11 @@ from app.modules.corpus.entity_persistence import (
 from app.modules.corpus.document_mapping import (
     DocumentChapterMappingResolver,
 )
+from app.modules.corpus.question_builder import (
+    build_extraction_meta,
+    build_question_tags,
+    detect_stem_year,
+)
 from app.models.mysql_models import CorpusFile, Document, EntityExtractionRun
 
 
@@ -33,6 +38,32 @@ def test_option_integrity_accepts_key_field():
     })
 
     assert result["is_complete"] is True
+
+
+def test_question_builder_metadata_rules():
+    assert detect_stem_year("【2024】下列说法正确的是") == 2024
+    assert build_question_tags("choice", 2024, True) == [
+        "选择题",
+        "真题",
+        "2024",
+    ]
+
+    metadata = build_extraction_meta(
+        blocks=[object()],
+        options=[
+            {"key": "A", "text": "a"},
+            {"key": "B", "text": "完整选项"},
+        ],
+        question_type="choice",
+        question_no=None,
+        has_figures=False,
+    )
+
+    assert metadata["group_source"] == "single_block"
+    assert metadata["option_count"] == 2
+    assert metadata["few_options"] is True
+    assert metadata["suspected_truncated_options"] is True
+    assert metadata["missing_question_no"] is True
 
 
 # ===== LLM 切分兜底：预筛检测 =====

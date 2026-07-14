@@ -4,17 +4,13 @@
 从文档的 blocks 中抽取知识点和题目，生成 knowledge_points 和 questions 记录。
 """
 
-import re
-import asyncio
 import json
 from datetime import datetime, timezone
-from types import SimpleNamespace
 from typing import Dict, Any, List, Optional, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.core.logging import get_logger
 from app.modules.corpus.document_mapping import (
     DocumentChapterMappingResolver,
@@ -33,6 +29,12 @@ from app.modules.corpus.extraction_diagnostics import (
     extract_fix_history,
     question_numbering_summary,
     question_text_excerpt,
+)
+from app.modules.corpus.question_builder import (
+    QuestionBuilder,
+    build_extraction_meta,
+    detect_merged_question_nos,
+    split_merged_questions,
 )
 from app.modules.corpus.question_llm_repair import LLMFallbackFixer
 from app.modules.corpus.question_layout import (
@@ -70,45 +72,10 @@ from app.models.mysql_models import (
 )
 from app.services.chapter_compat_service import resolve_legacy_chapter_id
 from app.services.system_settings_service import SystemSettingsService
-from app.services.text_cleaning import clean_block_text, normalize_whitespace
-from app.services.llm_call_recorder import LLMCallRecorder
+from app.services.text_cleaning import clean_block_text
 from app.services.llm_client import PDFStructureLLMClient
 
 logger = get_logger(__name__)
-
-
-# 题干年份/真题标记探测：匹配【2019】(2019)（2019）[2019] 2019年 等
-STEM_YEAR_RE = re.compile(r'[\[【(（]?\s*((?:19|20)\d{2})\s*(?:年)?\s*[\]】)）]?')
-STEM_REAL_EXAM_RE = re.compile(r'真题|考研真题|历年|统考')
-
-
-def _detect_stem_year(text: str) -> Optional[int]:
-    """从题干前部探测年份（仅扫前 30 字，避免命中题目正文里的年份数字）。"""
-    head = (text or "")[:30]
-    m = STEM_YEAR_RE.search(head)
-    if m:
-        year = int(m.group(1))
-        if 1990 <= year <= 2099:
-            return year
-    return None
-
-
-def _build_question_tags(
-    question_type: str, exam_year: Optional[int], is_real: bool
-) -> List[str]:
-    """结构化标签：题型 + 真题/课后习题 + 年份。"""
-    type_label = {
-        "choice": "选择题", "fill": "填空题", "judge": "判断题",
-        "short_answer": "简答题", "design": "设计题", "analysis": "分析题",
-    }.get(question_type, "")
-    tags: List[str] = []
-    if type_label:
-        tags.append(type_label)
-    tags.append("真题" if is_real else "课后习题")
-    if exam_year:
-        tags.append(str(exam_year))
-    return tags
-
 
 
 def clean_punctuation_subscript(text: str) -> str:
@@ -138,12 +105,15 @@ class EntityExtractionService:
     _strip_leading_option_marker = staticmethod(strip_leading_option_marker)
     _normalize_options = staticmethod(normalize_options)
     _extract_topic_terms = staticmethod(extract_topic_terms)
+    _detect_merged_question_nos = staticmethod(detect_merged_question_nos)
+    _build_extraction_meta = staticmethod(build_extraction_meta)
 
     def __init__(self, db: AsyncSession):
         self.db = db
         self._chapter_mapping = DocumentChapterMappingResolver(db)
         self._knowledge_persistence = KnowledgePointPersistence(db)
         self._question_persistence = QuestionPersistence(db)
+        self._question_builder = QuestionBuilder(db)
 
     async def extract_entities_with_run_id(self, run_id: str) -> Dict[str, Any]:
         """执行已创建的抽取任务，并将最终状态持久化到运行记录。"""
@@ -607,25 +577,6 @@ class EntityExtractionService:
             logger.warning("读取PDF结构解析LLM配置失败，跳过LLM兜底", error=str(e))
             return None
 
-    @staticmethod
-    def _detect_merged_question_nos(text: str, base_no: Optional[int]) -> List[int]:
-        """检测一段文本里是否粘连了后继题目的题号。
-
-        MinerU 偶尔把相邻两题输出进同一 block（如第8题的题号"8。"粘在第7题
-        选项之后）。这里在 base_no 之后找 base_no+1..base_no+3 的题号标记，
-        命中说明本组疑似多题粘连，返回粘进来的题号列表。
-        base_no 为空时无法判断后继，返回空。
-        """
-        if base_no is None or not text:
-            return []
-        found: List[int] = []
-        # 题号标记：文本中的"<数字>。/、"，只认 base_no 之后的连续后继题号
-        for m in re.finditer(r'(?<!\d)(\d{1,3})\s*[.、．。]\s*(?=\S)', text):
-            n = int(m.group(1))
-            if base_no < n <= base_no + 3 and n not in found:
-                found.append(n)
-        return found
-
     async def _llm_split_merged_questions(
         self,
         llm_client: "PDFStructureLLMClient",
@@ -633,52 +584,13 @@ class EntityExtractionService:
         base_no: int,
         successor_nos: List[int],
     ) -> Optional[List[Dict[str, Any]]]:
-        """用 LLM 把粘在一起的多道题切开。
-
-        只做切分（信息都在 raw_text 里），不补选项、不改写内容。
-        返回 [{question_no, stem, options:[{key,text}]}, ...]；失败返回 None。
-        """
-        import json
-        nos = ", ".join(str(n) for n in [base_no, *successor_nos])
-        prompt = f"""下面这段文本是从试卷 PDF 中提取的，疑似把多道题（题号 {nos}）粘连在了一起。
-请按题号把它们切分成独立题目。严格要求：
-1. 只做切分，不要补全、改写、编造任何内容——所有文字都必须来自原文。
-2. 每道题输出题号、题干、选项（如果是选择题）。选项格式 {{"key":"A","text":"..."}}。
-3. 若某题没有选项（简答/大题），options 为空数组。
-
-原始文本：
-{raw_text}
-
-只输出 JSON 数组，格式：
-[{{"question_no": {base_no}, "stem": "...", "options": [{{"key":"A","text":"..."}}]}}, ...]"""
-        try:
-            resp = await llm_client.chat(prompt, purpose="题目粘连切分")
-            start = resp.find("[")
-            end = resp.rfind("]")
-            if start < 0 or end <= start:
-                logger.warning("LLM 切分返回无有效 JSON 数组", base_no=base_no)
-                return None
-            parsed = json.loads(resp[start:end + 1])
-            if not isinstance(parsed, list) or len(parsed) < 2:
-                return None
-            out: List[Dict[str, Any]] = []
-            for item in parsed:
-                if not isinstance(item, dict) or not (item.get("stem") or "").strip():
-                    continue
-                opts = []
-                for o in item.get("options") or []:
-                    if isinstance(o, dict) and o.get("text"):
-                        key = str(o.get("key") or o.get("label") or "").strip().upper()[:1]
-                        opts.append({"key": key, "label": key, "option_label": key, "text": o["text"].strip()})
-                out.append({
-                    "question_no": item.get("question_no"),
-                    "stem": item["stem"].strip(),
-                    "options": opts,
-                })
-            return out if len(out) >= 2 else None
-        except Exception as e:
-            logger.warning("LLM 切分失败，保留原组", base_no=base_no, error=str(e))
-            return None
+        """兼容入口：委托题目构建模块完成粘连切分。"""
+        return await split_merged_questions(
+            llm_client,
+            raw_text,
+            base_no,
+            successor_nos,
+        )
 
     async def _extract_questions_v2(
         self,
@@ -736,52 +648,8 @@ class EntityExtractionService:
         part: Dict[str, Any],
         section_mappings: Dict[int, Dict[str, Optional[str]]],
     ) -> Dict[str, Any]:
-        """由 LLM 切分结果 + 原组基底构造一道独立题目。
-
-        复用原组的页码/来源/block 归属，但题干/选项/题号用切分结果，
-        并按切出的题干重新解析章节归属；标 fixed_by_llm 可追溯。
-        """
-        q = dict(base)  # 浅拷贝原组的页码/source/exam_year/blocks 等
-        stem = part.get("stem") or ""
-        options = part.get("options") or []
-        q_no = part.get("question_no")
-        question_type = "choice" if options else base.get("question_type") or "short_answer"
-
-        q["id"] = generate_id()
-        q["stem"] = stem
-        q["content"] = stem
-        q["raw_text"] = stem
-        q["options"] = options
-        q["question_no"] = str(q_no) if q_no is not None else None
-        q["question_type"] = question_type
-        q["type"] = question_type
-
-        # 切出的题各自重新解析章节（可能分属不同考点）
-        primary_chapter_id = base.get("primary_chapter_id")
-        subject_id = base.get("subject_id")
-        resolved_source = base.get("chapter_link_source")
-        try:
-            from app.services.chapter_link_service import ChapterLinkService
-            resolved = await ChapterLinkService(self.db).resolve_chapter_for_entity(
-                title=stem[:200], content=stem, subject_id=subject_id,
-                entity_type="question", options=options,
-            )
-            if resolved:
-                primary_chapter_id = resolved["chapter_id"]
-                subject_id = resolved["subject_id"] or subject_id
-                resolved_source = resolved.get("source", "vector_search")
-        except Exception as e:
-            logger.warning("切分题章节解析失败，沿用原组归属", error=str(e))
-        q["primary_chapter_id"] = primary_chapter_id
-        q["subject_id"] = subject_id
-        q["chapter_link_source"] = resolved_source
-
-        meta = dict(base.get("extraction_meta") or {})
-        meta["fixed_by_llm"] = "split"
-        meta["option_count"] = len(options)
-        meta["few_options"] = question_type == "choice" and 0 < len(options) < 4
-        q["extraction_meta"] = meta
-        return q
+        """兼容入口：委托题目构建模块生成切分后的题目。"""
+        return await self._question_builder.build_split_question(base, part)
 
     async def _question_group_to_dict(
         self,
@@ -791,185 +659,16 @@ class EntityExtractionService:
         section_mappings: Dict[int, Dict[str, Optional[str]]],
         grouper: QuestionLayoutGrouper,
     ) -> Optional[Dict[str, Any]]:
-        """将 QuestionGroup 转换为题目字典"""
-        blocks = group.blocks
-        if not blocks:
-            return None
-
-        first_block = blocks[0]
-        mapping_info = self._resolve_mapping_for_page(
-            getattr(first_block, "page_no", None), section_mappings
+        """兼容入口：委托题目构建模块生成标准题目字典。"""
+        return await self._question_builder.group_to_dict(
+            document_id=document_id,
+            fallback_subject_id=fallback_subject_id,
+            group=group,
+            section_mappings=section_mappings,
+            grouper=grouper,
+            doc_meta=getattr(self, "_doc_meta", {}) or {},
+            doc_type=getattr(self, "_doc_type", "other"),
         )
-
-        primary_chapter_id = mapping_info["chapter_id"] if mapping_info else None
-        subject_id = mapping_info["subject_id"] if mapping_info else fallback_subject_id
-        legacy_chapter_id = mapping_info["legacy_chapter_id"] if mapping_info else None
-        source_section_path = mapping_info.get("source_section_path") if mapping_info else None
-        resolved_source: Optional[str] = None
-
-        # 使用 bbox 分组器提取 stem / options / figures
-        stem = grouper._extract_stem(group)
-        options = grouper._extract_options(group)
-        figures = grouper._extract_figures(group)
-        question_no = grouper._extract_question_no(group)
-
-        # 组内类型判定：组题已把拆散的选项/跨页合并好，此时判"是不是题目"最准。
-        # 非题目组（无选项/无题号/无疑问特征）直接跳过，不落为题目——避免把知识点
-        # 段落误抽成题目。这些组的 block 会留给知识点路径处理。
-        group_label, group_label_reason = grouper.classify_group(group, options, question_no)
-        if group_label != "question":
-            return None
-
-        # 组合内容
-        content_parts = []
-        for block in blocks:
-            text = getattr(block, "content_md", None) or getattr(block, "content_text", None) or ""
-            if text.strip():
-                content_parts.append(text.strip())
-        content = "\n".join(content_parts)
-
-        if not content:
-            return None
-
-        # section_mapping 缺失时用题干内容直接匹配大纲考点
-        if not primary_chapter_id:
-            from app.services.chapter_link_service import ChapterLinkService
-            try:
-                resolved = await ChapterLinkService(self.db).resolve_chapter_for_entity(
-                    title=stem[:200],
-                    content=content,
-                    subject_id=subject_id,
-                    entity_type="question",
-                    options=options,
-                )
-                if resolved:
-                    primary_chapter_id = resolved["chapter_id"]
-                    subject_id = resolved["subject_id"] or subject_id
-                    resolved_source = resolved.get("source", "vector_search")
-                    logger.info(
-                        "题目章节解析（bbox v2）",
-                        chapter_id=primary_chapter_id,
-                        confidence=resolved.get("confidence"),
-                        source=resolved.get("source"),
-                    )
-            except Exception as e:
-                logger.warning("题目章节解析失败，跳过", error=str(e))
-
-        if not legacy_chapter_id:
-            legacy_chapter_id = await resolve_legacy_chapter_id(
-                self.db,
-                canonical_chapter_id=primary_chapter_id,
-                subject_id=subject_id,
-            )
-
-        # 判断题型
-        question_type = "short_answer"
-        if options:
-            question_type = "choice"
-        elif '判断' in content[:50]:
-            question_type = "judge"
-        elif '填空' in content[:50]:
-            question_type = "fill"
-
-        # 题目级来源/年份
-        doc_meta = getattr(self, "_doc_meta", {}) or {}
-        doc_type = getattr(self, "_doc_type", "other")
-        stem_year = _detect_stem_year(content)
-        if stem_year:
-            exam_year = stem_year
-            source = f"{stem_year}年真题"
-            paper_name = doc_meta.get("source_label") or None
-        elif doc_meta.get("exam_year"):
-            exam_year = doc_meta.get("exam_year")
-            source = doc_meta.get("source_label") or None
-            paper_name = doc_meta.get("paper_name") or doc_meta.get("source_label") or None
-        else:
-            exam_year = 0
-            inst = doc_meta.get("institution")
-            if doc_type == "textbook":
-                source = f"课后习题（{inst}）" if inst else "课后习题"
-            else:
-                source = doc_meta.get("source_label") or (inst or None)
-            paper_name = doc_meta.get("paper_name") or doc_meta.get("source_label") or None
-
-        tags = _build_question_tags(question_type, exam_year, bool(stem_year))
-
-        extraction_meta = self._build_extraction_meta(
-            blocks=blocks,
-            options=options,
-            question_type=question_type,
-            question_no=question_no,
-            has_figures=bool(figures),
-            group_label_reason=group_label_reason,
-        )
-
-        return {
-            'id': generate_id(),
-            'document_id': document_id,
-            'source_section_path': source_section_path,
-            'subject_id': subject_id,
-            'chapter_id': legacy_chapter_id,
-            'primary_chapter_id': primary_chapter_id,
-            'chapter_link_source': resolved_source or ("document_mapping" if mapping_info else None),
-            'question_type': question_type,
-            'type': question_type,
-            'content': stem if options else content,
-            'stem': stem if options else content,
-            'options': options,
-            'page_no': getattr(first_block, "page_no", None),
-            'block_ids': [getattr(b, "id", None) for b in blocks if getattr(b, "id", None)],
-            'blocks': blocks,
-            'raw_text': content,
-            'source': source,
-            'exam_year': int(exam_year or 0),
-            'exam_scope': doc_meta.get("exam_scope"),
-            'paper_name': paper_name,
-            'tags': tags,
-            'question_no': question_no,
-            'figures': figures,
-            'extraction_meta': extraction_meta,
-        }
-
-    @staticmethod
-    def _build_extraction_meta(
-        blocks: List[Any],
-        options: List[Dict[str, str]],
-        question_type: str,
-        question_no: Optional[str],
-        has_figures: bool,
-        group_label_reason: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """构建题目抽取质量诊断，供前端区分组题问题与 block 噪音。
-
-        - group_source: single_block（一块成题）/ merged（多块合并）
-        - block_count: 组题用了几个 block
-        - option_count: 提取到的选项数
-        - suspected_truncated_options: 选项文本疑似被截断（过短或无中文/字母数字实体）
-        - missing_question_no: 未识别出题号
-        """
-        block_count = len(blocks)
-        option_count = len(options)
-
-        suspected_truncated = False
-        if question_type == "choice" and options:
-            # 选择题选项文本过短（<2 字符）视为疑似截断
-            short_opts = sum(1 for o in options if len((o.get("text") or "").strip()) < 2)
-            if short_opts > 0:
-                suspected_truncated = True
-
-        # 选择题却选项不足 4 个：疑似漏选项（D 常见丢失）
-        few_options = question_type == "choice" and 0 < option_count < 4
-
-        return {
-            "group_source": "single_block" if block_count == 1 else "merged",
-            "block_count": block_count,
-            "option_count": option_count,
-            "has_figures": has_figures,
-            "missing_question_no": not question_no,
-            "suspected_truncated_options": suspected_truncated,
-            "few_options": few_options,
-            "group_label_reason": group_label_reason,
-        }
 
     async def _save_question_from_dict(self, question_dict: Dict[str, Any]) -> Tuple[bool, str]:
         """兼容入口：委托题目持久化组件。"""

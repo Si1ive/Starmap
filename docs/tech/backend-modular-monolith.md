@@ -112,9 +112,11 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - 知识点入库、实体级联清理及抽取实体 ID 生成也已收敛到该持久化模块
 - 已审核 section 映射加载及跨页最近章节回退已迁移到
   `app/modules/corpus/document_mapping.py`
+- 题目来源/年份/标签元数据、分组字典构建及 LLM 粘连切分已迁移到
+  `app/modules/corpus/question_builder.py`
 - `app.modules.corpus` 包初始化不再隐式加载 Router，避免领域规则反向触发接口层和
   抽取任务加载
-- 后续继续拆分实体抽取中的持久化职责和流水线编排
+- 后续继续拆分实体抽取流水线编排，并移除无调用方的旧版提取备用路径
 
 ### 阶段 4：检索与关系
 
