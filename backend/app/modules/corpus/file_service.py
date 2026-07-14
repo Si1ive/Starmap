@@ -1,8 +1,4 @@
-"""
-语料文件注册服务
-
-扫描本地目录，将文件注册到 corpus_files 表，支持去重和状态追踪。
-"""
+"""Corpus file registration, deduplication, and query service."""
 
 import hashlib
 import os
@@ -22,7 +18,8 @@ logger = get_logger(__name__)
 SUPPORTED_EXTENSIONS = {"pdf", "docx", "pptx"}
 
 # 本地 downloads 目录（兼容容器路径 → 本地路径映射）
-_LOCAL_DOWNLOADS = str(Path(__file__).parent.parent.parent / "downloads")
+BACKEND_ROOT = Path(__file__).resolve().parents[3]
+_LOCAL_DOWNLOADS = str(BACKEND_ROOT / "downloads")
 
 
 def _resolve_download_path(file_path: str) -> Path:
@@ -59,7 +56,7 @@ def generate_id() -> str:
     return uuid.uuid4().hex[:32]
 
 
-class CorpusService:
+class CorpusFileService:
     """语料文件注册服务"""
 
     def __init__(self, db: AsyncSession):

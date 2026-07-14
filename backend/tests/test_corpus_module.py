@@ -6,8 +6,12 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from fastapi import UploadFile
 
+from app.modules.corpus.file_service import (
+    BACKEND_ROOT,
+    CorpusFileService,
+    _resolve_download_path,
+)
 from app.modules.corpus.service import CorpusApplicationService
-from app.services.corpus_service import CorpusService
 
 
 @pytest.mark.asyncio
@@ -78,7 +82,11 @@ async def test_upload_sanitizes_name_and_removes_duplicate_copy(monkeypatch, tmp
             "is_new": False,
         }
 
-    monkeypatch.setattr(CorpusService, "register_single_file", register_single_file)
+    monkeypatch.setattr(
+        CorpusFileService,
+        "register_single_file",
+        register_single_file,
+    )
     upload = UploadFile(
         file=BytesIO(b"pdf"),
         filename="../../unsafe.pdf",
@@ -117,3 +125,21 @@ async def test_upload_rejects_oversized_file_without_leaving_copy(tmp_path):
     assert result["failed_count"] == 1
     assert "文件大小超过限制" in result["failed_items"][0]["error"]
     assert list(tmp_path.iterdir()) == []
+
+
+def test_container_download_path_resolves_from_backend_root(
+    monkeypatch,
+    tmp_path,
+):
+    local_downloads = tmp_path / "downloads"
+    local_downloads.mkdir()
+    target = local_downloads / "paper.pdf"
+    target.write_bytes(b"pdf")
+
+    monkeypatch.setattr(
+        "app.modules.corpus.file_service._LOCAL_DOWNLOADS",
+        str(local_downloads),
+    )
+
+    assert BACKEND_ROOT.name == "backend"
+    assert _resolve_download_path("/app/downloads/paper.pdf") == target

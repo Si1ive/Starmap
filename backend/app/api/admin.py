@@ -3056,7 +3056,10 @@ async def upload_parse_outline(
 
     前端轮询 GET /outlines/runs/{run_id} 获取进度，完成后再调 /outlines/import-from-llm 入库。
     """
-    from app.services.corpus_service import CorpusService, SUPPORTED_EXTENSIONS
+    from app.modules.corpus.file_service import (
+        CorpusFileService,
+        SUPPORTED_EXTENSIONS,
+    )
     from app.models.mysql_models import OutlineIngestionRun
     import asyncio
 
@@ -3077,7 +3080,7 @@ async def upload_parse_outline(
     file_path.write_bytes(await file.read())
 
     # 2) 注册文件
-    corpus_service = CorpusService(db)
+    corpus_service = CorpusFileService(db)
     reg = await corpus_service.register_single_file(
         file_path=str(file_path),
         batch_label=f"outline-{timestamp}",

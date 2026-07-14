@@ -18,13 +18,16 @@ from app.modules.corpus.errors import (
     ParseConflictError,
     ParseRunNotFoundError,
 )
+from app.modules.corpus.file_service import (
+    CorpusFileService,
+    SUPPORTED_EXTENSIONS,
+)
 from app.models.mysql_models import (
     CorpusFile,
     Document,
     DownloadedFile,
     ParseRun,
 )
-from app.services.corpus_service import CorpusService, SUPPORTED_EXTENSIONS
 from app.modules.corpus.document_parse_service import DocumentParseService
 
 logger = get_logger(__name__)
@@ -59,7 +62,7 @@ class CorpusApplicationService:
         file_types: Optional[List[str]],
         batch_label: Optional[str],
     ) -> Dict[str, Any]:
-        return await CorpusService(self.db).scan_and_register(
+        return await CorpusFileService(self.db).scan_and_register(
             root_path=root_path,
             file_types=file_types,
             batch_label=batch_label,
@@ -71,7 +74,7 @@ class CorpusApplicationService:
         file_path: str,
         batch_label: Optional[str],
     ) -> Dict[str, Any]:
-        return await CorpusService(self.db).register_single_file(
+        return await CorpusFileService(self.db).register_single_file(
             file_path=file_path,
             batch_label=batch_label,
         )
@@ -88,7 +91,7 @@ class CorpusApplicationService:
         if not downloaded.local_path:
             raise ValueError("该文件未下载到本地，local_path 为空")
 
-        return await CorpusService(self.db).register_single_file(
+        return await CorpusFileService(self.db).register_single_file(
             file_path=downloaded.local_path,
             batch_label=batch_label or downloaded.task_id,
         )
@@ -109,7 +112,7 @@ class CorpusApplicationService:
         success_items: List[Dict[str, Any]] = []
         failed_items: List[Dict[str, Any]] = []
         skipped_items: List[Dict[str, Any]] = []
-        corpus_service = CorpusService(self.db)
+        corpus_service = CorpusFileService(self.db)
 
         for upload in files:
             file_result: Dict[str, Any] = {"file_name": upload.filename}
@@ -181,7 +184,7 @@ class CorpusApplicationService:
         file_ext: Optional[str],
         keyword: Optional[str],
     ) -> Dict[str, Any]:
-        return await CorpusService(self.db).get_corpus_files(
+        return await CorpusFileService(self.db).get_corpus_files(
             page=page,
             page_size=page_size,
             status=status,
@@ -191,7 +194,9 @@ class CorpusApplicationService:
         )
 
     async def get_file(self, file_id: str) -> Dict[str, Any]:
-        result = await CorpusService(self.db).get_corpus_file_detail(file_id)
+        result = await CorpusFileService(self.db).get_corpus_file_detail(
+            file_id
+        )
         if not result:
             raise CorpusFileNotFoundError("语料文件不存在")
 

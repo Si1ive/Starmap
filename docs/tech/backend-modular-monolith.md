@@ -92,6 +92,9 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 
 - 阶段 3A 已完成：语料文件登记、上传、查询、删除及解析任务路由已迁移到
   `app/modules/corpus`
+- 语料文件扫描、注册、SHA256 去重及列表查询已迁移到
+  `app/modules/corpus/file_service.py`，`app/services/corpus_service.py`
+  已删除
 - 原 `/api/v1/admin/corpus/*` URL 保持不变，并增加模块归属与重复路由契约测试
 - 解析任务在后台派发前先持久化 `ParseRun` 和语料 `parsing` 状态
 - 上传改为安全文件名、分块写入、可配置大小限制，并清理重复或失败的临时副本
