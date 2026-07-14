@@ -8,80 +8,30 @@
 - 知识点关系扩展（prerequisite / similar_to 等）
 """
 
-import json
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
 
-from sqlalchemy import select, and_, func, or_
-from sqlalchemy.sql.elements import ColumnElement
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from qdrant_client.models import Filter, FieldCondition, MatchValue, MatchAny
 
 from app.core.logging import get_logger
-from app.db.qdrant import QdrantManager, qdrant_manager
+from app.db.qdrant import qdrant_manager
 from app.models.mysql_models import (
     RetrievalSegment, KnowledgePoint, Question,
-    KnowledgeRelation, EntitySourceLink, Document
+    KnowledgeRelation,
 )
 from app.modules.retrieval.outline_service import (
     expand_query_with_outline,
     retrieve_by_chapters,
+)
+from app.modules.retrieval.search_engine import (
+    RetrievalResult,
+    RetrievalSearchEngine,
 )
 from app.infrastructure.ai.embedding_service import (
     get_embedding_service_from_settings,
 )
 
 logger = get_logger(__name__)
-
-
-class RetrievalResult:
-    """单条检索结果"""
-
-    def __init__(
-        self,
-        segment_id: str,
-        entity_type: str,
-        entity_id: str,
-        segment_type: str,
-        content_text: str,
-        context_text: Optional[str],
-        score: float,
-        subject_id: Optional[str] = None,
-        chapter_ids: Optional[List[str]] = None,
-        # 来源引用
-        source_document_id: Optional[str] = None,
-        source_filename: Optional[str] = None,
-        page_no: Optional[int] = None,
-    ):
-        self.segment_id = segment_id
-        self.entity_type = entity_type
-        self.entity_id = entity_id
-        self.segment_type = segment_type
-        self.content_text = content_text
-        self.context_text = context_text
-        self.score = score
-        self.subject_id = subject_id
-        self.chapter_ids = chapter_ids or []
-        self.source_document_id = source_document_id
-        self.source_filename = source_filename
-        self.page_no = page_no
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "segment_id": self.segment_id,
-            "entity_type": self.entity_type,
-            "entity_id": self.entity_id,
-            "segment_type": self.segment_type,
-            "content_text": self.content_text,
-            "context_text": self.context_text,
-            "score": self.score,
-            "subject_id": self.subject_id,
-            "chapter_ids": self.chapter_ids,
-            "source": {
-                "document_id": self.source_document_id,
-                "filename": self.source_filename,
-                "page_no": self.page_no,
-            },
-        }
 
 
 class RetrievalService:
@@ -91,6 +41,7 @@ class RetrievalService:
         self.db = db
         self.embedding = None  # 惰性加载：首次用时从系统设置读 embedding 配置
         self.qdrant = qdrant_manager
+        self.search_engine = RetrievalSearchEngine(db)
 
     async def _ensure_embedding(self):
         if self.embedding is None:
@@ -291,10 +242,14 @@ class RetrievalService:
         query_vector = await self.embedding.embed_text(query)
 
         # 构建 Qdrant 过滤条件
-        qdrant_filter = self._build_filter(subject_id, chapter_ids, filters)
+        qdrant_filter = self.search_engine.build_filter(
+            subject_id,
+            chapter_ids,
+            filters,
+        )
 
         # 确定要搜索的 collections
-        collections = self._get_collections(entity_type)
+        collections = self.search_engine.get_collections(entity_type)
 
         all_results: List[RetrievalResult] = []
 
@@ -310,7 +265,7 @@ class RetrievalService:
             if mode == "dense":
                 hits = dense_hits
             elif mode == "sparse":
-                hits = await self._sparse_search(
+                hits = await self.search_engine.sparse_search(
                     collection,
                     sparse_q,
                     limit * 2,
@@ -320,7 +275,7 @@ class RetrievalService:
                 )
             else:
                 # hybrid: dense 用 query，sparse 用 sparse_q（原始 query）
-                sparse_hits = await self._sparse_search(
+                sparse_hits = await self.search_engine.sparse_search(
                     collection,
                     sparse_q,
                     limit * 2,
@@ -328,10 +283,10 @@ class RetrievalService:
                     chapter_ids=chapter_ids,
                     filters=filters,
                 )
-                hits = self._merge_hits(dense_hits, sparse_hits)
+                hits = self.search_engine.merge_hits(dense_hits, sparse_hits)
 
             # 从 MySQL 补全完整信息
-            results = await self._hydrate_results(hits, collection)
+            results = await self.search_engine.hydrate_results(hits)
             all_results.extend(results)
 
         # 按 score 排序，截取 top-N
@@ -463,275 +418,6 @@ class RetrievalService:
             if len(out) >= limit:
                 break
         return out
-
-    # ========== 内部方法 ==========
-
-    def _build_filter(
-        self,
-        subject_id: Optional[str],
-        chapter_ids: Optional[List[str]],
-        filters: Optional[Dict[str, Any]] = None,
-    ) -> Optional[Filter]:
-        """构建 Qdrant 过滤条件。filters 支持结构化富化维度过滤。"""
-        conditions = []
-
-        if subject_id:
-            conditions.append(
-                FieldCondition(
-                    key="subject_id",
-                    match=MatchValue(value=subject_id),
-                )
-            )
-
-        if chapter_ids:
-            conditions.append(
-                FieldCondition(
-                    key="chapter_ids",
-                    match=MatchAny(any=chapter_ids),
-                )
-            )
-
-        # 结构化富化维度（题目 payload 才有：exam_year/exam_scope/difficulty/question_type/answer_source）
-        f = filters or {}
-        # 精确匹配字段
-        for key in ("exam_year", "exam_scope", "difficulty", "question_type", "answer_source"):
-            val = f.get(key)
-            if val is not None and val != "":
-                conditions.append(FieldCondition(key=key, match=MatchValue(value=val)))
-        # 数组任意匹配字段
-        tags = f.get("tags")
-        if tags:
-            conditions.append(FieldCondition(key="tags", match=MatchAny(any=list(tags))))
-
-        if not conditions:
-            return None
-
-        return Filter(must=conditions)
-
-    def _get_collections(self, entity_type: Optional[str]) -> List[str]:
-        """根据实体类型返回要搜索的 collection 列表"""
-        if entity_type == "knowledge_point":
-            return [qdrant_manager.COLLECTION_KNOWLEDGE_SEGMENTS]
-        elif entity_type == "question":
-            return [qdrant_manager.COLLECTION_QUESTION_SEGMENTS]
-        return [
-            qdrant_manager.COLLECTION_KNOWLEDGE_SEGMENTS,
-            qdrant_manager.COLLECTION_QUESTION_SEGMENTS,
-        ]
-
-    async def _sparse_search(
-        self,
-        collection: str,
-        query: str,
-        limit: int,
-        subject_id: Optional[str] = None,
-        chapter_ids: Optional[List[str]] = None,
-        filters: Optional[Dict[str, Any]] = None,
-    ) -> List[Dict[str, Any]]:
-        """
-        稀疏检索：从 MySQL 按关键词匹配，再映射到 Qdrant 评分
-
-        简化实现：用 SQL LIKE 检索 segment 的 sparse_text，
-        取回对应 Qdrant 点的向量做相关性计算。
-        后续可接入 BM25 或 SPLADE。
-        """
-        keywords = query.strip().split()
-        if not keywords:
-            return []
-
-        entity_type = (
-            "knowledge_point"
-            if collection == qdrant_manager.COLLECTION_KNOWLEDGE_SEGMENTS
-            else "question"
-        )
-
-        conditions = self._build_sparse_conditions(
-            entity_type=entity_type,
-            subject_id=subject_id,
-            chapter_ids=chapter_ids,
-            filters=filters,
-        )
-        keyword_conditions = []
-        for kw in keywords[:5]:  # 最多 5 个关键词
-            keyword_conditions.append(
-                RetrievalSegment.sparse_text.ilike(f"%{kw}%")
-            )
-        if keyword_conditions:
-            conditions.append(or_(*keyword_conditions))
-
-        result = await self.db.execute(
-            select(RetrievalSegment)
-            .where(and_(*conditions))
-            .limit(limit)
-        )
-        segments = result.scalars().all()
-
-        # 转换为与 Qdrant search 相同的格式
-        hits = []
-        for seg in segments:
-            if seg.qdrant_point_id:
-                # 计算简单的关键词匹配分数
-                match_count = sum(1 for kw in keywords if kw.lower() in (seg.sparse_text or "").lower())
-                score = match_count / max(len(keywords), 1)
-                hits.append({
-                    "id": seg.qdrant_point_id,
-                    "score": score,
-                    "payload": {
-                        "segment_id": seg.id,
-                        "entity_id": seg.entity_id,
-                        "segment_type": seg.segment_type,
-                        "subject_id": seg.subject_id,
-                        "chapter_ids": seg.chapter_ids or [],
-                        "content_preview": seg.content_text[:200],
-                    },
-                })
-
-        return hits
-
-    @staticmethod
-    def _build_sparse_conditions(
-        entity_type: str,
-        subject_id: Optional[str],
-        chapter_ids: Optional[List[str]],
-        filters: Optional[Dict[str, Any]],
-    ) -> List[ColumnElement[bool]]:
-        """Build MySQL conditions equivalent to the Qdrant payload filter."""
-        conditions: List[ColumnElement[bool]] = [
-            RetrievalSegment.entity_type == entity_type,
-        ]
-
-        if subject_id:
-            conditions.append(RetrievalSegment.subject_id == subject_id)
-
-        if chapter_ids:
-            conditions.append(
-                func.json_overlaps(
-                    RetrievalSegment.chapter_ids,
-                    json.dumps(chapter_ids),
-                )
-                == 1
-            )
-
-        structured_filters = filters or {}
-        for key in (
-            "exam_year",
-            "exam_scope",
-            "difficulty",
-            "question_type",
-            "answer_source",
-        ):
-            value = structured_filters.get(key)
-            if value is None or value == "":
-                continue
-            conditions.append(
-                func.json_unquote(
-                    func.json_extract(
-                        RetrievalSegment.metadata_json,
-                        f"$.{key}",
-                    )
-                )
-                == str(value)
-            )
-
-        tags = structured_filters.get("tags")
-        if tags:
-            conditions.append(
-                func.json_overlaps(
-                    func.json_extract(
-                        RetrievalSegment.metadata_json,
-                        "$.tags",
-                    ),
-                    json.dumps(list(tags)),
-                )
-                == 1
-            )
-
-        return conditions
-
-    @staticmethod
-    def _merge_hits(
-        dense_hits: List[Dict[str, Any]],
-        sparse_hits: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
-        """合并 dense 和 sparse 结果，去重并取较高分"""
-        merged: Dict[str, Dict[str, Any]] = {}
-
-        for hit in dense_hits:
-            hid = str(hit["id"])
-            merged[hid] = hit
-            merged[hid]["_dense_score"] = hit["score"]
-
-        for hit in sparse_hits:
-            hid = str(hit["id"])
-            if hid in merged:
-                # 取两种检索的加权分数
-                dense_s = merged[hid].get("_dense_score", 0)
-                sparse_s = hit["score"]
-                merged[hid]["score"] = 0.7 * dense_s + 0.3 * sparse_s
-            else:
-                merged[hid] = hit
-                merged[hid]["score"] = hit["score"] * 0.8  # 纯 sparse 稍微降权
-
-        results = list(merged.values())
-        results.sort(key=lambda h: h["score"], reverse=True)
-        return results
-
-    async def _hydrate_results(
-        self,
-        hits: List[Dict[str, Any]],
-        collection: str,
-    ) -> List[RetrievalResult]:
-        """从 Qdrant 命中结果补全 MySQL 中的完整信息"""
-        if not hits:
-            return []
-
-        segment_ids = [
-            h["payload"].get("segment_id") for h in hits if h.get("payload", {}).get("segment_id")
-        ]
-        if not segment_ids:
-            return []
-
-        result = await self.db.execute(
-            select(RetrievalSegment).where(RetrievalSegment.id.in_(segment_ids))
-        )
-        segments_by_id = {s.id: s for s in result.scalars().all()}
-
-        # 批量查询来源文档名
-        doc_ids = list({
-            s.document_id for s in segments_by_id.values() if s.document_id
-        })
-        doc_names: Dict[str, str] = {}
-        if doc_ids:
-            doc_result = await self.db.execute(
-                select(Document).where(Document.id.in_(doc_ids))
-            )
-            for doc in doc_result.scalars().all():
-                doc_names[doc.id] = doc.filename
-
-        retrieval_results: List[RetrievalResult] = []
-        for hit in hits:
-            payload = hit.get("payload", {})
-            seg_id = payload.get("segment_id")
-            seg = segments_by_id.get(seg_id)
-            if not seg:
-                continue
-
-            retrieval_results.append(RetrievalResult(
-                segment_id=seg.id,
-                entity_type=seg.entity_type,
-                entity_id=seg.entity_id,
-                segment_type=seg.segment_type,
-                content_text=seg.content_text,
-                context_text=seg.context_text,
-                score=hit["score"],
-                subject_id=seg.subject_id,
-                chapter_ids=seg.chapter_ids or [],
-                source_document_id=seg.document_id,
-                source_filename=doc_names.get(seg.document_id),
-                page_no=seg.page_no,
-            ))
-
-        return retrieval_results
 
     async def _get_relations(
         self, knowledge_point_ids: List[str]

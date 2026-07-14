@@ -1,14 +1,142 @@
 """Retrieval filter consistency tests."""
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from sqlalchemy.dialects import mysql
 
 from app.db.qdrant import qdrant_manager
-from app.modules.retrieval.outline_service import expand_query_with_outline
+from app.modules.retrieval.search_engine import RetrievalSearchEngine
 from app.modules.retrieval.service import RetrievalService
+
+
+def test_build_filter_keeps_qdrant_and_sparse_filter_dimensions_aligned():
+    qdrant_filter = RetrievalSearchEngine.build_filter(
+        subject_id="subject-os",
+        chapter_ids=["chapter-process"],
+        filters={
+            "exam_year": 2024,
+            "difficulty": "hard",
+            "tags": ["真题"],
+        },
+    )
+
+    conditions = {condition.key: condition for condition in qdrant_filter.must}
+    assert set(conditions) == {
+        "subject_id",
+        "chapter_ids",
+        "exam_year",
+        "difficulty",
+        "tags",
+    }
+    assert conditions["subject_id"].match.value == "subject-os"
+    assert conditions["chapter_ids"].match.any == ["chapter-process"]
+    assert conditions["tags"].match.any == ["真题"]
+
+
+def test_merge_hits_does_not_mutate_qdrant_or_sparse_hits():
+    dense_hits = [
+        {"id": "shared", "score": 0.8, "payload": {"segment_id": "segment-1"}},
+        {"id": "dense", "score": 0.5, "payload": {"segment_id": "segment-2"}},
+    ]
+    sparse_hits = [
+        {"id": "shared", "score": 1.0, "payload": {"segment_id": "segment-1"}},
+        {"id": "sparse", "score": 0.6, "payload": {"segment_id": "segment-3"}},
+    ]
+
+    merged = RetrievalSearchEngine.merge_hits(dense_hits, sparse_hits)
+
+    assert [hit["id"] for hit in merged] == ["shared", "dense", "sparse"]
+    assert merged[0]["score"] == pytest.approx(0.86)
+    assert merged[2]["score"] == pytest.approx(0.48)
+    assert dense_hits[0] == {
+        "id": "shared",
+        "score": 0.8,
+        "payload": {"segment_id": "segment-1"},
+    }
+    assert sparse_hits[1]["score"] == 0.6
+
+
+@pytest.mark.asyncio
+async def test_hydrate_results_preserves_hit_order_and_adds_source_filename():
+    segment = SimpleNamespace(
+        id="segment-1",
+        entity_type="question",
+        entity_id="question-1",
+        segment_type="content",
+        content_text="进程调度题",
+        context_text="上下文",
+        subject_id="subject-os",
+        chapter_ids=["chapter-process"],
+        document_id="document-1",
+        page_no=3,
+    )
+    segment_result = SimpleNamespace(
+        scalars=lambda: SimpleNamespace(all=lambda: [segment]),
+    )
+    document_result = SimpleNamespace(
+        scalars=lambda: SimpleNamespace(
+            all=lambda: [
+                SimpleNamespace(id="document-1", filename="试卷.pdf"),
+            ]
+        ),
+    )
+    db = SimpleNamespace(
+        execute=AsyncMock(side_effect=[segment_result, document_result]),
+    )
+
+    results = await RetrievalSearchEngine(db).hydrate_results(
+        [
+            {
+                "id": "point-1",
+                "score": 0.92,
+                "payload": {"segment_id": "segment-1"},
+            },
+            {
+                "id": "stale-point",
+                "score": 0.8,
+                "payload": {"segment_id": "missing-segment"},
+            },
+        ]
+    )
+
+    assert len(results) == 1
+    assert results[0].segment_id == "segment-1"
+    assert results[0].score == 0.92
+    assert results[0].source_filename == "试卷.pdf"
+    assert results[0].page_no == 3
+
+
+@pytest.mark.asyncio
+async def test_retrieval_service_delegates_storage_steps_to_search_engine():
+    hydrated = SimpleNamespace(score=0.9)
+    dense_hits = [
+        {"id": "point-1", "score": 0.9, "payload": {"segment_id": "segment-1"}},
+    ]
+    service = RetrievalService(None)
+    service.embedding = SimpleNamespace(
+        embed_text=AsyncMock(return_value=[0.1, 0.2]),
+    )
+    service.qdrant = SimpleNamespace(search=Mock(return_value=dense_hits))
+    service.search_engine = SimpleNamespace(
+        build_filter=Mock(return_value=None),
+        get_collections=Mock(return_value=["question_segments"]),
+        sparse_search=AsyncMock(return_value=[]),
+        merge_hits=Mock(return_value=dense_hits),
+        hydrate_results=AsyncMock(return_value=[hydrated]),
+    )
+
+    results = await service.search(
+        query="进程调度",
+        entity_type="question",
+        mode="hybrid",
+        limit=5,
+    )
+
+    assert results == [hydrated]
+    service.search_engine.merge_hits.assert_called_once_with(dense_hits, [])
+    service.search_engine.hydrate_results.assert_awaited_once_with(dense_hits)
 
 
 @pytest.mark.asyncio
@@ -17,9 +145,9 @@ async def test_sparse_search_applies_structured_filters_before_limit():
         scalars=lambda: SimpleNamespace(all=lambda: []),
     )
     db = SimpleNamespace(execute=AsyncMock(return_value=db_result))
-    service = RetrievalService(db)
+    engine = RetrievalSearchEngine(db)
 
-    await service._sparse_search(
+    await engine.sparse_search(
         qdrant_manager.COLLECTION_QUESTION_SEGMENTS,
         "进程 调度",
         20,
@@ -57,9 +185,9 @@ async def test_sparse_search_without_filters_keeps_keyword_only_query():
         scalars=lambda: SimpleNamespace(all=lambda: []),
     )
     db = SimpleNamespace(execute=AsyncMock(return_value=db_result))
-    service = RetrievalService(db)
+    engine = RetrievalSearchEngine(db)
 
-    await service._sparse_search(
+    await engine.sparse_search(
         qdrant_manager.COLLECTION_KNOWLEDGE_SEGMENTS,
         "二叉树",
         10,
