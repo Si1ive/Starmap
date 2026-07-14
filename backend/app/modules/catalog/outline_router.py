@@ -226,10 +226,10 @@ async def generate_outline_guidance(
     outline_id: str, subject_id: str, db: AsyncSession = Depends(get_db)
 ):
     """为某门课的所有章节批量生成复习指导（结合考察目标，写回 exam_guidance）。"""
-    from app.modules.catalog.outline_import_service import OutlineImportService
-    service = OutlineImportService(db)
+    from app.modules.catalog.outline_guidance_service import OutlineGuidanceService
+    service = OutlineGuidanceService(db)
     try:
-        return ApiResponse(data=await service.generate_guidance_for_subject(outline_id, subject_id))
+        return ApiResponse(data=await service.generate_for_subject(outline_id, subject_id))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

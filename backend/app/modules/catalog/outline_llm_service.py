@@ -18,6 +18,7 @@ from app.core.logging import get_logger
 from app.infrastructure.ai.llm_client import OutlineLLMClient
 from app.models.mysql_models import Document, Subject
 from app.modules.catalog.outline_llm_parser import extract_outline_llm_json
+from app.modules.catalog.outline_llm_runtime import load_outline_llm_client
 from app.modules.catalog.outline_prompts import (
     build_outline_enhancement_prompt,
     build_outline_objective_prompt,
@@ -50,9 +51,7 @@ class OutlineLLMService:
         self.db = db
 
     async def _get_client(self) -> OutlineLLMClient:
-        runtime_settings = await SystemSettingsService(self.db).load()
-        cfg = runtime_settings.get("outline_llm", {})
-        return OutlineLLMClient(cfg if isinstance(cfg, dict) else {})
+        return await load_outline_llm_client(self.db)
 
     async def _load_subjects(self) -> Dict[str, Subject]:
         """code → Subject。"""

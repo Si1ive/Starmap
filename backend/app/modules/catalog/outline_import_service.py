@@ -23,8 +23,6 @@ from app.core.logging import get_logger
 from app.models.mysql_models import (
     ExamOutline, CanonicalChapter, Subject, DocumentSection, ExamOutlineSubject,
 )
-from app.modules.catalog.outline_llm_parser import extract_outline_llm_json
-from app.modules.catalog.outline_prompts import build_outline_guidance_prompt
 from app.modules.catalog.outline_parser import (
     detect_outline_format,
     extract_outline_code,
@@ -543,88 +541,6 @@ class OutlineImportService:
             "successful_subjects": len([s for s in subject_summaries if s.get("status") == "success"]),
             "failed_subjects": len(failed_subjects),
             "run_id": run.id,  # 返回任务 ID
-        }
-
-    async def generate_guidance_for_subject(
-        self, outline_id: str, subject_id: str, batch_size: int = 15,
-    ) -> Dict[str, Any]:
-        """
-        为某门课的所有章节批量生成复习指导（exam_guidance）。
-
-        结合该门课的考察目标，按 batch_size 分组调 LLM，逐节点写回 CanonicalChapter。
-        单组失败不影响其他组；全部失败才标记 failed。
-        """
-        from app.modules.catalog.outline_llm_service import OutlineLLMService
-
-        link = (await self.db.execute(
-            select(ExamOutlineSubject).where(
-                ExamOutlineSubject.outline_id == outline_id,
-                ExamOutlineSubject.subject_id == subject_id,
-            )
-        )).scalar_one_or_none()
-        if not link:
-            raise ValueError("该大纲下不存在此科目的考察目标记录")
-
-        chapters = (await self.db.execute(
-            select(CanonicalChapter).where(
-                CanonicalChapter.outline_id == outline_id,
-                CanonicalChapter.subject_id == subject_id,
-            ).order_by(CanonicalChapter.level, CanonicalChapter.sort_order)
-        )).scalars().all()
-        if not chapters:
-            raise ValueError("该科目下没有章节，无法生成复习指导")
-
-        llm_service = OutlineLLMService(self.db)
-        client = await llm_service._get_client()
-        if not client.is_available:
-            raise ValueError("大纲拆分 LLM 未启用或缺少配置，请在系统设置 -> outline_llm 配置后重试")
-
-        link.guidance_status = "generating"
-        await self.db.commit()
-
-        objective = link.exam_objective or ""
-        by_id = {c.id: c for c in chapters}
-        updated = 0
-        any_success = False
-        any_fail = False
-
-        for i in range(0, len(chapters), batch_size):
-            batch = chapters[i:i + batch_size]
-            items = [
-                {"id": c.id, "code": c.outline_code or "", "name": c.name,
-                 "points": (c.description or "")[:500]}
-                for c in batch
-            ]
-            prompt = build_outline_guidance_prompt(objective, items)
-            try:
-                text = await client.chat(prompt, purpose="大纲章节复习指导生成")
-                data = extract_outline_llm_json(text)
-                guidance_map = data.get("guidance") if isinstance(data, dict) else data
-                if isinstance(guidance_map, list):
-                    guidance_map = {g.get("id"): g.get("guidance") for g in guidance_map if isinstance(g, dict)}
-                if not isinstance(guidance_map, dict):
-                    raise ValueError("复习指导返回格式不正确")
-                for cid, guidance in guidance_map.items():
-                    chapter = by_id.get(cid)
-                    if chapter and guidance:
-                        chapter.exam_guidance = str(guidance).strip()
-                        updated += 1
-                any_success = True
-                await self.db.commit()
-            except Exception as e:
-                any_fail = True
-                logger.warning("复习指导某批生成失败", outline_id=outline_id,
-                               subject_id=subject_id, batch_start=i, error=str(e))
-
-        link.guidance_status = "done" if any_success and not any_fail else ("failed" if not any_success else "done")
-        await self.db.commit()
-
-        return {
-            "outline_id": outline_id,
-            "subject_id": subject_id,
-            "guidance_status": link.guidance_status,
-            "updated_chapters": updated,
-            "total_chapters": len(chapters),
         }
 
 async def list_outlines(session: AsyncSession) -> List[Dict[str, Any]]:

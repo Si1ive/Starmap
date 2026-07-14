@@ -234,7 +234,8 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
   `outline_llm_parser.py` 与 `outline_tree.py`；大纲专用 LLM 客户端统一复用
   `app/infrastructure/ai/llm_client.py`；科目边界识别和超长章节分块拆分到
   `outline_segmentation.py`；骨架拆分、节点增强、目标提取和复习指导 Prompt 集中到
-  `outline_prompts.py`，对应的旧 Service 文件已删除
+  `outline_prompts.py`；章节复习指导生成迁移到 `outline_guidance_service.py`，
+  大纲 LLM 运行时配置集中到 `outline_llm_runtime.py`，对应的旧 Service 文件已删除
 - 考试大纲列表、预览、导入、PDF 异步解析、任务查询和删除接口已迁移到
   `app/modules/catalog/outline_router.py`；上传目录统一使用
   `settings.CORPUS_UPLOAD_DIR`，不再依赖路由文件所在层级推导路径
