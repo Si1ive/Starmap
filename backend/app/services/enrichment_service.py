@@ -84,7 +84,7 @@ class EnrichmentService:
 
     async def _get_retrieval(self):
         if self._retrieval is None:
-            from app.services.retrieval_service import RetrievalService
+            from app.modules.retrieval.service import RetrievalService
             self._retrieval = RetrievalService(self.db)
         return self._retrieval
 

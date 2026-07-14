@@ -133,6 +133,14 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - 迁移 Segment、向量召回、章节关联和关系构建
 - 为检索过滤条件和索引一致性增加集成测试
 
+状态：进行中。
+
+- Segment 构建、普通检索、关系扩展、大纲扩展、双路召回和章节扩展接口已迁移到
+  `app/modules/retrieval`
+- 原 `/api/v1/admin/segments/*` 和 `/api/v1/admin/search*` URL 保持不变
+- 检索编排实现已迁移到 `app/modules/retrieval/service.py`，
+  `app/services/retrieval_service.py` 仅保留兼容导出
+
 ### 阶段 5：运营域
 
 - 迁移爬虫、监控、设置、用户和审计接口

@@ -96,6 +96,23 @@ def test_corpus_document_workflow_routes_are_owned_by_corpus_module():
         assert routes[path].endpoint.__module__ == "app.modules.corpus.router"
 
 
+def test_retrieval_routes_are_owned_by_retrieval_module():
+    routes = _routes_by_path()
+
+    for path in (
+        "/api/v1/admin/segments/build",
+        "/api/v1/admin/segments/build/knowledge",
+        "/api/v1/admin/segments/build/questions",
+        "/api/v1/admin/segments/build/chapters",
+        "/api/v1/admin/search",
+        "/api/v1/admin/search/with-relations",
+        "/api/v1/admin/search/with-outline",
+        "/api/v1/admin/search/dual-path",
+        "/api/v1/admin/search/chapter-expansion",
+    ):
+        assert routes[path].endpoint.__module__ == "app.modules.retrieval.router"
+
+
 def test_application_has_no_duplicate_method_path_pairs():
     seen = set()
     duplicates = []

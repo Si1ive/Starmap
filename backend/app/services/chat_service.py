@@ -338,7 +338,7 @@ class ChatService:
         llm_config = {}
 
         try:
-            from app.services.retrieval_service import RetrievalService
+            from app.modules.retrieval.service import RetrievalService
             from app.services.system_settings_service import SystemSettingsService
 
             async with mysql_client.session() as db:

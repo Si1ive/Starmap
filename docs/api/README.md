@@ -160,8 +160,12 @@ API 延迟使用可合并的固定桶直方图统计 P50/P95/P99。迁移前的�
 | POST | `/api/v1/admin/segments/build` | 构建全部 segment |
 | POST | `/api/v1/admin/segments/build/knowledge` | 构建知识点 segment |
 | POST | `/api/v1/admin/segments/build/questions` | 构建题目 segment |
+| POST | `/api/v1/admin/segments/build/chapters` | 构建大纲章节 segment |
 | POST | `/api/v1/admin/search` | 搜索 |
 | POST | `/api/v1/admin/search/with-relations` | 带关系扩展搜索 |
+| POST | `/api/v1/admin/search/with-outline` | 大纲辅助查询扩展搜索 |
+| POST | `/api/v1/admin/search/dual-path` | 向量与章节双路召回 |
+| POST | `/api/v1/admin/search/chapter-expansion` | 查询章节结构与审核关系扩展 |
 
 ### 系统设置
 

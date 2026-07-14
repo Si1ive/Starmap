@@ -26,6 +26,7 @@ from app.modules.operations.security import (
     require_current_admin,
     validate_admin_security_config,
 )
+from app.modules.retrieval.router import router as retrieval_router
 from app.modules.operations.schema_guard import (
     DatabaseSchemaError,
     verify_database_schema,
@@ -228,6 +229,11 @@ app.include_router(
 )
 app.include_router(
     corpus_router,
+    prefix="/api/v1",
+    dependencies=admin_dependencies,
+)
+app.include_router(
+    retrieval_router,
     prefix="/api/v1",
     dependencies=admin_dependencies,
 )
