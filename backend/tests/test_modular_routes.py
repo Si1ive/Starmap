@@ -11,6 +11,15 @@ def _routes_by_path():
     }
 
 
+def _methods_by_path():
+    methods = {}
+    for route in app.routes:
+        if not hasattr(route, "methods"):
+            continue
+        methods.setdefault(route.path, set()).update(route.methods)
+    return methods
+
+
 def test_catalog_routes_keep_existing_paths_and_methods():
     routes = _routes_by_path()
 
@@ -99,6 +108,64 @@ def test_corpus_document_workflow_routes_are_owned_by_corpus_module():
         "/api/v1/admin/corpus/documents/{document_id}/entities/{entity_type}/{entity_id}/reextraction-status",
     ):
         assert routes[path].endpoint.__module__ == "app.modules.corpus.router"
+
+
+def test_crawler_routes_are_owned_by_crawler_module():
+    routes = _routes_by_path()
+
+    for path in (
+        "/api/v1/admin/crawler/config",
+        "/api/v1/admin/crawler/tasks",
+        "/api/v1/admin/crawler/tasks/{task_id}/start",
+        "/api/v1/admin/crawler/tasks/{task_id}/stop",
+        "/api/v1/admin/crawler/tasks/{task_id}",
+        "/api/v1/admin/crawler/sources",
+        "/api/v1/admin/crawler/sources/defaults",
+        "/api/v1/admin/crawler/sources/{source_id}",
+        "/api/v1/admin/crawler/sources/{source_id}/health",
+        "/api/v1/admin/crawler/sources/{source_id}/stats",
+        "/api/v1/admin/crawler/stats/overview",
+        "/api/v1/admin/crawler/stats/sources",
+        "/api/v1/admin/crawler/stats/trend",
+        "/api/v1/admin/crawler/stats/file-types",
+        "/api/v1/admin/crawler/stats/suggestions",
+        "/api/v1/admin/crawler/scrapy/status",
+        "/api/v1/admin/crawler/schedules",
+        "/api/v1/admin/crawler/schedules/{schedule_id}",
+        "/api/v1/admin/crawler/schedules/{schedule_id}/toggle",
+        "/api/v1/admin/crawler/schedules/{schedule_id}/runs",
+        "/api/v1/admin/crawler/logs",
+        "/api/v1/admin/crawler/logs/export",
+        "/api/v1/admin/crawler/file-logs",
+        "/api/v1/admin/crawler/file-logs/repos",
+        "/api/v1/admin/crawler/file-logs/retry",
+        "/api/v1/admin/crawler/logs/analysis",
+        "/api/v1/admin/crawler/logs/stream",
+    ):
+        assert routes[path].endpoint.__module__ == "app.modules.crawler.router"
+
+
+def test_crawler_routes_keep_existing_http_methods():
+    methods = _methods_by_path()
+    expected = {
+        "/api/v1/admin/crawler/config": {"GET", "PUT"},
+        "/api/v1/admin/crawler/tasks": {"GET", "POST"},
+        "/api/v1/admin/crawler/tasks/{task_id}": {"DELETE"},
+        "/api/v1/admin/crawler/sources": {"GET", "POST"},
+        "/api/v1/admin/crawler/sources/{source_id}": {"GET", "PUT", "DELETE"},
+        "/api/v1/admin/crawler/schedules": {"GET", "POST"},
+        "/api/v1/admin/crawler/schedules/{schedule_id}": {
+            "GET",
+            "PUT",
+            "DELETE",
+        },
+        "/api/v1/admin/crawler/logs": {"GET"},
+        "/api/v1/admin/crawler/file-logs": {"GET"},
+        "/api/v1/admin/crawler/file-logs/retry": {"POST"},
+    }
+
+    for path, expected_methods in expected.items():
+        assert expected_methods <= methods[path]
 
 
 def test_retrieval_routes_are_owned_by_retrieval_module():

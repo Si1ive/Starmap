@@ -214,8 +214,9 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - 爬取源、任务执行、定时调度、文件统计、爬虫日志、Scrapy Redis Bridge 和
   WebSocket 日志处理实现已迁移到 `app/modules/crawler`；应用生命周期、调度器、
   管理接口和测试已直接依赖爬虫模块，对应 7 个旧 `app/services/*.py` 文件已删除
-- `/api/v1/admin/crawler/*` 管理端点仍暂存于 `app/api/admin.py`，将在下一批迁移中
-  收敛到爬虫模块 Router，迁移期间 URL 与行为保持不变
+- `/api/v1/admin/crawler/*` 管理端点已迁移到 `app/modules/crawler/router.py`，
+  包括任务、爬取源、统计、调度、日志、文件重试和实时日志接口；URL、鉴权和响应
+  行为保持不变，并由路由归属契约测试防止重新回流到 `app/api/admin.py`
 
 每个阶段都必须满足：
 

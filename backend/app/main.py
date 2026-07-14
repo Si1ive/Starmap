@@ -21,6 +21,7 @@ from app.db.mysql import mysql_client
 from app.modules.catalog import router as catalog_router
 from app.modules.content import router as content_router
 from app.modules.corpus.router import router as corpus_router
+from app.modules.crawler.router import router as crawler_router
 from app.modules.monitoring.router import router as monitoring_router
 from app.modules.operations import router as operations_router
 from app.modules.operations.security import (
@@ -244,6 +245,11 @@ app.include_router(
 )
 app.include_router(
     corpus_router,
+    prefix="/api/v1",
+    dependencies=admin_dependencies,
+)
+app.include_router(
+    crawler_router,
     prefix="/api/v1",
     dependencies=admin_dependencies,
 )
