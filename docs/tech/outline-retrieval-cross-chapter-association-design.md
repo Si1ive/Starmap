@@ -100,13 +100,15 @@ ChapterLinkService._match_by_vector_search(entity, entity_type)
   → 聚合到 chapter_id，过滤 score >= 0.75，取 top-3
 ```
 
-#### 用途 B：语义检索考点——用户自然语言 → 考点列表（待实现）
+#### 用途 B：语义检索考点——用户自然语言 → 考点列表（已实现）
 
 当用户用自然语言描述一个概念（如"操作系统里那种多个进程抢资源的问题"），系统需要找到对应的考点（"进程同步与互斥"）。这需要：
 
 1. 用户 query → embedding
 2. 在 `knowledge_segments` 中检索 `entity_type="canonical_chapter"` 的 segment
 3. 返回考点列表 + 该考点下的知识点和题目
+
+当前实现由 `expand_query_with_outline()` 完成自然语言到考点的向量定位，并由 `RetrievalService.search_with_outline_expansion()` 接入聊天检索主链路。大纲导入完成后会自动调用 `SegmentService.build_canonical_chapter_segments()` 写入考点向量。
 
 ### 3.3 为什么不需要单独建 collection
 

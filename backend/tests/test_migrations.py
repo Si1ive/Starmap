@@ -17,3 +17,12 @@ def test_revision_ids_fit_default_alembic_version_column():
     ]
 
     assert oversized == []
+
+
+def test_migration_graph_has_single_head():
+    backend_dir = Path(__file__).resolve().parents[1]
+    config = Config(str(backend_dir / "alembic.ini"))
+    config.set_main_option("script_location", str(backend_dir / "alembic"))
+    scripts = ScriptDirectory.from_config(config)
+
+    assert scripts.get_heads() == ["20260714_api_latency_histogram"]

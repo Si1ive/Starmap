@@ -1,7 +1,37 @@
 import adminClient from './client'
 import type { ApiResponse } from '@/types'
 
-export const getApiMonitor = (hours = 24): Promise<ApiResponse<Record<string, unknown>>> => {
+export interface ApiLatencyStats {
+  p50: number | null
+  p95: number
+  p99: number | null
+  sample_count: number
+  coverage_percent: number
+}
+
+export interface ApiEndpointMetric {
+  endpoint: string
+  method: string
+  calls: number
+  avg_latency: number
+  max_latency: number
+  p95: number
+  error_rate: number
+}
+
+export interface ApiMonitorData {
+  window_hours: number
+  total_requests: number
+  avg_latency: number
+  error_rate: number
+  qps: number
+  latency_stats: ApiLatencyStats
+  endpoints: ApiEndpointMetric[]
+  slow_queries: ApiEndpointMetric[]
+  qps_trend: Array<{ date: string; count: number }>
+}
+
+export const getApiMonitor = (hours = 24): Promise<ApiResponse<ApiMonitorData>> => {
   return adminClient.get('/monitor/api', { params: { hours } })
 }
 

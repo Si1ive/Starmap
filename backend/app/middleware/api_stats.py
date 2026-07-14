@@ -4,56 +4,48 @@ API 调用统计中间件
 把每次 HTTP 请求的（endpoint, method, latency, status）按小时桶聚合到 api_call_stats。
 
 写入策略：
-- 内存累加（hour_bucket -> {count, errors, total, max, samples}）
+- 内存累加（hour_bucket -> {count, errors, total, max, histogram}）
 - 每 30 秒由后台 flush task 把累计写到库（UPSERT）
-- p95 用 reservoir sampling 做近似（保留 100 个采样点）
+- 固定桶直方图可跨刷新合并，用于真实计算 P50/P95/P99
 """
 
 import asyncio
 import os
-import random
 import sys
 import time
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable, Dict, Optional, Tuple
 
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
+from app.modules.monitoring.latency_histogram import (
+    histogram_percentile,
+    merge_histograms,
+    record_latency,
+)
+
 DEFAULT_FLUSH_INTERVAL = 30.0
-DEFAULT_SAMPLE_SIZE = 100  # 每 (endpoint, method, hour_bucket) 保留的采样池
 
 # 内存累计桶；key = (endpoint, method, hour_bucket)
 _buckets: Dict[Tuple[str, str, datetime], dict] = defaultdict(
-    lambda: {"count": 0, "errors": 0, "total_ms": 0, "max_ms": 0, "samples": []}
+    lambda: {
+        "count": 0,
+        "errors": 0,
+        "total_ms": 0,
+        "max_ms": 0,
+        "latency_histogram": {},
+    }
 )
 _flush_task: Optional[asyncio.Task] = None
 _flush_running = False
 
 
 def _hour_bucket(ts: Optional[datetime] = None) -> datetime:
-    ts = ts or datetime.utcnow()
+    ts = ts or datetime.now(timezone.utc).replace(tzinfo=None)
     return ts.replace(minute=0, second=0, microsecond=0)
-
-
-def _record_sample(samples: list, value: int, max_size: int = DEFAULT_SAMPLE_SIZE) -> None:
-    """Reservoir sampling — 当 samples 达到上限后，按概率替换。"""
-    if len(samples) < max_size:
-        samples.append(value)
-    else:
-        idx = random.randint(0, len(samples) - 1)
-        if random.random() < (max_size / (max_size + 1)):
-            samples[idx] = value
-
-
-def _percentile(samples: list, p: float) -> int:
-    if not samples:
-        return 0
-    sorted_samples = sorted(samples)
-    idx = int(len(sorted_samples) * p)
-    return int(sorted_samples[min(idx, len(sorted_samples) - 1)])
 
 
 def _normalize_endpoint(request: Request) -> str:
@@ -102,7 +94,7 @@ class APIStatsMiddleware(BaseHTTPMiddleware):
                 bucket["total_ms"] += latency_ms
                 if latency_ms > bucket["max_ms"]:
                     bucket["max_ms"] = latency_ms
-                _record_sample(bucket["samples"], latency_ms)
+                record_latency(bucket["latency_histogram"], latency_ms)
             except Exception:
                 # 统计失败不能影响业务
                 pass
@@ -125,7 +117,6 @@ async def _flush_to_db() -> None:
             for (endpoint, method, hour_bucket), data in snapshot:
                 if data["count"] == 0:
                     continue
-                p95 = _percentile(data["samples"], 0.95)
                 # UPSERT：先 select，再 insert/update
                 existing = await session.execute(
                     select(ApiCallStat).where(
@@ -136,15 +127,33 @@ async def _flush_to_db() -> None:
                 )
                 row = existing.scalar_one_or_none()
                 if row:
+                    merged_histogram = merge_histograms(
+                        row.latency_histogram,
+                        data["latency_histogram"],
+                    )
                     row.call_count += data["count"]
                     row.error_count += data["errors"]
                     row.total_latency_ms += data["total_ms"]
                     if data["max_ms"] > row.max_latency_ms:
                         row.max_latency_ms = data["max_ms"]
-                    # p95 取较大值（保守估计）
-                    if p95 > row.p95_sample_ms:
-                        row.p95_sample_ms = p95
+                    row.latency_histogram = merged_histogram
+                    row.p95_sample_ms = (
+                        histogram_percentile(
+                            merged_histogram,
+                            0.95,
+                            overflow_value=row.max_latency_ms,
+                        )
+                        or 0
+                    )
                 else:
+                    p95 = (
+                        histogram_percentile(
+                            data["latency_histogram"],
+                            0.95,
+                            overflow_value=data["max_ms"],
+                        )
+                        or 0
+                    )
                     session.add(ApiCallStat(
                         endpoint=endpoint,
                         method=method,
@@ -154,6 +163,7 @@ async def _flush_to_db() -> None:
                         total_latency_ms=data["total_ms"],
                         max_latency_ms=data["max_ms"],
                         p95_sample_ms=p95,
+                        latency_histogram=data["latency_histogram"],
                     ))
             await session.commit()
     except Exception as e:

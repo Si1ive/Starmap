@@ -9,7 +9,7 @@
 
 import gzip
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -18,6 +18,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.modules.monitoring.latency_histogram import (
+    histogram_count,
+    histogram_percentile,
+    merge_histograms,
+)
 from app.models.mysql_models import (
     ServiceLog, SystemMetric, ApiCallStat, LLMCallLog,
 )
@@ -239,7 +244,9 @@ def _metric_to_dict(row: SystemMetric) -> Dict[str, Any]:
 
 
 async def get_api_stats_overview(session: AsyncSession, hours: int = 24) -> Dict[str, Any]:
-    since_bucket = (datetime.utcnow() - timedelta(hours=hours)).replace(minute=0, second=0, microsecond=0)
+    since_bucket = (
+        datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=hours)
+    ).replace(minute=0, second=0, microsecond=0)
     rows = (await session.execute(
         select(ApiCallStat).where(ApiCallStat.hour_bucket >= since_bucket)
     )).scalars().all()
@@ -250,9 +257,16 @@ async def get_api_stats_overview(session: AsyncSession, hours: int = 24) -> Dict
     avg_latency = int(total_ms / total_calls) if total_calls else 0
     error_rate = round(total_errors / total_calls, 4) if total_calls else 0
 
-    # P95 取所有 endpoint 的 p95 max（保守）
-    p95_overall = max((int(r.p95_sample_ms or 0) for r in rows), default=0)
-    p99_overall = p95_overall  # 库里没存 p99，先用 p95 占位
+    latency_histogram = merge_histograms(
+        *(r.latency_histogram for r in rows)
+    )
+    histogram_samples = histogram_count(latency_histogram)
+    legacy_p95 = max((int(r.p95_sample_ms or 0) for r in rows), default=0)
+    histogram_p95 = histogram_percentile(
+        latency_histogram,
+        0.95,
+        overflow_value=max((int(r.max_latency_ms or 0) for r in rows), default=0),
+    )
 
     # 每小时桶时序
     qps_by_hour: Dict[str, int] = {}
@@ -267,24 +281,41 @@ async def get_api_stats_overview(session: AsyncSession, hours: int = 24) -> Dict
         key = f"{r.method} {r.endpoint}"
         slot = endpoint_aggregate.setdefault(key, {
             "endpoint": r.endpoint, "method": r.method,
-            "calls": 0, "errors": 0, "total_ms": 0, "max_ms": 0, "p95": 0,
+            "calls": 0,
+            "errors": 0,
+            "total_ms": 0,
+            "max_ms": 0,
+            "legacy_p95": 0,
+            "latency_histogram": {},
         })
         slot["calls"] += int(r.call_count or 0)
         slot["errors"] += int(r.error_count or 0)
         slot["total_ms"] += int(r.total_latency_ms or 0)
         slot["max_ms"] = max(slot["max_ms"], int(r.max_latency_ms or 0))
-        slot["p95"] = max(slot["p95"], int(r.p95_sample_ms or 0))
+        slot["legacy_p95"] = max(
+            slot["legacy_p95"],
+            int(r.p95_sample_ms or 0),
+        )
+        slot["latency_histogram"] = merge_histograms(
+            slot["latency_histogram"],
+            r.latency_histogram,
+        )
 
     endpoints = []
     for slot in endpoint_aggregate.values():
         calls = slot["calls"] or 1
+        endpoint_p95 = histogram_percentile(
+            slot["latency_histogram"],
+            0.95,
+            overflow_value=slot["max_ms"],
+        )
         endpoints.append({
             "endpoint": slot["endpoint"],
             "method": slot["method"],
             "calls": slot["calls"],
             "avg_latency": int(slot["total_ms"] / calls),
             "max_latency": slot["max_ms"],
-            "p95": slot["p95"],
+            "p95": max(endpoint_p95 or 0, slot["legacy_p95"]),
             "error_rate": round(slot["errors"] / calls * 100, 2),
         })
     endpoints.sort(key=lambda x: x["calls"], reverse=True)
@@ -296,9 +327,28 @@ async def get_api_stats_overview(session: AsyncSession, hours: int = 24) -> Dict
         "error_rate": round(error_rate * 100, 2),
         "qps": round(total_calls / max(1, hours * 3600), 4),
         "latency_stats": {
-            "p50": int(avg_latency * 0.7) if avg_latency else 0,  # 没存 p50，粗估
-            "p95": p95_overall,
-            "p99": p99_overall,
+            "p50": histogram_percentile(
+                latency_histogram,
+                0.50,
+                overflow_value=max(
+                    (int(r.max_latency_ms or 0) for r in rows),
+                    default=0,
+                ),
+            ),
+            "p95": max(histogram_p95 or 0, legacy_p95),
+            "p99": histogram_percentile(
+                latency_histogram,
+                0.99,
+                overflow_value=max(
+                    (int(r.max_latency_ms or 0) for r in rows),
+                    default=0,
+                ),
+            ),
+            "sample_count": histogram_samples,
+            "coverage_percent": min(
+                100.0,
+                round(histogram_samples / total_calls * 100, 2),
+            ) if total_calls else 0.0,
         },
         "endpoints": endpoints[:20],  # 调用 top20
         "slow_queries": sorted(

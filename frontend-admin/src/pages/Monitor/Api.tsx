@@ -5,7 +5,8 @@ import {
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { LineChart } from '@/components/Chart'
-import { getApiMonitor } from '@/api'
+import { getApiMonitor, type ApiEndpointMetric } from '@/api'
+import type { TableProps } from 'antd'
 
 const ApiMonitor = () => {
   const [hours, setHours] = useState(24)
@@ -16,15 +17,17 @@ const ApiMonitor = () => {
     refetchInterval: 30000,
   })
 
-  const apiData = (data?.data || {}) as Record<string, any>
+  const apiData = data?.data
+  const totalRequests = apiData?.total_requests ?? 0
+  const avgLatency = apiData?.avg_latency ?? 0
+  const errorRate = apiData?.error_rate ?? 0
+  const qps = apiData?.qps ?? 0
+  const latencyStats = apiData?.latency_stats
+  const formatPercentile = (value: number | null | undefined) => (
+    value == null ? '--' : `${value}ms`
+  )
 
-  const totalRequests = apiData.total_requests ?? 0
-  const avgLatency = apiData.avg_latency ?? 0
-  const errorRate = apiData.error_rate ?? 0
-  const qps = apiData.qps ?? 0
-  const latencyStats = apiData.latency_stats || {}
-
-  const endpointColumns = [
+  const endpointColumns: TableProps<ApiEndpointMetric>['columns'] = [
     { title: '接口', dataIndex: 'endpoint', key: 'endpoint', ellipsis: true },
     {
       title: '方法', dataIndex: 'method', key: 'method', width: 80,
@@ -33,13 +36,13 @@ const ApiMonitor = () => {
         return <Tag color={colorMap[m] || 'default'}>{m}</Tag>
       },
     },
-    { title: '调用数', dataIndex: 'calls', key: 'calls', width: 100, sorter: (a: any, b: any) => a.calls - b.calls },
+    { title: '调用数', dataIndex: 'calls', key: 'calls', width: 100, sorter: (a, b) => a.calls - b.calls },
     {
       title: '平均耗时(ms)', dataIndex: 'avg_latency', key: 'avg_latency', width: 130,
       render: (v: number) => (
         <span style={{ color: v > 500 ? '#ff4d4f' : v > 200 ? '#fa8c16' : '#52c41a' }}>{v}ms</span>
       ),
-      sorter: (a: any, b: any) => a.avg_latency - b.avg_latency,
+      sorter: (a, b) => a.avg_latency - b.avg_latency,
     },
     {
       title: 'P95(ms)', dataIndex: 'p95', key: 'p95', width: 100,
@@ -56,7 +59,7 @@ const ApiMonitor = () => {
     },
   ]
 
-  const slowQueryColumns = [
+  const slowQueryColumns: TableProps<ApiEndpointMetric>['columns'] = [
     { title: '接口', dataIndex: 'endpoint', ellipsis: true },
     { title: '方法', dataIndex: 'method', width: 80 },
     { title: '最大耗时', dataIndex: 'max_latency', width: 110, render: (v: number) => <span style={{ color: '#ff4d4f' }}>{v}ms</span> },
@@ -120,30 +123,34 @@ const ApiMonitor = () => {
 
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
         <Col xs={24} lg={10}>
-          <Card title="耗时分布（窗口聚合）" size="small">
+          <Card
+            title="耗时分布（窗口聚合）"
+            extra={`统计覆盖率 ${latencyStats?.coverage_percent ?? 0}%`}
+            size="small"
+          >
             <Row gutter={16}>
               <Col span={8}>
-                <Tooltip title="50% 请求耗时低于此值（粗估）">
-                  <Card size="small" style={{ textAlign: 'center' }}>
-                    <div style={{ fontSize: 22, fontWeight: 'bold', color: '#52c41a' }}>{latencyStats.p50 ?? 0}ms</div>
+                <Tooltip title="由请求延迟直方图计算；无历史样本时显示 --">
+                  <div style={{ textAlign: 'center', padding: '12px 4px' }}>
+                    <div style={{ fontSize: 22, fontWeight: 'bold', color: '#52c41a' }}>{formatPercentile(latencyStats?.p50)}</div>
                     <div style={{ color: '#666' }}>P50</div>
-                  </Card>
+                  </div>
                 </Tooltip>
               </Col>
               <Col span={8}>
-                <Tooltip title="95% 请求耗时低于此值">
-                  <Card size="small" style={{ textAlign: 'center' }}>
-                    <div style={{ fontSize: 22, fontWeight: 'bold', color: '#fa8c16' }}>{latencyStats.p95 ?? 0}ms</div>
+                <Tooltip title="由请求延迟直方图计算；旧数据兼容原 P95 采样值">
+                  <div style={{ textAlign: 'center', padding: '12px 4px' }}>
+                    <div style={{ fontSize: 22, fontWeight: 'bold', color: '#fa8c16' }}>{formatPercentile(latencyStats?.p95)}</div>
                     <div style={{ color: '#666' }}>P95</div>
-                  </Card>
+                  </div>
                 </Tooltip>
               </Col>
               <Col span={8}>
-                <Tooltip title="99% 请求耗时低于此值">
-                  <Card size="small" style={{ textAlign: 'center' }}>
-                    <div style={{ fontSize: 22, fontWeight: 'bold', color: '#ff4d4f' }}>{latencyStats.p99 ?? 0}ms</div>
+                <Tooltip title="由请求延迟直方图计算；无历史样本时显示 --">
+                  <div style={{ textAlign: 'center', padding: '12px 4px' }}>
+                    <div style={{ fontSize: 22, fontWeight: 'bold', color: '#ff4d4f' }}>{formatPercentile(latencyStats?.p99)}</div>
                     <div style={{ color: '#666' }}>P99</div>
-                  </Card>
+                  </div>
                 </Tooltip>
               </Col>
             </Row>
@@ -152,7 +159,7 @@ const ApiMonitor = () => {
         <Col xs={24} lg={14}>
           <Card title="QPS 趋势（每小时）" size="small">
             <LineChart
-              data={(apiData.qps_trend || []) as { date: string; count: number }[]}
+              data={apiData?.qps_trend ?? []}
               color="#722ed1"
               height={180}
             />
@@ -163,7 +170,7 @@ const ApiMonitor = () => {
       <Card title="接口排行（按调用数）" size="small" style={{ marginBottom: 16 }}>
         <Table
           columns={endpointColumns}
-          dataSource={(apiData.endpoints || []) as any[]}
+          dataSource={apiData?.endpoints ?? []}
           rowKey={(r) => `${r.method}-${r.endpoint}`}
           pagination={{ pageSize: 10 }}
           size="small"
@@ -173,7 +180,7 @@ const ApiMonitor = () => {
       <Card title="慢接口（最大耗时 ≥ 1s）" size="small">
         <Table
           columns={slowQueryColumns}
-          dataSource={(apiData.slow_queries || []) as any[]}
+          dataSource={apiData?.slow_queries ?? []}
           rowKey={(r) => `${r.method}-${r.endpoint}`}
           pagination={{ pageSize: 10 }}
           size="small"

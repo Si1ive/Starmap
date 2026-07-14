@@ -127,7 +127,15 @@
 - 新环境默认 `MinerU`，`Docling` 作为性能优先备选；当激活解析器不可用时，`parse` 应返回明确错误提示，不做自动 fallback。
 - `pdf_parser` 现支持两种部署位置：
   - `local`：访问本机 Podman 中的解析服务，默认读取 `local_service_endpoint`
-  - `remote`：保存远程地址信息，当前版本仅保留扩展口，暂未实现远程请求转发
+  - `remote`：把解析请求转发到 `remote_service_endpoint` 指向的 HTTP 服务，并沿用同一解析协议与健康检查
+
+### 运行监控
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/admin/monitor/api` | API 调用量、错误率、QPS、接口排行和延迟分位数 |
+
+API 延迟使用可合并的固定桶直方图统计 P50/P95/P99。迁移前的历史行只有 P95 采样值，因此 P50/P99 在没有直方图样本时返回 `null`，同时通过 `coverage_percent` 返回当前窗口的直方图覆盖率。
 
 ### 审核与检索
 

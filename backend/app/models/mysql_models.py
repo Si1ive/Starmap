@@ -1605,7 +1605,15 @@ class ApiCallStat(Base):
     error_count: Mapped[int] = mapped_column(Integer, default=0)
     total_latency_ms: Mapped[int] = mapped_column(BigInteger, default=0)
     max_latency_ms: Mapped[int] = mapped_column(Integer, default=0)
-    p95_sample_ms: Mapped[int] = mapped_column(Integer, default=0, comment="近似P95（reservoir 采样）")
+    p95_sample_ms: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        comment="兼容字段：由延迟直方图计算的近似P95",
+    )
+    latency_histogram: Mapped[Optional[dict]] = mapped_column(
+        JSON,
+        comment="可合并的固定桶延迟直方图",
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )

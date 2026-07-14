@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS `api_call_stats` (
     `total_latency_ms` BIGINT NOT NULL DEFAULT 0,
     `max_latency_ms` INT NOT NULL DEFAULT 0,
     `p95_sample_ms` INT NOT NULL DEFAULT 0,
+    `latency_histogram` JSON NULL COMMENT '可合并的固定桶延迟直方图',
     `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`),
     UNIQUE KEY `uq_api_stats_bucket` (`endpoint`, `method`, `hour_bucket`),
