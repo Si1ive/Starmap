@@ -170,6 +170,35 @@ def test_chapter_relation_routes_are_owned_by_catalog_module():
     ]
 
 
+def test_chapter_link_routes_are_owned_by_catalog_module():
+    routes = _routes_by_path()
+
+    for path in (
+        "/api/v1/admin/knowledge/{kp_id}/link-chapters",
+        "/api/v1/admin/questions/{question_id}/link-chapters",
+        "/api/v1/admin/documents/{document_id}/link-chapters",
+        "/api/v1/admin/chapters/{chapter_id}/entities",
+    ):
+        assert (
+            routes[path].endpoint.__module__
+            == "app.modules.catalog.chapter_link_router"
+        )
+
+    methods = _methods_by_path()
+    assert {"POST"} <= methods[
+        "/api/v1/admin/knowledge/{kp_id}/link-chapters"
+    ]
+    assert {"POST"} <= methods[
+        "/api/v1/admin/questions/{question_id}/link-chapters"
+    ]
+    assert {"POST"} <= methods[
+        "/api/v1/admin/documents/{document_id}/link-chapters"
+    ]
+    assert {"GET"} <= methods[
+        "/api/v1/admin/chapters/{chapter_id}/entities"
+    ]
+
+
 def test_outline_routes_are_owned_by_catalog_module():
     routes = _routes_by_path()
 

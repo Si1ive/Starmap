@@ -185,6 +185,9 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
   `app/modules/catalog/chapter_link_service.py`，
   `app/services/chapter_link_service.py` 已删除；关键词打分和向量召回策略进一步拆分到
   `app/modules/catalog/chapter_matcher.py`
+- 知识点、题目和整份文档的手动章节关联入口，以及章节下实体查询接口已迁移到
+  `app/modules/catalog/chapter_link_router.py`，保持原
+  `/api/v1/admin/*/link-chapters` 与 `/chapters/{chapter_id}/entities` 路径不变
 - 标准章节树维护、文档 section 映射、映射审核和章节归属诊断已迁移到
   `app/modules/catalog`；其中标准章节树维护位于 `canonical_chapter_service.py`，
   section 映射与审核位于 `chapter_mapping_service.py`，
