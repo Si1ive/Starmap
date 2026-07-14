@@ -7,6 +7,8 @@ from app.services.document_parsers import (
     ParsedDocumentResult,
     _normalize_payload_block_type,
     _parsed_document_result_from_dict,
+    choose_parser,
+    inspect_parser_health,
 )
 
 
@@ -123,3 +125,115 @@ def test_payload_block_type_preserves_noise_types_for_downstream_grouping():
     assert _normalize_payload_block_type("page_number") == "page_number"
     assert _normalize_payload_block_type("aside_text") == "aside_text"
     assert _normalize_payload_block_type("page_footnote") == "page_footnote"
+
+
+class _ServiceResponse:
+    def __init__(self, payload, status_code=200):
+        self._payload = payload
+        self.status_code = status_code
+        self.content = b"json"
+        self.text = "json"
+
+    def json(self):
+        return self._payload
+
+
+def _remote_runtime_config():
+    return {
+        "active_parser": "mineru",
+        "deployment_target": "remote",
+        "remote_service_endpoint": "https://parser.example.test",
+        "request_timeout_seconds": 120,
+        "processing_window_size": 2,
+    }
+
+
+def test_remote_parser_service_posts_file_with_runtime_options(monkeypatch, tmp_path):
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"%PDF")
+    captured = {}
+
+    def fake_post(url, *, data, files, timeout):
+        captured.update(url=url, data=data, files=files, timeout=timeout)
+        return _ServiceResponse({
+            "code": 200,
+            "data": {
+                "parser_name": "mineru",
+                "parser_version": "3.3",
+                "pages": [{"page_no": 1}],
+                "blocks": [],
+                "assets": [],
+                "document_markdown": "# parsed",
+            },
+        })
+
+    monkeypatch.setattr("app.services.document_parsers.requests.post", fake_post)
+
+    parser = choose_parser(None, _remote_runtime_config())
+    result = parser.parse(str(pdf_path), task_id="run-1")
+
+    assert captured["url"] == "https://parser.example.test/parse"
+    assert captured["data"] == {
+        "parser_name": "mineru",
+        "processing_window_size": "2",
+        "task_id": "run-1",
+    }
+    assert captured["timeout"] == 120
+    assert result.document_markdown == "# parsed"
+    assert result.metadata["deployment_target"] == "remote"
+
+
+def test_remote_parser_service_fetches_progress(monkeypatch):
+    captured = {}
+
+    def fake_get(url, *, timeout):
+        captured.update(url=url, timeout=timeout)
+        return _ServiceResponse({
+            "code": 200,
+            "data": {
+                "task_id": "run-2",
+                "status": "parsing",
+                "current_page": 3,
+                "total_pages": 8,
+            },
+        })
+
+    monkeypatch.setattr("app.services.document_parsers.requests.get", fake_get)
+
+    parser = choose_parser(None, _remote_runtime_config())
+    progress = parser.fetch_progress("run-2")
+
+    assert captured == {
+        "url": "https://parser.example.test/progress/run-2",
+        "timeout": 5,
+    }
+    assert progress["current_page"] == 3
+
+
+def test_remote_parser_health_uses_configured_service(monkeypatch):
+    captured = {}
+
+    def fake_get(url, *, params, timeout):
+        captured.update(url=url, params=params, timeout=timeout)
+        return _ServiceResponse({
+            "code": 200,
+            "data": {
+                "parser_name": "mineru",
+                "parser_version": "3.3",
+                "health_status": "ready",
+                "is_available": True,
+            },
+        })
+
+    monkeypatch.setattr("app.services.document_parsers.requests.get", fake_get)
+
+    health = inspect_parser_health("mineru", _remote_runtime_config())
+
+    assert captured == {
+        "url": "https://parser.example.test/health",
+        "params": {"parser_name": "mineru"},
+        "timeout": 10,
+    }
+    assert health["deployment_target"] == "remote"
+    assert health["is_available"] is True
+    assert health["health_status"] == "ready"

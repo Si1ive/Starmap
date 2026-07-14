@@ -382,7 +382,7 @@ const Settings = () => {
                 showIcon
                 style={{ marginBottom: 16 }}
                 message="推荐策略：默认使用 MinerU + 本地 Podman 服务"
-                description="MinerU 更适合作为当前项目的主流默认方案；Docling 保留为高性能备选。本地模式默认访问本机 Podman 中的解析服务；远程模式当前先保留配置扩展口。"
+                description="MinerU 更适合作为当前项目的主流默认方案；Docling 保留为高性能备选。本地和远程模式使用相同的健康检查、文件解析与任务进度协议。"
               />
 
               {activeRuntimeStatus && (
@@ -454,6 +454,7 @@ const Settings = () => {
                     <Form.Item
                       name={['pdf_parser', 'remote_service_endpoint']}
                       label="远程解析服务地址"
+                      tooltip="远程服务需实现 /health、/parse 和 /progress/{task_id} 接口"
                       rules={[{ required: true, message: '请选择远程模式时必须填写远程地址' }]}
                     >
                       <Input placeholder="https://parser.example.com" />

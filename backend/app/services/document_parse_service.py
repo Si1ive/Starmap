@@ -491,11 +491,11 @@ class DocumentParseService:
 
             # 3. 调用解析器（同步 IO 重任务放线程池），并发追踪逐页进度
             # - embedded 模式：MinerU 在本进程内，用 logging.Handler 拦截日志
-            # - local 模式：MinerU 在独立 parser_service 进程，轮询其 /progress 端点
+            # - HTTP 服务模式（local / remote）：轮询 parser_service 的 /progress 端点
             progress_handler = None
-            is_local_service = hasattr(parser, "fetch_progress") and hasattr(parser, "endpoint")
+            is_http_service = hasattr(parser, "fetch_progress") and hasattr(parser, "endpoint")
 
-            if parser.name.lower() == "mineru" and not is_local_service:
+            if parser.name.lower() == "mineru" and not is_http_service:
                 # embedded 模式：挂载日志拦截器
                 try:
                     loop = asyncio.get_running_loop()
@@ -511,15 +511,15 @@ class DocumentParseService:
             # 把解析放到后台线程，主协程并发轮询进度
             parse_future = asyncio.ensure_future(
                 asyncio.to_thread(parser.parse, corpus_file.local_path, task_id=run_id)
-                if is_local_service
+                if is_http_service
                 else asyncio.to_thread(parser.parse, corpus_file.local_path)
             )
 
             try:
                 while not parse_future.done():
                     await asyncio.sleep(2)
-                    # local 模式：轮询 parser_service /progress
-                    if is_local_service:
+                    # HTTP 服务模式：轮询 parser_service /progress
+                    if is_http_service:
                         prog = await asyncio.to_thread(parser.fetch_progress, run_id)
                         if prog and prog.get("total_pages"):
                             cur = prog.get("current_page") or 0

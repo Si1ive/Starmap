@@ -15,7 +15,7 @@ import json
 import os
 import tempfile
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol
 from urllib.parse import urlparse
@@ -142,7 +142,11 @@ class DocumentParser(Protocol):
     name: str
     version: str
 
-    def parse(self, file_path: str) -> ParsedDocumentResult:
+    def parse(
+        self,
+        file_path: str,
+        task_id: Optional[str] = None,
+    ) -> ParsedDocumentResult:
         ...
 
 
@@ -726,25 +730,31 @@ class MinerUParser:
         return mapping.get(item_type, "paragraph")
 
 
-class LocalParserServiceClient:
+class HttpParserServiceClient:
     def __init__(
         self,
         parser_name: str,
         endpoint: str,
         timeout_seconds: int,
+        deployment_target: str,
         processing_window_size: Optional[int] = None,
     ):
         self.name = parser_name
         self.version = "service"
         self.endpoint = endpoint.rstrip("/")
         self.timeout_seconds = timeout_seconds
+        self.deployment_target = deployment_target
         self.processing_window_size = processing_window_size
+
+    @property
+    def _target_label(self) -> str:
+        return "远程" if self.deployment_target == "remote" else "本地"
 
     def parse(self, file_path: str, task_id: Optional[str] = None) -> ParsedDocumentResult:
         if not self.endpoint:
             raise ParserUnavailableError(
                 self.name,
-                "未配置本地解析服务地址，请在系统设置中确认本地 Podman 解析服务配置",
+                f"未配置{self._target_label}解析服务地址，请在系统设置中确认解析服务配置",
             )
 
         try:
@@ -766,14 +776,14 @@ class LocalParserServiceClient:
         except requests.RequestException as exc:
             raise ParserUnavailableError(
                 self.name,
-                f"无法连接本地解析服务 {self.endpoint}：{str(exc)[:200]}",
+                f"无法连接{self._target_label}解析服务 {self.endpoint}：{str(exc)[:200]}",
             ) from exc
 
         if response.status_code >= 400:
             detail = _extract_service_error_detail(response)
             raise ParserUnavailableError(
                 self.name,
-                f"本地解析服务返回异常（HTTP {response.status_code}）：{detail}",
+                f"{self._target_label}解析服务返回异常（HTTP {response.status_code}）：{detail}",
             )
 
         try:
@@ -781,14 +791,18 @@ class LocalParserServiceClient:
         except ValueError as exc:
             raise ParserUnavailableError(
                 self.name,
-                f"本地解析服务返回了无效 JSON：{response.text[:200]}",
+                f"{self._target_label}解析服务返回了无效 JSON：{response.text[:200]}",
             ) from exc
 
         normalized = _unwrap_service_payload(payload)
         return _parsed_document_result_from_dict(
             parser_name=self.name,
             payload=normalized,
-            fallback_metadata={"source_file": file_path, "service_endpoint": self.endpoint},
+            fallback_metadata={
+                "source_file": file_path,
+                "service_endpoint": self.endpoint,
+                "deployment_target": self.deployment_target,
+            },
         )
 
     def fetch_progress(self, task_id: str) -> Optional[Dict[str, Any]]:
@@ -806,20 +820,37 @@ class LocalParserServiceClient:
             return None
 
 
-class RemoteParserServiceClient:
-    def __init__(self, parser_name: str, endpoint: str, timeout_seconds: int):
-        self.name = parser_name
-        self.version = "service"
-        self.endpoint = endpoint.rstrip("/")
-        self.timeout_seconds = timeout_seconds
+class LocalParserServiceClient(HttpParserServiceClient):
+    def __init__(
+        self,
+        parser_name: str,
+        endpoint: str,
+        timeout_seconds: int,
+        processing_window_size: Optional[int] = None,
+    ):
+        super().__init__(
+            parser_name=parser_name,
+            endpoint=endpoint,
+            timeout_seconds=timeout_seconds,
+            deployment_target="local",
+            processing_window_size=processing_window_size,
+        )
 
-    def parse(self, file_path: str) -> ParsedDocumentResult:
-        raise ParserUnavailableError(
-            self.name,
-            (
-                f"已配置远程解析服务 {self.endpoint}，但当前版本尚未实现远程解析调用链路。"
-                " 当前仅保留配置结构和扩展口，请先切回本地解析服务模式。"
-            ),
+
+class RemoteParserServiceClient(HttpParserServiceClient):
+    def __init__(
+        self,
+        parser_name: str,
+        endpoint: str,
+        timeout_seconds: int,
+        processing_window_size: Optional[int] = None,
+    ):
+        super().__init__(
+            parser_name=parser_name,
+            endpoint=endpoint,
+            timeout_seconds=timeout_seconds,
+            deployment_target="remote",
+            processing_window_size=processing_window_size,
         )
 
 
@@ -1016,7 +1047,7 @@ def inspect_parser_health(
 ) -> Dict[str, Any]:
     normalized = (parser_name or "").strip().lower()
     config = _normalize_runtime_config(runtime_config)
-    checked_at = datetime.utcnow().isoformat()
+    checked_at = datetime.now(timezone.utc).isoformat()
 
     if config.deployment_target == "embedded":
         parser = get_parser(normalized)
@@ -1063,22 +1094,7 @@ def inspect_parser_health(
         else config.remote_service_endpoint
     )
 
-    if config.deployment_target == "remote":
-        return {
-            "parser_name": normalized,
-            "parser_version": "service",
-            "health_status": "unavailable",
-            "is_available": False,
-            "checked_at": checked_at,
-            "deployment_target": "remote",
-            "service_endpoint": service_endpoint,
-            "error_detail": (
-                f"远程解析服务地址已配置为 {service_endpoint}"
-                if service_endpoint
-                else "尚未配置远程解析服务地址"
-            )
-            + "，但当前版本尚未实现远程探活与远程解析调用链路。",
-        }
+    target_label = "远程" if config.deployment_target == "remote" else "本地"
 
     if not service_endpoint:
         return {
@@ -1087,9 +1103,21 @@ def inspect_parser_health(
             "health_status": "unavailable",
             "is_available": False,
             "checked_at": checked_at,
-            "deployment_target": "local",
+            "deployment_target": config.deployment_target,
             "service_endpoint": service_endpoint,
-            "error_detail": "未配置本地解析服务地址，请在系统设置或环境变量中补充",
+            "error_detail": f"未配置{target_label}解析服务地址，请在系统设置或环境变量中补充",
+        }
+
+    if not _is_valid_url(service_endpoint):
+        return {
+            "parser_name": normalized,
+            "parser_version": "service",
+            "health_status": "unavailable",
+            "is_available": False,
+            "checked_at": checked_at,
+            "deployment_target": config.deployment_target,
+            "service_endpoint": service_endpoint,
+            "error_detail": f"{target_label}解析服务地址格式不合法：{service_endpoint}",
         }
 
     try:
@@ -1106,9 +1134,9 @@ def inspect_parser_health(
                 "health_status": "unavailable",
                 "is_available": False,
                 "checked_at": checked_at,
-                "deployment_target": "local",
+                "deployment_target": config.deployment_target,
                 "service_endpoint": service_endpoint,
-                "error_detail": f"本地解析服务探活失败（HTTP {response.status_code}）：{detail}",
+                "error_detail": f"{target_label}解析服务探活失败（HTTP {response.status_code}）：{detail}",
             }
 
         payload = response.json() if response.content else {}
@@ -1119,7 +1147,7 @@ def inspect_parser_health(
             "health_status": str(data.get("health_status") or "ready"),
             "is_available": bool(data.get("is_available", True)),
             "checked_at": str(data.get("checked_at") or checked_at),
-            "deployment_target": "local",
+            "deployment_target": config.deployment_target,
             "service_endpoint": service_endpoint,
             "error_detail": data.get("error_detail"),
         }
@@ -1130,9 +1158,9 @@ def inspect_parser_health(
             "health_status": "unavailable",
             "is_available": False,
             "checked_at": checked_at,
-            "deployment_target": "local",
+            "deployment_target": config.deployment_target,
             "service_endpoint": service_endpoint,
-            "error_detail": f"无法连接本地解析服务 {service_endpoint}：{str(exc)[:200]}",
+            "error_detail": f"无法连接{target_label}解析服务 {service_endpoint}：{str(exc)[:200]}",
         }
     except Exception as exc:
         return {
@@ -1141,9 +1169,9 @@ def inspect_parser_health(
             "health_status": "unavailable",
             "is_available": False,
             "checked_at": checked_at,
-            "deployment_target": "local",
+            "deployment_target": config.deployment_target,
             "service_endpoint": service_endpoint,
-            "error_detail": f"本地解析服务探活返回异常：{str(exc)[:200]}",
+            "error_detail": f"{target_label}解析服务探活返回异常：{str(exc)[:200]}",
         }
 
 
@@ -1158,7 +1186,7 @@ def choose_parser(
     - 运行时只激活一个主解析器
     - 指定 parser 时直接使用
     - 部署目标为 local 时，调用本地 Podman 解析服务
-    - 部署目标为 remote 时，保留远程扩展口
+    - 部署目标为 remote 时，调用远程 HTTP 解析服务
     """
     config = _normalize_runtime_config(runtime_config)
     parser_name = (requested_parser or config.active_parser or "mineru").strip().lower()
@@ -1188,6 +1216,7 @@ def choose_parser(
             parser_name=parser_name,
             endpoint=config.remote_service_endpoint,
             timeout_seconds=config.request_timeout_seconds,
+            processing_window_size=config.processing_window_size,
         )
 
     raise ValueError(f"不支持的部署目标: {config.deployment_target}")
