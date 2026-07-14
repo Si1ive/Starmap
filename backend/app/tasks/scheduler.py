@@ -19,7 +19,7 @@ from sqlalchemy import select
 from app.core.logging import get_logger
 from app.db.mysql import mysql_client
 from app.models.mysql_models import CrawlSchedule, CrawlTask
-from app.services.schedule_service import CrawlerScheduleService
+from app.modules.crawler.schedule_service import CrawlerScheduleService
 
 logger = get_logger(__name__)
 
@@ -267,7 +267,7 @@ async def _execute_schedule_task(session: AsyncSession, schedule: CrawlSchedule)
     logger.info(f"执行任务类型: {schedule.task_type}, 源: {schedule.source_ids}")
     
     # 创建爬虫任务执行服务
-    from app.services.task_service import CrawlerTaskService
+    from app.modules.crawler.task_service import CrawlerTaskService
     task_service = CrawlerTaskService(session)
     
     # 根据任务类型执行不同的逻辑

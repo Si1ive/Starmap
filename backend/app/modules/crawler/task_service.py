@@ -15,10 +15,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.modules.crawler.cleanup_service import CrawlerCleanupService
+from app.modules.crawler.log_service import CrawlerLogService
+from app.modules.crawler.scrapy_bridge import ScrapyBridgeService
+from app.modules.crawler.source_service import CrawlerSourceService
 from app.models.mysql_models import CrawlTask, CrawlLog, CrawlSource
-from app.services.log_service import CrawlerLogService
-from app.services.scrapy_bridge import ScrapyBridgeService
-from app.services.source_service import CrawlerSourceService
 
 logger = get_logger(__name__)
 

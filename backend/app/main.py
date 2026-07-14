@@ -83,7 +83,7 @@ async def lifespan(app: FastAPI):
         logger.warning("APScheduler调度器初始化失败", error=str(e))
 
     try:
-        from app.services.log_handler import init_log_handler
+        from app.modules.crawler.log_handler import init_log_handler
 
         await init_log_handler()
         logger.info("日志处理器初始化成功")
@@ -91,7 +91,7 @@ async def lifespan(app: FastAPI):
         logger.warning("日志处理器初始化失败", error=str(e))
 
     try:
-        from app.services.scrapy_bridge import start_scrapy_event_listener
+        from app.modules.crawler.scrapy_bridge import start_scrapy_event_listener
 
         await start_scrapy_event_listener()
         logger.info("Scrapy事件监听器初始化成功")
@@ -135,7 +135,7 @@ async def lifespan(app: FastAPI):
         logger.error("Redis关闭失败", error=str(e))
 
     try:
-        from app.services.scrapy_bridge import stop_scrapy_event_listener
+        from app.modules.crawler.scrapy_bridge import stop_scrapy_event_listener
 
         await stop_scrapy_event_listener()
         logger.info("Scrapy事件监听器已关闭")
@@ -181,7 +181,7 @@ async def lifespan(app: FastAPI):
         logger.error("APScheduler调度器关闭失败", error=str(e))
 
     try:
-        from app.services.log_handler import shutdown_log_handler
+        from app.modules.crawler.log_handler import shutdown_log_handler
 
         await shutdown_log_handler()
         logger.info("日志处理器已关闭")

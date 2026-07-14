@@ -12,7 +12,7 @@ from datetime import datetime
 from app.core.logging import get_logger
 from app.core.websocket import LogWebSocketManager
 from app.db.mysql import mysql_client
-from app.services.log_service import CrawlerLogService
+from app.modules.crawler.log_service import CrawlerLogService
 
 logger = get_logger(__name__)
 

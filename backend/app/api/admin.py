@@ -24,10 +24,10 @@ from app.core.logging import get_logger
 from app.core.websocket import log_websocket_manager
 from app.db import get_db, get_optional_db
 from app.modules.operations.security import get_request_admin_id
-from app.services.source_service import CrawlerSourceService
-from app.services.stats_service import CrawlerStatsService
-from app.services.schedule_service import CrawlerScheduleService
-from app.services.log_service import CrawlerLogService
+from app.modules.crawler.log_service import CrawlerLogService
+from app.modules.crawler.schedule_service import CrawlerScheduleService
+from app.modules.crawler.source_service import CrawlerSourceService
+from app.modules.crawler.stats_service import CrawlerStatsService
 from app.models.mysql_models import (
     DownloadedFile,
 )
@@ -199,7 +199,7 @@ async def get_crawler_tasks(
     """
     获取爬虫任务列表
     """
-    from app.services.task_service import CrawlerTaskService
+    from app.modules.crawler.task_service import CrawlerTaskService
     
     service = CrawlerTaskService(db)
     skip = (page - 1) * page_size
@@ -273,7 +273,7 @@ async def create_crawler_task(
     }
     ```
     """
-    from app.services.task_service import CrawlerTaskService
+    from app.modules.crawler.task_service import CrawlerTaskService
     
     service = CrawlerTaskService(db)
     
@@ -337,7 +337,7 @@ async def start_crawler_task(
     db: AsyncSession = Depends(get_db)
 ):
     """启动爬虫任务"""
-    from app.services.task_service import CrawlerTaskService
+    from app.modules.crawler.task_service import CrawlerTaskService
     
     service = CrawlerTaskService(db)
     task = await service.get_task_by_id(task_id)
@@ -372,7 +372,7 @@ async def stop_crawler_task(
     db: AsyncSession = Depends(get_db)
 ):
     """停止爬虫任务"""
-    from app.services.task_service import CrawlerTaskService
+    from app.modules.crawler.task_service import CrawlerTaskService
     
     service = CrawlerTaskService(db)
     task = await service.stop_task(task_id)
@@ -397,7 +397,7 @@ async def delete_crawler_task(
     db: AsyncSession = Depends(get_db)
 ):
     """删除爬虫任务"""
-    from app.services.task_service import CrawlerTaskService
+    from app.modules.crawler.task_service import CrawlerTaskService
 
     service = CrawlerTaskService(db)
     try:
@@ -593,7 +593,7 @@ async def get_crawler_overview(db: AsyncSession = Depends(get_db)):
     overview = await service.get_overview()
     
     # 添加 Scrapy 服务状态
-    from app.services.scrapy_bridge import ScrapyBridgeService
+    from app.modules.crawler.scrapy_bridge import ScrapyBridgeService
     bridge = ScrapyBridgeService(db)
     scrapy_status = await bridge.get_scrapy_status()
     overview["scrapy_status"] = scrapy_status
@@ -650,7 +650,7 @@ async def get_scrapy_status(db: AsyncSession = Depends(get_db)):
     
     返回 Scrapy 爬虫服务的连接状态和队列信息。
     """
-    from app.services.scrapy_bridge import ScrapyBridgeService
+    from app.modules.crawler.scrapy_bridge import ScrapyBridgeService
     bridge = ScrapyBridgeService(db)
     status = await bridge.get_scrapy_status()
     await bridge.close()
@@ -1649,7 +1649,7 @@ async def ingest_pdf(
     await db.refresh(task)
 
     # Publish to Scrapy queue
-    from app.services.scrapy_bridge import ScrapyBridgeService
+    from app.modules.crawler.scrapy_bridge import ScrapyBridgeService
     bridge = ScrapyBridgeService(db)
     published = await bridge.publish_task(task)
     await bridge.close()

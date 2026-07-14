@@ -20,7 +20,7 @@ from app.core.logging import get_logger
 from app.core.websocket import log_websocket_manager
 from app.db.mysql import mysql_client
 from app.models.mysql_models import CrawlSource, CrawlTask
-from app.services.log_service import CrawlerLogService
+from app.modules.crawler.log_service import CrawlerLogService
 from app.services.system_settings_service import SystemSettingsService
 
 logger = get_logger(__name__)

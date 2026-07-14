@@ -13,8 +13,8 @@ from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
+from app.modules.crawler.task_service import CrawlerTaskService
 from app.models.mysql_models import CrawlSchedule, CrawlScheduleRun
-from app.services.task_service import CrawlerTaskService
 
 logger = get_logger(__name__)
 

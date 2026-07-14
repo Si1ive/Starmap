@@ -7,10 +7,10 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from app.modules.crawler.cleanup_service import CrawlerCleanupService
-from app.services.schedule_service import CrawlerScheduleService
-from app.services.scrapy_bridge import ScrapyBridgeService
+from app.modules.crawler.schedule_service import CrawlerScheduleService
+from app.modules.crawler.scrapy_bridge import ScrapyBridgeService
+from app.modules.crawler.task_service import CrawlerTaskService
 from app.services.system_settings_service import SystemSettingsService
-from app.services.task_service import CrawlerTaskService
 
 
 def test_cleanup_options_normalize_aliases_and_defaults():
