@@ -24,6 +24,7 @@ from app.modules.corpus.router import router as corpus_router
 from app.modules.crawler.router import router as crawler_router
 from app.modules.monitoring.router import router as monitoring_router
 from app.modules.operations import router as operations_router
+from app.modules.operations.settings_router import router as settings_router
 from app.modules.operations.security import (
     require_current_admin,
     validate_admin_security_config,
@@ -230,6 +231,11 @@ app.include_router(operations_router, prefix="/api/v1")
 admin_dependencies = [Depends(require_current_admin)]
 app.include_router(
     admin.router,
+    prefix="/api/v1",
+    dependencies=admin_dependencies,
+)
+app.include_router(
+    settings_router,
     prefix="/api/v1",
     dependencies=admin_dependencies,
 )

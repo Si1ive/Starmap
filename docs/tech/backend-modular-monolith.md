@@ -207,6 +207,9 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - 系统运行配置、PDF 解析器切换、爬虫配置校验和配置审计已迁移到
   `app/modules/operations/settings_service.py`，各业务模块直接依赖运营配置接口，
   `app/services/system_settings_service.py` 已删除
+- `/api/v1/admin/settings*` 配置查询、保存、PDF 解析器切换历史及 LLM 连通性测试
+  接口已迁移到 `app/modules/operations/settings_router.py`；原 URL、管理员鉴权、
+  API Key 脱敏和响应行为保持不变
 - LLM 调用记录、聚合统计和向量召回质量日志已迁移到
   `app/modules/monitoring`，对应管理接口保持 `/api/v1/admin/monitor/*`
   不变，`app/services/llm_call_recorder.py` 与

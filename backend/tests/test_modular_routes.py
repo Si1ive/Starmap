@@ -43,6 +43,20 @@ def test_auth_and_user_routes_are_owned_by_operations_module():
         assert routes[path].endpoint.__module__ == "app.modules.operations.router"
 
 
+def test_settings_routes_are_owned_by_operations_module():
+    routes = _routes_by_path()
+
+    for path in (
+        "/api/v1/admin/settings",
+        "/api/v1/admin/settings/pdf-parser/history",
+        "/api/v1/admin/settings/llm/{kind}/status",
+        "/api/v1/admin/settings/llm/{kind}/test",
+    ):
+        assert (
+            routes[path].endpoint.__module__ == "app.modules.operations.settings_router"
+        )
+
+
 def test_catalog_routes_are_owned_by_catalog_module():
     routes = _routes_by_path()
 
@@ -166,6 +180,15 @@ def test_crawler_routes_keep_existing_http_methods():
 
     for path, expected_methods in expected.items():
         assert expected_methods <= methods[path]
+
+
+def test_settings_routes_keep_existing_http_methods():
+    methods = _methods_by_path()
+
+    assert {"GET", "PUT"} <= methods["/api/v1/admin/settings"]
+    assert {"GET"} <= methods["/api/v1/admin/settings/pdf-parser/history"]
+    assert {"GET"} <= methods["/api/v1/admin/settings/llm/{kind}/status"]
+    assert {"POST"} <= methods["/api/v1/admin/settings/llm/{kind}/test"]
 
 
 def test_retrieval_routes_are_owned_by_retrieval_module():
