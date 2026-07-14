@@ -3,7 +3,6 @@ import base64
 import pytest
 
 from app.modules.corpus.document_parsers import (
-    MinerUParser,
     _normalize_payload_block_type,
     _parsed_document_result_from_dict,
     choose_parser,
@@ -11,6 +10,7 @@ from app.modules.corpus.document_parsers import (
     get_supported_parser_names,
     inspect_parser_health,
 )
+from app.modules.corpus.mineru_parser import MinerUParser
 from app.modules.corpus.parser_types import ParsedDocumentResult
 
 
