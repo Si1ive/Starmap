@@ -136,6 +136,15 @@ class OutlineLLMClient(BaseLLMClient):
     default_system_prompt = (
         "你是408考研大纲解析专家，负责把大纲文本拆成结构化章节树。"
     )
+    default_temperature = 0.2
+
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        config = config or {}
+        super().__init__(config)
+        if not config.get("max_tokens"):
+            self.max_tokens = 16000
+        if not config.get("timeout_seconds"):
+            self.timeout_seconds = 180
 
 
 class ChatLLMClient(BaseLLMClient):

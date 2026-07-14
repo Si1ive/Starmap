@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.infrastructure.ai.llm_client import BaseLLMClient
+from app.infrastructure.ai.llm_client import OutlineLLMClient
 from app.models.mysql_models import Document, Subject
 from app.modules.catalog.outline_llm_parser import extract_outline_llm_json
 from app.modules.catalog.outline_tree import (
@@ -41,23 +41,6 @@ SUBJECT_ALIASES: Dict[str, str] = {
     "计算机网络": "computer_network",
     "计网": "computer_network",
 }
-
-
-class OutlineLLMClient(BaseLLMClient):
-    """大纲拆分专用客户端：继承 BaseLLMClient，覆盖默认温度/token/超时。"""
-
-    called_by = "outline_llm"
-    default_system_prompt = "你是408考研大纲解析专家，负责把大纲文本拆成结构化章节树。"
-    default_temperature = 0.2
-
-    def __init__(self, config: Dict[str, Any]):
-        config = config or {}
-        super().__init__(config)
-        # 如果配置中未显式设置，使用大纲拆分的合理默认值
-        if not config.get("max_tokens"):
-            self.max_tokens = 16000
-        if not config.get("timeout_seconds"):
-            self.timeout_seconds = 180
 
 
 _SPLIT_PROMPT = """下面是一门课《{subject_name}》的考试大纲文本。请把它拆成结构化 JSON。
