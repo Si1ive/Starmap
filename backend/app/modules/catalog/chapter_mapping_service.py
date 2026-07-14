@@ -11,8 +11,8 @@ from app.models.mysql_models import (
     CanonicalChapter, DocumentSection, DocumentSectionMapping,
     Document,
 )
+from app.modules.catalog.chapter_diagnostics_rules import EXAM_DOC_TYPES
 from app.modules.catalog.chapter_diagnostics_service import (
-    EXAM_DOC_TYPES,
     ChapterOwnershipDiagnosticsService,
 )
 
