@@ -18,6 +18,16 @@ from app.modules.crawler.cleanup_service import CrawlerCleanupService
 from app.modules.crawler.log_service import CrawlerLogService
 from app.modules.crawler.scrapy_bridge import ScrapyBridgeService
 from app.modules.crawler.source_service import CrawlerSourceService
+from app.modules.crawler.task_config import (
+    SPIDER_SOURCES,
+    TASK_TYPES,
+    is_supported_source,
+    normalize_keywords,
+    normalize_source_ids,
+    normalize_task_config,
+    source_code_candidates,
+    validate_crawl_config,
+)
 from app.models.mysql_models import CrawlTask, CrawlLog, CrawlSource
 
 logger = get_logger(__name__)
@@ -26,11 +36,8 @@ logger = get_logger(__name__)
 class CrawlerTaskService:
     """爬虫任务执行服务"""
 
-    TASK_TYPES = {"full", "incremental", "targeted", "health_check", "cleanup"}
-    SPIDER_SOURCES = {
-        "github": {"github"},
-        "knowledge": {"github", "pdf"},
-    }
+    TASK_TYPES = TASK_TYPES
+    SPIDER_SOURCES = SPIDER_SOURCES
 
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -133,30 +140,17 @@ class CrawlerTaskService:
     @staticmethod
     def _source_code_candidates(source_code: str) -> List[str]:
         """Return database source code candidates for a Scrapy source key."""
-        aliases = {
-            "wikipedia": "wikipedia_zh",
-            "douban": "douban_movie",
-            "baike": "baidu_baike",
-        }
-        return [code for code in {source_code, aliases.get(source_code)} if code]
+        return source_code_candidates(source_code)
 
     @staticmethod
     def _normalize_source_ids(source_ids: Any) -> List[str]:
         """Normalize source_ids input into a list."""
-        if isinstance(source_ids, list):
-            return [str(source_id) for source_id in source_ids if str(source_id).strip()]
-        if isinstance(source_ids, str) and source_ids.strip():
-            return [source_ids.strip()]
-        return []
+        return normalize_source_ids(source_ids)
 
     @staticmethod
     def _normalize_keywords(keywords: Any) -> List[str]:
         """Normalize keyword input into a list."""
-        if isinstance(keywords, list):
-            return [str(keyword).strip() for keyword in keywords if str(keyword).strip()]
-        if isinstance(keywords, str):
-            return [keyword.strip() for keyword in keywords.split(",") if keyword.strip()]
-        return []
+        return normalize_keywords(keywords)
 
     @classmethod
     def normalize_task_config(
@@ -165,46 +159,28 @@ class CrawlerTaskService:
         target_config: Optional[Dict[str, Any]],
     ) -> Dict[str, Any]:
         """Validate and normalize configuration shared by manual and scheduled tasks."""
-        if task_type not in cls.TASK_TYPES:
-            raise ValueError(f"不支持的任务类型: {task_type}")
-
-        config = dict(target_config or {})
-        if task_type in {"full", "incremental", "targeted"}:
-            return cls._validate_crawl_config(config)
-        if task_type == "cleanup":
-            cleanup_types, retention_days = CrawlerCleanupService.validate_options(
-                config.get("cleanup_types"),
-                config.get("retention_days", 90),
-            )
-            config["cleanup_types"] = cleanup_types
-            config["retention_days"] = retention_days
-        return config
+        return normalize_task_config(
+            task_type,
+            target_config,
+            task_types=cls.TASK_TYPES,
+            spider_sources=cls.SPIDER_SOURCES,
+        )
 
     @classmethod
     def _validate_crawl_config(cls, config: Dict[str, Any]) -> Dict[str, Any]:
         """Validate supported spider inputs before persisting a task."""
-        normalized = dict(config)
-        spider_type = str(normalized.get("spider_type") or "github").strip()
-        if spider_type not in cls.SPIDER_SOURCES:
-            supported = ", ".join(sorted(cls.SPIDER_SOURCES))
-            raise ValueError(
-                f"不支持的爬虫类型: {spider_type}，当前支持: {supported}"
-            )
-        normalized["spider_type"] = spider_type
-
-        if spider_type == "github":
-            if not normalized.get("repo_url") and not normalized.get("search_query"):
-                raise ValueError("GitHub 爬虫必须填写仓库地址或搜索关键词")
-        elif spider_type == "knowledge" and not normalized.get("pdf_path"):
-            raise ValueError("知识抽取爬虫必须填写 PDF 路径")
-        return normalized
+        return validate_crawl_config(
+            config,
+            spider_sources=cls.SPIDER_SOURCES,
+        )
 
     @staticmethod
     def _is_supported_source(spider_type: str, source_code: str) -> bool:
         """Check whether a Scrapy spider supports the selected source."""
-        return source_code in CrawlerTaskService.SPIDER_SOURCES.get(
+        return is_supported_source(
             spider_type,
-            set(),
+            source_code,
+            spider_sources=CrawlerTaskService.SPIDER_SOURCES,
         )
 
     async def create_task_from_schedule(
