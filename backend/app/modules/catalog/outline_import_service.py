@@ -12,16 +12,11 @@
 - 后续抽取知识点/题目时，可以传 outline_id 限定使用该大纲匹配章节
 """
 
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.logging import get_logger
-from app.models.mysql_models import (
-    Subject, ExamOutlineSubject,
-)
+from app.models.mysql_models import Subject
 from app.modules.catalog.outline_document_sections import (
     load_outline_tree_from_document_sections,
 )
@@ -32,14 +27,11 @@ from app.modules.catalog.outline_parser import (
 )
 from app.modules.catalog.outline_persistence import (
     OutlinePersistence,
-    generate_outline_id,
 )
 from app.modules.catalog.outline_tree import (
     count_outline_nodes,
     max_outline_depth,
 )
-
-logger = get_logger(__name__)
 
 
 class OutlineImportService:
@@ -169,185 +161,4 @@ class OutlineImportService:
             "updated_chapters": updated,
             "total_chapters": count_outline_nodes(chapters_tree),
             "source_document_id": document_id,
-        }
-
-    async def import_from_llm_result(
-        self,
-        llm_result: Dict[str, Any],
-        name: str,
-        year: int,
-        version: str = "v1.0",
-        description: Optional[str] = None,
-        set_default: bool = False,
-    ) -> Dict[str, Any]:
-        """
-        把 OutlineLLMService.split_outline 的多门课结果整体入库。
-
-        llm_result: {"subjects": [{subject_id, subject_name, exam_objective,
-                                    chapters: [...], error?: str}]}
-        - upsert ExamOutline
-        - 每门课 upsert 一条 exam_outline_subjects（存考察目标）
-        - 每门课章节树挂到对应 subject_id + outline_id（description 一并入库）
-
-        重要改进：
-        - 如果某个科目有 error 字段或 chapters 为空，跳过该科目但不影响其他科目
-        - 部分成功时仍然入库，返回 partial=True 标识
-        - 创建 OutlineIngestionRun 记录任务进度
-        """
-        from app.models.mysql_models import OutlineIngestionRun
-
-        subjects = llm_result.get("subjects") or []
-        if not subjects:
-            raise ValueError("LLM 拆分结果为空，无法入库")
-
-        # 创建任务记录（status 用 "processing"，与 DB ENUM 一致）
-        run = OutlineIngestionRun(
-            id=generate_outline_id(),
-            outline_name=name,
-            year=year,
-            version=version,
-            total_subjects=len(subjects),
-            status="processing",
-        )
-        self.db.add(run)
-        await self.db.flush()
-
-        # 过滤出有效科目（有 chapters 且无 error）
-        valid_subjects = [s for s in subjects if s.get("chapters") and not s.get("error")]
-        failed_subjects = [s for s in subjects if s.get("error") or not s.get("chapters")]
-
-        if not valid_subjects:
-            # 全部科目都失败
-            error_summary = "; ".join([f"{s.get('subject_name')}: {s.get('error', '章节为空')}" for s in failed_subjects])
-            run.status = "failed"
-            run.error_detail = f"所有科目拆分均失败。错误: {error_summary}"
-            run.completed_at = datetime.utcnow()
-            await self.db.commit()
-            raise ValueError(f"所有科目拆分均失败，无法入库。错误: {error_summary}")
-
-        outline = await self.persistence.upsert_outline_meta(
-            name=name,
-            year=year,
-            version=version,
-            description=description,
-            set_default=set_default,
-        )
-        run.outline_id = outline.id
-
-        total_created = 0
-        total_updated = 0
-        subject_summaries: List[Dict[str, Any]] = []
-        processed_count = 0
-
-        # 处理成功的科目
-        for subj in valid_subjects:
-            subject_id = subj.get("subject_id")
-            subject_name = subj.get("subject_name")
-            chapters = subj.get("chapters") or []
-            if not subject_id or not chapters:
-                continue
-
-            # 更新当前处理科目
-            run.current_subject_name = subject_name
-            await self.db.flush()
-
-            try:
-                # upsert 考察目标关联
-                link = (await self.db.execute(
-                    select(ExamOutlineSubject).where(
-                        ExamOutlineSubject.outline_id == outline.id,
-                        ExamOutlineSubject.subject_id == subject_id,
-                    )
-                )).scalar_one_or_none()
-                chapter_count = count_outline_nodes(chapters)
-                if link:
-                    link.exam_objective = subj.get("exam_objective") or link.exam_objective
-                    link.chapter_count = chapter_count
-                    link.guidance_status = "pending"
-                else:
-                    link = ExamOutlineSubject(
-                        id=generate_outline_id(),
-                        outline_id=outline.id,
-                        subject_id=subject_id,
-                        exam_objective=subj.get("exam_objective"),
-                        chapter_count=chapter_count,
-                        guidance_status="pending",
-                    )
-                    self.db.add(link)
-                    await self.db.flush()
-
-                created, updated = await self.persistence.upsert_chapters(
-                    subject_id=subject_id,
-                    outline_id=outline.id,
-                    chapters=chapters,
-                )
-                total_created += created
-                total_updated += updated
-                processed_count += 1
-
-                # 更新进度
-                run.processed_subjects = processed_count
-                await self.db.flush()
-
-                subject_summaries.append({
-                    "subject_id": subject_id,
-                    "subject_name": subject_name,
-                    "chapter_count": chapter_count,
-                    "created": created,
-                    "updated": updated,
-                    "status": "success",
-                })
-            except Exception as e:
-                logger.error("入库某科目章节树时失败", subject_id=subject_id, error=str(e))
-                subject_summaries.append({
-                    "subject_id": subject_id,
-                    "subject_name": subject_name,
-                    "status": "failed",
-                    "error": str(e),
-                })
-
-        # 记录失败的科目
-        for subj in failed_subjects:
-            subject_summaries.append({
-                "subject_id": subj.get("subject_id"),
-                "subject_name": subj.get("subject_name"),
-                "status": "failed",
-                "error": subj.get("error", "章节为空"),
-            })
-
-        # 更新任务状态
-        run.processed_subjects = len(valid_subjects)
-        if len(failed_subjects) > 0:
-            run.status = "partial_success"
-        else:
-            run.status = "done"
-        run.completed_at = datetime.utcnow()
-
-        await self.db.commit()
-
-        # 大纲入库完成后，自动构建考点 segment 写入 Qdrant
-        try:
-            from app.modules.retrieval.segment_service import SegmentService
-            seg_service = SegmentService(self.db)
-            seg_result = await seg_service.build_canonical_chapter_segments(
-                outline_id=outline.id,
-                rebuild=False,
-            )
-            logger.info("大纲章节 segment 构建完成", outline_id=outline.id, count=seg_result.get("segments_count", 0))
-        except Exception as e:
-            logger.warning("大纲章节 segment 构建失败（不影响大纲入库）", outline_id=outline.id, error=str(e))
-
-        return {
-            "outline_id": outline.id,
-            "outline_name": outline.name,
-            "year": outline.year,
-            "version": outline.version,
-            "created_chapters": total_created,
-            "updated_chapters": total_updated,
-            "subjects": subject_summaries,
-            "partial": len(failed_subjects) > 0,  # 标识是否部分成功
-            "total_subjects": len(subjects),
-            "successful_subjects": len([s for s in subject_summaries if s.get("status") == "success"]),
-            "failed_subjects": len(failed_subjects),
-            "run_id": run.id,  # 返回任务 ID
         }

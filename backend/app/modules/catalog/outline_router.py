@@ -151,10 +151,12 @@ async def import_outline_from_llm(request: OutlineFromLLMRequest, db: AsyncSessi
     改进：支持部分成功，如果某些科目失败但其他成功，仍然入库成功的部分。
     返回 partial=true 标识部分成功。
     """
-    from app.modules.catalog.outline_import_service import OutlineImportService
-    service = OutlineImportService(db)
+    from app.modules.catalog.outline_llm_import_service import (
+        OutlineLLMImportService,
+    )
+    service = OutlineLLMImportService(db)
     try:
-        result = await service.import_from_llm_result(
+        result = await service.import_result(
             llm_result={"subjects": request.subjects},
             name=request.name,
             year=request.year,
