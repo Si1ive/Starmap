@@ -260,8 +260,9 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
   和启停接口拆分到 `task_router.py`，爬取源列表、维护、健康检查和来源统计拆分到
   `source_router.py`，统计报表与 Scrapy 运行状态拆分到 `stats_router.py`，定时
   任务维护和运行历史拆分到 `schedule_router.py`，爬虫运行配置拆分到
-  `config_router.py`，其余日志、文件重试和实时日志接口保留在模块聚合路由中；
-  URL、鉴权和响应行为保持不变，并由路由归属契约测试防止重新回流到集中式路由
+  `config_router.py`，日志查询、导出、文件重试和实时日志拆分到 `log_router.py`；
+  原含糊的 `crawler/router.py` 已移除。URL、鉴权和响应行为保持不变，并由路由
+  归属契约测试防止重新回流到集中式路由
 - 已下载文件列表、详情和预览接口已迁移到 `app/modules/crawler/file_router.py`；
   下载根目录统一由 `crawler/storage.py` 管理，文件预览改为真实父目录校验，
   避免相似路径前缀绕过访问边界

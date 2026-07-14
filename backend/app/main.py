@@ -38,8 +38,8 @@ from app.modules.content.relation_review_router import (
 from app.modules.corpus.router import router as corpus_router
 from app.modules.crawler.config_router import router as crawler_config_router
 from app.modules.crawler.file_router import router as crawler_file_router
+from app.modules.crawler.log_router import router as crawler_log_router
 from app.modules.crawler.pdf_ingest_router import router as pdf_ingest_router
-from app.modules.crawler.router import router as crawler_router
 from app.modules.crawler.schedule_router import router as crawler_schedule_router
 from app.modules.crawler.source_router import router as crawler_source_router
 from app.modules.crawler.stats_router import router as crawler_stats_router
@@ -313,7 +313,7 @@ app.include_router(
     dependencies=admin_dependencies,
 )
 app.include_router(
-    crawler_router,
+    crawler_log_router,
     prefix="/api/v1",
     dependencies=admin_dependencies,
 )

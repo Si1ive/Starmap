@@ -1,4 +1,4 @@
-"""Crawler administration routes."""
+"""Crawler log administration routes."""
 
 import json
 from datetime import datetime

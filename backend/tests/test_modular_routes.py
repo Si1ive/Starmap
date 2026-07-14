@@ -327,7 +327,7 @@ def test_corpus_document_workflow_routes_are_owned_by_corpus_module():
         assert routes[path].endpoint.__module__ == "app.modules.corpus.router"
 
 
-def test_crawler_routes_are_owned_by_crawler_module():
+def test_crawler_log_routes_are_owned_by_log_router():
     routes = _routes_by_path()
 
     for path in (
@@ -339,7 +339,10 @@ def test_crawler_routes_are_owned_by_crawler_module():
         "/api/v1/admin/crawler/logs/analysis",
         "/api/v1/admin/crawler/logs/stream",
     ):
-        assert routes[path].endpoint.__module__ == "app.modules.crawler.router"
+        assert (
+            routes[path].endpoint.__module__
+            == "app.modules.crawler.log_router"
+        )
 
 
 def test_crawler_config_routes_are_owned_by_config_router():
