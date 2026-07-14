@@ -20,6 +20,7 @@ from app.db.redis import redis_client
 from app.db.mysql import mysql_client
 from app.modules.catalog import router as catalog_router
 from app.modules.content import router as content_router
+from app.modules.corpus import router as corpus_router
 from app.modules.operations.schema_guard import (
     DatabaseSchemaError,
     verify_database_schema,
@@ -205,6 +206,7 @@ app.include_router(chat.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
 app.include_router(catalog_router, prefix="/api/v1")
 app.include_router(content_router, prefix="/api/v1")
+app.include_router(corpus_router, prefix="/api/v1")
 
 
 @app.get("/health")

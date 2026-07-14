@@ -154,6 +154,8 @@ services:
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
       - PDF_PARSER_LOCAL_ENDPOINT=http://pdf-parser-service:8090
+      - CORPUS_UPLOAD_DIR=/app/uploads
+      - CORPUS_UPLOAD_MAX_BYTES=${CORPUS_UPLOAD_MAX_BYTES:-209715200}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}

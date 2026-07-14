@@ -170,6 +170,7 @@ class CorpusService:
         self,
         file_path: str,
         batch_label: Optional[str] = None,
+        file_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         注册单个文件到 corpus_files
@@ -179,6 +180,7 @@ class CorpusService:
         Args:
             file_path: 文件的绝对路径
             batch_label: 批次标签
+            file_name: 可选展示文件名；上传存储名包含唯一前缀时使用
 
         Returns:
             {"corpus_file_id": str, "status": str, "is_new": bool}
@@ -212,7 +214,7 @@ class CorpusService:
             id=generate_id(),
             source_type="upload",
             source_ref=batch,
-            file_name=p.name,
+            file_name=file_name or p.name,
             file_ext=ext,
             local_path=str(p),
             sha256=sha256,

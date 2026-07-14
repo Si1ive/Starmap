@@ -46,6 +46,25 @@ def test_content_routes_are_owned_by_content_module():
         assert routes[path].endpoint.__module__ == "app.modules.content.router"
 
 
+def test_corpus_file_and_parse_routes_are_owned_by_corpus_module():
+    routes = _routes_by_path()
+
+    for path in (
+        "/api/v1/admin/corpus/files/scan",
+        "/api/v1/admin/corpus/files/register",
+        "/api/v1/admin/corpus/files/register-by-download",
+        "/api/v1/admin/corpus/files/upload",
+        "/api/v1/admin/corpus/files",
+        "/api/v1/admin/corpus/files/{file_id}",
+        "/api/v1/admin/corpus/files/{file_id}/parse",
+        "/api/v1/admin/corpus/files/batch-delete",
+        "/api/v1/admin/corpus/parse-runs",
+        "/api/v1/admin/corpus/parse-runs/{run_id}",
+        "/api/v1/admin/corpus/documents/{document_id}",
+    ):
+        assert routes[path].endpoint.__module__ == "app.modules.corpus.router"
+
+
 def test_application_has_no_duplicate_method_path_pairs():
     seen = set()
     duplicates = []

@@ -1,6 +1,7 @@
 from pydantic_settings import BaseSettings
 from typing import List
 import os
+from pathlib import Path
 
 class Settings(BaseSettings):
     # 应用配置
@@ -40,6 +41,15 @@ class Settings(BaseSettings):
 
     # PDF Parser Service
     PDF_PARSER_LOCAL_ENDPOINT: str = os.getenv("PDF_PARSER_LOCAL_ENDPOINT", "http://localhost:8090")
+
+    # Corpus uploads
+    CORPUS_UPLOAD_DIR: str = os.getenv(
+        "CORPUS_UPLOAD_DIR",
+        str(Path(__file__).resolve().parents[2] / "uploads"),
+    )
+    CORPUS_UPLOAD_MAX_BYTES: int = int(
+        os.getenv("CORPUS_UPLOAD_MAX_BYTES", str(200 * 1024 * 1024))
+    )
     
     model_config = {
         "env_file": ".env"

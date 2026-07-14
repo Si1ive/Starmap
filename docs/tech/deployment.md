@@ -115,6 +115,8 @@ REDIS_URL=redis://localhost:6379
 QDRANT_HOST=localhost
 QDRANT_PORT=6333
 PDF_PARSER_LOCAL_ENDPOINT=http://localhost:8090
+CORPUS_UPLOAD_DIR=./backend/uploads
+CORPUS_UPLOAD_MAX_BYTES=209715200
 MINERU_PACKAGE_SPEC=mineru[pipeline]>=3.3,<4
 ```
 
