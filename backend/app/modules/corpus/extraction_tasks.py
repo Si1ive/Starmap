@@ -1,6 +1,7 @@
 """Persistent background task orchestration for document entity extraction."""
 
 import asyncio
+import json
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
@@ -10,13 +11,126 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.db.mysql import mysql_client
-from app.models.mysql_models import Document, EntityExtractionRun
+from app.models.mysql_models import (
+    CorpusFile,
+    Document,
+    EntityExtractionRun,
+)
 from app.modules.corpus.errors import DocumentNotFoundError
-from app.services.entity_extraction_service import EntityExtractionService
+from app.modules.corpus.entity_extraction_pipeline import (
+    DocumentEntityExtractionPipeline,
+)
 
 logger = get_logger(__name__)
 
 _entity_extraction_tasks: set[asyncio.Task[Any]] = set()
+
+
+class EntityExtractionRunExecutor:
+    """Execute a durable extraction run and persist its final state."""
+
+    def __init__(
+        self,
+        db: AsyncSession,
+        pipeline: Optional[DocumentEntityExtractionPipeline] = None,
+    ):
+        self.db = db
+        self.pipeline = pipeline or DocumentEntityExtractionPipeline(db)
+
+    async def execute(self, run_id: str) -> Dict[str, Any]:
+        """Run extraction and indexing for an existing run record."""
+        run = await self.db.get(EntityExtractionRun, run_id)
+        if not run:
+            raise ValueError(f"抽取任务不存在: {run_id}")
+
+        try:
+            await self.set_corpus_file_status(
+                run.document_id,
+                "extracting",
+            )
+            await self.db.commit()
+
+            result = await self.pipeline.extract(
+                document_id=run.document_id,
+                extract_knowledge=run.extract_knowledge,
+                extract_questions=run.extract_questions,
+                fallback_subject_id=run.subject_id,
+            )
+            indexing_result = await self.index_document_entities(
+                document_id=run.document_id,
+                include_knowledge=run.extract_knowledge,
+                include_questions=run.extract_questions,
+            )
+            result = {**result, "indexing": indexing_result}
+
+            run.status = "success"
+            run.knowledge_count = int(result.get("knowledge_count") or 0)
+            run.question_count = int(result.get("question_count") or 0)
+            run.result_json = json.loads(
+                json.dumps(result, ensure_ascii=False, default=str)
+            )
+            run.error_detail = None
+            run.completed_at = self._utcnow()
+            await self.set_corpus_file_status(
+                run.document_id,
+                "indexed",
+            )
+            await self.db.commit()
+            return result
+        except Exception as exc:
+            await self.db.rollback()
+            failed_run = await self.db.get(EntityExtractionRun, run_id)
+            if failed_run:
+                failed_run.status = "failed"
+                failed_run.error_detail = str(exc)[:4000]
+                failed_run.completed_at = self._utcnow()
+                await self.set_corpus_file_status(
+                    failed_run.document_id,
+                    "failed",
+                    error_detail=str(exc)[:4000],
+                )
+                await self.db.commit()
+            raise
+
+    async def index_document_entities(
+        self,
+        document_id: str,
+        include_knowledge: bool,
+        include_questions: bool,
+    ) -> Dict[str, Any]:
+        """Build searchable segments immediately after extraction."""
+        from app.services.segment_service import SegmentService
+
+        return await SegmentService(self.db).build_document_segments(
+            document_id=document_id,
+            include_knowledge=include_knowledge,
+            include_questions=include_questions,
+            rebuild=True,
+        )
+
+    async def set_corpus_file_status(
+        self,
+        document_id: str,
+        status: str,
+        error_detail: Optional[str] = None,
+    ) -> None:
+        """Update the corpus file associated with a document."""
+        document = await self.db.get(Document, document_id)
+        if not document or not document.corpus_file_id:
+            return
+
+        corpus_file = await self.db.get(
+            CorpusFile,
+            document.corpus_file_id,
+        )
+        if not corpus_file:
+            return
+        corpus_file.status = status
+        corpus_file.error_detail = error_detail
+
+    @staticmethod
+    def _utcnow() -> datetime:
+        return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class EntityExtractionTaskService:
@@ -116,9 +230,7 @@ class EntityExtractionTaskService:
     async def _run_in_background(run_id: str) -> None:
         try:
             async with mysql_client.session() as session:
-                await EntityExtractionService(
-                    session
-                ).extract_entities_with_run_id(run_id)
+                await EntityExtractionRunExecutor(session).execute(run_id)
         except Exception as exc:
             logger.error(
                 "后台实体抽取任务失败",

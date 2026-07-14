@@ -4,8 +4,6 @@
 从文档的 blocks 中抽取知识点和题目，生成 knowledge_points 和 questions 记录。
 """
 
-import json
-from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Tuple
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,6 +28,7 @@ from app.modules.corpus.extraction_diagnostics import (
     question_numbering_summary,
     question_text_excerpt,
 )
+from app.modules.corpus.extraction_tasks import EntityExtractionRunExecutor
 from app.modules.corpus.knowledge_pipeline import KnowledgeExtractionPipeline
 from app.modules.corpus.question_builder import (
     QuestionBuilder,
@@ -68,10 +67,7 @@ from app.modules.corpus.question_validation import (
     comprehensive_validation,
 )
 from app.models.mysql_models import (
-    CorpusFile,
-    Document,
     DocumentBlock,
-    EntityExtractionRun,
 )
 from app.services.text_cleaning import clean_block_text
 from app.services.llm_client import PDFStructureLLMClient
@@ -116,55 +112,14 @@ class EntityExtractionService:
             question_pipeline=self._question_pipeline,
             question_persistence=self._question_persistence,
         )
+        self._run_executor = EntityExtractionRunExecutor(
+            db,
+            pipeline=self._document_pipeline,
+        )
 
     async def extract_entities_with_run_id(self, run_id: str) -> Dict[str, Any]:
-        """执行已创建的抽取任务，并将最终状态持久化到运行记录。"""
-        run = await self.db.get(EntityExtractionRun, run_id)
-        if not run:
-            raise ValueError(f"抽取任务不存在: {run_id}")
-
-        try:
-            await self._set_corpus_file_status(run.document_id, "extracting")
-            await self.db.commit()
-
-            result = await self.extract_entities(
-                document_id=run.document_id,
-                extract_knowledge=run.extract_knowledge,
-                extract_questions=run.extract_questions,
-                fallback_subject_id=run.subject_id,
-            )
-            indexing_result = await self._index_document_entities(
-                document_id=run.document_id,
-                include_knowledge=run.extract_knowledge,
-                include_questions=run.extract_questions,
-            )
-            result = {**result, "indexing": indexing_result}
-
-            run.status = "success"
-            run.knowledge_count = int(result.get("knowledge_count") or 0)
-            run.question_count = int(result.get("question_count") or 0)
-            run.result_json = json.loads(
-                json.dumps(result, ensure_ascii=False, default=str)
-            )
-            run.error_detail = None
-            run.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
-            await self._set_corpus_file_status(run.document_id, "indexed")
-            await self.db.commit()
-            return result
-        except Exception as exc:
-            await self.db.rollback()
-            failed_run = await self.db.get(EntityExtractionRun, run_id)
-            if failed_run:
-                failed_run.status = "failed"
-                failed_run.error_detail = str(exc)[:4000]
-                failed_run.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
-                await self._set_corpus_file_status(
-                    failed_run.document_id,
-                    "failed",
-                    error_detail=str(exc)[:4000],
-                )
-                await self.db.commit()
-            raise
+        """兼容入口：执行已创建的持久化抽取任务。"""
+        return await self._run_executor.execute(run_id)
 
     async def _index_document_entities(
         self,
@@ -172,14 +127,11 @@ class EntityExtractionService:
         include_knowledge: bool,
         include_questions: bool,
     ) -> Dict[str, Any]:
-        """将本次抽取产物立即构建为可检索 segments。"""
-        from app.services.segment_service import SegmentService
-
-        return await SegmentService(self.db).build_document_segments(
-            document_id=document_id,
-            include_knowledge=include_knowledge,
-            include_questions=include_questions,
-            rebuild=True,
+        """兼容入口：构建本次抽取产物的检索 segments。"""
+        return await self._run_executor.index_document_entities(
+            document_id,
+            include_knowledge,
+            include_questions,
         )
 
     async def _set_corpus_file_status(
@@ -188,16 +140,12 @@ class EntityExtractionService:
         status: str,
         error_detail: Optional[str] = None,
     ) -> None:
-        document = await self.db.get(Document, document_id)
-        if not document or not document.corpus_file_id:
-            return
-
-        corpus_file = await self.db.get(CorpusFile, document.corpus_file_id)
-        if not corpus_file:
-            return
-
-        corpus_file.status = status
-        corpus_file.error_detail = error_detail
+        """兼容入口：更新文档对应语料文件状态。"""
+        await self._run_executor.set_corpus_file_status(
+            document_id,
+            status,
+            error_detail,
+        )
 
     async def extract_entities(
         self,

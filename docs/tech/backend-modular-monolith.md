@@ -121,6 +121,9 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
   `app/modules/corpus/knowledge_pipeline.py`
 - 文档加载、block 分类、题目/知识点分流、答案回连和事务提交已迁移到
   `app/modules/corpus/entity_extraction_pipeline.py`
+- 后台抽取运行状态、失败恢复和抽取后索引已由
+  `app/modules/corpus/extraction_tasks.py` 的 `EntityExtractionRunExecutor`
+  负责，corpus 模块不再反向依赖旧 Service
 - `app.modules.corpus` 包初始化不再隐式加载 Router，避免领域规则反向触发接口层和
   抽取任务加载
 - `app/services/entity_extraction_service.py` 现作为旧调用方兼容门面保留

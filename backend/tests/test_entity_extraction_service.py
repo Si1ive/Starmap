@@ -20,6 +20,7 @@ from app.modules.corpus.entity_extraction_pipeline import (
     find_uncovered_pages,
     select_knowledge_blocks,
 )
+from app.modules.corpus.extraction_tasks import EntityExtractionRunExecutor
 from app.modules.corpus.question_builder import (
     build_extraction_meta,
     build_question_tags,
@@ -552,7 +553,6 @@ async def test_extraction_run_persists_success(monkeypatch):
         error_detail="previous error",
     )
     session = _RunSession(run, document, corpus_file)
-    service = EntityExtractionService(session)
 
     async def fake_extract_entities(**kwargs):
         assert kwargs["document_id"] == "doc-1"
@@ -569,14 +569,17 @@ async def test_extraction_run_persists_success(monkeypatch):
             "question_segments": {"segments_count": 8},
         }
 
-    monkeypatch.setattr(service, "extract_entities", fake_extract_entities)
+    executor = EntityExtractionRunExecutor(
+        session,
+        pipeline=SimpleNamespace(extract=fake_extract_entities),
+    )
     monkeypatch.setattr(
-        service,
-        "_index_document_entities",
+        executor,
+        "index_document_entities",
         fake_index_document_entities,
     )
 
-    result = await service.extract_entities_with_run_id("run-1")
+    result = await executor.execute("run-1")
 
     assert result == {
         "knowledge_count": 3,
@@ -615,15 +618,17 @@ async def test_extraction_run_persists_failure(monkeypatch):
     document = SimpleNamespace(id="doc-2", corpus_file_id="file-2")
     corpus_file = SimpleNamespace(id="file-2", status="parsed", error_detail=None)
     session = _RunSession(run, document, corpus_file)
-    service = EntityExtractionService(session)
 
     async def fake_extract_entities(**_kwargs):
         raise RuntimeError("LLM timeout")
 
-    monkeypatch.setattr(service, "extract_entities", fake_extract_entities)
+    executor = EntityExtractionRunExecutor(
+        session,
+        pipeline=SimpleNamespace(extract=fake_extract_entities),
+    )
 
     with pytest.raises(RuntimeError, match="LLM timeout"):
-        await service.extract_entities_with_run_id("run-2")
+        await executor.execute("run-2")
 
     assert run.status == "failed"
     assert run.error_detail == "LLM timeout"
@@ -652,7 +657,6 @@ async def test_extraction_run_fails_when_indexing_fails(monkeypatch):
     document = SimpleNamespace(id="doc-3", corpus_file_id="file-3")
     corpus_file = SimpleNamespace(id="file-3", status="parsed", error_detail=None)
     session = _RunSession(run, document, corpus_file)
-    service = EntityExtractionService(session)
 
     async def fake_extract_entities(**_kwargs):
         return {"knowledge_count": 2, "question_count": 0}
@@ -660,15 +664,18 @@ async def test_extraction_run_fails_when_indexing_fails(monkeypatch):
     async def fake_index_document_entities(**_kwargs):
         raise RuntimeError("Qdrant unavailable")
 
-    monkeypatch.setattr(service, "extract_entities", fake_extract_entities)
+    executor = EntityExtractionRunExecutor(
+        session,
+        pipeline=SimpleNamespace(extract=fake_extract_entities),
+    )
     monkeypatch.setattr(
-        service,
-        "_index_document_entities",
+        executor,
+        "index_document_entities",
         fake_index_document_entities,
     )
 
     with pytest.raises(RuntimeError, match="Qdrant unavailable"):
-        await service.extract_entities_with_run_id("run-3")
+        await executor.execute("run-3")
 
     assert run.status == "failed"
     assert run.error_detail == "Qdrant unavailable"
