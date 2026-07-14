@@ -1,11 +1,6 @@
-"""Knowledge relation module compatibility tests."""
+"""Knowledge relation module tests."""
 
 from app.modules.retrieval.relation_service import RelationService
-from app.services.relation_service import RelationService as LegacyRelationService
-
-
-def test_legacy_relation_service_exports_retrieval_implementation():
-    assert LegacyRelationService is RelationService
 
 
 def test_relation_string_similarity_keeps_existing_jaccard_behavior():

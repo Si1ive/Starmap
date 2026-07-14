@@ -6,9 +6,6 @@ from app.modules.corpus.document_parse_service import (
     DocumentParseService,
     _normalize_asset_type_for_db,
 )
-from app.services.document_parse_service import (
-    DocumentParseService as LegacyDocumentParseService,
-)
 from app.services.document_parsers import ParsedDocumentResult, ParsedPage, ParsedBlock, ParsedAsset
 
 
@@ -18,10 +15,6 @@ class _ScalarResult:
 
     def scalar_one_or_none(self):
         return self._value
-
-
-def test_legacy_document_parse_service_exports_corpus_implementation():
-    assert LegacyDocumentParseService is DocumentParseService
 
 
 @pytest.mark.asyncio
@@ -45,7 +38,7 @@ async def test_parse_document_rejects_duplicate_primary_parse():
 
     service = DocumentParseService(db)
 
-    with patch("app.services.document_parse_service.Path.exists", return_value=True):
+    with patch("app.modules.corpus.document_parse_service.Path.exists", return_value=True):
         with pytest.raises(ValueError, match="已成功解析"):
             await service.parse_document("file_1", parse_mode="primary")
 

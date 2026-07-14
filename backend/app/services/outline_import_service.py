@@ -651,7 +651,7 @@ class OutlineImportService:
 
         # 大纲入库完成后，自动构建考点 segment 写入 Qdrant
         try:
-            from app.services.segment_service import SegmentService
+            from app.modules.retrieval.segment_service import SegmentService
             seg_service = SegmentService(self.db)
             seg_result = await seg_service.build_canonical_chapter_segments(
                 outline_id=outline.id,

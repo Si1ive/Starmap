@@ -946,7 +946,7 @@ async def test_cleanup_document_entities_deletes_qdrant_segments(monkeypatch):
         fake_cleanup_entity_links,
     )
     monkeypatch.setattr(
-        "app.services.segment_service.SegmentService.delete_entity_segments",
+        "app.modules.retrieval.segment_service.SegmentService.delete_entity_segments",
         fake_delete_entity_segments,
     )
 

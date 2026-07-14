@@ -1,4 +1,4 @@
-"""Catalog chapter link module compatibility tests."""
+"""Catalog chapter link module tests."""
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -7,11 +7,6 @@ import pytest
 
 from app.modules.catalog.chapter_matcher import ChapterMatcher
 from app.modules.catalog.chapter_link_service import ChapterLinkService
-from app.services.chapter_link_service import ChapterLinkService as LegacyChapterLinkService
-
-
-def test_legacy_chapter_link_service_exports_catalog_implementation():
-    assert LegacyChapterLinkService is ChapterLinkService
 
 
 @pytest.mark.asyncio

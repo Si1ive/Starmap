@@ -9,7 +9,7 @@ from app.modules.content.schemas import (
     UpdateQuestionRequest,
 )
 from app.modules.content.service import ContentService
-from app.services.segment_service import SegmentService
+from app.modules.retrieval.segment_service import SegmentService
 
 
 def test_content_update_schemas_keep_editable_assignment_fields():

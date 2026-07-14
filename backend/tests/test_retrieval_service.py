@@ -9,13 +9,6 @@ from sqlalchemy.dialects import mysql
 from app.db.qdrant import qdrant_manager
 from app.modules.retrieval.outline_service import expand_query_with_outline
 from app.modules.retrieval.service import RetrievalService
-from app.services.outline_retrieval_service import (
-    expand_query_with_outline as legacy_expand_query_with_outline,
-)
-
-
-def test_legacy_outline_retrieval_exports_module_implementation():
-    assert legacy_expand_query_with_outline is expand_query_with_outline
 
 
 @pytest.mark.asyncio

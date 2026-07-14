@@ -1,4 +1,4 @@
-"""Catalog chapter mapping module compatibility tests."""
+"""Catalog chapter mapping module tests."""
 
 from datetime import datetime
 from types import SimpleNamespace
@@ -13,19 +13,6 @@ from app.modules.catalog.chapter_diagnostics_service import (
     _looks_like_question_start,
 )
 from app.modules.catalog.chapter_mapping_service import ChapterMappingService
-from app.services.chapter_mapping_service import (
-    CanonicalChapterService as LegacyCanonicalChapterService,
-)
-from app.services.chapter_mapping_service import (
-    ChapterMappingService as LegacyChapterMappingService,
-)
-
-
-def test_legacy_chapter_mapping_service_exports_catalog_implementations():
-    assert LegacyCanonicalChapterService is CanonicalChapterService
-    assert LegacyChapterMappingService is ChapterMappingService
-
-
 @pytest.mark.asyncio
 async def test_canonical_chapter_service_initializes_root_with_null_parent():
     existing_result = Mock()

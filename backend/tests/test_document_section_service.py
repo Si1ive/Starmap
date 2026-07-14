@@ -1,4 +1,4 @@
-"""Document section extraction module compatibility and rule tests."""
+"""Document section extraction and heading rule tests."""
 
 from app.modules.corpus.document_section_service import DocumentSectionService
 from app.modules.corpus.section_heading import (
@@ -6,15 +6,6 @@ from app.modules.corpus.section_heading import (
     detect_heading_level,
     looks_like_question_or_option,
 )
-from app.services.document_section_service import (
-    DocumentSectionService as LegacyDocumentSectionService,
-)
-
-
-def test_legacy_document_section_service_exports_corpus_implementation():
-    assert LegacyDocumentSectionService is DocumentSectionService
-
-
 def test_heading_rules_detect_native_section_levels():
     assert detect_heading_level("第1章 操作系统概述", "heading") == 1
     assert detect_heading_level("第2节 进程管理", "paragraph") == 2

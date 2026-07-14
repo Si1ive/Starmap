@@ -10,8 +10,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from app.db.mysql import mysql_client
 from app.models.mysql_models import ChatMessageRecord, ChatSession
 from app.models.transaction import ChatRequest, ChatResponse, SourceItem
+from app.modules.retrieval.service import RetrievalService
 from app.services.chat_service import ChatService
-from app.services.retrieval_service import RetrievalService
 from app.services.system_settings_service import SystemSettingsService
 
 
