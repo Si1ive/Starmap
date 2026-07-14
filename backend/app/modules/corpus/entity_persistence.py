@@ -16,11 +16,15 @@ from app.models.mysql_models import (
     Question,
     QuestionChapterLink,
 )
+from app.modules.catalog.chapter_compat import resolve_legacy_chapter_id
+from app.modules.content.entity_assets import (
+    cleanup_entity_links,
+    link_entity_assets_by_blocks,
+)
 from app.modules.corpus.question_validation import (
     extract_question_number,
     get_option_label,
 )
-from app.services.chapter_compat_service import resolve_legacy_chapter_id
 
 logger = get_logger(__name__)
 
@@ -61,8 +65,6 @@ async def cleanup_document_entities(
             )
         )
         try:
-            from app.services.entity_asset_service import cleanup_entity_links
-
             await cleanup_entity_links(
                 db,
                 entity_type=current_type,
@@ -360,10 +362,6 @@ class KnowledgePointPersistence:
         await self.db.flush()
 
         try:
-            from app.services.entity_asset_service import (
-                link_entity_assets_by_blocks,
-            )
-
             await link_entity_assets_by_blocks(
                 self.db,
                 entity_type="knowledge_point",
@@ -568,10 +566,6 @@ class QuestionPersistence:
                 ]
                 if block_ids:
                     try:
-                        from app.services.entity_asset_service import (
-                            link_entity_assets_by_blocks,
-                        )
-
                         await link_entity_assets_by_blocks(
                             self.db,
                             entity_type="question",
@@ -695,11 +689,6 @@ async def replace_entity_source_and_assets(
     )
 
     try:
-        from app.services.entity_asset_service import (
-            cleanup_entity_links,
-            link_entity_assets_by_blocks,
-        )
-
         await cleanup_entity_links(
             db,
             entity_type=entity_type,

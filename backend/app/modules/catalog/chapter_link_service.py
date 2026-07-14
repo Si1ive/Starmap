@@ -22,12 +22,12 @@ from app.modules.catalog.chapter_matcher import (
     VECTOR_MATCH_THRESHOLD,
     ChapterMatcher,
 )
+from app.modules.catalog.chapter_compat import resolve_legacy_chapter_id
 from app.models.mysql_models import (
     KnowledgePoint, Question, CanonicalChapter,
     KnowledgePointChapterLink, QuestionChapterLink,
     EntitySourceLink, DocumentBlock, DocumentSection, DocumentSectionMapping
 )
-from app.services.chapter_compat_service import resolve_legacy_chapter_id
 
 logger = get_logger(__name__)
 

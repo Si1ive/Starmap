@@ -5,12 +5,12 @@ from typing import Dict, Optional
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.catalog.chapter_compat import resolve_legacy_chapter_id
 from app.models.mysql_models import (
     CanonicalChapter,
     DocumentSection,
     DocumentSectionMapping,
 )
-from app.services.chapter_compat_service import resolve_legacy_chapter_id
 
 PageMapping = Dict[str, Optional[str]]
 PageMappingIndex = Dict[int, PageMapping]

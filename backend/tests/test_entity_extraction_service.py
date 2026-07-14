@@ -943,7 +943,7 @@ async def test_cleanup_document_entities_deletes_qdrant_segments(monkeypatch):
         deleted.append((entity_type, entity_ids))
 
     monkeypatch.setattr(
-        "app.services.entity_asset_service.cleanup_entity_links",
+        "app.modules.corpus.entity_persistence.cleanup_entity_links",
         fake_cleanup_entity_links,
     )
     monkeypatch.setattr(

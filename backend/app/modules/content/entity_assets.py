@@ -1,5 +1,5 @@
 """
-实体（知识点 / 题目）与文档资产（figure / table / formula）的关联服务。
+内容实体（知识点 / 题目）与文档资产（figure / table / formula）的关联服务。
 
 入口：在抽取阶段，根据实体覆盖的 block 范围（page_no 或 block_id 列表），找到该
 区域内的 DocumentAsset 行并建立 EntityAssetLink。

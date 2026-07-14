@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
+from app.modules.catalog.chapter_compat import resolve_legacy_chapter_id
 from app.modules.corpus.document_mapping import (
     DocumentChapterMappingResolver,
     PageMappingIndex,
@@ -17,7 +18,6 @@ from app.modules.corpus.question_layout import (
     QuestionLayoutGrouper,
 )
 from app.modules.corpus.question_type import infer_question_type
-from app.services.chapter_compat_service import resolve_legacy_chapter_id
 
 logger = get_logger(__name__)
 

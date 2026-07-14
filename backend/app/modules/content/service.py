@@ -16,7 +16,7 @@ from app.models.mysql_models import (
     QuestionChapterLink,
     QuestionKnowledgeLink,
 )
-from app.services.entity_asset_service import get_entity_assets
+from app.modules.content.entity_assets import get_entity_assets
 from app.modules.retrieval.segment_service import SegmentService
 
 logger = get_logger(__name__)

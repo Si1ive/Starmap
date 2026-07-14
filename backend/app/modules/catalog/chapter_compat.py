@@ -1,5 +1,5 @@
 """
-旧章节兼容服务
+旧章节 ID 兼容规则
 
 为仍依赖 `chapters.id` 的旧字段提供兼容映射，
 将 `canonical_chapters` 解析到 legacy `chapters`。

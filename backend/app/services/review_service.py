@@ -16,8 +16,8 @@ from app.models.mysql_models import (
     KnowledgePoint, Question, DocumentSectionMapping, CanonicalChapter,
     KnowledgeRelation, KnowledgePointChapterLink, QuestionChapterLink,
 )
+from app.modules.catalog.chapter_compat import resolve_legacy_chapter_id
 from app.modules.retrieval.segment_service import SegmentService
-from app.services.chapter_compat_service import resolve_legacy_chapter_id
 
 logger = get_logger(__name__)
 

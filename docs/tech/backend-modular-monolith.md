@@ -171,6 +171,11 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
   section 映射与审核位于 `chapter_mapping_service.py`，
   页级、块级和 section 级章节归属诊断位于 `chapter_diagnostics_service.py`，
   `app/services/chapter_mapping_service.py` 已删除
+- 标准章节到旧章节 ID 的兼容解析已迁移到
+  `app/modules/catalog/chapter_compat.py`，旧 Service 文件已删除
+- 题目/知识点与文档图片、表格、公式的资产关联已迁移到
+  `app/modules/content/entity_assets.py`，语料持久化改为显式依赖该模块，
+  旧 Service 文件已删除
 - sparse/hybrid 的 MySQL 关键词召回已与 dense 的 Qdrant payload 过滤保持一致，
   学科、章节、年份、考试范围、难度、题型、答案来源和标签均在截断候选前过滤
 
