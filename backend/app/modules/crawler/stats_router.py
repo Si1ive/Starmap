@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import ApiResponse
 from app.db import get_db
-from app.modules.crawler.scrapy_bridge import ScrapyBridgeService
+from app.modules.crawler.scrapy_task_bridge import ScrapyTaskBridge
 from app.modules.crawler.stats_service import CrawlerStatsService
 
 router = APIRouter(prefix="/admin/crawler", tags=["爬虫管理"])
@@ -69,7 +69,7 @@ async def get_scrapy_status(db: AsyncSession = Depends(get_db)):
 
 
 async def _get_scrapy_status(db: AsyncSession) -> dict:
-    bridge = ScrapyBridgeService(db)
+    bridge = ScrapyTaskBridge(db)
     try:
         return await bridge.get_scrapy_status()
     finally:

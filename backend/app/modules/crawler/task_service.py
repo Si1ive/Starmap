@@ -6,7 +6,7 @@
 """
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Optional, Dict, Any, List
 
 from sqlalchemy import select, func
@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.logging import get_logger
 from app.modules.crawler.cleanup_service import CrawlerCleanupService
 from app.modules.crawler.log_service import CrawlerLogService
-from app.modules.crawler.scrapy_bridge import ScrapyBridgeService
+from app.modules.crawler.scrapy_task_bridge import ScrapyTaskBridge
 from app.modules.crawler.source_service import CrawlerSourceService
 from app.modules.crawler.task_config import (
     SPIDER_SOURCES,
@@ -30,6 +30,11 @@ from app.modules.crawler.task_config import (
 from app.models.mysql_models import CrawlTask, CrawlLog, CrawlSource
 
 logger = get_logger(__name__)
+
+
+def _utcnow() -> datetime:
+    """Return naive UTC for existing MySQL DateTime columns."""
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 class CrawlerTaskService:
@@ -204,7 +209,7 @@ class CrawlerTaskService:
             创建的 CrawlTask 实例
         """
         task = await self.create_task(
-            name=f"{schedule_name} - {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}",
+            name=f"{schedule_name} - {_utcnow().strftime('%Y-%m-%d %H:%M')}",
             task_type=task_type,
             source_ids=source_ids,
             target_config=target_config,
@@ -240,7 +245,7 @@ class CrawlerTaskService:
         
         # 更新状态为运行中
         task.status = "running"
-        task.started_at = datetime.utcnow()
+        task.started_at = _utcnow()
         await self.db.commit()
         
         logger.info(f"Starting crawl task via Scrapy: {task.name} ({task.id})")
@@ -254,7 +259,7 @@ class CrawlerTaskService:
 
                 task.status = "completed"
                 task.progress = 100
-                task.completed_at = datetime.utcnow()
+                task.completed_at = _utcnow()
                 await self.db.commit()
                 await self.log_service.create_log({
                     "task_id": task_id,
@@ -266,9 +271,11 @@ class CrawlerTaskService:
                 await self.db.refresh(task)
                 return task
 
-            bridge = ScrapyBridgeService(self.db)
-            
-            published = await bridge.publish_task(task)
+            bridge = ScrapyTaskBridge(self.db)
+            try:
+                published = await bridge.publish_task(task)
+            finally:
+                await bridge.close()
             
             if not published:
                 raise RuntimeError("Failed to publish task to Scrapy")
@@ -279,7 +286,7 @@ class CrawlerTaskService:
             # 任务失败
             task.status = "failed"
             task.error_message = str(e)[:500]
-            task.completed_at = datetime.utcnow()
+            task.completed_at = _utcnow()
             
             logger.error(f"Crawl task failed: {task.name} ({task.id}), error: {e}")
             
@@ -317,7 +324,7 @@ class CrawlerTaskService:
             return task
         
         task.status = "stopped"
-        task.completed_at = datetime.utcnow()
+        task.completed_at = _utcnow()
         await self.db.commit()
         
         logger.info(f"Stopped crawl task: {task.name} ({task.id})")

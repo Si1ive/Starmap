@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.schemas import ApiResponse
 from app.db import get_db
 from app.models.mysql_models import Chapter, CrawlTask, Subject
-from app.modules.crawler.scrapy_bridge import ScrapyBridgeService
+from app.modules.crawler.scrapy_task_bridge import ScrapyTaskBridge
 
 router = APIRouter(prefix="/admin", tags=["爬虫管理"])
 
@@ -66,7 +66,7 @@ async def ingest_pdf(
     await db.commit()
     await db.refresh(task)
 
-    bridge = ScrapyBridgeService(db)
+    bridge = ScrapyTaskBridge(db)
     try:
         published = await bridge.publish_task(task)
     finally:

@@ -116,7 +116,9 @@ async def lifespan(app: FastAPI):
         logger.warning("日志处理器初始化失败", error=str(e))
 
     try:
-        from app.modules.crawler.scrapy_bridge import start_scrapy_event_listener
+        from app.modules.crawler.scrapy_event_listener import (
+            start_scrapy_event_listener,
+        )
 
         await start_scrapy_event_listener()
         logger.info("Scrapy事件监听器初始化成功")
@@ -160,7 +162,9 @@ async def lifespan(app: FastAPI):
         logger.error("Redis关闭失败", error=str(e))
 
     try:
-        from app.modules.crawler.scrapy_bridge import stop_scrapy_event_listener
+        from app.modules.crawler.scrapy_event_listener import (
+            stop_scrapy_event_listener,
+        )
 
         await stop_scrapy_event_listener()
         logger.info("Scrapy事件监听器已关闭")

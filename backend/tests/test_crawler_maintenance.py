@@ -9,13 +9,13 @@ import pytest
 from app.modules.crawler.cleanup_service import CrawlerCleanupService
 from app.modules.crawler import stats_router
 from app.modules.crawler.schedule_service import CrawlerScheduleService
-from app.modules.crawler.scrapy_bridge import ScrapyBridgeService
+from app.modules.crawler.scrapy_task_bridge import ScrapyTaskBridge
 from app.modules.crawler.task_service import CrawlerTaskService
 from app.modules.operations.settings_service import SystemSettingsService
 
 
 @pytest.mark.asyncio
-async def test_stats_router_closes_scrapy_bridge_when_status_query_fails(
+async def test_stats_router_closes_scrapy_task_bridge_when_status_query_fails(
     monkeypatch,
 ):
     bridge = SimpleNamespace(
@@ -24,7 +24,7 @@ async def test_stats_router_closes_scrapy_bridge_when_status_query_fails(
     )
     monkeypatch.setattr(
         stats_router,
-        "ScrapyBridgeService",
+        "ScrapyTaskBridge",
         lambda _db: bridge,
     )
 
@@ -238,11 +238,11 @@ async def test_task_cleanup_records_current_model_statistics(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_scrapy_bridge_defaults_missing_spider_type_to_github():
+async def test_scrapy_task_bridge_defaults_missing_spider_type_to_github():
     redis = SimpleNamespace(lpush=AsyncMock())
     db_result = SimpleNamespace(scalar_one_or_none=lambda: None)
     db = SimpleNamespace(execute=AsyncMock(return_value=db_result))
-    service = ScrapyBridgeService(db)
+    service = ScrapyTaskBridge(db)
     service._redis = redis
     service.log_service.create_log = AsyncMock()
     task = SimpleNamespace(
@@ -361,11 +361,11 @@ async def test_crawler_runtime_config_update_writes_redacted_audit_log():
 
 
 @pytest.mark.asyncio
-async def test_scrapy_bridge_publishes_runtime_config_snapshot():
+async def test_scrapy_task_bridge_publishes_runtime_config_snapshot():
     redis = SimpleNamespace(lpush=AsyncMock())
     db_result = SimpleNamespace(scalar_one_or_none=lambda: None)
     db = SimpleNamespace(execute=AsyncMock(return_value=db_result))
-    service = ScrapyBridgeService(db)
+    service = ScrapyTaskBridge(db)
     service._redis = redis
     service.log_service.create_log = AsyncMock()
     task = SimpleNamespace(
@@ -405,6 +405,40 @@ async def test_scrapy_bridge_publishes_runtime_config_snapshot():
     assert payload["runtime_config"] == runtime_config
     log_data = service.log_service.create_log.await_args.args[0]
     assert log_data["details"]["runtime_config"] == runtime_config
+
+
+@pytest.mark.asyncio
+async def test_task_execution_closes_scrapy_task_bridge(monkeypatch):
+    task = SimpleNamespace(
+        id="task-publish",
+        name="Publish task",
+        task_type="targeted",
+        status="pending",
+        started_at=None,
+        completed_at=None,
+        error_message=None,
+    )
+    db = SimpleNamespace(
+        commit=AsyncMock(),
+        refresh=AsyncMock(),
+    )
+    service = CrawlerTaskService(db)
+    service.get_task_by_id = AsyncMock(return_value=task)
+    bridge = SimpleNamespace(
+        publish_task=AsyncMock(return_value=True),
+        close=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "app.modules.crawler.task_service.ScrapyTaskBridge",
+        lambda _db: bridge,
+    )
+
+    result = await service.execute_task(task.id)
+
+    assert result is task
+    assert task.status == "running"
+    bridge.publish_task.assert_awaited_once_with(task)
+    bridge.close.assert_awaited_once()
 
 
 def test_scrapy_runtime_config_maps_to_real_scrapy_settings():
