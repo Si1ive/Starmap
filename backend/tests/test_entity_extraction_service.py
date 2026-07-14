@@ -13,6 +13,9 @@ from app.modules.corpus.entity_persistence import (
     build_knowledge_content,
     extract_answers_from_blocks,
 )
+from app.modules.corpus.document_mapping import (
+    DocumentChapterMappingResolver,
+)
 from app.models.mysql_models import CorpusFile, Document, EntityExtractionRun
 
 
@@ -229,6 +232,18 @@ def test_build_knowledge_content_prefers_markdown_and_skips_empty_blocks():
     ]
 
     assert build_knowledge_content(blocks) == "第一段 **正文**\n\n第二段正文"
+
+
+def test_document_chapter_mapping_resolves_nearest_page():
+    mappings = {
+        3: {"chapter_id": "chapter-3"},
+        8: {"chapter_id": "chapter-8"},
+    }
+
+    assert DocumentChapterMappingResolver.resolve(3, mappings) == mappings[3]
+    assert DocumentChapterMappingResolver.resolve(6, mappings) == mappings[3]
+    assert DocumentChapterMappingResolver.resolve(1, mappings) == mappings[3]
+    assert DocumentChapterMappingResolver.resolve(None, mappings) is None
 
 
 @pytest.mark.asyncio

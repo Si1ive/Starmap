@@ -11,11 +11,14 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Dict, Any, List, Optional, Tuple
 
-from sqlalchemy import select, and_
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.modules.corpus.document_mapping import (
+    DocumentChapterMappingResolver,
+)
 from app.modules.corpus.entity_persistence import (
     KnowledgePointPersistence,
     QuestionPersistence,
@@ -62,9 +65,8 @@ from app.modules.corpus.question_validation import (
     extract_question_number as _extract_question_number_simple,
 )
 from app.models.mysql_models import (
-    CorpusFile, Document, DocumentBlock, DocumentSection, DocumentSectionMapping,
-    Question, QuestionChapterLink, EntitySourceLink, CanonicalChapter,
-    EntityExtractionRun
+    CorpusFile, Document, DocumentBlock, Question, QuestionChapterLink,
+    EntitySourceLink, EntityExtractionRun
 )
 from app.services.chapter_compat_service import resolve_legacy_chapter_id
 from app.services.system_settings_service import SystemSettingsService
@@ -139,6 +141,7 @@ class EntityExtractionService:
 
     def __init__(self, db: AsyncSession):
         self.db = db
+        self._chapter_mapping = DocumentChapterMappingResolver(db)
         self._knowledge_persistence = KnowledgePointPersistence(db)
         self._question_persistence = QuestionPersistence(db)
 
@@ -372,60 +375,16 @@ class EntityExtractionService:
         }
 
     async def _get_section_mappings(self, document_id: str) -> Dict[int, Dict[str, Optional[str]]]:
-        """获取 section 到标准章节的映射关系，同时获取章节对应的学科"""
-        result = await self.db.execute(
-            select(DocumentSection, DocumentSectionMapping, CanonicalChapter)
-            .join(DocumentSectionMapping, DocumentSection.id == DocumentSectionMapping.document_section_id)
-            .join(CanonicalChapter, DocumentSectionMapping.canonical_chapter_id == CanonicalChapter.id)
-            .where(
-                and_(
-                    DocumentSection.document_id == document_id,
-                    DocumentSectionMapping.review_status == "approved"
-                )
-            )
-        )
-        rows = result.all()
-
-        # 构建 page -> {chapter_id, subject_id} 的映射
-        page_chapter_map: Dict[int, Dict[str, Optional[str]]] = {}
-        legacy_chapter_cache: Dict[str, Optional[str]] = {}
-        for section, mapping, chapter in rows:
-            if section.page_start:
-                if chapter.id not in legacy_chapter_cache:
-                    legacy_chapter_cache[chapter.id] = await resolve_legacy_chapter_id(
-                        self.db,
-                        canonical_chapter_id=chapter.id,
-                        subject_id=chapter.subject_id,
-                    )
-                info = {
-                    "chapter_id": mapping.canonical_chapter_id,
-                    "subject_id": chapter.subject_id,
-                    "legacy_chapter_id": legacy_chapter_cache[chapter.id],
-                    "source_section_path": section.section_path[:500] if section.section_path else None,
-                }
-                for page in range(section.page_start, (section.page_end or section.page_start) + 1):
-                    page_chapter_map[page] = info
-
-        return page_chapter_map
+        """兼容入口：加载已审核的 section 到章节映射。"""
+        return await self._chapter_mapping.load(document_id)
 
     def _resolve_mapping_for_page(
         self,
         page_no: Optional[int],
         section_mappings: Dict[int, Dict[str, Optional[str]]],
     ) -> Optional[Dict[str, Optional[str]]]:
-        """按页码获取章节映射，缺精确页时回退到最近的前序映射，再回退到最近后序映射。"""
-        if page_no is None or not section_mappings:
-            return None
-        if page_no in section_mappings:
-            return section_mappings[page_no]
-
-        previous_pages = [page for page in section_mappings.keys() if page <= page_no]
-        if previous_pages:
-            return section_mappings[max(previous_pages)]
-        next_pages = [page for page in section_mappings.keys() if page > page_no]
-        if next_pages:
-            return section_mappings[min(next_pages)]
-        return None
+        """兼容入口：按页码解析章节映射。"""
+        return self._chapter_mapping.resolve(page_no, section_mappings)
 
     async def _cleanup_existing_entities(self, document_id: str, entity_type: str) -> None:
         """清理同一文档已抽取的实体，避免重复入库。"""
