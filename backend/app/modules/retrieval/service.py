@@ -22,6 +22,10 @@ from app.models.mysql_models import (
     RetrievalSegment, KnowledgePoint, Question,
     KnowledgeRelation, EntitySourceLink, Document
 )
+from app.modules.retrieval.outline_service import (
+    expand_query_with_outline,
+    retrieve_by_chapters,
+)
 from app.services.embedding_service import get_embedding_service_from_settings
 
 logger = get_logger(__name__)
@@ -117,8 +121,6 @@ class RetrievalService:
                 },
             }
         """
-        from app.services.outline_retrieval_service import expand_query_with_outline
-
         # Phase 0: 大纲扩展
         expansion = await expand_query_with_outline(self.db, query)
 
@@ -179,8 +181,6 @@ class RetrievalService:
         3. JOIN 为主——路 B 走 link 表精确 JOIN，不再用关键词重搜
         4. 去重——路 A 已命中的实体不在路 B 重复出现，标注 dual_hit
         """
-        from app.services.outline_retrieval_service import retrieve_by_chapters
-
         # 路 A: 向量直接命中（第一梯队）
         vector_hits = await self.search(
             query=expanded_query,

@@ -2463,7 +2463,7 @@ async def build_chapter_relations(
     2. 双向写入 ChapterRelation（source_type="llm"）
     3. 对无 cross_references 的考点，用 embedding 相似度兜底（source_type="embedding"）
     """
-    from app.services.outline_retrieval_service import (
+    from app.modules.retrieval.outline_service import (
         validate_cross_references, fallback_chapter_similarity,
     )
     from app.models.mysql_models import CanonicalChapter, ChapterRelation

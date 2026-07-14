@@ -13,8 +13,8 @@ from app.modules.retrieval.schemas import (
     SearchRequest,
     SearchWithOutlineRequest,
 )
+from app.modules.retrieval.outline_service import expand_related_chapters
 from app.modules.retrieval.service import RetrievalService
-from app.services.outline_retrieval_service import expand_related_chapters
 from app.modules.retrieval.segment_service import SegmentService
 
 router = APIRouter(prefix="/admin", tags=["检索"])
