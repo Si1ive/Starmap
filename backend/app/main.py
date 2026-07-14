@@ -29,6 +29,7 @@ from app.modules.catalog.section_review_router import (
 from app.modules.chat.admin_router import router as chat_admin_router
 from app.modules.chat.router import router as chat_router
 from app.modules.content import router as content_router
+from app.modules.content.asset_router import router as asset_router
 from app.modules.content.relation_review_router import (
     router as relation_review_router,
 )
@@ -286,6 +287,11 @@ app.include_router(
 )
 app.include_router(
     content_router,
+    prefix="/api/v1",
+    dependencies=admin_dependencies,
+)
+app.include_router(
+    asset_router,
     prefix="/api/v1",
     dependencies=admin_dependencies,
 )

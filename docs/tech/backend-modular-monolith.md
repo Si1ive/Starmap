@@ -210,6 +210,9 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - 题目/知识点与文档图片、表格、公式的资产关联已迁移到
   `app/modules/content/entity_assets.py`，语料持久化改为显式依赖该模块，
   旧 Service 文件已删除
+- 文档资产元数据和文件读取接口已迁移到
+  `app/modules/content/asset_router.py`，原 `/api/v1/admin/assets/{asset_id}*`
+  路径和 404 响应语义保持不变
 - sparse/hybrid 的 MySQL 关键词召回已与 dense 的 Qdrant payload 过滤保持一致，
   学科、章节、年份、考试范围、难度、题型、答案来源和标签均在截断候选前过滤
 

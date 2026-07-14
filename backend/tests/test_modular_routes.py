@@ -223,6 +223,18 @@ def test_content_routes_are_owned_by_content_module():
         assert routes[path].endpoint.__module__ == "app.modules.content.router"
 
 
+def test_asset_routes_are_owned_by_content_module():
+    routes = _routes_by_path()
+
+    for path in (
+        "/api/v1/admin/assets/{asset_id}",
+        "/api/v1/admin/assets/{asset_id}/file",
+    ):
+        route = routes[path]
+        assert route.endpoint.__module__ == "app.modules.content.asset_router"
+        assert "GET" in route.methods
+
+
 def test_relation_review_routes_are_owned_by_content_module():
     routes = _routes_by_path()
 
