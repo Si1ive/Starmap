@@ -1,7 +1,11 @@
 from datetime import datetime
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
+
+import pytest
 
 from app.modules.corpus.content_overview import CorpusContentOverviewService
+from app.modules.corpus.quality_gate import CorpusQualityGateBuilder
 
 
 def _document(doc_type="past_exam"):
@@ -58,8 +62,15 @@ def _summary(**overrides):
     return result
 
 
+def _query_result(*, item=None, items=None):
+    result = Mock()
+    result.scalar_one_or_none.return_value = item
+    result.scalars.return_value.all.return_value = items or []
+    return result
+
+
 def test_quality_gate_passes_clean_exam_content():
-    gate = CorpusContentOverviewService.build_quality_gate(
+    gate = CorpusQualityGateBuilder.build(
         document=_document(),
         knowledge_points=[],
         questions=[_question()],
@@ -84,7 +95,7 @@ def test_quality_gate_ignores_stale_document_diagnostic_after_repair():
         "unsaved_samples": [],
     }
 
-    gate = CorpusContentOverviewService.build_quality_gate(
+    gate = CorpusQualityGateBuilder.build(
         document=_document(),
         knowledge_points=[],
         questions=[_question()],
@@ -117,7 +128,7 @@ def test_quality_gate_warns_for_generated_option_and_missing_assignment():
         },
     )
 
-    gate = CorpusContentOverviewService.build_quality_gate(
+    gate = CorpusQualityGateBuilder.build(
         document=_document(),
         knowledge_points=[],
         questions=[question],
@@ -171,7 +182,7 @@ def test_quality_gate_blocks_unresolved_and_unsaved_questions():
         extraction_meta={"few_options": True},
     )
 
-    gate = CorpusContentOverviewService.build_quality_gate(
+    gate = CorpusQualityGateBuilder.build(
         document=_document(),
         knowledge_points=[],
         questions=[question],
@@ -207,7 +218,7 @@ def test_quality_gate_blocks_unresolved_and_unsaved_questions():
 
 
 def test_quality_gate_identifies_duplicate_question_numbers():
-    gate = CorpusContentOverviewService.build_quality_gate(
+    gate = CorpusQualityGateBuilder.build(
         document=_document(),
         knowledge_points=[],
         questions=[
@@ -230,7 +241,7 @@ def test_quality_gate_identifies_duplicate_question_numbers():
 
 
 def test_quality_gate_blocks_exam_without_questions():
-    gate = CorpusContentOverviewService.build_quality_gate(
+    gate = CorpusQualityGateBuilder.build(
         document=_document(),
         knowledge_points=[],
         questions=[],
@@ -276,3 +287,83 @@ def test_content_overview_keeps_latest_run_per_entity_target():
 
     assert result[("question", "question-1")]["id"] == "run-new"
     assert result[("question", "question-1")]["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_content_overview_composes_loaded_entities_with_quality_gate(
+    monkeypatch,
+):
+    document = SimpleNamespace(
+        id="doc-1",
+        title="试卷",
+        doc_type="past_exam",
+    )
+    knowledge_point = SimpleNamespace(
+        id="knowledge-1",
+        title="进程调度",
+        summary="调度算法概述",
+        content="知识点正文",
+        topic_terms=["调度"],
+        review_status="pending",
+        status="active",
+        source_section_path="第一章",
+        primary_chapter_id="chapter-1",
+    )
+    question = SimpleNamespace(
+        id="question-1",
+        question_no="1",
+        type="choice",
+        content="题干",
+        options=[],
+        exam_year=2026,
+        review_status="pending",
+        status="active",
+        primary_chapter_id="chapter-1",
+        source_section_path="第一章",
+        extraction_meta={},
+        subject_id="subject-1",
+        chapter_id="legacy-chapter-1",
+    )
+    chapter = SimpleNamespace(
+        id="chapter-1",
+        name="进程管理",
+        outline_code="2.1",
+        keywords=["进程"],
+        description="章节描述",
+        exam_guidance="复习指导",
+    )
+    db = SimpleNamespace(
+        execute=AsyncMock(
+            side_effect=[
+                _query_result(item=document),
+                _query_result(items=[knowledge_point]),
+                _query_result(items=[question]),
+                _query_result(item=None),
+                _query_result(items=[]),
+                _query_result(items=[chapter]),
+            ]
+        )
+    )
+    gate = {"status": "passed", "score": 100}
+    build_gate = Mock(return_value=gate)
+    monkeypatch.setattr(CorpusQualityGateBuilder, "build", build_gate)
+
+    result = await CorpusContentOverviewService(db).get("doc-1")
+
+    assert result["quality_gate"] is gate
+    assert result["summary"] == {
+        "knowledge_count": 1,
+        "question_count": 1,
+        "chapter_count": 1,
+        "ungrouped_count": 0,
+        "unassigned_question_count": 0,
+    }
+    assert result["knowledge_chapters"][0]["chapter_name"] == "进程管理"
+    assert result["questions"][0]["primary_chapter_name"] == "进程管理"
+    build_gate.assert_called_once_with(
+        document=document,
+        knowledge_points=[knowledge_point],
+        questions=[question],
+        summary=result["summary"],
+        latest_run=None,
+    )

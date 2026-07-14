@@ -145,6 +145,9 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - 无调用方且绕过统一校验/修复/持久化的旧版题目提取备用路径已移除
 - 题目组装、规则/LLM 修复、最终校验、保存及诊断汇总编排已迁移到
   `app/modules/corpus/question_pipeline.py`
+- 语料详情的实体查询、章节分组和重提取状态组装由
+  `app/modules/corpus/content_overview.py` 负责；入库质量检查、问题明细和评分规则已
+  拆分到纯业务模块 `app/modules/corpus/quality_gate.py`
 - 标题驱动的知识点分组、章节映射和保存编排已迁移到
   `app/modules/corpus/knowledge_pipeline.py`
 - 文档加载、block 分类、题目/知识点分流、答案回连和事务提交已迁移到
