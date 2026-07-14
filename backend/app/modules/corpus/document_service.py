@@ -18,6 +18,9 @@ from app.modules.corpus.errors import (
     PageRenderError,
     SourceFileNotFoundError,
 )
+from app.modules.catalog.chapter_diagnostics_service import (
+    ChapterOwnershipDiagnosticsService,
+)
 from app.modules.catalog.chapter_mapping_service import ChapterMappingService
 from app.services.document_parse_service import DocumentParseService
 from app.services.document_section_service import DocumentSectionService
@@ -204,7 +207,7 @@ class CorpusDocumentService:
         page_no: Optional[int],
         include_blocks: bool,
     ) -> Dict[str, Any]:
-        return await ChapterMappingService(
+        return await ChapterOwnershipDiagnosticsService(
             self.db
         ).get_chapter_ownership_diagnostics(
             document_id=document_id,

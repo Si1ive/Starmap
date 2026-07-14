@@ -7,6 +7,11 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from app.modules.catalog.canonical_chapter_service import CanonicalChapterService
+from app.modules.catalog.chapter_diagnostics_service import (
+    ChapterOwnershipDiagnosticsService,
+    _looks_like_option_block,
+    _looks_like_question_start,
+)
 from app.modules.catalog.chapter_mapping_service import ChapterMappingService
 from app.services.chapter_mapping_service import (
     CanonicalChapterService as LegacyCanonicalChapterService,
@@ -85,3 +90,39 @@ async def test_canonical_chapter_service_builds_parent_child_tree():
     assert [chapter["id"] for chapter in chapters] == ["root"]
     assert [chapter["id"] for chapter in chapters[0]["children"]] == ["child"]
     assert chapters[0]["created_at"] == "2026-07-14T12:00:00"
+
+
+@pytest.mark.asyncio
+async def test_chapter_mapping_service_delegates_ownership_diagnostics():
+    service = ChapterMappingService(SimpleNamespace())
+    service.diagnostics.get_chapter_ownership_diagnostics = AsyncMock(
+        return_value={"document_id": "document-1"}
+    )
+
+    result = await service.get_chapter_ownership_diagnostics(
+        "document-1",
+        page_no=3,
+        include_blocks=False,
+    )
+
+    assert result == {"document_id": "document-1"}
+    service.diagnostics.get_chapter_ownership_diagnostics.assert_awaited_once_with(
+        document_id="document-1",
+        page_no=3,
+        include_blocks=False,
+    )
+
+
+def test_chapter_diagnostics_question_and_option_signals():
+    assert _looks_like_question_start(
+        "43 假设有两个整数 x 和 y，请回答下列问题",
+        "paragraph",
+    )
+    assert not _looks_like_question_start("A. 寄存器内容", "paragraph")
+    assert _looks_like_option_block("A. 寄存器内容")
+
+
+def test_ownership_diagnostics_class_is_independent_from_mapping_service():
+    diagnostics = ChapterOwnershipDiagnosticsService(SimpleNamespace())
+
+    assert diagnostics.db is not None
