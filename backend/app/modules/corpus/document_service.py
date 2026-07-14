@@ -18,7 +18,7 @@ from app.modules.corpus.errors import (
     PageRenderError,
     SourceFileNotFoundError,
 )
-from app.services.chapter_mapping_service import ChapterMappingService
+from app.modules.catalog.chapter_mapping_service import ChapterMappingService
 from app.services.document_parse_service import DocumentParseService
 from app.services.document_section_service import DocumentSectionService
 

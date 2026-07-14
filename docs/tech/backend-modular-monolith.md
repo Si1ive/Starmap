@@ -153,6 +153,9 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
   `app/modules/catalog/chapter_link_service.py`，
   `app/services/chapter_link_service.py` 仅保留兼容导出；关键词打分和向量召回策略进一步拆分到
   `app/modules/catalog/chapter_matcher.py`
+- 标准章节树维护、文档 section 映射、映射审核和章节归属诊断已迁移到
+  `app/modules/catalog/chapter_mapping_service.py`，
+  `app/services/chapter_mapping_service.py` 仅保留兼容导出
 - sparse/hybrid 的 MySQL 关键词召回已与 dense 的 Qdrant payload 过滤保持一致，
   学科、章节、年份、考试范围、难度、题型、答案来源和标签均在截断候选前过滤
 

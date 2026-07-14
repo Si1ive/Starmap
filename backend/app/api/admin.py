@@ -2098,7 +2098,7 @@ async def init_canonical_chapters(
     db: AsyncSession = Depends(get_db),
 ):
     """初始化学科的标准章节体系"""
-    from app.services.chapter_mapping_service import CanonicalChapterService
+    from app.modules.catalog.chapter_mapping_service import CanonicalChapterService
 
     service = CanonicalChapterService(db)
     try:
@@ -2116,7 +2116,7 @@ async def get_canonical_chapters(
     db: AsyncSession = Depends(get_db),
 ):
     """获取学科的标准章节"""
-    from app.services.chapter_mapping_service import CanonicalChapterService
+    from app.modules.catalog.chapter_mapping_service import CanonicalChapterService
 
     service = CanonicalChapterService(db)
     if tree:
@@ -2213,7 +2213,7 @@ async def review_section_mapping(
     db: AsyncSession = Depends(get_db),
 ):
     """审核 section 映射。已废弃，仅保留回滚兼容。"""
-    from app.services.chapter_mapping_service import ChapterMappingService
+    from app.modules.catalog.chapter_mapping_service import ChapterMappingService
 
     service = ChapterMappingService(db)
     try:
