@@ -9,17 +9,35 @@ from app.models.mysql_models import (
     KnowledgePoint,
     Question,
 )
+from app.modules.corpus.quality_gate_rules import (
+    EXPECTED_OPTION_LABELS,
+    add_check,
+    add_issue,
+    as_non_negative_int,
+    content_yield_check,
+    is_question_unassigned,
+    join_labels,
+    overall_status,
+    quality_score,
+    question_integrity_message,
+    question_label,
+    serialize_latest_run,
+    status_label,
+    status_summary,
+    unsaved_question_label,
+    unsaved_question_message,
+)
 
 
 class CorpusQualityGateBuilder:
     """Evaluate persisted corpus entities against deterministic quality rules."""
 
     POLICY_VERSION = "2026-07-v2"
-    EXPECTED_OPTION_LABELS = ("A", "B", "C", "D")
+    EXPECTED_OPTION_LABELS = EXPECTED_OPTION_LABELS
 
     @staticmethod
     def _is_question_unassigned(question: Question) -> bool:
-        return not question.subject_id or not question.chapter_id
+        return is_question_unassigned(question)
 
     @classmethod
     def build(
@@ -75,9 +93,9 @@ class CorpusQualityGateBuilder:
                         message="抽取时曾缺失题号，当前题号需要对照原卷核验",
                     )
 
-            has_option_issue = (
-                question.type == "choice" and len(options) < 4
-            ) or bool(meta.get("suspected_truncated_options"))
+            has_option_issue = (question.type == "choice" and len(options) < 4) or bool(
+                meta.get("suspected_truncated_options")
+            )
             if has_option_issue:
                 question_issue_ids.add(question.id)
                 cls._add_issue(
@@ -155,9 +173,7 @@ class CorpusQualityGateBuilder:
             )
 
         duplicate_question_no_count = sum(
-            count - 1
-            for count in Counter(numbered_questions).values()
-            if count > 1
+            count - 1 for count in Counter(numbered_questions).values() if count > 1
         )
         for number, duplicate_questions in questions_by_number.items():
             if len(duplicate_questions) < 2:
@@ -322,9 +338,7 @@ class CorpusQualityGateBuilder:
             ),
         )
 
-        numbering_issue_count = (
-            missing_question_no_count + duplicate_question_no_count
-        )
+        numbering_issue_count = missing_question_no_count + duplicate_question_no_count
         cls._add_check(
             checks,
             key="question_numbering",
@@ -361,9 +375,7 @@ class CorpusQualityGateBuilder:
             ai_generated_option_count=ai_generated_option_count,
         )
         fail_count = sum(1 for check in checks if check["status"] == "fail")
-        warning_count = sum(
-            1 for check in checks if check["status"] == "warning"
-        )
+        warning_count = sum(1 for check in checks if check["status"] == "warning")
         issues.sort(
             key=lambda issue: (
                 issue["severity"] != "fail",
@@ -393,69 +405,28 @@ class CorpusQualityGateBuilder:
         options: Sequence[Dict[str, Any]],
         meta: Dict[str, Any],
     ) -> str:
-        reasons = []
-        if question.type == "choice" and len(options) < 4:
-            labels = {
-                str(
-                    option.get("key")
-                    or option.get("label")
-                    or option.get("option_label")
-                    or ""
-                ).strip().upper()[:1]
-                for option in options
-            }
-            labels.discard("")
-            missing_labels = [
-                label
-                for label in cls.EXPECTED_OPTION_LABELS
-                if label not in labels
-            ]
-            if labels and missing_labels:
-                reasons.append(
-                    f"仅识别到选项 {cls._join_labels(sorted(labels))}，"
-                    f"缺少 {cls._join_labels(missing_labels)}"
-                )
-            else:
-                reasons.append(
-                    f"选择题仅识别到 {len(options)} 个选项，选项结构不完整"
-                )
-        if meta.get("suspected_truncated_options"):
-            reasons.append("存在疑似被截断的选项文本")
-        return "；".join(reasons) or "题目存在未解决的关键结构问题"
+        return question_integrity_message(
+            question=question,
+            options=options,
+            meta=meta,
+            expected_option_labels=cls.EXPECTED_OPTION_LABELS,
+        )
 
     @staticmethod
     def _question_label(question: Question) -> str:
-        number = str(getattr(question, "question_no", "") or "").strip()
-        if number:
-            return f"第{number}题"
-        content = str(getattr(question, "content", "") or "").strip()
-        excerpt = content[:18] + ("..." if len(content) > 18 else "")
-        return f"无题号题目：{excerpt}" if excerpt else "无题号题目"
+        return question_label(question)
 
     @staticmethod
     def _join_labels(labels: Sequence[str]) -> str:
-        return "、".join(dict.fromkeys(label for label in labels if label))
+        return join_labels(labels)
 
     @staticmethod
     def _unsaved_question_label(sample: Dict[str, Any]) -> str:
-        number = sample.get("question_no")
-        if number is not None:
-            return f"第{number}题"
-        page_no = sample.get("page_no")
-        return f"第{page_no}页题目" if page_no is not None else "未落库题目"
+        return unsaved_question_label(sample)
 
     @staticmethod
     def _unsaved_question_message(sample: Dict[str, Any]) -> str:
-        reason_text = {
-            "save_failed": "数据库保存失败",
-            "missing_subject": "缺少科目归属",
-            "missing_chapter": "缺少章节归属",
-        }.get(sample.get("reason"), sample.get("reason") or "未知原因")
-        excerpt = str(sample.get("text_excerpt") or "").strip()
-        if excerpt:
-            excerpt = excerpt[:60] + ("..." if len(excerpt) > 60 else "")
-            return f"未成功入库：{reason_text}；题干：{excerpt}"
-        return f"未成功入库：{reason_text}"
+        return unsaved_question_message(sample)
 
     @staticmethod
     def _add_issue(
@@ -469,16 +440,15 @@ class CorpusQualityGateBuilder:
         entity_label: str,
         message: str,
     ) -> None:
-        issues.append(
-            {
-                "key": key,
-                "check_key": check_key,
-                "severity": severity,
-                "entity_type": entity_type,
-                "entity_id": entity_id,
-                "entity_label": entity_label,
-                "message": message,
-            }
+        add_issue(
+            issues,
+            key=key,
+            check_key=check_key,
+            severity=severity,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            entity_label=entity_label,
+            message=message,
         )
 
     @staticmethod
@@ -489,21 +459,11 @@ class CorpusQualityGateBuilder:
         knowledge_count: int,
         question_count: int,
     ) -> tuple:
-        if latest_run and latest_run.status == "running":
-            return "running", "抽取执行中，内容产出尚未稳定"
-        if not latest_run and not knowledge_count and not question_count:
-            return "pending", "尚无可评估的入库内容"
-
-        doc_type = document.doc_type or "other"
-        if doc_type in {"past_exam", "mock_exam"} and question_count == 0:
-            return "fail", "试卷类文档没有产出题目"
-        if doc_type in {"textbook", "notes"} and knowledge_count == 0:
-            return "fail", "教材或笔记类文档没有产出知识点"
-        if knowledge_count + question_count == 0:
-            return "fail", "抽取任务没有产出任何知识点或题目"
-        return (
-            "pass",
-            f"已产出 {knowledge_count} 个知识点、{question_count} 道题目",
+        return content_yield_check(
+            document=document,
+            latest_run=latest_run,
+            knowledge_count=knowledge_count,
+            question_count=question_count,
         )
 
     @staticmethod
@@ -515,13 +475,12 @@ class CorpusQualityGateBuilder:
         status: str,
         message: str,
     ) -> None:
-        checks.append(
-            {
-                "key": key,
-                "label": label,
-                "status": status,
-                "message": message,
-            }
+        add_check(
+            checks,
+            key=key,
+            label=label,
+            status=status,
+            message=message,
         )
 
     @staticmethod
@@ -531,17 +490,7 @@ class CorpusQualityGateBuilder:
         questions: Sequence[Question],
         knowledge_points: Sequence[KnowledgePoint],
     ) -> str:
-        if latest_run and latest_run.status == "running":
-            return "running"
-        if latest_run and latest_run.status == "failed":
-            return "failed"
-        if any(check["status"] == "fail" for check in checks):
-            return "blocked"
-        if any(check["status"] == "warning" for check in checks):
-            return "warning"
-        if not latest_run and not questions and not knowledge_points:
-            return "not_run"
-        return "passed"
+        return overall_status(checks, latest_run, questions, knowledge_points)
 
     @staticmethod
     def _quality_score(
@@ -555,72 +504,31 @@ class CorpusQualityGateBuilder:
         numbering_issue_count: int,
         ai_generated_option_count: int,
     ) -> int:
-        if status == "not_run":
-            return 0
-        score = 100
-        score -= 40 if content_yield_failed else 0
-        score -= min(45, unresolved_question_count * 15)
-        score -= min(30, skipped_question_count * 10)
-        score -= min(20, unassigned_question_count * 4)
-        score -= min(15, ungrouped_count * 3)
-        score -= min(10, numbering_issue_count * 3)
-        score -= min(10, ai_generated_option_count * 2)
-        if status == "failed":
-            score = min(score, 40)
-        return max(0, score)
+        return quality_score(
+            status=status,
+            content_yield_failed=content_yield_failed,
+            unresolved_question_count=unresolved_question_count,
+            skipped_question_count=skipped_question_count,
+            unassigned_question_count=unassigned_question_count,
+            ungrouped_count=ungrouped_count,
+            numbering_issue_count=numbering_issue_count,
+            ai_generated_option_count=ai_generated_option_count,
+        )
 
     @staticmethod
     def _status_label(status: str) -> str:
-        return {
-            "passed": "质量通过",
-            "warning": "建议核验",
-            "blocked": "需要修复",
-            "running": "评估中",
-            "failed": "抽取失败",
-            "not_run": "尚未抽取",
-        }[status]
+        return status_label(status)
 
     @staticmethod
     def _status_summary(status: str, fail_count: int, warning_count: int) -> str:
-        if status == "passed":
-            return "当前入库产物通过全部质量检查。"
-        if status == "warning":
-            return f"没有阻断问题，但有 {warning_count} 项需要人工关注。"
-        if status == "blocked":
-            return f"发现 {fail_count} 项阻断问题，建议修复后重新抽取。"
-        if status == "running":
-            return "抽取任务仍在执行，完成后将自动形成最终质量结论。"
-        if status == "failed":
-            return "最新抽取任务失败，当前内容可能来自更早的执行结果。"
-        return "尚未执行实体抽取，暂无质量结论。"
+        return status_summary(status, fail_count, warning_count)
 
     @staticmethod
     def _serialize_latest_run(
         latest_run: Optional[EntityExtractionRun],
     ) -> Optional[Dict[str, Any]]:
-        if not latest_run:
-            return None
-        return {
-            "id": latest_run.id,
-            "status": latest_run.status,
-            "knowledge_count": latest_run.knowledge_count or 0,
-            "question_count": latest_run.question_count or 0,
-            "error_detail": latest_run.error_detail,
-            "started_at": (
-                latest_run.started_at.isoformat()
-                if latest_run.started_at
-                else None
-            ),
-            "completed_at": (
-                latest_run.completed_at.isoformat()
-                if latest_run.completed_at
-                else None
-            ),
-        }
+        return serialize_latest_run(latest_run)
 
     @staticmethod
     def _as_non_negative_int(value: Any) -> int:
-        try:
-            return max(0, int(value or 0))
-        except (TypeError, ValueError):
-            return 0
+        return as_non_negative_int(value)
