@@ -3,15 +3,15 @@
 
 实现设计文档 outline-retrieval-cross-chapter-association-design.md 中定义的核心函数：
 
-Phase 0: expand_query_with_outline()  - 大纲辅助 Query 扩展
 Phase 2: expand_chapter_scope()      - 沿考点树向上扩展
 Phase 2: retrieve_by_chapters()      - 从考点出发的结构化展开
 Phase 2: retrieve_by_question()      - 从题出发（题→考点→委托 retrieve_by_chapters）
 Phase 2: fallback_chapter_similarity()  - embedding 兜底（离线构建器用）
 Phase 2: expand_related_chapters()      - 在线读取器：scope 在线算 + semantic 读 ChapterRelation 已审核行
+
+Phase 0 查询扩展已迁移到 outline_query_expansion.py。
 """
 
-from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import select
@@ -33,142 +33,6 @@ from app.infrastructure.ai.embedding_service import (
 )
 
 logger = get_logger(__name__)
-
-
-# ========== 数据结构 ==========
-
-
-@dataclass
-class OutlineExpansionResult:
-    """Phase 0 大纲扩展结果"""
-    expanded_query: str
-    subject_ids: List[str] = field(default_factory=list)
-    chapter_ids: List[str] = field(default_factory=list)
-    matched_chapters: List[Dict[str, Any]] = field(default_factory=list)
-
-
-@dataclass
-class ScopeChapter:
-    """scope_expansion 结果：考点树结构派生（在线计算，不入表）"""
-    chapter_id: str
-    relation: str = "sibling_or_ancestor"  # sibling / parent / child
-
-
-@dataclass
-class SemanticRelation:
-    """semantic_relations 结果：读 ChapterRelation 已审核行"""
-    chapter_id: str
-    source_type: str  # llm / embedding / manual
-    relation_type: str = "similar_to"
-    confidence: float = 0.0
-    evidence_text: Optional[str] = None
-
-
-# ========== Phase 0: 大纲辅助 Query 扩展 ==========
-
-
-async def expand_query_with_outline(
-    db: AsyncSession,
-    query: str,
-    top_k: int = 3,
-) -> OutlineExpansionResult:
-    """
-    用大纲考点扩展用户 query，解决短查询 vs 长文档的语义不对称问题。
-
-    1. query embedding → Qdrant 检索 entity_type="canonical_chapter" 的 segment
-    2. 聚合到 chapter_id，取 top-K 考点
-    3. 用考点 keywords + enhanced_description 扩写 query
-    4. 提取结构化过滤条件 (subject_ids, chapter_ids)
-    """
-    if not query.strip():
-        return OutlineExpansionResult(expanded_query=query)
-
-    embedding = await get_embedding_service_from_settings(db)
-    query_vector = await embedding.embed_text(query)
-
-    # Step 1: Qdrant 检索考点 segment（title + content 双路）
-    title_hits = qdrant_manager.search(
-        collection_name=qdrant_manager.COLLECTION_KNOWLEDGE_SEGMENTS,
-        query_vector=query_vector,
-        query_filter=Filter(must=[
-            FieldCondition(key="entity_type", match=MatchValue(value="canonical_chapter")),
-            FieldCondition(key="segment_type", match=MatchValue(value="title")),
-        ]),
-        limit=top_k * 2,
-    )
-    content_hits = qdrant_manager.search(
-        collection_name=qdrant_manager.COLLECTION_KNOWLEDGE_SEGMENTS,
-        query_vector=query_vector,
-        query_filter=Filter(must=[
-            FieldCondition(key="entity_type", match=MatchValue(value="canonical_chapter")),
-            FieldCondition(key="segment_type", match=MatchValue(value="content")),
-        ]),
-        limit=top_k * 2,
-    )
-
-    # Step 2: 合并 title + content 命中，聚合到 chapter_id
-    chapter_scores: Dict[str, float] = {}
-    for hit in title_hits + content_hits:
-        payload = hit.get("payload") or {}
-        ch_id = payload.get("entity_id")
-        if not ch_id:
-            continue
-        weight = 1.2 if payload.get("segment_type") == "title" else 1.0
-        chapter_scores[ch_id] = max(chapter_scores.get(ch_id, 0), hit.get("score", 0) * weight)
-
-    top_chapters = sorted(
-        [(cid, s) for cid, s in chapter_scores.items() if s >= 0.7],
-        key=lambda x: -x[1],
-    )[:top_k]
-
-    if not top_chapters:
-        return OutlineExpansionResult(expanded_query=query)
-
-    # Step 3: 从 MySQL 加载考点完整信息
-    top_ids = [cid for cid, _ in top_chapters]
-    chapters = (await db.execute(
-        select(CanonicalChapter).where(CanonicalChapter.id.in_(top_ids))
-    )).scalars().all()
-    chapter_map = {ch.id: ch for ch in chapters}
-
-    # 构建扩展 query
-    query_parts = [query]
-    for cid, _score in top_chapters:
-        ch = chapter_map.get(cid)
-        if not ch:
-            continue
-        if ch.keywords:
-            query_parts.append(" ".join(ch.keywords[:8]))
-        if ch.enhanced_description:
-            query_parts.append(ch.enhanced_description[:100])
-
-    expanded_query = " ".join(query_parts)
-
-    # Step 4: 提取结构化过滤条件
-    subject_ids = list({
-        chapter_map[cid].subject_id
-        for cid, _ in top_chapters
-        if chapter_map.get(cid) and chapter_map[cid].subject_id
-    })
-
-    matched_chapters = [
-        {
-            "chapter_id": cid,
-            "name": chapter_map[cid].name if chapter_map.get(cid) else "",
-            "outline_code": chapter_map[cid].outline_code if chapter_map.get(cid) else "",
-            "score": round(score, 4),
-            "keywords": chapter_map[cid].keywords if chapter_map.get(cid) else [],
-        }
-        for cid, score in top_chapters
-        if chapter_map.get(cid)
-    ]
-
-    return OutlineExpansionResult(
-        expanded_query=expanded_query[:2000],
-        subject_ids=subject_ids,
-        chapter_ids=top_ids,
-        matched_chapters=matched_chapters,
-    )
 
 
 # ========== Phase 2: 考点树展开 ==========
