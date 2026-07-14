@@ -243,7 +243,8 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - 考试大纲列表、预览、导入、PDF 异步解析、任务查询和删除接口已迁移到
   `app/modules/catalog/outline_router.py`；任务详情、列表序列化和删除维护进一步迁移到
   `outline_run_service.py`；文件上传、固定 MinerU 解析、文档复用、LLM 拆分和后台任务
-  状态维护迁移到 `outline_parse_service.py`；上传目录统一使用
+  状态维护迁移到 `outline_parse_service.py`；大纲及其章节树删除迁移到
+  `outline_maintenance_service.py`；上传目录统一使用
   `settings.CORPUS_UPLOAD_DIR`，不再依赖路由文件所在层级推导路径
 - 题目/知识点与文档图片、表格、公式的资产关联已迁移到
   `app/modules/content/entity_assets.py`，语料持久化改为显式依赖该模块，

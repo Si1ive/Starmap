@@ -4,7 +4,6 @@ from typing import Optional, List, Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import ApiResponse, BatchIdsRequest
@@ -170,47 +169,15 @@ async def import_outline_from_llm(request: OutlineFromLLMRequest, db: AsyncSessi
 
 @router.delete("/outlines/{outline_id}", response_model=ApiResponse)
 async def delete_outline(outline_id: str, db: AsyncSession = Depends(get_db)):
-    """
-    删除大纲及其所有关联数据
+    """删除大纲、科目关联和章节树。"""
+    from app.modules.catalog.outline_maintenance_service import (
+        OutlineMaintenanceService,
+    )
 
-    删除内容:
-    - ExamOutline 记录
-    - ExamOutlineSubject 关联
-    - CanonicalChapter 所有章节（级联删除会自动清理关联表）
-    """
-    from app.models.mysql_models import ExamOutline, ExamOutlineSubject, CanonicalChapter
-
-    outline = await db.get(ExamOutline, outline_id)
-    if not outline:
+    result = await OutlineMaintenanceService(db).delete_outline(outline_id)
+    if not result:
         raise HTTPException(status_code=404, detail="大纲不存在")
-
-    # 统计删除数量
-    chapters_count = await db.scalar(
-        select(func.count()).select_from(CanonicalChapter).where(
-            CanonicalChapter.outline_id == outline_id
-        )
-    )
-
-    # 删除章节（级联删除会自动清理 chapter links 等）
-    await db.execute(
-        delete(CanonicalChapter).where(CanonicalChapter.outline_id == outline_id)
-    )
-
-    # 删除科目关联
-    await db.execute(
-        delete(ExamOutlineSubject).where(ExamOutlineSubject.outline_id == outline_id)
-    )
-
-    # 删除大纲
-    await db.delete(outline)
-    await db.commit()
-
-    return ApiResponse(data={
-        "outline_id": outline_id,
-        "outline_name": outline.name,
-        "deleted_chapters": chapters_count,
-        "message": "大纲已删除"
-    })
+    return ApiResponse(data=result)
 
 
 @router.post(
