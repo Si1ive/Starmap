@@ -7,7 +7,7 @@
   极少有真实的上下标，强行转 Unicode 反而会把误识别内容误判为下标，得不偿失）；
 - 顺带规范化空白（合并多余空格、清行尾空白、压缩多空行）。
 
-被 document_parse_service 在持久化 block 时调用，也被 entity_extraction_service
+被 document_store 在持久化 block 时调用，也被 entity_extraction_pipeline
 在抽取入口时兜底调用（兼容旧数据）。
 """
 

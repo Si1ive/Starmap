@@ -16,13 +16,13 @@ from app.models.mysql_models import (
     DocumentBlock,
     DocumentPage,
 )
+from app.modules.corpus.text_cleaning import clean_block_text
 from app.services.document_parsers import (
     ParsedAsset,
     ParsedBlock,
     ParsedDocumentResult,
     ParsedPage,
 )
-from app.services.text_cleaning import clean_block_text
 
 logger = get_logger(__name__)
 BACKEND_ROOT = Path(__file__).resolve().parents[3]

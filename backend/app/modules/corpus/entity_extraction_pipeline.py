@@ -11,15 +11,15 @@ from app.modules.corpus.document_mapping import (
     DocumentChapterMappingResolver,
     PageMappingIndex,
 )
+from app.modules.corpus.block_classifier import BlockClassifier
+from app.modules.corpus.document_meta_service import DocumentMetaService
 from app.modules.corpus.entity_persistence import (
     QuestionPersistence,
     cleanup_document_entities,
 )
 from app.modules.corpus.knowledge_pipeline import KnowledgeExtractionPipeline
 from app.modules.corpus.question_pipeline import QuestionExtractionPipeline
-from app.services.block_classifier import BlockClassifier
-from app.services.document_meta_service import DocumentMetaService
-from app.services.text_cleaning import clean_block_text
+from app.modules.corpus.text_cleaning import clean_block_text
 
 logger = get_logger(__name__)
 
