@@ -58,7 +58,7 @@ class OutlineFromLLMRequest(BaseModel):
 @router.get("/outlines", response_model=ApiResponse)
 async def list_outlines_endpoint(db: AsyncSession = Depends(get_db)):
     """列出所有大纲"""
-    from app.modules.catalog.outline_import_service import list_outlines
+    from app.modules.catalog.outline_query_service import list_outlines
     return ApiResponse(data=await list_outlines(db))
 
 
@@ -69,14 +69,14 @@ async def get_outline_chapters_endpoint(
     db: AsyncSession = Depends(get_db),
 ):
     """获取大纲下章节树（含原文考点 description + 复习指导 exam_guidance，可按 subject_id 过滤）"""
-    from app.modules.catalog.outline_import_service import get_outline_chapters
+    from app.modules.catalog.outline_query_service import get_outline_chapters
     return ApiResponse(data=await get_outline_chapters(db, outline_id, subject_id=subject_id))
 
 
 @router.get("/outlines/{outline_id}/subjects", response_model=ApiResponse)
 async def get_outline_subjects_endpoint(outline_id: str, db: AsyncSession = Depends(get_db)):
     """获取大纲下各门课的考察目标 + 复习指导生成状态"""
-    from app.modules.catalog.outline_import_service import get_outline_subjects
+    from app.modules.catalog.outline_query_service import get_outline_subjects
     return ApiResponse(data=await get_outline_subjects(db, outline_id))
 
 
