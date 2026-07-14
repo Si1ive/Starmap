@@ -24,11 +24,16 @@ from app.core.logging import get_logger
 from app.models.mysql_models import (
     ExamOutline, CanonicalChapter, Subject, DocumentSection, ExamOutlineSubject,
 )
+from app.modules.catalog.outline_llm_parser import extract_outline_llm_json
 from app.modules.catalog.outline_parser import (
     detect_outline_format,
     extract_outline_code,
     parse_outline_json,
     parse_outline_text,
+)
+from app.modules.catalog.outline_tree import (
+    count_outline_nodes,
+    max_outline_depth,
 )
 from app.modules.retrieval.chapter_relation_retrieval import (
     validate_cross_references,
@@ -56,8 +61,8 @@ class OutlineImportService:
             chapters = parse_outline_text(content)
 
         # 统计
-        total = self._count_tree(chapters)
-        max_depth = self._max_depth(chapters)
+        total = count_outline_nodes(chapters)
+        max_depth = max_outline_depth(chapters)
 
         return {
             "format": fmt,
@@ -260,8 +265,8 @@ class OutlineImportService:
         chapters_tree = await self._load_document_sections_tree(document_id)
         return {
             "format": "document_sections",
-            "total_chapters": self._count_tree(chapters_tree),
-            "max_depth": self._max_depth(chapters_tree),
+            "total_chapters": count_outline_nodes(chapters_tree),
+            "max_depth": max_outline_depth(chapters_tree),
             "chapters": chapters_tree,
         }
 
@@ -327,7 +332,7 @@ class OutlineImportService:
             "outline_id": outline.id,
             "created_chapters": created,
             "updated_chapters": updated,
-            "total_chapters": self._count_tree(chapters_tree),
+            "total_chapters": count_outline_nodes(chapters_tree),
             "source_document_id": document_id,
         }
 
@@ -445,7 +450,7 @@ class OutlineImportService:
                         ExamOutlineSubject.subject_id == subject_id,
                     )
                 )).scalar_one_or_none()
-                chapter_count = self._count_tree(chapters)
+                chapter_count = count_outline_nodes(chapters)
                 if link:
                     link.exam_objective = subj.get("exam_objective") or link.exam_objective
                     link.chapter_count = chapter_count
@@ -592,9 +597,8 @@ class OutlineImportService:
             ]
             prompt = self._build_guidance_prompt(objective, items)
             try:
-                from app.modules.catalog.outline_llm_service import _extract_json
                 text = await client.chat(prompt, purpose="大纲章节复习指导生成")
-                data = _extract_json(text)
+                data = extract_outline_llm_json(text)
                 guidance_map = data.get("guidance") if isinstance(data, dict) else data
                 if isinstance(guidance_map, list):
                     guidance_map = {g.get("id"): g.get("guidance") for g in guidance_map if isinstance(g, dict)}
@@ -634,24 +638,6 @@ class OutlineImportService:
             f"章节列表（JSON，id 是章节标识）：\n{chapters_json}\n\n"
             "只输出 JSON，格式：{\"guidance\": {\"<章节id>\": \"复习指导文本\", ...}}，不要任何解释。"
         )
-
-    @staticmethod
-    def _count_tree(chapters: List[Dict[str, Any]]) -> int:
-        n = 0
-        for c in chapters:
-            n += 1
-            n += OutlineImportService._count_tree(c.get("children") or [])
-        return n
-
-    @staticmethod
-    def _max_depth(chapters: List[Dict[str, Any]], current: int = 1) -> int:
-        if not chapters:
-            return 0
-        return max(
-            OutlineImportService._max_depth(c.get("children") or [], current + 1) or current
-            for c in chapters
-        )
-
 
 async def list_outlines(session: AsyncSession) -> List[Dict[str, Any]]:
     rows = (await session.execute(

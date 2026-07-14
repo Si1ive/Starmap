@@ -9,7 +9,6 @@
 与题目抽取的「题干/选项分离 + 兜底」机制完全无关，是独立的大纲处理路径。
 """
 
-import ast
 import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -18,8 +17,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.models.mysql_models import Document, Subject
 from app.infrastructure.ai.llm_client import BaseLLMClient
+from app.models.mysql_models import Document, Subject
+from app.modules.catalog.outline_llm_parser import extract_outline_llm_json
+from app.modules.catalog.outline_tree import (
+    collect_outline_leaves,
+    count_outline_nodes,
+    max_outline_depth,
+    normalize_outline_chapters,
+)
 from app.modules.operations.settings_service import SystemSettingsService
 
 logger = get_logger(__name__)
@@ -52,206 +58,6 @@ class OutlineLLMClient(BaseLLMClient):
             self.max_tokens = 16000
         if not config.get("timeout_seconds"):
             self.timeout_seconds = 180
-
-
-def _repair_truncated_json(s: str) -> str:
-    """
-    修复被截断的 JSON：扫描一遍源串，追踪字符串状态和括号栈。
-    当截断点在字符串内部时，回退到该字符串开始前最后一个完整元素的位置，
-    丢弃残缺的半截值，然后关闭所有开放括号。
-
-    核心修复：解决了截断在 array 元素字符串中间时产生的悬挂逗号问题。
-    例如 ["val1", "val2" ← 截断 → 回退到 ["val1" → 补 "]" → ["val1"]（合法）
-    """
-    stack: List[str] = []          # 括号栈
-    in_string = False
-    escape = False
-    expecting_value = False        # 紧跟 ':' 后在等值
-
-    # 记录上一个 "安全截断点"：最近一次完成一个完整值/键之后的位置
-    last_safe = 0
-
-    i = 0
-    length = len(s)
-    while i < length:
-        ch = s[i]
-        if escape:
-            escape = False
-            i += 1
-            continue
-        if in_string:
-            if ch == '\\':
-                escape = True
-            elif ch == '"':
-                in_string = False
-                expecting_value = False
-                # 一个完整字符串刚结束，从此处往后都是安全的
-                last_safe = i + 1
-            i += 1
-            continue
-        if ch == '"':
-            in_string = True
-            i += 1
-            continue
-        if ch in '[{':
-            stack.append(ch)
-            expecting_value = False
-            last_safe = i + 1
-        elif ch in ']}':
-            if stack:
-                stack.pop()
-            expecting_value = False
-            last_safe = i + 1
-        elif ch == ':':
-            expecting_value = True
-            last_safe = i + 1
-        elif ch == ',':
-            expecting_value = False
-            last_safe = i + 1
-        elif ch in ' \t\n\r':
-            pass
-        else:  # 数字 / 字面量字符
-            expecting_value = False
-        i += 1
-
-    # 如果截断在一个未闭合的字符串内，回退到 last_safe（丢弃半截值），
-    # 并重置 in_string（半截值已丢弃，不再处于字符串内）
-    if in_string and last_safe < length:
-        result = s[:last_safe]
-        in_string = False
-    else:
-        result = s
-
-    # 如果':'后没有值，补 null
-    if expecting_value and not in_string:
-        result += ' null'
-
-    # 关闭所有开放括号
-    while stack:
-        result += ']' if stack.pop() == '[' else '}'
-
-    # 清理悬挂逗号: ",]" → "]"，",}" → "}"
-    result = re.sub(r',(\s*[\]}])', r'\1', result)
-    return result
-
-
-def _extract_json(text: str) -> Any:
-    """
-    从 LLM 返回里抠出 JSON（容忍 ```json 包裹 / 前后噪声 / 单引号 / 尾部逗号 / 截断）。
-    """
-    if not text:
-        raise ValueError("LLM 返回为空")
-    cleaned = text.strip()
-
-    # 去掉 ```json ... ``` 包裹
-    fence = re.search(r"```(?:json)?\s*(.*?)```", cleaned, re.DOTALL | re.IGNORECASE)
-    if fence:
-        cleaned = fence.group(1).strip()
-
-    # 退而求其次：截取首个 { 到末个 }
-    if not cleaned.startswith("{") and not cleaned.startswith("["):
-        start = cleaned.find("{")
-        if start == -1:
-            start = cleaned.find("[")
-        end = cleaned.rfind("}")
-        if end == -1:
-            end = cleaned.rfind("]")
-        if start != -1 and end != -1 and end > start:
-            cleaned = cleaned[start:end + 1]
-
-    # 移除注释 (// 和 /* */)
-    cleaned = re.sub(r'//.*?$', '', cleaned, flags=re.MULTILINE)
-    cleaned = re.sub(r'/\*.*?\*/', '', cleaned, flags=re.DOTALL)
-
-    # 修复尾部逗号
-    cleaned = re.sub(r',\s*}', '}', cleaned)
-    cleaned = re.sub(r',\s*]', ']', cleaned)
-
-    try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError as e:
-        error_msg = str(e)
-
-        # 截断修复：基于括号栈和字符串状态智能补全
-        if "Unterminated string" in error_msg or "Expecting" in error_msg:
-            try:
-                repaired = _repair_truncated_json(cleaned)
-                result = json.loads(repaired)
-                logger.info(
-                    "JSON 截断修复成功",
-                    added_len=len(repaired) - len(cleaned),
-                    added_tail=repaired[len(cleaned):][:50],
-                )
-                return result
-            except json.JSONDecodeError:
-                pass
-
-        # 兜底：ast.literal_eval（支持单引号字典字面量）
-        try:
-            if cleaned.startswith('{') or cleaned.startswith('['):
-                result = ast.literal_eval(cleaned)
-                return json.loads(json.dumps(result))
-        except Exception:
-            pass
-
-        logger.error("JSON 解析失败", error=error_msg, text_preview=text[:1000])
-        raise ValueError(f"JSON 解析失败: {error_msg[:200]}。原始文本前 500 字符: {text[:500]}")
-
-
-def _normalize_chapters(raw: Any) -> List[Dict[str, Any]]:
-    """递归清洗 LLM 输出的章节树：name 必填，保留 outline_code/description/enhanced_description/keywords/cross_references/children。"""
-    result: List[Dict[str, Any]] = []
-    if not isinstance(raw, list):
-        return result
-    for idx, node in enumerate(raw):
-        if not isinstance(node, dict):
-            continue
-        name = str(node.get("name") or node.get("title") or "").strip()
-        if not name:
-            continue
-        children = _normalize_chapters(node.get("children") or [])
-
-        # 处理 enhanced_description
-        enhanced_desc = node.get("enhanced_description")
-        if enhanced_desc:
-            enhanced_desc = str(enhanced_desc).strip()[:1000]  # 限制长度
-
-        # 处理 keywords
-        keywords = node.get("keywords")
-        if keywords:
-            if isinstance(keywords, list):
-                keywords = [str(k).strip() for k in keywords if k][:50]  # 最多50个关键词
-            else:
-                keywords = None
-
-        result.append({
-            "name": name[:200],
-            "outline_code": (str(node.get("outline_code")).strip()[:50] if node.get("outline_code") else None),
-            "description": (str(node.get("description")).strip() if node.get("description") else None),
-            "enhanced_description": enhanced_desc,
-            "keywords": keywords,
-            "cross_references": node.get("cross_references") if isinstance(node.get("cross_references"), list) else None,
-            "sort_order": idx,
-            "children": children,
-        })
-    return result
-
-
-def _count_tree(chapters: List[Dict[str, Any]]) -> int:
-    n = 0
-    for c in chapters:
-        n += 1
-        n += _count_tree(c.get("children") or [])
-    return n
-
-
-def _max_depth(chapters: List[Dict[str, Any]], current: int = 1) -> int:
-    if not chapters:
-        return 0
-    return max(
-        _max_depth(c.get("children") or [], current + 1) or current
-        for c in chapters
-    )
 
 
 _SPLIT_PROMPT = """下面是一门课《{subject_name}》的考试大纲文本。请把它拆成结构化 JSON。
@@ -584,8 +390,8 @@ class OutlineLLMService:
         for attempt in range(2):
             try:
                 text = await client.chat(prompt, purpose=f"大纲骨架拆分-{subject_name}")
-                data = _extract_json(text)
-                chapters = _normalize_chapters(data.get("chapters") or [])
+                data = extract_outline_llm_json(text)
+                chapters = normalize_outline_chapters(data.get("chapters") or [])
                 if not chapters:
                     raise ValueError("骨架拆分结果章节为空")
                 skeleton = {
@@ -601,7 +407,7 @@ class OutlineLLMService:
             raise ValueError(f"《{subject_name}》骨架拆分失败: {last_err}")
 
         # ===== 第2轮：批量增强叶子节点 =====
-        leaf_nodes = self._collect_leaf_nodes(skeleton["chapters"])
+        leaf_nodes = collect_outline_leaves(skeleton["chapters"])
         if leaf_nodes:
             logger.info("开始批量增强叶子节点", subject=subject_name, leaf_count=len(leaf_nodes))
             await self._enhance_leaf_nodes_batched(client, subject_name, leaf_nodes)
@@ -609,18 +415,6 @@ class OutlineLLMService:
             logger.info("无叶子节点需要增强", subject=subject_name)
 
         return skeleton
-
-    @staticmethod
-    def _collect_leaf_nodes(chapters: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """收集章节树中所有叶子节点（无 children 或 children 为空的节点）。"""
-        result: List[Dict[str, Any]] = []
-        for ch in chapters:
-            children = ch.get("children") or []
-            if children:
-                result.extend(OutlineLLMService._collect_leaf_nodes(children))
-            else:
-                result.append(ch)
-        return result
 
     async def _build_chapter_catalog(self) -> str:
         """
@@ -706,7 +500,7 @@ class OutlineLLMService:
                 )
                 try:
                     text = await client.chat(prompt, purpose=f"大纲增强-{subject_name}-批{batch_idx+1}")
-                    data = _extract_json(text)
+                    data = extract_outline_llm_json(text)
                     enhancements = data.get("items") if isinstance(data, dict) else data
                     if not isinstance(enhancements, list):
                         logger.warning("增强返回格式不正确，跳过此批", batch_idx=batch_idx)
@@ -759,7 +553,7 @@ class OutlineLLMService:
         exam_objective = None
         try:
             text = await client.chat(objective_prompt, purpose=f"提取考察目标-{subject_name}")
-            data = _extract_json(text)
+            data = extract_outline_llm_json(text)
             exam_objective = data.get("exam_objective")
         except Exception as e:
             logger.warning("提取考察目标失败，继续处理", subject=subject_name, error=str(e))
@@ -774,8 +568,8 @@ class OutlineLLMService:
             chunk_prompt = _SKELETON_PROMPT.format(subject_name=subject_name, content=chunk[:30000])
             try:
                 text = await client.chat(chunk_prompt, purpose=f"大纲骨架拆分-{subject_name}-块{i+1}")
-                data = _extract_json(text)
-                chapters = _normalize_chapters(data.get("chapters") or [])
+                data = extract_outline_llm_json(text)
+                chapters = normalize_outline_chapters(data.get("chapters") or [])
                 all_chapters.extend(chapters)
             except Exception as e:
                 logger.warning("某块骨架拆分失败，跳过", subject=subject_name, chunk=i+1, error=str(e))
@@ -784,7 +578,7 @@ class OutlineLLMService:
             raise ValueError(f"《{subject_name}》所有块拆分均失败")
 
         # 4. 批量增强叶子节点
-        leaf_nodes = self._collect_leaf_nodes(all_chapters)
+        leaf_nodes = collect_outline_leaves(all_chapters)
         if leaf_nodes:
             logger.info("开始批量增强叶子节点（分块模式）", subject=subject_name, leaf_count=len(leaf_nodes))
             await self._enhance_leaf_nodes_batched(client, subject_name, leaf_nodes)
@@ -848,7 +642,7 @@ class OutlineLLMService:
             "subject_code": subject.code,
             "subject_name": subject.name,
             "exam_objective": parsed.get("exam_objective"),
-            "total_chapters": _count_tree(chapters),
-            "max_depth": _max_depth(chapters),
+            "total_chapters": count_outline_nodes(chapters),
+            "max_depth": max_outline_depth(chapters),
             "chapters": chapters,
         }
