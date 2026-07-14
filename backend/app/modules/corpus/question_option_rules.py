@@ -12,7 +12,7 @@ OPTION_SEPARATOR_RE = re.compile(
 # 408 单选恒为 A-D。放宽到 A-H 会把图 G、访问位 R、修改位 M 等题干符号
 # 误判为选项标记。
 OPTION_MARKER_RE = re.compile(
-    r"([A-D])"
+    r"(?<![A-Za-z])([A-D])"
     r"(?:\s*(?:[.．、:：。]|<sub>\s*[.．、:：。]\s*</sub>)\s*|\s+)"
     r"(?=\S)"
 )

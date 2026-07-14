@@ -1,10 +1,27 @@
 """BBox-based grouping and parsing rules for extracted questions."""
 
-import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.logging import get_logger
+from app.modules.corpus.question_group_content import (
+    EMBEDDED_QUESTION_NUMERIC_RE,
+    OPTION_CONTINUATION_GAP_RATIO,
+    OPTION_CONTINUATION_LEFT_MARGIN,
+    QUESTION_CUE_RE,
+    QUESTION_EXAMPLE_RE,
+    QUESTION_NUMERIC_RE,
+    QUESTION_PAREN_RE,
+    QUESTION_TITLE_RE,
+    classify_group,
+    extract_figures,
+    extract_full_stem,
+    extract_options,
+    extract_question_no,
+    extract_stem,
+    group_text,
+    should_append_to_last_option,
+)
 from app.modules.corpus.question_layout_geometry import (
     COLUMN_GAP_MIN,
     COLUMN_MIN_BLOCKS_PER_COL,
@@ -31,29 +48,16 @@ from app.modules.corpus.question_option_rules import (
     has_inline_options,
     parse_options_from_text,
 )
-from app.modules.corpus.question_type import is_subjective_question_text
 
 logger = get_logger(__name__)
-
-
-QUESTION_NUMERIC_RE = re.compile(r'^\s*(\d{1,3})(?:\s*[.、．。]\s*|\s+)(?=\S)')
-EMBEDDED_QUESTION_NUMERIC_RE = re.compile(r'(?<!\d)(\d{1,3})(?:\s*[.、．。]\s*|\s+)(?=\S)')
-QUESTION_TITLE_RE = re.compile(r'^\s*第\s*([一二三四五六七八九十百千\d]+)\s*题')
-QUESTION_PAREN_RE = re.compile(r'^\s*[（(]\s*(\d{1,3})\s*[）)]\s*\S+')
-QUESTION_EXAMPLE_RE = re.compile(r'^\s*例\s*\d+')
-QUESTION_CUE_RE = re.compile(
-    r'[?？]|下列|以下|关于|若|设|已知|正确|错误|不是|可以|能够|应|属于|采用|'
-    r'给出|求|计算|证明|说明|分析|为什么|多少|哪个|哪些|如果|判断'
-)
-
 
 # ===== QuestionLayoutGrouper: 基于 bbox 坐标的题目分组器 =====
 
 # 阈值常量
-LEFT_EDGE_MARGIN = 30       # 0-1000 坐标系，约 3% 页宽
+LEFT_EDGE_MARGIN = OPTION_CONTINUATION_LEFT_MARGIN
 GAP_RATIO_NEW_QUESTION = 3.0
 GAP_RATIO_PAREN_Q = 1.5
-GAP_RATIO_CONTINUATION = 1.5
+GAP_RATIO_CONTINUATION = OPTION_CONTINUATION_GAP_RATIO
 @dataclass
 class BlockTag:
     block: Any
@@ -278,154 +282,22 @@ class QuestionLayoutGrouper:
         return find_inline_option_start(text)
 
     def _extract_stem(self, group: QuestionGroup) -> str:
-        if is_subjective_question_text(self._group_text(group)):
-            return self._extract_full_stem(group)
-
-        parts: List[str] = []
-        in_options = False
-        recoverable_inline = self._find_recoverable_inline_option(group)
-        for block_idx, block in enumerate(group.blocks):
-            text = getattr(block, "content_text", None) or getattr(block, "content_md", None) or ""
-            text = text.strip()
-            if not text:
-                continue
-            if OPTION_BLOCK_RE.match(text):
-                in_options = True
-            if in_options:
-                continue
-            block_type = getattr(block, "block_type", "") or ""
-            if block_type.lower() in ("figure", "table", "formula", "image", "chart"):
-                # media 块通常是纯图表，内容不混进题干。但 MinerU 常把"题干文字+数据表"
-                # 混成一个 table 块（如第47题），块内带题号的文字正是题干，需纳入；
-                # 纯图表（无题号文字）仍跳过。
-                if QUESTION_NUMERIC_RE.match(text):
-                    parts.append(text)
-                continue
-            if recoverable_inline and block_idx == recoverable_inline[0]:
-                stem_part = text[:recoverable_inline[1]].strip()
-                if stem_part:
-                    parts.append(stem_part)
-                in_options = True
-                continue
-            # 题干+选项同块：只保留选项标记之前的题干，选项部分留给 _extract_options 处理
-            if self._has_inline_options(text):
-                opt_start = self._find_inline_option_start(text)
-                if opt_start > 0:
-                    stem_part = text[:opt_start].strip()
-                    if stem_part:
-                        parts.append(stem_part)
-                    in_options = True
-                    continue
-            parts.append(text)
-        # 用空格而非换行拼接 stem
-        return " ".join(parts)
+        """Compatibility delegate for question stem extraction."""
+        return extract_stem(group.blocks)
 
     def _extract_options(self, group: QuestionGroup) -> List[Dict[str, str]]:
-        """从组内提取选项（含跨 block 合并）"""
-        if is_subjective_question_text(self._group_text(group)):
-            return []
-
-        option_blocks: List[Dict[str, Any]] = []
-        non_option_after: List[Any] = []
-        last_option_block: Optional[Any] = None
-
-        option_phase = False
-        recoverable_inline = self._find_recoverable_inline_option(group)
-        for block_idx, block in enumerate(group.blocks):
-            text = getattr(block, "content_text", None) or getattr(block, "content_md", None) or ""
-            text = text.strip()
-            block_type = getattr(block, "block_type", "") or ""
-
-            if recoverable_inline and block_idx == recoverable_inline[0]:
-                option_phase = True
-                option_blocks.append({
-                    "text": text[recoverable_inline[1]:],
-                    "block": block,
-                    "is_option": True,
-                })
-                last_option_block = block
-            elif OPTION_BLOCK_RE.match(text):
-                option_phase = True
-                option_blocks.append({"text": text, "block": block, "is_option": True})
-                last_option_block = block
-            elif not option_phase and self._has_inline_options(text):
-                # 题干+选项同块：切出选项标记之后的部分作为选项文本
-                opt_start = self._find_inline_option_start(text)
-                if opt_start >= 0:
-                    option_phase = True
-                    option_blocks.append({"text": text[opt_start:], "block": block, "is_option": True})
-                    last_option_block = block
-            elif option_phase:
-                # 媒体块不应作为选项尾部文字合并
-                if (
-                    block_type.lower() not in ("figure", "table", "formula", "image", "chart")
-                    and last_option_block is not None
-                    and self._should_append_to_last_option(last_option_block, block)
-                ):
-                    non_option_after.append(block)
-
-        if not option_blocks:
-            return []
-
-        # 从选项块中解析出各个选项
-        all_option_text = " ".join(ob["text"] for ob in option_blocks)
-
-        options = self._parse_options_from_text(all_option_text)
-
-        # 处理跨 block 的选项尾部文字
-        if non_option_after and options:
-            trailing_text = " ".join(
-                getattr(b, "content_text", None) or getattr(b, "content_md", None) or ""
-                for b in non_option_after
-            ).strip()
-            if trailing_text and not QUESTION_NUMERIC_RE.match(trailing_text):
-                options[-1]["text"] = options[-1]["text"] + " " + trailing_text
-
-        return options
+        """Compatibility delegate for question option extraction."""
+        return extract_options(group.blocks, self.page_stats)
 
     @staticmethod
     def _group_text(group: QuestionGroup) -> str:
-        return " ".join(
-            (
-                getattr(block, "content_text", None)
-                or getattr(block, "content_md", None)
-                or ""
-            ).strip()
-            for block in group.blocks
-            if (
-                getattr(block, "content_text", None)
-                or getattr(block, "content_md", None)
-                or ""
-            ).strip()
-        )
+        """Compatibility delegate for question group text assembly."""
+        return group_text(group.blocks)
 
     @staticmethod
     def _extract_full_stem(group: QuestionGroup) -> str:
-        parts: List[str] = []
-        for block in group.blocks:
-            text = (
-                getattr(block, "content_text", None)
-                or getattr(block, "content_md", None)
-                or ""
-            ).strip()
-            if not text:
-                continue
-            block_type = (
-                getattr(block, "block_type", "") or ""
-            ).lower()
-            if (
-                block_type in (
-                    "figure",
-                    "table",
-                    "formula",
-                    "image",
-                    "chart",
-                )
-                and not QUESTION_NUMERIC_RE.match(text)
-            ):
-                continue
-            parts.append(text)
-        return " ".join(parts)
+        """Compatibility delegate for subjective stem extraction."""
+        return extract_full_stem(group.blocks)
 
     @staticmethod
     def _find_recoverable_inline_option(group: QuestionGroup) -> Optional[Tuple[int, int]]:
@@ -433,72 +305,24 @@ class QuestionLayoutGrouper:
         return find_recoverable_inline_option(group.blocks)
 
     def _should_append_to_last_option(self, option_block: Any, continuation_block: Any) -> bool:
-        text = (
-            getattr(continuation_block, "content_text", None)
-            or getattr(continuation_block, "content_md", None)
-            or ""
-        ).strip()
-        if not text:
-            return False
-        if QUESTION_NUMERIC_RE.match(text) or QUESTION_PAREN_RE.match(text) or OPTION_BLOCK_RE.match(text):
-            return False
-
-        option_bbox = getattr(option_block, "bbox", None) or {}
-        cont_bbox = getattr(continuation_block, "bbox", None) or {}
-        option_y1 = self._bbox_y1(option_bbox)
-        cont_y0 = self._bbox_y0(cont_bbox)
-        option_x0 = self._bbox_x0(option_bbox)
-        option_x1 = self._bbox_x1(option_bbox)
-        cont_x0 = self._bbox_x0(cont_bbox)
-
-        if option_y1 is not None and cont_y0 is not None and cont_y0 < option_y1:
-            return False
-
-        page_no = getattr(option_block, "page_no", None) or getattr(continuation_block, "page_no", None) or 1
-        stats = self.page_stats.get(page_no)
-        if stats and option_y1 is not None and cont_y0 is not None:
-            gap = max(0.0, cont_y0 - option_y1)
-            gap_ratio = gap / max(stats.median_gap, 1.0)
-            if gap_ratio >= GAP_RATIO_CONTINUATION:
-                return False
-
-        if option_x0 is not None and option_x1 is not None and cont_x0 is not None:
-            if cont_x0 > option_x1 + LEFT_EDGE_MARGIN:
-                return False
-
-        return True
+        """Compatibility delegate for option continuation detection."""
+        return should_append_to_last_option(
+            option_block,
+            continuation_block,
+            self.page_stats,
+        )
 
     def _parse_options_from_text(self, text: str) -> List[Dict[str, str]]:
         """Compatibility delegate for option text parsing."""
         return parse_options_from_text(text)
 
     def _extract_figures(self, group: QuestionGroup) -> List[str]:
-        figure_ids: List[str] = []
-        for block in group.blocks:
-            block_type = getattr(block, "block_type", "") or ""
-            if block_type.lower() in ("figure", "table", "formula", "image", "chart"):
-                block_id = getattr(block, "id", None)
-                if block_id:
-                    figure_ids.append(block_id)
-        return figure_ids
+        """Compatibility delegate for media block extraction."""
+        return extract_figures(group.blocks)
 
     def _extract_question_no(self, group: QuestionGroup) -> Optional[int]:
-        for block in group.blocks:
-            text = getattr(block, "content_text", None) or getattr(block, "content_md", None) or ""
-            text = text.strip()
-            m = QUESTION_NUMERIC_RE.match(text)
-            if m:
-                return int(m.group(1))
-            m = QUESTION_PAREN_RE.match(text)
-            if m:
-                return int(m.group(1))
-            m = QUESTION_TITLE_RE.match(text)
-            if m:
-                try:
-                    return int(m.group(1))
-                except ValueError:
-                    pass
-        return None
+        """Compatibility delegate for question number extraction."""
+        return extract_question_no(group.blocks)
 
     def classify_group(
         self, group: QuestionGroup, options: List[Dict[str, str]], question_no: Optional[int]
@@ -513,20 +337,7 @@ class QuestionLayoutGrouper:
           3. 有明确疑问特征(下列/正确的是/？等) → 题目（大题/简答）
           4. 都没有 → 知识点候选(uncertain，交给上层决定或 LLM)
         """
-        if options and len(options) >= 2:
-            return "question", "has_options"
-        if question_no is not None:
-            return "question", "has_question_no"
-
-        # 疑问特征：合并组内全部文本再判，避免题干被拆到多个 block 时漏判
-        joined = " ".join(
-            (getattr(b, "content_text", None) or getattr(b, "content_md", None) or "")
-            for b in group.blocks
-        )
-        if QUESTION_CUE_RE.search(joined):
-            return "question", "has_cue"
-
-        return "uncertain", "no_signal"
+        return classify_group(group.blocks, options, question_no)
 
     # ---- Phase 5: 跨页处理 ----
 

@@ -63,6 +63,17 @@ def test_parse_options_from_text_supports_mineru_separators():
     ]
 
 
+def test_parse_options_from_text_ignores_letters_inside_english_words():
+    options = parse_options_from_text(
+        "A rear-length B (rear-length+m) MOD m "
+        "C (rear+1-length+m) MOD m D rear+length"
+    )
+
+    assert [option["key"] for option in options] == ["A", "B", "C", "D"]
+    assert options[1]["text"] == "(rear-length+m) MOD m"
+    assert options[2]["text"] == "(rear+1-length+m) MOD m"
+
+
 def test_parse_options_from_text_stops_at_repeated_marker():
     options = parse_options_from_text(
         "A 选项一 B 选项二 C 选项三 D 选项四 C 重复残块"
