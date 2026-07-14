@@ -24,6 +24,7 @@ from app.modules.corpus.document_parse_service import (
     generate_id,
 )
 from app.modules.corpus.file_service import CorpusFileService
+from app.modules.corpus.parser_runtime import validate_mineru_parser_name
 
 logger = get_logger(__name__)
 
@@ -325,9 +326,7 @@ class OutlineParseTaskService:
 
     @staticmethod
     def _validate_parser_name(parser_name: Optional[str]) -> None:
-        normalized = (parser_name or OUTLINE_PARSER_NAME).strip().lower()
-        if normalized != OUTLINE_PARSER_NAME:
-            raise ValueError("大纲 PDF 解析器固定使用 MinerU")
+        validate_mineru_parser_name(parser_name)
 
     @staticmethod
     def _schedule(job: OutlineParseJob) -> None:

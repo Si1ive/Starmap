@@ -5,6 +5,7 @@ import type {
   CorpusFile,
   ParseRun,
   ParseCorpusFileRequest,
+  DocumentParserName,
   CorpusDocument,
   DocumentSection,
   SectionMapping,
@@ -471,7 +472,7 @@ export const getDocumentPageAnalysis = (
   blocks: Array<any>
   assets: Array<any>
   raw_parse_data: any
-  parser_name?: string
+  parser_name?: DocumentParserName
 }>> => {
   return adminClient.get(`/corpus/documents/${documentId}/page-analysis`, {
     params: { page_no: pageNo },

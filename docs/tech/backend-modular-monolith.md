@@ -304,6 +304,10 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - `/api/v1/admin/settings*` 配置查询、保存、MinerU 配置历史及 LLM 连通性测试
   接口已迁移到 `app/modules/operations/settings_router.py`；原 URL、管理员鉴权、
   API Key 脱敏和响应行为保持不变
+- PDF 解析运行时已移除多解析器注册、选择和支持列表抽象；主后端、管理端和独立
+  `parser_service` 均固定构造 MinerU，仅保留本地/远程部署位置、运行参数以及
+  `parser_name=mineru` 兼容字段，非 MinerU 输入在接口边界直接拒绝；旧响应中的
+  解析器列表字段保留为单元素 MinerU 快照，不再参与运行时选择
 - OpenAI 兼容 LLM 与 Embedding 客户端已迁移到 `app/infrastructure/ai`，由语料、
   内容、目录、检索、聊天和运营配置模块共享；两个旧 `app/services/*.py` 文件已删除
 - 公共问答编排和 `/api/v1/chat*` 路由已迁移到 `app/modules/chat`，最后一个旧

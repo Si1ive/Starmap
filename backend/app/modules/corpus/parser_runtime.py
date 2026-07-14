@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
 import requests
@@ -21,6 +21,8 @@ from app.modules.corpus.parser_types import (
     ParserUnavailableError,
     PdfParserRuntimeConfig,
 )
+
+MINERU_PARSER_NAME = "mineru"
 
 
 def normalize_runtime_config(
@@ -58,7 +60,7 @@ def normalize_runtime_config(
     ).strip()
 
     return PdfParserRuntimeConfig(
-        active_parser="mineru",
+        active_parser=MINERU_PARSER_NAME,
         deployment_target=deployment_target,
         local_service_endpoint=local_endpoint,
         remote_service_endpoint=remote_endpoint,
@@ -72,27 +74,21 @@ def is_valid_url(value: str) -> bool:
     return bool(parsed.scheme and parsed.netloc)
 
 
-def get_parser(parser_name: str) -> DocumentParser:
-    normalized = (parser_name or "").strip().lower()
-    if normalized == "mineru":
-        return MinerUParser()
-    raise ValueError(f"不支持的解析器: {parser_name}")
+def validate_mineru_parser_name(parser_name: Optional[str]) -> None:
+    """校验兼容字段，但不提供解析器选择能力。"""
+    normalized = (parser_name or MINERU_PARSER_NAME).strip().lower()
+    if normalized != MINERU_PARSER_NAME:
+        raise ValueError("PDF 解析器固定使用 MinerU")
 
 
-def get_supported_parser_names() -> List[str]:
-    return ["mineru"]
-
-
-def inspect_parser_health(
-    parser_name: str,
+def inspect_mineru_health(
     runtime_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    normalized = (parser_name or "").strip().lower()
     config = normalize_runtime_config(runtime_config)
     checked_at = datetime.now(timezone.utc).isoformat()
 
     if config.deployment_target == "embedded":
-        parser = get_parser(normalized)
+        parser = MinerUParser()
         try:
             try:
                 from mineru.cli.common import convert_single_pdf  # type: ignore
@@ -136,7 +132,7 @@ def inspect_parser_health(
 
     if not service_endpoint:
         return {
-            "parser_name": normalized,
+            "parser_name": MINERU_PARSER_NAME,
             "parser_version": "service",
             "health_status": "unavailable",
             "is_available": False,
@@ -150,7 +146,7 @@ def inspect_parser_health(
 
     if not is_valid_url(service_endpoint):
         return {
-            "parser_name": normalized,
+            "parser_name": MINERU_PARSER_NAME,
             "parser_version": "service",
             "health_status": "unavailable",
             "is_available": False,
@@ -165,13 +161,13 @@ def inspect_parser_health(
     try:
         response = requests.get(
             f"{service_endpoint.rstrip('/')}/health",
-            params={"parser_name": normalized},
+            params={"parser_name": MINERU_PARSER_NAME},
             timeout=min(config.request_timeout_seconds, 10),
         )
         if response.status_code >= 400:
             detail = extract_service_error_detail(response)
             return {
-                "parser_name": normalized,
+                "parser_name": MINERU_PARSER_NAME,
                 "parser_version": "service",
                 "health_status": "unavailable",
                 "is_available": False,
@@ -187,7 +183,9 @@ def inspect_parser_health(
         payload = response.json() if response.content else {}
         data = unwrap_service_payload(payload) if payload else {}
         return {
-            "parser_name": str(data.get("parser_name") or normalized),
+            "parser_name": str(
+                data.get("parser_name") or MINERU_PARSER_NAME
+            ),
             "parser_version": str(
                 data.get("parser_version") or "service"
             ),
@@ -200,7 +198,7 @@ def inspect_parser_health(
         }
     except requests.RequestException as exc:
         return {
-            "parser_name": normalized,
+            "parser_name": MINERU_PARSER_NAME,
             "parser_version": "service",
             "health_status": "unavailable",
             "is_available": False,
@@ -214,7 +212,7 @@ def inspect_parser_health(
         }
     except Exception as exc:
         return {
-            "parser_name": normalized,
+            "parser_name": MINERU_PARSER_NAME,
             "parser_version": "service",
             "health_status": "unavailable",
             "is_available": False,
@@ -227,19 +225,18 @@ def inspect_parser_health(
         }
 
 
-def choose_parser(
-    requested_parser: Optional[str],
+def create_mineru_parser(
     runtime_config: Optional[Dict[str, Any]] = None,
 ) -> DocumentParser:
-    """Choose the MinerU adapter for the configured deployment target."""
+    """按配置的部署位置构造 MinerU 适配器。"""
     config = normalize_runtime_config(runtime_config)
-    parser_name = (requested_parser or "mineru").strip().lower()
-    if parser_name != "mineru":
-        raise ValueError(f"不支持的解析器: {parser_name}")
+
+    if config.deployment_target == "embedded":
+        return MinerUParser()
 
     if config.deployment_target == "local":
         return LocalParserServiceClient(
-            parser_name=parser_name,
+            parser_name=MINERU_PARSER_NAME,
             endpoint=config.local_service_endpoint,
             timeout_seconds=config.request_timeout_seconds,
             processing_window_size=config.processing_window_size,
@@ -248,16 +245,16 @@ def choose_parser(
     if config.deployment_target == "remote":
         if not config.remote_service_endpoint:
             raise ParserUnavailableError(
-                parser_name,
+                MINERU_PARSER_NAME,
                 "当前已切换到远程解析服务模式，但尚未配置远程服务地址",
             )
         if not is_valid_url(config.remote_service_endpoint):
             raise ParserUnavailableError(
-                parser_name,
+                MINERU_PARSER_NAME,
                 f"远程解析服务地址格式不合法：{config.remote_service_endpoint}",
             )
         return RemoteParserServiceClient(
-            parser_name=parser_name,
+            parser_name=MINERU_PARSER_NAME,
             endpoint=config.remote_service_endpoint,
             timeout_seconds=config.request_timeout_seconds,
             processing_window_size=config.processing_window_size,

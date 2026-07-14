@@ -26,7 +26,7 @@
 | `parser_types.py` | `DocumentParser`、标准页面/块/资产/结果与运行配置契约 |
 | `mineru_parser.py` | 嵌入式 MinerU 调用、原始输出归一化、图片资产内联 |
 | `parser_service_client.py` | 本地/远程 HTTP 调用、进度查询和响应反序列化 |
-| `parser_runtime.py` | 配置归一化、部署目标选择、解析器注册与健康检查 |
+| `parser_runtime.py` | MinerU 配置归一化、部署目标适配器构造与健康检查 |
 | `document_parse_service.py` | 解析任务编排、运行状态和标准结果持久化 |
 | `document_store.py` | 文档、页面、块和资产落库 |
 
@@ -52,14 +52,14 @@ MinerU 的 `content_list` 字段、版本差异和临时输出目录只在适配
 ```text
 CorpusFile
   -> DocumentParseService
-  -> parser_runtime.choose_parser()
+  -> parser_runtime.create_mineru_parser()
   -> LocalParserServiceClient / RemoteParserServiceClient
   -> MinerU parser service
   -> ParsedDocumentResult
   -> ParsedDocumentStore
 ```
 
-独立 parser 进程直接通过 `parser_runtime.get_parser("mineru")` 获取嵌入式适配器。
+独立 parser 进程通过 `parser_runtime.create_mineru_parser()` 获取嵌入式适配器。
 主后端默认通过 HTTP 调用解析服务，避免安装和加载重型 MinerU 依赖。
 
 ## 5. 服务协议

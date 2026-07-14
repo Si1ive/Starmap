@@ -133,7 +133,7 @@ async def test_update_pdf_parser_executes_local_health_check_and_audit():
     service.save = AsyncMock(side_effect=lambda data: data)
 
     with patch(
-        "app.modules.operations.settings_service.inspect_parser_health",
+        "app.modules.operations.settings_service.inspect_mineru_health",
         return_value={"health_status": "ready"},
     ) as inspect_health:
         saved = await service.update_pdf_parser(

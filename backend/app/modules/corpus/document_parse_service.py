@@ -23,7 +23,10 @@ from app.modules.corpus.document_store import (
     generate_id,
 )
 from app.modules.corpus.entity_persistence import cleanup_document_entities
-from app.modules.corpus.parser_runtime import choose_parser
+from app.modules.corpus.parser_runtime import (
+    create_mineru_parser,
+    validate_mineru_parser_name,
+)
 from app.modules.corpus.parser_types import ParserUnavailableError
 from app.modules.corpus.parse_progress import (
     MinerUProgressHandler,
@@ -47,9 +50,10 @@ class DocumentParseService:
         return generate_id()
 
     async def _get_parser(self, parser_name: Optional[str] = None):
-        """获取解析器实例（供 API 层提前检查用）"""
+        """获取 MinerU 实例（供 API 层提前检查用）。"""
+        validate_mineru_parser_name(parser_name)
         runtime_config = await SystemSettingsService(self.db).get_pdf_parser_runtime_config()
-        return choose_parser(requested_parser=parser_name, runtime_config=runtime_config)
+        return create_mineru_parser(runtime_config=runtime_config)
 
     async def parse_document(
         self,
@@ -92,10 +96,8 @@ class DocumentParseService:
             )
 
         runtime_config = await SystemSettingsService(self.db).get_pdf_parser_runtime_config()
-        parser = choose_parser(
-            requested_parser=parser_name,
-            runtime_config=runtime_config,
-        )
+        validate_mineru_parser_name(parser_name)
+        parser = create_mineru_parser(runtime_config=runtime_config)
 
         # 2. 创建 parse_run
         parse_run = ParseRun(
@@ -319,9 +321,10 @@ class DocumentParseService:
             corpus_file.error_detail = None
             await self.db.commit()
 
-            # 2. 选择解析器
+            # 2. 构造固定的 MinerU 解析器
             runtime_config = await SystemSettingsService(self.db).get_pdf_parser_runtime_config()
-            parser = choose_parser(requested_parser=parser_name, runtime_config=runtime_config)
+            validate_mineru_parser_name(parser_name)
+            parser = create_mineru_parser(runtime_config=runtime_config)
 
             # 更新进度：开始解析
             parse_run.current_stage = "parsing"

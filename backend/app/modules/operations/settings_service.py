@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.models.mysql_models import AuditLog, SystemConfig
-from app.modules.corpus.parser_runtime import inspect_parser_health
+from app.modules.corpus.parser_runtime import inspect_mineru_health
 from app.modules.operations.crawler_settings import (
     normalize_crawler_settings,
     redact_crawler_runtime_config,
@@ -173,10 +173,7 @@ class SystemSettingsService:
         )
 
         if plan.requires_local_health_check:
-            parser_health = inspect_parser_health(
-                "mineru",
-                plan.next_config,
-            )
+            parser_health = inspect_mineru_health(plan.next_config)
             if parser_health.get("health_status") != "ready":
                 raise ValueError(
                     f"目标解析器 mineru 当前不可用：{parser_health.get('error_detail') or '未知错误'}。"

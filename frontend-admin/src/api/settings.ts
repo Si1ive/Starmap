@@ -52,7 +52,7 @@ export interface SystemSettings {
     request_timeout_seconds: number
     processing_window_size: number
     active_runtime_status?: PdfParserRuntimeStatus | null
-    available_parsers?: PdfParserRuntimeStatus[]
+    available_parsers?: [PdfParserRuntimeStatus]
   }
 }
 

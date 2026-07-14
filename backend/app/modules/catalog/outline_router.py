@@ -1,6 +1,6 @@
 """考试大纲导入、解析任务与章节树管理路由。"""
 
-from typing import Optional, List, Any, Dict
+from typing import Optional, List, Any, Dict, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
 from pydantic import BaseModel, Field
@@ -199,7 +199,7 @@ async def generate_outline_guidance(
 @router.post("/outlines/upload-parse", response_model=ApiResponse)
 async def upload_parse_outline(
     file: UploadFile = File(...),
-    parser_name: Optional[str] = Form(None),
+    parser_name: Optional[Literal["mineru"]] = Form(None),
     db: AsyncSession = Depends(get_db),
 ):
     """

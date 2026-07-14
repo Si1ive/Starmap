@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 import logging
 import os
 import re
@@ -17,15 +17,16 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 
 from app.core.logging import configure_logging, get_logger
 from app.modules.corpus.parser_runtime import (
-    get_parser,
-    get_supported_parser_names,
-    inspect_parser_health,
+    MINERU_PARSER_NAME,
+    create_mineru_parser,
+    inspect_mineru_health,
+    validate_mineru_parser_name,
 )
 from app.modules.corpus.parser_types import (
     ParsedAsset,
@@ -39,7 +40,6 @@ logger = get_logger(__name__)
 _MINERU_RUNTIME_LOCK = threading.Lock()
 
 APP_VERSION = "1.0.0"
-DEFAULT_PARSER = "mineru"
 
 # ========== 解析进度追踪 ==========
 # MinerU 解析被 _MINERU_RUNTIME_LOCK 串行化，同一时刻最多一个任务在跑，
@@ -136,29 +136,31 @@ def _install_progress_interceptors() -> None:
         logger.warning("标准 logging 拦截器挂载失败", error=str(exc))
 
 
-app = FastAPI(
-    title="StarMap PDF Parser Service",
-    description="独立 PDF 解析服务，供主 backend 通过 HTTP 调用",
-    version=APP_VERSION,
-)
-
-
-@app.on_event("startup")
-async def startup_event() -> None:
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
     configure_logging()
     _install_progress_interceptors()
     logger.info(
         "PDF 解析服务启动完成",
-        default_parser=DEFAULT_PARSER,
-        supported_parsers=get_supported_parser_names(),
+        parser_name=MINERU_PARSER_NAME,
     )
+    yield
+
+
+app = FastAPI(
+    title="StarMap PDF Parser Service",
+    description="独立 MinerU 解析服务，供主 backend 通过 HTTP 调用",
+    version=APP_VERSION,
+    lifespan=lifespan,
+)
 
 
 def _resolve_parser_name(parser_name: Optional[str]) -> str:
-    normalized = (parser_name or DEFAULT_PARSER).strip().lower()
-    if normalized != "mineru":
-        raise HTTPException(status_code=400, detail=f"不支持的解析器: {parser_name}")
-    return normalized
+    try:
+        validate_mineru_parser_name(parser_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return MINERU_PARSER_NAME
 
 
 def _serialize_parse_result(result: ParsedDocumentResult) -> Dict[str, Any]:
@@ -232,17 +234,17 @@ def _temporary_mineru_processing_window_size(value: Optional[int]):
 
 
 @app.get("/health")
-async def health_check(parser_name: Optional[str] = None) -> Dict[str, Any]:
-    normalized = _resolve_parser_name(parser_name)
-    health = inspect_parser_health(
-        normalized,
+async def health_check(
+    parser_name: Optional[Literal["mineru"]] = None,
+) -> Dict[str, Any]:
+    _resolve_parser_name(parser_name)
+    health = inspect_mineru_health(
         {
-            "active_parser": normalized,
             "deployment_target": "embedded",
         },
     )
     health["service_mode"] = "standalone_http"
-    health["default_parser"] = DEFAULT_PARSER
+    health["default_parser"] = MINERU_PARSER_NAME
     return {
         "code": 200,
         "message": "success",
@@ -253,7 +255,7 @@ async def health_check(parser_name: Optional[str] = None) -> Dict[str, Any]:
 @app.post("/parse")
 async def parse_document(
     file: UploadFile = File(...),
-    parser_name: Optional[str] = Form(default=None),
+    parser_name: Optional[Literal["mineru"]] = Form(default=None),
     processing_window_size: Optional[int] = Form(default=None),
     task_id: Optional[str] = Form(default=None),
 ) -> Dict[str, Any]:
@@ -261,10 +263,7 @@ async def parse_document(
     normalized = _resolve_parser_name(parser_name)
     suffix = Path(file.filename or "document.pdf").suffix or ".pdf"
 
-    try:
-        parser = get_parser(normalized)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    parser = create_mineru_parser({"deployment_target": "embedded"})
 
     # 初始化进度追踪
     if task_id:
@@ -350,8 +349,9 @@ async def root() -> Dict[str, Any]:
     return {
         "service": "pdf-parser-service",
         "version": APP_VERSION,
-        "default_parser": DEFAULT_PARSER,
-        "supported_parsers": get_supported_parser_names(),
+        "parser_name": MINERU_PARSER_NAME,
+        "default_parser": MINERU_PARSER_NAME,
+        "supported_parsers": [MINERU_PARSER_NAME],
         "health": "/health",
         "parse": "/parse",
     }

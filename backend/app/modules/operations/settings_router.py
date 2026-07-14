@@ -25,10 +25,7 @@ async def get_settings(db: Optional[AsyncSession] = Depends(get_optional_db)):
 
     返回当前系统配置，优先读取数据库持久化内容。
     """
-    from app.modules.corpus.parser_runtime import (
-        get_supported_parser_names,
-        inspect_parser_health,
-    )
+    from app.modules.corpus.parser_runtime import inspect_mineru_health
     from app.modules.operations.settings_service import (
         SystemSettingsService,
         LLM_CONFIG_KEYS,
@@ -43,17 +40,9 @@ async def get_settings(db: Optional[AsyncSession] = Depends(get_optional_db)):
             block["api_key"] = SECRET_KEEP_MASK
         masked_llm[key] = block
 
-    active_parser = runtime_settings["pdf_parser"]["active_parser"]
     parser_runtime_config = runtime_settings["pdf_parser"]
-    available_parsers = []
-    for parser_name in get_supported_parser_names():
-        parser_status = inspect_parser_health(parser_name, parser_runtime_config)
-        parser_status["is_active"] = parser_name == active_parser
-        available_parsers.append(parser_status)
-    active_runtime_status = next(
-        (item for item in available_parsers if item["is_active"]),
-        None,
-    )
+    active_runtime_status = inspect_mineru_health(parser_runtime_config)
+    active_runtime_status["is_active"] = True
 
     return ApiResponse(
         code=200,
@@ -66,7 +55,7 @@ async def get_settings(db: Optional[AsyncSession] = Depends(get_optional_db)):
             "doc_meta_llm": masked_llm["doc_meta_llm"],
             "enrich_llm": masked_llm["enrich_llm"],
             "pdf_parser": {
-                "active_parser": active_parser,
+                "active_parser": "mineru",
                 "service_mode": runtime_settings["pdf_parser"]["service_mode"],
                 "service_switch_notes": runtime_settings["pdf_parser"][
                     "service_switch_notes"
@@ -87,7 +76,8 @@ async def get_settings(db: Optional[AsyncSession] = Depends(get_optional_db)):
                     "processing_window_size"
                 ],
                 "active_runtime_status": active_runtime_status,
-                "available_parsers": available_parsers,
+                # 兼容旧管理端读取契约；固定为唯一的 MinerU 状态快照。
+                "available_parsers": [active_runtime_status],
             },
         },
     )

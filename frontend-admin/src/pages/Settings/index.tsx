@@ -273,13 +273,8 @@ const Settings = () => {
     }
 
     if (isSwitching) {
-      const targetStatus = availableParsers.find((item) => item.parser_name === 'mineru')
       if (!switchNotes) {
         message.error('切换部署位置前必须填写变更备注')
-        return
-      }
-      if (nextTarget === 'local' && (!targetStatus || targetStatus.health_status !== 'ready')) {
-        message.error('MinerU 本地解析服务当前不可用，请先完成服务部署和依赖校验')
         return
       }
 
@@ -298,7 +293,6 @@ const Settings = () => {
 
   const parserSettings = data?.data?.pdf_parser
   const activeRuntimeStatus = parserSettings?.active_runtime_status
-  const availableParsers = parserSettings?.available_parsers || []
 
   const initialValues = data?.data
 
@@ -387,30 +381,14 @@ const Settings = () => {
                 />
               )}
 
-              <div style={{ marginBottom: 16 }}>
-                {availableParsers.map((item) => (
-                  <div
-                    key={item.parser_name}
-                    style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 12, marginBottom: 8 }}
-                  >
-                    <Space wrap>
-                      <strong>{item.parser_name}</strong>
-                      <Tag>{item.parser_version}</Tag>
-                      <Tag>{item.deployment_target === 'remote' ? '远程' : '本地'}</Tag>
-                      {getParserStatusTag(item.health_status)}
-                      {item.is_active ? <Tag color="blue">当前激活</Tag> : null}
-                    </Space>
-                    <div style={{ marginTop: 8, color: '#666' }}>服务地址：{item.service_endpoint || '-'}</div>
-                    <div style={{ marginTop: 4, color: '#666' }}>最近检查：{formatCheckTime(item.checked_at)}</div>
-                    {item.error_detail ? (
-                      <div style={{ marginTop: 6, color: '#cf1322' }}>{item.error_detail}</div>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-
-              <Form.Item name={['pdf_parser', 'active_parser']} hidden>
-                <Input />
+              <Form.Item label="解析引擎">
+                <Space>
+                  <strong>MinerU</strong>
+                  {getParserStatusTag(activeRuntimeStatus?.health_status)}
+                  {activeRuntimeStatus?.parser_version ? (
+                    <Tag>{activeRuntimeStatus.parser_version}</Tag>
+                  ) : null}
+                </Space>
               </Form.Item>
 
               <Form.Item name={['pdf_parser', 'deployment_target']} label="部署位置">
@@ -473,7 +451,7 @@ const Settings = () => {
               </Form.Item>
             </Card>
 
-            <Card title="切换历史" style={{ marginTop: 16 }}>
+            <Card title="MinerU 配置变更历史" style={{ marginTop: 16 }}>
               <Table
                 loading={historyLoading}
                 dataSource={historyData?.data?.items || []}

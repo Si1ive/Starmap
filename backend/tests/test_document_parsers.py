@@ -3,10 +3,9 @@ import base64
 import pytest
 
 from app.modules.corpus.parser_runtime import (
-    choose_parser,
-    get_parser,
-    get_supported_parser_names,
-    inspect_parser_health,
+    create_mineru_parser,
+    inspect_mineru_health,
+    validate_mineru_parser_name,
 )
 from app.modules.corpus.mineru_parser import MinerUParser
 from app.modules.corpus.parser_service_client import (
@@ -152,15 +151,12 @@ def _remote_runtime_config():
     }
 
 
-def test_only_mineru_parser_is_supported():
-    assert get_supported_parser_names() == ["mineru"]
-    assert isinstance(get_parser("mineru"), MinerUParser)
+def test_parser_compatibility_field_only_accepts_mineru():
+    validate_mineru_parser_name(None)
+    validate_mineru_parser_name(" MINERU ")
 
-    with pytest.raises(ValueError, match="不支持的解析器"):
-        get_parser("docling")
-
-    with pytest.raises(ValueError, match="不支持的解析器"):
-        choose_parser("docling", _remote_runtime_config())
+    with pytest.raises(ValueError, match="固定使用 MinerU"):
+        validate_mineru_parser_name("docling")
 
 
 def test_remote_parser_service_posts_file_with_runtime_options(monkeypatch, tmp_path):
@@ -187,7 +183,7 @@ def test_remote_parser_service_posts_file_with_runtime_options(monkeypatch, tmp_
         fake_post,
     )
 
-    parser = choose_parser(None, _remote_runtime_config())
+    parser = create_mineru_parser(_remote_runtime_config())
     result = parser.parse(str(pdf_path), task_id="run-1")
 
     assert captured["url"] == "https://parser.example.test/parse"
@@ -221,7 +217,7 @@ def test_remote_parser_service_fetches_progress(monkeypatch):
         fake_get,
     )
 
-    parser = choose_parser(None, _remote_runtime_config())
+    parser = create_mineru_parser(_remote_runtime_config())
     progress = parser.fetch_progress("run-2")
 
     assert captured == {
@@ -248,7 +244,7 @@ def test_remote_parser_health_uses_configured_service(monkeypatch):
 
     monkeypatch.setattr("app.modules.corpus.parser_runtime.requests.get", fake_get)
 
-    health = inspect_parser_health("mineru", _remote_runtime_config())
+    health = inspect_mineru_health(_remote_runtime_config())
 
     assert captured == {
         "url": "https://parser.example.test/health",
