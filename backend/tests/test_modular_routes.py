@@ -53,6 +53,22 @@ def test_public_chat_routes_are_owned_by_chat_module():
         assert routes[path].endpoint.__module__ == "app.modules.chat.router"
 
 
+def test_admin_conversation_routes_are_owned_by_chat_module():
+    routes = _routes_by_path()
+
+    for path in (
+        "/api/v1/admin/conversations",
+        "/api/v1/admin/conversations/{conversation_id}",
+    ):
+        assert routes[path].endpoint.__module__ == "app.modules.chat.admin_router"
+
+    methods = _methods_by_path()
+    assert {"GET"} <= methods["/api/v1/admin/conversations"]
+    assert {"GET", "DELETE"} <= methods[
+        "/api/v1/admin/conversations/{conversation_id}"
+    ]
+
+
 def test_settings_routes_are_owned_by_operations_module():
     routes = _routes_by_path()
 

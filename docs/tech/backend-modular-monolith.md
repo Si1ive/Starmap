@@ -216,6 +216,8 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
   内容、目录、检索、聊天和运营配置模块共享；两个旧 `app/services/*.py` 文件已删除
 - 公共问答编排和 `/api/v1/chat*` 路由已迁移到 `app/modules/chat`，最后一个旧
   `app/services/chat_service.py` 已删除，空的 `app/services` 兼容目录同步移除
+- 后台会话列表、详情和删除接口已迁移到 `app/modules/chat/admin_router.py`，
+  原 `/api/v1/admin/conversations*` 路径和管理员鉴权保持不变
 - LLM 调用记录、聚合统计和向量召回质量日志已迁移到
   `app/modules/monitoring`，对应管理接口保持 `/api/v1/admin/monitor/*`
   不变，`app/services/llm_call_recorder.py` 与
