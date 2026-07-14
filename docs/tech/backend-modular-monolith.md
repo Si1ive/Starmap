@@ -242,6 +242,9 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - 已下载文件列表、详情和预览接口已迁移到 `app/modules/crawler/file_router.py`；
   下载根目录统一由 `crawler/storage.py` 管理，文件预览改为真实父目录校验，
   避免相似路径前缀绕过访问边界
+- 仍通过 `CrawlTask(source=pdf)` 和 Scrapy Bridge 执行的旧版 PDF 入库接口已迁移到
+  `app/modules/crawler/pdf_ingest_router.py`；保留 `/api/v1/admin/knowledge/ingest*`
+  兼容路径，并确保任务发布异常时 Bridge 连接仍会关闭
 
 每个阶段都必须满足：
 

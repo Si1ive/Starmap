@@ -221,6 +221,19 @@ def test_downloaded_file_routes_are_owned_by_crawler_module():
         )
 
 
+def test_legacy_pdf_ingest_routes_are_owned_by_crawler_module():
+    routes = _routes_by_path()
+
+    for path in (
+        "/api/v1/admin/knowledge/ingest",
+        "/api/v1/admin/knowledge/ingest/tasks",
+    ):
+        assert (
+            routes[path].endpoint.__module__
+            == "app.modules.crawler.pdf_ingest_router"
+        )
+
+
 def test_crawler_routes_keep_existing_http_methods():
     methods = _methods_by_path()
     expected = {
