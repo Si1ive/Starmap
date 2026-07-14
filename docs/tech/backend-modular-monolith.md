@@ -74,6 +74,9 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - 题目、知识点和知识关系的审核查询、审核写入及审核后索引重建已迁移到
   `app/modules/content/review_service.py`，`app/services/review_service.py`
   已删除
+- 题目答案/解析、考点回连和知识点摘要富化已迁移到
+  `app/modules/content/enrichment_service.py`，三条富化端点也已迁入内容模块，
+  `app/services/enrichment_service.py` 已删除
 
 内容状态约定：
 

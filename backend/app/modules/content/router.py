@@ -11,6 +11,7 @@ from app.modules.content.schemas import (
     UpdateKnowledgePointRequest,
     UpdateQuestionRequest,
 )
+from app.modules.content.enrichment_service import EnrichmentService
 from app.modules.content.review_service import ReviewService
 from app.modules.content.service import ContentService
 from app.modules.catalog.chapter_link_service import ChapterLinkService
@@ -257,6 +258,52 @@ async def review_question(
             review_notes=review_notes,
             primary_chapter_id=primary_chapter_id,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ApiResponse(data=result)
+
+
+@router.post("/enrichment/document/{document_id}", response_model=ApiResponse)
+async def enrich_document_entities(
+    document_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """批量富化某文档下的题目和知识点。"""
+    try:
+        result = await EnrichmentService(db).enrich_document(document_id)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"富化失败: {str(exc)[:200]}",
+        ) from exc
+    return ApiResponse(data=result)
+
+
+@router.post("/enrichment/question/{question_id}", response_model=ApiResponse)
+async def enrich_single_question(
+    question_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """富化单道题目。"""
+    try:
+        result = await EnrichmentService(db).enrich_question(question_id)
+        await db.commit()
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ApiResponse(data=result)
+
+
+@router.post("/enrichment/knowledge/{kp_id}", response_model=ApiResponse)
+async def enrich_single_knowledge_point(
+    kp_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """富化单个知识点。"""
+    try:
+        result = await EnrichmentService(db).enrich_knowledge_point(
+            kp_id
+        )
+        await db.commit()
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return ApiResponse(data=result)

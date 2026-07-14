@@ -55,6 +55,9 @@ def test_content_routes_are_owned_by_content_module():
         "/api/v1/admin/questions",
         "/api/v1/admin/review/knowledge",
         "/api/v1/admin/review/questions",
+        "/api/v1/admin/enrichment/document/{document_id}",
+        "/api/v1/admin/enrichment/question/{question_id}",
+        "/api/v1/admin/enrichment/knowledge/{kp_id}",
     ):
         assert routes[path].endpoint.__module__ == "app.modules.content.router"
 

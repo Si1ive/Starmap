@@ -183,7 +183,7 @@ for match in pair_re.finditer(answer_text):
 
 ### 5.2 EnrichmentService 核心方法
 
-**文件**: `backend/app/services/enrichment_service.py`
+**文件**: `backend/app/modules/content/enrichment_service.py`
 
 #### 5.2.1 `enrich_question(question_id)` — 题目富化
 
@@ -223,13 +223,13 @@ for match in pair_re.finditer(answer_text):
 
 ### 5.3 审核通过自动触发
 
-**文件**: `backend/app/services/review_service.py`  
+**文件**: `backend/app/modules/content/review_service.py`
 **修改点**: `review_question` 和 `review_knowledge_point` 的 `commit()` 后插入:
 
 ```python
 if review_status == "approved":
     try:
-        from app.services.enrichment_service import EnrichmentService
+        from app.modules.content.enrichment_service import EnrichmentService
         enrich_result = await EnrichmentService(db).enrich_question(question_id)
     except Exception as e:
         logger.warning("题目审核后富化失败，不影响审核", question_id=question_id, error=str(e))
@@ -677,8 +677,6 @@ await db.commit()
 **技术栈**: FastAPI + SQLAlchemy 2.0 async + Qdrant + OpenAI-compatible LLM + React Query + TypeScript。
 
 **提交历史**: 8 commits (`3a0045c..e298eb6`),已推送至 `origin/main`。
-
-
 
 
 

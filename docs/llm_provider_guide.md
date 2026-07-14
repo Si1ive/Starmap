@@ -148,7 +148,7 @@ cd backend
 venv/bin/python -c "
 import asyncio
 from app.db.mysql import mysql_client
-from app.services.enrichment_service import EnrichmentService
+from app.modules.content.enrichment_service import EnrichmentService
 
 async def test():
     async with mysql_client.session() as db:

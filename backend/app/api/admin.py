@@ -2384,48 +2384,7 @@ async def get_review_stats(
     return ApiResponse(data=result)
 
 
-# ========== 富化与关系构建 ==========
-
-
-@router.post("/enrichment/document/{document_id}", response_model=ApiResponse)
-async def enrich_document_entities(document_id: str, db: AsyncSession = Depends(get_db)):
-    """批量富化某文档下所有已审核的题目和知识点（答案/解析/考点回连 + 知识点增强）。"""
-    from app.services.enrichment_service import EnrichmentService
-
-    service = EnrichmentService(db)
-    try:
-        result = await service.enrich_document(document_id)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"富化失败: {str(e)[:200]}")
-    return ApiResponse(data=result)
-
-
-@router.post("/enrichment/question/{question_id}", response_model=ApiResponse)
-async def enrich_single_question(question_id: str, db: AsyncSession = Depends(get_db)):
-    """富化单道题目。"""
-    from app.services.enrichment_service import EnrichmentService
-
-    service = EnrichmentService(db)
-    try:
-        result = await service.enrich_question(question_id)
-        await db.commit()
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    return ApiResponse(data=result)
-
-
-@router.post("/enrichment/knowledge/{kp_id}", response_model=ApiResponse)
-async def enrich_single_knowledge(kp_id: str, db: AsyncSession = Depends(get_db)):
-    """富化单个知识点。"""
-    from app.services.enrichment_service import EnrichmentService
-
-    service = EnrichmentService(db)
-    try:
-        result = await service.enrich_knowledge_point(kp_id)
-        await db.commit()
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    return ApiResponse(data=result)
+# ========== 关系构建 ==========
 
 
 @router.post("/relations/build", response_model=ApiResponse)
