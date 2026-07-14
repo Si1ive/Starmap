@@ -24,28 +24,6 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/admin", tags=["后台管理"])
 
 
-# ========== 关系构建 ==========
-
-
-@router.post("/relations/build", response_model=ApiResponse)
-async def build_knowledge_relations(
-    subject_id: Optional[str] = None,
-    knowledge_point_ids: Optional[List[str]] = None,
-    db: AsyncSession = Depends(get_db),
-):
-    """构建知识点关系（规则 + 语义相似度边）。"""
-    from app.modules.retrieval.relation_service import RelationService
-
-    service = RelationService(db)
-    try:
-        result = await service.build_relations(
-            subject_id=subject_id, knowledge_point_ids=knowledge_point_ids
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"关系构建失败: {str(e)[:200]}")
-    return ApiResponse(data=result)
-
-
 # ========== 考点关系管理 ==========
 
 

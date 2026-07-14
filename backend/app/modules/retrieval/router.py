@@ -2,7 +2,7 @@
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import ApiResponse
@@ -14,6 +14,7 @@ from app.modules.retrieval.schemas import (
     SearchWithOutlineRequest,
 )
 from app.modules.retrieval.outline_service import expand_related_chapters
+from app.modules.retrieval.relation_service import RelationService
 from app.modules.retrieval.service import RetrievalService
 from app.modules.retrieval.segment_service import SegmentService
 
@@ -81,6 +82,26 @@ async def build_chapter_segments(
         outline_id=outline_id,
         rebuild=rebuild,
     )
+    return ApiResponse(data=result)
+
+
+@router.post("/relations/build", response_model=ApiResponse)
+async def build_knowledge_relations(
+    subject_id: Optional[str] = None,
+    knowledge_point_ids: Optional[List[str]] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """构建知识点规则关系和语义相似关系。"""
+    try:
+        result = await RelationService(db).build_relations(
+            subject_id=subject_id,
+            knowledge_point_ids=knowledge_point_ids,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"关系构建失败: {str(exc)[:200]}",
+        ) from exc
     return ApiResponse(data=result)
 
 

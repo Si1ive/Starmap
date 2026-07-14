@@ -326,6 +326,7 @@ def test_retrieval_routes_are_owned_by_retrieval_module():
         "/api/v1/admin/search/with-outline",
         "/api/v1/admin/search/dual-path",
         "/api/v1/admin/search/chapter-expansion",
+        "/api/v1/admin/relations/build",
     ):
         assert routes[path].endpoint.__module__ == "app.modules.retrieval.router"
 

@@ -179,6 +179,8 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - 知识点关系构建、语义相似边、关系查询和审核已迁移到
   `app/modules/retrieval/relation_service.py`，
   `app/services/relation_service.py` 已删除
+- `POST /api/v1/admin/relations/build` 已迁移到检索模块路由，关系重建入口与
+  `RelationService` 归属保持一致
 - 语料实体的章节解析、关联写入和历史题目章节回填已迁移到
   `app/modules/catalog/chapter_link_service.py`，
   `app/services/chapter_link_service.py` 已删除；关键词打分和向量召回策略进一步拆分到
