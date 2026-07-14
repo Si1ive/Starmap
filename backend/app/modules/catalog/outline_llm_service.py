@@ -10,8 +10,7 @@
 """
 
 import json
-import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +19,10 @@ from app.core.logging import get_logger
 from app.infrastructure.ai.llm_client import OutlineLLMClient
 from app.models.mysql_models import Document, Subject
 from app.modules.catalog.outline_llm_parser import extract_outline_llm_json
+from app.modules.catalog.outline_segmentation import (
+    segment_outline_subjects,
+    split_outline_chapter_chunks,
+)
 from app.modules.catalog.outline_tree import (
     collect_outline_leaves,
     count_outline_nodes,
@@ -29,51 +32,6 @@ from app.modules.catalog.outline_tree import (
 from app.modules.operations.settings_service import SystemSettingsService
 
 logger = get_logger(__name__)
-
-# 科目名 → code 的别名映射，用于在 markdown 里定位课程边界。
-# key 是出现在大纲文本中的可能写法，value 是 subjects.code。
-SUBJECT_ALIASES: Dict[str, str] = {
-    "数据结构": "data_structure",
-    "计算机组成原理": "computer_organization",
-    "计算机组成": "computer_organization",
-    "计组": "computer_organization",
-    "操作系统": "operating_system",
-    "计算机网络": "computer_network",
-    "计网": "computer_network",
-}
-
-
-_SPLIT_PROMPT = """下面是一门课《{subject_name}》的考试大纲文本。请把它拆成结构化 JSON。
-
-要求：
-1. 先识别这门课开头的「考察目标」（概括性的整门课要求，通常三四句话），放进 exam_objective。
-2. 再把后续内容拆成多层级章节树 chapters。层级用嵌套 children 表达（如 一 / (一) / 1. / (1) 这样的层级关系）。
-3. 每个章节节点：
-   - name：章节标题（去掉前面的编号），必填
-   - outline_code：原始编号（如 "1.1.1" / "一" / "(一)"），没有就 null
-   - description：该节点对应的考点正文原文（大纲里列的具体考点），没有就 null
-   - children：子章节数组，没有就空数组
-4. 不要生成复习建议或重点分析，只忠实还原大纲结构。
-5. 只输出 JSON，不要任何解释文字。
-
-输出格式：
-{{
-  "exam_objective": "……",
-  "chapters": [
-    {{
-      "name": "哈希表",
-      "outline_code": "1.5",
-      "description": "大纲原文...",
-      "children": [...]
-    }}
-  ]
-}}
-
-大纲文本：
----
-{content}
----"""
-
 
 # 骨架拆分 prompt（不生成 enhanced_description 和 keywords，输出量小不会截断）
 _SKELETON_PROMPT = """下面是一门课《{subject_name}》的考试大纲文本。请把它拆成结构化的章节树（骨架）。
@@ -171,33 +129,6 @@ class OutlineLLMService:
         rows = (await self.db.execute(select(Subject))).scalars().all()
         return {s.code: s for s in rows}
 
-    def _segment_by_subject(self, markdown: str) -> List[Tuple[str, int, int]]:
-        """
-        在 markdown 里按科目名定位课程边界，返回 [(subject_code, start, end), ...]。
-        找不到边界返回空列表（交给调用方降级）。
-        """
-        hits: List[Tuple[int, str]] = []  # (pos, code)
-        for alias, code in SUBJECT_ALIASES.items():
-            for m in re.finditer(re.escape(alias), markdown):
-                hits.append((m.start(), code))
-        if not hits:
-            return []
-        hits.sort()
-        # 每门课取首次出现位置作为段落起点（去重 code，保留最早）
-        first_pos: Dict[str, int] = {}
-        for pos, code in hits:
-            if code not in first_pos:
-                first_pos[code] = pos
-        # 至少识别到 2 门课才认为粗切有效
-        if len(first_pos) < 2:
-            return []
-        ordered = sorted(first_pos.items(), key=lambda kv: kv[1])  # [(code, pos)]
-        segments: List[Tuple[str, int, int]] = []
-        for i, (code, pos) in enumerate(ordered):
-            end = ordered[i + 1][1] if i + 1 < len(ordered) else len(markdown)
-            segments.append((code, pos, end))
-        return segments
-
     async def split_outline(self, document_id: str) -> Dict[str, Any]:
         """
         拆分大纲文档，返回四门课结构（不入库）：
@@ -221,7 +152,7 @@ class OutlineLLMService:
             raise ValueError("大纲拆分 LLM 未启用或缺少配置，请在系统设置 -> outline_llm 配置后重试")
 
         subjects_by_code = await self._load_subjects()
-        segments = self._segment_by_subject(markdown)
+        segments = segment_outline_subjects(markdown)
 
         results: List[Dict[str, Any]] = []
         if segments:
@@ -282,7 +213,7 @@ class OutlineLLMService:
             raise ValueError("大纲拆分 LLM 未启用或缺少配置，请在系统设置 -> outline_llm 配置后重试")
 
         subjects_by_code = await self._load_subjects()
-        segments = self._segment_by_subject(markdown)
+        segments = segment_outline_subjects(markdown)
 
         # 获取 run 记录
         run = await self.db.get(OutlineIngestionRun, run_id)
@@ -542,7 +473,7 @@ class OutlineLLMService:
             logger.warning("提取考察目标失败，继续处理", subject=subject_name, error=str(e))
 
         # 2. 按一级章节分块
-        chunks = self._split_into_chapter_chunks(content, max_chunk_size=30000)
+        chunks = split_outline_chapter_chunks(content, max_chunk_size=30000)
         logger.info("按章节分块", subject=subject_name, chunks=len(chunks))
 
         # 3. 每块单独拆骨架
@@ -570,39 +501,6 @@ class OutlineLLMService:
             "exam_objective": exam_objective,
             "chapters": all_chapters,
         }
-
-    def _split_into_chapter_chunks(self, content: str, max_chunk_size: int = 30000) -> List[str]:
-        """
-        按一级章节标题分块
-
-        策略: 寻找 "第X章"、"一、"、"1." 等一级标题，在此处切分
-        """
-        lines = content.split('\n')
-        chunks = []
-        current_chunk = []
-        current_size = 0
-
-        # 一级标题模式（第X章、一、、1.）
-        chapter_pattern = re.compile(r'^\s*(?:第[一二三四五六七八九十百千万零\d]+章|[一二三四五六七八九十]+\s*[、.]|\d+\s*[、.])')
-
-        for line in lines:
-            line_size = len(line) + 1  # +1 for newline
-
-            # 如果是一级标题 且 当前块已有内容 且 加上这行会超过限制
-            if chapter_pattern.match(line) and current_chunk and (current_size + line_size > max_chunk_size):
-                # 保存当前块
-                chunks.append('\n'.join(current_chunk))
-                current_chunk = [line]
-                current_size = line_size
-            else:
-                current_chunk.append(line)
-                current_size += line_size
-
-        # 保存最后一块
-        if current_chunk:
-            chunks.append('\n'.join(current_chunk))
-
-        return chunks if chunks else [content]
 
     async def _split_whole(
         self, client: OutlineLLMClient, markdown: str, subjects_by_code: Dict[str, Subject]
