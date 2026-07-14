@@ -29,6 +29,7 @@ app/
     chat/                      # 公共问答与后台会话管理
     content/                   # 题目、知识点及人工审核记录
     corpus/                    # 文件、解析、实体抽取任务
+    dashboard/                 # 后台跨领域统计读模型
     retrieval/                 # Segment、召回、章节扩展
     crawler/                   # 爬取源、任务、调度、日志
     monitoring/                # 运行指标、服务日志、LLM 与召回监控
@@ -218,6 +219,8 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
   `app/services/chat_service.py` 已删除，空的 `app/services` 兼容目录同步移除
 - 后台会话列表、详情和删除接口已迁移到 `app/modules/chat/admin_router.py`，
   原 `/api/v1/admin/conversations*` 路径和管理员鉴权保持不变
+- 看板核心数量及学科、难度、题型分布查询已迁移到 `app/modules/dashboard`，
+  两条 `/api/v1/admin/dashboard/*` 只读接口保持原统计口径与鉴权不变
 - LLM 调用记录、聚合统计和向量召回质量日志已迁移到
   `app/modules/monitoring`，对应管理接口保持 `/api/v1/admin/monitor/*`
   不变，`app/services/llm_call_recorder.py` 与

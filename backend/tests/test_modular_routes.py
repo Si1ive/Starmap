@@ -69,6 +69,18 @@ def test_admin_conversation_routes_are_owned_by_chat_module():
     ]
 
 
+def test_dashboard_routes_are_owned_by_dashboard_module():
+    routes = _routes_by_path()
+
+    for path in (
+        "/api/v1/admin/dashboard/stats",
+        "/api/v1/admin/dashboard/charts",
+    ):
+        route = routes[path]
+        assert route.endpoint.__module__ == "app.modules.dashboard.router"
+        assert "GET" in route.methods
+
+
 def test_settings_routes_are_owned_by_operations_module():
     routes = _routes_by_path()
 

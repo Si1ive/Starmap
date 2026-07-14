@@ -1,7 +1,7 @@
 """
 后台管理 API 路由。
 
-当前保留尚未按业务域迁移的看板、对话等后台接口。
+当前保留尚未按业务域迁移的 PDF 入库、关系审核和大纲等后台接口。
 """
 
 import os
@@ -24,122 +24,6 @@ from app.db import get_db
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["后台管理"])
-
-
-
-# ========== 看板相关 ==========
-
-class DashboardStats(BaseModel):
-    """看板统计数据"""
-    subject_count: int
-    chapter_count: int
-    knowledge_point_count: int
-    question_count: int
-    today_chat_count: int
-
-
-@router.get("/dashboard/stats", response_model=ApiResponse)
-async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
-    """获取看板统计数据（408考研平台）"""
-    from app.models.mysql_models import Subject, Chapter, KnowledgePoint, Question, ChatSession
-    from sqlalchemy import func
-    from datetime import datetime as _dt, time as _time
-
-    subject_count = await db.scalar(
-        select(func.count()).select_from(Subject).where(Subject.status == "active")
-    ) or 0
-
-    chapter_count = await db.scalar(
-        select(func.count()).select_from(Chapter).where(Chapter.status == "active")
-    ) or 0
-
-    knowledge_point_count = await db.scalar(
-        select(func.count()).select_from(KnowledgePoint).where(KnowledgePoint.status != "deleted")
-    ) or 0
-
-    question_count = await db.scalar(
-        select(func.count()).select_from(Question).where(Question.status != "deleted")
-    ) or 0
-
-    today_start = _dt.combine(_dt.utcnow().date(), _time.min)
-    today_chat_count = await db.scalar(
-        select(func.count()).select_from(ChatSession).where(ChatSession.created_at >= today_start)
-    ) or 0
-
-    return ApiResponse(
-        code=200,
-        message="success",
-        data={
-            "subject_count": subject_count,
-            "chapter_count": chapter_count,
-            "knowledge_point_count": knowledge_point_count,
-            "question_count": question_count,
-            "today_chat_count": today_chat_count,
-        }
-    )
-
-
-@router.get("/dashboard/charts", response_model=ApiResponse)
-async def get_dashboard_charts(db: AsyncSession = Depends(get_db)):
-    """获取看板图表数据（408考研平台）"""
-    from app.models.mysql_models import Subject, KnowledgePoint, Question
-    from sqlalchemy import func
-
-    # 各学科知识点分布
-    subject_rows = await db.execute(
-        select(Subject.name, func.count(KnowledgePoint.id))
-        .outerjoin(KnowledgePoint, Subject.id == KnowledgePoint.subject_id)
-        .where(Subject.status == "active")
-        .group_by(Subject.id, Subject.name)
-        .order_by(Subject.sort_order)
-    )
-    subject_distribution = [
-        {"name": row[0], "value": row[1] or 0}
-        for row in subject_rows
-    ]
-
-    # 知识点难度分布
-    difficulty_rows = await db.execute(
-        select(KnowledgePoint.difficulty, func.count())
-        .where(KnowledgePoint.status != "deleted")
-        .group_by(KnowledgePoint.difficulty)
-    )
-    difficulty_name_map = {"easy": "简单", "medium": "中等", "hard": "困难"}
-    difficulty_distribution = [
-        {"name": difficulty_name_map.get(d, d), "value": c}
-        for d, c in difficulty_rows
-    ]
-
-    # 题目类型分布
-    type_rows = await db.execute(
-        select(Question.type, func.count())
-        .where(Question.status != "deleted")
-        .group_by(Question.type)
-    )
-    type_name_map = {
-        "choice": "选择题",
-        "fill": "填空题",
-        "judge": "判断题",
-        "short_answer": "简答题",
-        "design": "设计题",
-        "analysis": "分析题"
-    }
-    question_type_distribution = [
-        {"name": type_name_map.get(t, t), "value": c}
-        for t, c in type_rows
-    ]
-
-    return ApiResponse(
-        code=200,
-        message="success",
-        data={
-            "subject_distribution": subject_distribution,
-            "difficulty_distribution": difficulty_distribution,
-            "question_type_distribution": question_type_distribution
-        }
-    )
-
-
 # ========== PDF入库 ==========
 
 class IngestPdfRequest(BaseModel):

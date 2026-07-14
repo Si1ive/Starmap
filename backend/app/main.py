@@ -24,6 +24,7 @@ from app.modules.chat.router import router as chat_router
 from app.modules.content import router as content_router
 from app.modules.corpus.router import router as corpus_router
 from app.modules.crawler.router import router as crawler_router
+from app.modules.dashboard.router import router as dashboard_router
 from app.modules.monitoring.router import router as monitoring_router
 from app.modules.operations import router as operations_router
 from app.modules.operations.settings_router import router as settings_router
@@ -238,6 +239,11 @@ app.include_router(
 )
 app.include_router(
     chat_admin_router,
+    prefix="/api/v1",
+    dependencies=admin_dependencies,
+)
+app.include_router(
+    dashboard_router,
     prefix="/api/v1",
     dependencies=admin_dependencies,
 )
