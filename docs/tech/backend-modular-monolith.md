@@ -134,7 +134,9 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - bbox 页面统计、单双栏阅读顺序、题目边界、选项恢复和跨页合并已迁移到
   `app/modules/corpus/question_layout.py`；A-D 标记识别、内联选项定位、MinerU
   粘连选项恢复和选项文本切分进一步拆分到
-  `app/modules/corpus/question_option_rules.py`
+  `app/modules/corpus/question_option_rules.py`，bbox 坐标兼容、页面间距统计、
+  双栏检测和阅读顺序拆分到
+  `app/modules/corpus/question_layout_geometry.py`
 - 抽取数量、页级保存结果、题号连续性和规则/LLM 修复历史摘要已迁移到
   `app/modules/corpus/extraction_diagnostics.py`
 - 题目入库、选项标准化、原卷答案回连和实体来源查询已迁移到
