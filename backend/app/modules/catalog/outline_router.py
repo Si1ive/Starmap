@@ -1,9 +1,6 @@
 """考试大纲导入、解析任务与章节树管理路由。"""
 
-import asyncio
-from pathlib import Path
 from typing import Optional, List, Any, Dict
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
 from pydantic import BaseModel, Field
@@ -11,11 +8,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import ApiResponse, BatchIdsRequest
-from app.core.config import settings
-from app.core.logging import get_logger
 from app.db import get_db
-
-logger = get_logger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["考试大纲"])
 
@@ -247,137 +240,17 @@ async def upload_parse_outline(
 
     前端轮询 GET /outlines/runs/{run_id} 获取进度，完成后再调 /outlines/import-from-llm 入库。
     """
-    from app.modules.corpus.file_service import (
-        CorpusFileService,
-        SUPPORTED_EXTENSIONS,
+    from app.modules.catalog.outline_parse_service import (
+        OutlineParseTaskService,
     )
-    from app.models.mysql_models import OutlineIngestionRun
-
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="文件名为空")
-    file_name = Path(file.filename).name
-    ext = Path(file_name).suffix.lstrip(".").lower()
-    if ext not in SUPPORTED_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"不支持的文件类型: {ext}，仅支持 {', '.join(sorted(SUPPORTED_EXTENSIONS))}",
+    try:
+        data = await OutlineParseTaskService(db).start(
+            file,
+            parser_name=parser_name,
         )
-
-    # 1) 保存文件
-    upload_dir = Path(settings.CORPUS_UPLOAD_DIR)
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    file_path = upload_dir / f"{timestamp}_{file_name}"
-    file_path.write_bytes(await file.read())
-
-    # 2) 注册文件
-    corpus_service = CorpusFileService(db)
-    reg = await corpus_service.register_single_file(
-        file_path=str(file_path),
-        batch_label=f"outline-{timestamp}",
-    )
-    corpus_file_id = reg["corpus_file_id"]
-
-    # 3) 立即创建 OutlineIngestionRun（document_id 可空），让任务列表立即可见
-    from app.modules.corpus.document_parse_service import generate_id
-    run_id = generate_id()
-    run = OutlineIngestionRun(
-        id=run_id,
-        document_id=None,  # 解析完成后由后台任务填充
-        outline_name=file_name,
-        status="processing",
-        current_stage="parsing",
-        stage_detail=f"文件已上传：{file_name}",
-        started_at=datetime.utcnow(),
-    )
-    db.add(run)
-    await db.commit()
-
-    # 4) 后台异步执行解析 + LLM 拆分
-    async def _run_outline_parse_in_background(
-        run_id: str, corpus_file_id: str, parser_name: Optional[str], is_new: bool, file_name: str
-    ):
-        from app.db.mysql import mysql_client
-        from app.modules.corpus.document_parse_service import DocumentParseService
-        from app.modules.catalog.outline_llm_service import OutlineLLMService
-        from app.models.mysql_models import DocumentBlock
-
-        async with mysql_client.session() as bg_session:
-            try:
-                bg_run = await bg_session.get(OutlineIngestionRun, run_id)
-                if not bg_run:
-                    logger.error("OutlineIngestionRun 不存在", run_id=run_id)
-                    return
-
-                # 解析阶段
-                bg_run.current_stage = "parsing"
-                bg_run.stage_detail = "正在解析 PDF..."
-                await bg_session.commit()
-
-                document_id: Optional[str] = None
-                parse_service = DocumentParseService(bg_session)
-
-                # 复用既有文档（如果已解析）
-                if not is_new:
-                    existing_doc = await parse_service._get_document_by_corpus_file_id(corpus_file_id)
-                    if existing_doc:
-                        block_count = (await bg_session.execute(
-                            select(func.count()).select_from(DocumentBlock)
-                            .where(DocumentBlock.document_id == existing_doc.id)
-                        )).scalar_one()
-                        if block_count > 0:
-                            document_id = existing_doc.id
-
-                if document_id is None:
-                    parse_result = await parse_service.parse_document(corpus_file_id, parser_name=parser_name)
-                    document_id = parse_result["document_id"]
-
-                # 更新 run：解析完成，进入拆分
-                bg_run.document_id = document_id
-                bg_run.current_stage = "splitting"
-                bg_run.stage_detail = "正在用 LLM 拆分大纲..."
-                await bg_session.commit()
-
-                # LLM 拆分阶段
-                llm_service = OutlineLLMService(bg_session)
-                split = await llm_service.split_outline_with_progress(run_id, document_id)
-
-                # 完成
-                bg_run.status = "done"
-                bg_run.current_stage = "completed"
-                bg_run.stage_detail = f"拆分完成，共 {len(split['subjects'])} 个科目"
-                bg_run.total_subjects = len(split["subjects"])
-                bg_run.processed_subjects = len(split["subjects"])
-                bg_run.successful_subjects = len([s for s in split["subjects"] if not s.get("error")])
-                # 把 file_name 存进 result_summary 方便列表展示
-                split_with_meta = {**split, "file_name": file_name}
-                bg_run.result_summary = split_with_meta
-                bg_run.completed_at = datetime.utcnow()
-                await bg_session.commit()
-
-                logger.info("大纲解析+拆分完成", run_id=run_id, document_id=document_id)
-
-            except Exception as e:
-                logger.error("大纲后台任务失败", run_id=run_id, error=str(e))
-                bg_run = await bg_session.get(OutlineIngestionRun, run_id)
-                if bg_run:
-                    bg_run.status = "failed"
-                    bg_run.current_stage = "failed"
-                    bg_run.error_detail = str(e)[:500]
-                    bg_run.stage_detail = f"失败：{str(e)[:100]}"
-                    bg_run.completed_at = datetime.utcnow()
-                    await bg_session.commit()
-
-    asyncio.ensure_future(_run_outline_parse_in_background(
-        run_id, corpus_file_id, parser_name, reg["is_new"], file_name
-    ))
-
-    return ApiResponse(message="大纲解析任务已启动", data={
-        "run_id": run_id,
-        "corpus_file_id": corpus_file_id,
-        "file_name": file_name,
-        "status": "processing",
-    })
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return ApiResponse(message="大纲解析任务已启动", data=data)
 
 
 @router.get("/outlines/runs/{run_id}", response_model=ApiResponse)

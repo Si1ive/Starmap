@@ -45,6 +45,7 @@ export interface OutlineSubjectSplit {
   subject_id: string
   subject_code: string
   subject_name: string
+  error?: string
   exam_objective?: string
   total_chapters: number
   max_depth: number
@@ -172,12 +173,10 @@ export const generateOutlineGuidance = (
 }
 
 export const uploadParseOutline = (
-  file: File,
-  parserName?: string
+  file: File
 ): Promise<ApiResponse<OutlineUploadParseResult>> => {
   const formData = new FormData()
   formData.append('file', file)
-  if (parserName) formData.append('parser_name', parserName)
   return adminClient.post('/outlines/upload-parse', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
     timeout: 10 * 60 * 1000,

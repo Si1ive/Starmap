@@ -105,13 +105,13 @@ const OutlineList = () => {
       const detail = await getOutlineRunDetail(runItem.id)
       const r = detail.data
       setParsedFileName(r.outline_name || r.file_name || '')
-      if (r.status === 'done' && r.result_summary?.subjects) {
+      if (['done', 'partial'].includes(r.status) && r.result_summary?.subjects) {
         setSplitSubjects(r.result_summary.subjects)
       } else {
         setSplitSubjects(null)
       }
     } catch {
-      if (runItem.status === 'done' && (runItem as any).result_summary?.subjects) {
+      if (['done', 'partial'].includes(runItem.status) && (runItem as any).result_summary?.subjects) {
         setSplitSubjects((runItem as any).result_summary.subjects)
       } else {
         setSplitSubjects(null)
@@ -205,8 +205,8 @@ const OutlineList = () => {
 
   const beforeUpload = (file: File) => {
     const ext = file.name.split('.').pop()?.toLowerCase()
-    if (!ext || !['pdf', 'docx', 'pptx'].includes(ext)) {
-      message.error('仅支持 PDF / DOCX / PPTX 文件')
+    if (ext !== 'pdf') {
+      message.error('仅支持 PDF 文件')
       return Upload.LIST_IGNORE
     }
     setSplitSubjects(null)
@@ -265,6 +265,9 @@ const OutlineList = () => {
       title: '进度', key: 'progress', width: 200,
       render: (_: unknown, r: OutlineRunListItem) => {
         if (r.status === 'done') return <Tag color="success">完成</Tag>
+        if (r.status === 'partial') {
+          return <Tag color="warning">成功 {r.successful_subjects}/{r.total_subjects}</Tag>
+        }
         if (r.status === 'failed') return <Tag color="error">{r.error_detail?.slice(0, 50) || '失败'}</Tag>
         return (
           <Space direction="vertical" size={0} style={{ width: '100%' }}>
@@ -368,13 +371,13 @@ const OutlineList = () => {
                 type="info"
                 showIcon
                 message="上传 408 大纲 PDF，自动拆分四门课"
-                description="系统先用 MinerU 全文解析，再让 LLM 按四门课拆出考察目标 + 多层章节树（含原文考点）。复习指导在入库后单独生成。支持 PDF / DOCX / PPTX。"
+                description="系统先用 MinerU 全文解析，再让 LLM 按四门课拆出考察目标 + 多层章节树（含原文考点）。复习指导在入库后单独生成。"
               />
 
               <Dragger
                 beforeUpload={beforeUpload}
                 showUploadList={false}
-                accept=".pdf,.docx,.pptx"
+                accept=".pdf"
                 disabled={uploadMut.isPending}
               >
                 <p className="ant-upload-drag-icon"><InboxOutlined /></p>
@@ -397,6 +400,14 @@ const OutlineList = () => {
                   label: `${s.subject_name}（${s.total_chapters}）`,
                   children: (
                     <Space direction="vertical" style={{ width: '100%' }}>
+                      {s.error && (
+                        <Alert
+                          type="error"
+                          showIcon
+                          message={`${s.subject_name}拆分失败`}
+                          description={s.error}
+                        />
+                      )}
                       {s.exam_objective && (
                         <Alert
                           type="success"
@@ -404,12 +415,14 @@ const OutlineList = () => {
                           description={<Paragraph style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{s.exam_objective}</Paragraph>}
                         />
                       )}
-                      <Tree
-                        treeData={buildTreeNodes(s.chapters)}
-                        defaultExpandAll={s.total_chapters < 40}
-                        showLine
-                        height={320}
-                      />
+                      {!s.error && (
+                        <Tree
+                          treeData={buildTreeNodes(s.chapters)}
+                          defaultExpandAll={s.total_chapters < 40}
+                          showLine
+                          height={320}
+                        />
+                      )}
                     </Space>
                   ),
                 }))}
