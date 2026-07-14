@@ -3,14 +3,16 @@ import base64
 import pytest
 
 from app.modules.corpus.document_parsers import (
-    _normalize_payload_block_type,
-    _parsed_document_result_from_dict,
     choose_parser,
     get_parser,
     get_supported_parser_names,
     inspect_parser_health,
 )
 from app.modules.corpus.mineru_parser import MinerUParser
+from app.modules.corpus.parser_service_client import (
+    normalize_payload_block_type,
+    parsed_document_result_from_dict,
+)
 from app.modules.corpus.parser_types import ParsedDocumentResult
 
 
@@ -110,7 +112,7 @@ def test_parsed_document_result_from_dict_normalizes_image_payload_block_and_ass
         ],
     }
 
-    parsed = _parsed_document_result_from_dict(
+    parsed = parsed_document_result_from_dict(
         parser_name="mineru",
         payload=payload,
         fallback_metadata={},
@@ -122,11 +124,11 @@ def test_parsed_document_result_from_dict_normalizes_image_payload_block_and_ass
 
 
 def test_payload_block_type_preserves_noise_types_for_downstream_grouping():
-    assert _normalize_payload_block_type("header") == "header"
-    assert _normalize_payload_block_type("footer") == "footer"
-    assert _normalize_payload_block_type("page_number") == "page_number"
-    assert _normalize_payload_block_type("aside_text") == "aside_text"
-    assert _normalize_payload_block_type("page_footnote") == "page_footnote"
+    assert normalize_payload_block_type("header") == "header"
+    assert normalize_payload_block_type("footer") == "footer"
+    assert normalize_payload_block_type("page_number") == "page_number"
+    assert normalize_payload_block_type("aside_text") == "aside_text"
+    assert normalize_payload_block_type("page_footnote") == "page_footnote"
 
 
 class _ServiceResponse:
@@ -180,7 +182,10 @@ def test_remote_parser_service_posts_file_with_runtime_options(monkeypatch, tmp_
             },
         })
 
-    monkeypatch.setattr("app.modules.corpus.document_parsers.requests.post", fake_post)
+    monkeypatch.setattr(
+        "app.modules.corpus.parser_service_client.requests.post",
+        fake_post,
+    )
 
     parser = choose_parser(None, _remote_runtime_config())
     result = parser.parse(str(pdf_path), task_id="run-1")
@@ -211,7 +216,10 @@ def test_remote_parser_service_fetches_progress(monkeypatch):
             },
         })
 
-    monkeypatch.setattr("app.modules.corpus.document_parsers.requests.get", fake_get)
+    monkeypatch.setattr(
+        "app.modules.corpus.parser_service_client.requests.get",
+        fake_get,
+    )
 
     parser = choose_parser(None, _remote_runtime_config())
     progress = parser.fetch_progress("run-2")
