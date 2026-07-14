@@ -43,6 +43,16 @@ def test_auth_and_user_routes_are_owned_by_operations_module():
         assert routes[path].endpoint.__module__ == "app.modules.operations.router"
 
 
+def test_public_chat_routes_are_owned_by_chat_module():
+    routes = _routes_by_path()
+
+    for path in (
+        "/api/v1/chat",
+        "/api/v1/chat/{session_id}/history",
+    ):
+        assert routes[path].endpoint.__module__ == "app.modules.chat.router"
+
+
 def test_settings_routes_are_owned_by_operations_module():
     routes = _routes_by_path()
 

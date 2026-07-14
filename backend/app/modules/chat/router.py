@@ -8,8 +8,8 @@
 
 from fastapi import APIRouter, Depends
 
-from app.models.transaction import ChatRequest, ChatResponse, ChatHistory
-from app.services.chat_service import ChatService, get_chat_service
+from app.models.transaction import ChatHistory, ChatRequest, ChatResponse
+from app.modules.chat.service import ChatService, get_chat_service
 
 router = APIRouter(tags=["对话"])
 

@@ -1398,7 +1398,7 @@ fallback 方案：
 
 - [backend/app/api/admin.py](/Users/golfzhang/Documents/project/my-agent/backend/app/api/admin.py:1932)
 - [backend/app/db/qdrant.py](/Users/golfzhang/Documents/project/my-agent/backend/app/db/qdrant.py:1)
-- [backend/app/services/chat_service.py](/Users/golfzhang/Documents/project/my-agent/backend/app/services/chat_service.py:147)
+- [backend/app/modules/chat/service.py](/Users/golfzhang/Documents/project/my-agent/backend/app/modules/chat/service.py:147)
 
 ---
 

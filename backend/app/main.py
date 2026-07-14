@@ -13,12 +13,13 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import chat, admin
+from app.api import admin
 from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
 from app.db.redis import redis_client
 from app.db.mysql import mysql_client
 from app.modules.catalog import router as catalog_router
+from app.modules.chat.router import router as chat_router
 from app.modules.content import router as content_router
 from app.modules.corpus.router import router as corpus_router
 from app.modules.crawler.router import router as crawler_router
@@ -226,7 +227,7 @@ app.add_middleware(
 )
 
 # 注册路由
-app.include_router(chat.router, prefix="/api/v1")
+app.include_router(chat_router, prefix="/api/v1")
 app.include_router(operations_router, prefix="/api/v1")
 admin_dependencies = [Depends(require_current_admin)]
 app.include_router(

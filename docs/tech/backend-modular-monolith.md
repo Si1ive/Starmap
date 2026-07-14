@@ -26,13 +26,13 @@ app/
       router.py
       schemas.py               # 模块需要时再创建
       service.py
+    chat/                      # 公共问答与后台会话管理
     content/                   # 题目、知识点及人工审核记录
     corpus/                    # 文件、解析、实体抽取任务
     retrieval/                 # Segment、召回、章节扩展
     crawler/                   # 爬取源、任务、调度、日志
     monitoring/                # 运行指标、服务日志、LLM 与召回监控
     operations/                # 配置、用户与审计
-  services/                    # 尚未迁移的兼容服务
   models/                      # ORM 注册入口和逐步拆分后的模型
 ```
 
@@ -214,6 +214,8 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
   API Key 脱敏和响应行为保持不变
 - OpenAI 兼容 LLM 与 Embedding 客户端已迁移到 `app/infrastructure/ai`，由语料、
   内容、目录、检索、聊天和运营配置模块共享；两个旧 `app/services/*.py` 文件已删除
+- 公共问答编排和 `/api/v1/chat*` 路由已迁移到 `app/modules/chat`，最后一个旧
+  `app/services/chat_service.py` 已删除，空的 `app/services` 兼容目录同步移除
 - LLM 调用记录、聚合统计和向量召回质量日志已迁移到
   `app/modules/monitoring`，对应管理接口保持 `/api/v1/admin/monitor/*`
   不变，`app/services/llm_call_recorder.py` 与

@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.models.transaction import ChatHistory, ChatResponse
-from app.services.chat_service import get_chat_service
+from app.modules.chat.service import get_chat_service
 
 client = TestClient(app)
 

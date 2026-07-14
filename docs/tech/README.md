@@ -67,7 +67,7 @@ VITE_API_BASE_URL=http://localhost:8000
 | `backend/app/api/chat.py` | 问答 API |
 | `backend/app/db/qdrant.py` | Qdrant 连接与 collection 管理 |
 | `backend/app/services/retrieval_service.py` | 检索服务 |
-| `backend/app/services/chat_service.py` | RAG 对话服务 |
+| `backend/app/modules/chat/service.py` | RAG 对话服务 |
 | `backend/app/models/mysql_models.py` | MySQL ORM 模型 |
 | `backend/scrapy_service/starmap_scrapy/spiders/knowledge_spider.py` | 408 PDF 采集与解析 spider |
 | `frontend-admin/src/router/index.tsx` | 管理端路由 |
