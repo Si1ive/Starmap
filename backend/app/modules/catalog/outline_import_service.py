@@ -21,11 +21,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.models.mysql_models import (
-    ExamOutline, CanonicalChapter, Subject, DocumentSection, ExamOutlineSubject,
+    ExamOutline, CanonicalChapter, Subject, ExamOutlineSubject,
+)
+from app.modules.catalog.outline_document_sections import (
+    load_outline_tree_from_document_sections,
 )
 from app.modules.catalog.outline_parser import (
     detect_outline_format,
-    extract_outline_code,
     parse_outline_json,
     parse_outline_text,
 )
@@ -221,46 +223,12 @@ class OutlineImportService:
                 updated += u
         return created, updated
 
-    async def _load_document_sections_tree(self, document_id: str) -> List[Dict[str, Any]]:
-        """
-        读取文档标题树（document_sections）并转成 chapters 树。
-
-        大纲走的是「标题树」这条路（document_section_service 的规则提取），
-        与题目抽取的「题干/选项分离 + LLM 兜底」机制完全不同。
-        """
-        sections = (await self.db.execute(
-            select(DocumentSection)
-            .where(DocumentSection.document_id == document_id)
-            .order_by(DocumentSection.page_start, DocumentSection.level, DocumentSection.id)
-        )).scalars().all()
-        if not sections:
-            raise ValueError("文档没有可用的标题树，请先执行『提取标题树』")
-
-        chapters_tree: List[Dict[str, Any]] = []
-        # 用栈维护父链：(level, children_list)
-        stack: List[Tuple[int, List[Dict[str, Any]]]] = [(0, chapters_tree)]
-        sort_order = 0
-        for sec in sections:
-            level = max(1, int(sec.level or 1))
-            chapter = {
-                "name": (sec.title or "").strip()[:200],
-                "outline_code": extract_outline_code(sec.title or ""),
-                "sort_order": sort_order,
-                "children": [],
-            }
-            sort_order += 1
-            while stack and stack[-1][0] >= level:
-                stack.pop()
-            (stack[-1][1] if stack else chapters_tree).append(chapter)
-            stack.append((level, chapter["children"]))
-
-        if not chapters_tree:
-            raise ValueError("标题树解析后为空")
-        return chapters_tree
-
     async def preview_from_document_sections(self, document_id: str) -> Dict[str, Any]:
         """预览文档标题树转成的大纲章节树（不入库）。"""
-        chapters_tree = await self._load_document_sections_tree(document_id)
+        chapters_tree = await load_outline_tree_from_document_sections(
+            self.db,
+            document_id,
+        )
         return {
             "format": "document_sections",
             "total_chapters": count_outline_nodes(chapters_tree),
@@ -281,7 +249,10 @@ class OutlineImportService:
         从已解析文档的标题树（document_sections）转换为大纲入库。
         适合用户上传 PDF 大纲文件 → 解析器跑标题树 → 一键转大纲场景。
         """
-        chapters_tree = await self._load_document_sections_tree(document_id)
+        chapters_tree = await load_outline_tree_from_document_sections(
+            self.db,
+            document_id,
+        )
 
         # 转成 import_outline 同样的入库流程
         existing_outline = (await self.db.execute(
