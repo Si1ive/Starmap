@@ -8,12 +8,14 @@ import json
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Tuple
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.logging import get_logger
 from app.modules.corpus.document_mapping import (
     DocumentChapterMappingResolver,
+)
+from app.modules.corpus.entity_extraction_pipeline import (
+    DocumentEntityExtractionPipeline,
+    clean_document_blocks,
 )
 from app.modules.corpus.entity_persistence import (
     QuestionPersistence,
@@ -74,8 +76,6 @@ from app.models.mysql_models import (
 from app.services.text_cleaning import clean_block_text
 from app.services.llm_client import PDFStructureLLMClient
 
-logger = get_logger(__name__)
-
 
 def clean_punctuation_subscript(text: str) -> str:
     """兼容入口：转发到 text_cleaning.clean_block_text"""
@@ -83,13 +83,8 @@ def clean_punctuation_subscript(text: str) -> str:
 
 
 def clean_blocks_punctuation(blocks):
-    """清理 blocks 的 content_text/content_md 字段"""
-    for block in blocks:
-        if block.content_text:
-            block.content_text = clean_block_text(block.content_text)
-        if block.content_md:
-            block.content_md = clean_block_text(block.content_md)
-    return blocks
+    """兼容入口：清理 blocks 的文本字段。"""
+    return clean_document_blocks(blocks)
 
 
 class EntityExtractionService:
@@ -114,6 +109,13 @@ class EntityExtractionService:
         self._question_persistence = QuestionPersistence(db)
         self._question_builder = QuestionBuilder(db)
         self._question_pipeline = QuestionExtractionPipeline(db)
+        self._document_pipeline = DocumentEntityExtractionPipeline(
+            db,
+            chapter_mapping=self._chapter_mapping,
+            knowledge_pipeline=self._knowledge_pipeline,
+            question_pipeline=self._question_pipeline,
+            question_persistence=self._question_persistence,
+        )
 
     async def extract_entities_with_run_id(self, run_id: str) -> Dict[str, Any]:
         """执行已创建的抽取任务，并将最终状态持久化到运行记录。"""
@@ -204,145 +206,16 @@ class EntityExtractionService:
         extract_questions: bool = True,
         fallback_subject_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """
-        从文档中抽取实体
-
-        学科归属从章节映射反推（canonical_chapter.subject_id），
-        不依赖 document.subject_id，因此同一文档的不同 section 可以属于不同学科。
-
-        Args:
-            document_id: 文档ID
-            extract_knowledge: 是否抽取知识点
-            extract_questions: 是否抽取题目
-
-        Returns:
-            抽取结果统计
-        """
-        # 1. 获取文档信息
-        result = await self.db.execute(
-            select(Document).where(Document.id == document_id)
-        )
-        document = result.scalar_one_or_none()
-        if not document:
-            raise ValueError(f"文档不存在: {document_id}")
-
-        # document.subject_id 仅作为 fallback；前端可在试卷类文档中显式传入学科。
-        fallback_subject_id = fallback_subject_id or document.subject_id
-
-        # 1.5 提取文档级来源元信息（年份/真题/机构/试卷名），广播到题目
-        from app.services.document_meta_service import DocumentMetaService
-        try:
-            self._doc_meta = await DocumentMetaService(self.db).extract_and_store_meta(document_id)
-        except Exception as e:
-            logger.warning("文档元信息提取失败，题目来源将留空", document_id=document_id, error=str(e))
-            self._doc_meta = {}
-        self._doc_type = document.doc_type or "other"
-
-        # 2. 获取 blocks
-        blocks_result = await self.db.execute(
-            select(DocumentBlock)
-            .where(DocumentBlock.document_id == document_id)
-            .order_by(DocumentBlock.page_no, DocumentBlock.order_no)
-        )
-        blocks = blocks_result.scalars().all()
-
-        if not blocks:
-            return {
-                "knowledge_count": 0,
-                "question_count": 0,
-                "question_diagnostic": None,
-                "message": "文档没有 blocks",
-            }
-
-        # 2.5 清洗 <sub>/<sup> 标签和多余空白，知识点和题目两条路径共用
-        blocks = clean_blocks_punctuation(blocks)
-
-        # 2.6 混排识别：把每个 block 标记为 knowledge / question_stem / question_option / answer 等
-        from app.services.block_classifier import BlockClassifier
-        classifier_llm = await self._get_pdf_structure_llm_client()
-        classifier = BlockClassifier(llm_client=classifier_llm)
-        classifications = await classifier.classify(blocks, use_llm=bool(classifier_llm and classifier_llm.is_available))
-        block_label_by_id = {c.block_id: c.label for c in classifications if c.block_id}
-        classification_stats = BlockClassifier.stats(classifications)
-        logger.info("Block 类型分类完成", stats=classification_stats)
-
-        # 3. 获取 section 映射，用于确定章节和学科归属
-        # page -> {chapter_id, subject_id}
-        section_mappings = await self._get_section_mappings(document_id)
-
-        knowledge_count = 0
-        question_count = 0
-        question_diagnostic: Optional[Dict[str, Any]] = None
-        question_unassigned: List[Dict[str, Any]] = []
-        answer_linked = 0
-
-        # 架构：先组题再判类型。题目路径吃全部文本 block（不再按分类器预过滤，
-        # 避免题目 block 被误判成 knowledge 而在组题前就被滤掉）。组题后由
-        # QuestionLayoutGrouper.classify_group 按"有选项/题号/疑问特征"判定是否题目，
-        # 非题目组不落为题目、其 block 留给知识点路径。
-        # block_label_by_id 仅用于诊断展示，不再决定分流。
-        consumed_block_ids: set = set()
-
-        # 4. 抽取题目 — 吃全部 block，组题后判类型
-        if extract_questions:
-            await self._cleanup_existing_entities(document_id, "question")
-            question_result = await self._extract_questions(
-                document_id, fallback_subject_id, list(blocks), section_mappings
-            )
-            question_count = question_result["saved_count"]
-            question_diagnostic = question_result["diagnostic"]
-            question_unassigned = question_result.get("unassigned", [])
-            consumed_block_ids = set(question_result.get("consumed_block_ids") or [])
-            # 4.1 PDF 自带答案区回连：扫描"参考答案"段，按题号写回 answer（标 extracted）
-            try:
-                answer_linked = await self._extract_and_link_answers(document_id, blocks)
-            except Exception as e:
-                logger.warning("PDF 答案区回连失败，跳过", document_id=document_id, error=str(e))
-                answer_linked = 0
-
-        # 5. 抽取知识点 — 用剩余 block（排除已被题目消费的），保留标题/段落结构
-        if extract_knowledge:
-            await self._cleanup_existing_entities(document_id, "knowledge_point")
-            knowledge_blocks = [
-                b for b in blocks
-                if getattr(b, "id", None) not in consumed_block_ids
-                and block_label_by_id.get(getattr(b, "id", ""), "") in ("knowledge", "heading", "table", "figure", "formula")
-            ] or [b for b in blocks if getattr(b, "id", None) not in consumed_block_ids]
-            knowledge_count = await self._extract_knowledge_points(
-                document_id, fallback_subject_id, knowledge_blocks, section_mappings
-            )
-
-        # 跨页归属加固：找出未被任何 section 覆盖的页码（标题漏检/映射失败的信号）
-        all_pages = sorted({b.page_no for b in blocks if b.page_no is not None})
-        covered_pages = set(section_mappings.keys())
-        uncovered_pages = [p for p in all_pages if p not in covered_pages]
-        if uncovered_pages:
-            logger.warning(
-                "存在未被章节映射覆盖的页码，题目/知识点将依赖前后回退归属",
-                document_id=document_id,
-                uncovered_pages=uncovered_pages,
-            )
-
-        await self.db.commit()
-
-        logger.info(
-            "实体抽取完成",
+        """兼容入口：委托文档级实体抽取流水线。"""
+        result = await self._document_pipeline.extract(
             document_id=document_id,
-            knowledge_count=knowledge_count,
-            question_count=question_count,
+            extract_knowledge=extract_knowledge,
+            extract_questions=extract_questions,
+            fallback_subject_id=fallback_subject_id,
         )
-
-        return {
-            "document_id": document_id,
-            "knowledge_count": knowledge_count,
-            "question_count": question_count,
-            "question_diagnostic": question_diagnostic,
-            "block_classification": classification_stats,
-            "doc_meta": getattr(self, "_doc_meta", {}) or {},
-            "unassigned_questions": question_unassigned,
-            "uncovered_pages": uncovered_pages,
-            "answer_linked": answer_linked,
-        }
+        self._doc_meta = result.get("doc_meta") or {}
+        self._doc_type = self._document_pipeline.last_document_type
+        return result
 
     async def _get_section_mappings(self, document_id: str) -> Dict[int, Dict[str, Optional[str]]]:
         """兼容入口：加载已审核的 section 到章节映射。"""

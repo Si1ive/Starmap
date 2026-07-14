@@ -16,6 +16,10 @@ from app.modules.corpus.entity_persistence import (
 from app.modules.corpus.document_mapping import (
     DocumentChapterMappingResolver,
 )
+from app.modules.corpus.entity_extraction_pipeline import (
+    find_uncovered_pages,
+    select_knowledge_blocks,
+)
 from app.modules.corpus.question_builder import (
     build_extraction_meta,
     build_question_tags,
@@ -405,6 +409,32 @@ def test_document_chapter_mapping_resolves_nearest_page():
     assert DocumentChapterMappingResolver.resolve(6, mappings) == mappings[3]
     assert DocumentChapterMappingResolver.resolve(1, mappings) == mappings[3]
     assert DocumentChapterMappingResolver.resolve(None, mappings) is None
+
+
+def test_document_pipeline_selects_remaining_knowledge_blocks():
+    blocks = [
+        SimpleNamespace(id="question", page_no=1),
+        SimpleNamespace(id="knowledge", page_no=2),
+        SimpleNamespace(id="unknown", page_no=3),
+    ]
+
+    selected = select_knowledge_blocks(
+        blocks,
+        consumed_block_ids={"question"},
+        block_label_by_id={"knowledge": "knowledge"},
+    )
+    fallback = select_knowledge_blocks(
+        blocks,
+        consumed_block_ids={"question"},
+        block_label_by_id={},
+    )
+
+    assert [block.id for block in selected] == ["knowledge"]
+    assert [block.id for block in fallback] == ["knowledge", "unknown"]
+    assert find_uncovered_pages(
+        blocks,
+        section_mappings={1: {}, 3: {}},
+    ) == [2]
 
 
 @pytest.mark.asyncio
