@@ -118,10 +118,17 @@ def test_retrieval_routes_are_owned_by_retrieval_module():
         assert routes[path].endpoint.__module__ == "app.modules.retrieval.router"
 
 
-def test_llm_and_vector_monitor_routes_are_owned_by_monitoring_module():
+def test_monitor_routes_are_owned_by_monitoring_module():
     routes = _routes_by_path()
 
     for path in (
+        "/api/v1/admin/monitor/api",
+        "/api/v1/admin/monitor/database",
+        "/api/v1/admin/monitor/errors",
+        "/api/v1/admin/monitor/logs",
+        "/api/v1/admin/monitor/logs/stats",
+        "/api/v1/admin/monitor/logs/archive",
+        "/api/v1/admin/monitor/system",
         "/api/v1/admin/monitor/llm-calls",
         "/api/v1/admin/monitor/llm-calls/stats",
         "/api/v1/admin/monitor/llm-calls/{call_id}",

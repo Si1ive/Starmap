@@ -76,6 +76,7 @@ async def lifespan(app: FastAPI):
 
     try:
         from app.tasks.scheduler import init_scheduler
+
         await init_scheduler()
         logger.info("APScheduler调度器初始化成功")
     except Exception as e:
@@ -83,6 +84,7 @@ async def lifespan(app: FastAPI):
 
     try:
         from app.services.log_handler import init_log_handler
+
         await init_log_handler()
         logger.info("日志处理器初始化成功")
     except Exception as e:
@@ -90,6 +92,7 @@ async def lifespan(app: FastAPI):
 
     try:
         from app.services.scrapy_bridge import start_scrapy_event_listener
+
         await start_scrapy_event_listener()
         logger.info("Scrapy事件监听器初始化成功")
     except Exception as e:
@@ -97,21 +100,24 @@ async def lifespan(app: FastAPI):
 
     # 启动后台监控相关组件
     try:
-        from app.services.db_log_sink import start_db_log_sink
+        from app.modules.monitoring.log_sink import start_db_log_sink
+
         await start_db_log_sink()
         logger.info("服务日志 DB sink 启动成功")
     except Exception as e:
         logger.warning("服务日志 DB sink 启动失败", error=str(e))
 
     try:
-        from app.services.system_metrics_collector import start_metrics_collector
+        from app.modules.monitoring.system_metrics import start_metrics_collector
+
         await start_metrics_collector()
         logger.info("系统资源采集器启动成功")
     except Exception as e:
         logger.warning("系统资源采集器启动失败", error=str(e))
 
     try:
-        from app.middleware.api_stats import start_api_stats_flusher
+        from app.modules.monitoring.api_stats import start_api_stats_flusher
+
         await start_api_stats_flusher()
         logger.info("API 统计 flusher 启动成功")
     except Exception as e:
@@ -130,27 +136,31 @@ async def lifespan(app: FastAPI):
 
     try:
         from app.services.scrapy_bridge import stop_scrapy_event_listener
+
         await stop_scrapy_event_listener()
         logger.info("Scrapy事件监听器已关闭")
     except Exception as e:
         logger.error("Scrapy事件监听器关闭失败", error=str(e))
 
     try:
-        from app.middleware.api_stats import stop_api_stats_flusher
+        from app.modules.monitoring.api_stats import stop_api_stats_flusher
+
         await stop_api_stats_flusher()
         logger.info("API 统计 flusher 已关闭")
     except Exception as e:
         logger.error("API 统计 flusher 关闭失败", error=str(e))
 
     try:
-        from app.services.system_metrics_collector import stop_metrics_collector
+        from app.modules.monitoring.system_metrics import stop_metrics_collector
+
         await stop_metrics_collector()
         logger.info("系统资源采集器已关闭")
     except Exception as e:
         logger.error("系统资源采集器关闭失败", error=str(e))
 
     try:
-        from app.services.db_log_sink import stop_db_log_sink
+        from app.modules.monitoring.log_sink import stop_db_log_sink
+
         await stop_db_log_sink()
         logger.info("服务日志 DB sink 已关闭")
     except Exception as e:
@@ -164,6 +174,7 @@ async def lifespan(app: FastAPI):
 
     try:
         from app.tasks.scheduler import shutdown_scheduler
+
         await shutdown_scheduler()
         logger.info("APScheduler调度器已关闭")
     except Exception as e:
@@ -171,6 +182,7 @@ async def lifespan(app: FastAPI):
 
     try:
         from app.services.log_handler import shutdown_log_handler
+
         await shutdown_log_handler()
         logger.info("日志处理器已关闭")
     except Exception as e:
@@ -184,11 +196,12 @@ app = FastAPI(
     title="408考研学习平台 API",
     description="408计算机考研结构化学习平台",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 # 注册异常处理器
 from fastapi.exceptions import RequestValidationError
+
 app.add_exception_handler(APIException, api_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(Exception, general_exception_handler)
@@ -197,7 +210,8 @@ app.add_exception_handler(Exception, general_exception_handler)
 app.add_middleware(ErrorHandlerMiddleware)
 
 # API 调用统计中间件（按 endpoint 聚合到 api_call_stats）
-from app.middleware.api_stats import APIStatsMiddleware
+from app.modules.monitoring.api_stats import APIStatsMiddleware
+
 app.add_middleware(APIStatsMiddleware)
 
 # CORS配置
@@ -206,7 +220,7 @@ app.add_middleware(
     allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"]
+    allow_headers=["*"],
 )
 
 # 注册路由
@@ -259,7 +273,7 @@ async def health_check():
         "services": {
             "mysql": "up" if mysql_healthy else "down",
             "redis": "up" if redis_healthy else "down",
-        }
+        },
     }
 
 
@@ -269,5 +283,5 @@ async def root():
         "message": "Welcome to 408考研学习平台 API",
         "version": "1.0.0",
         "docs": "/docs",
-        "health": "/health"
+        "health": "/health",
     }

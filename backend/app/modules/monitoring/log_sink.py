@@ -1,5 +1,4 @@
-"""
-服务日志数据库 Sink
+"""服务日志数据库 Sink。
 
 把 structlog 输出异步批量写入 service_logs 表，供前端查询。
 
@@ -41,7 +40,11 @@ def queue_log(event_dict: Dict[str, Any]) -> None:
         _dropped_count += 1
 
 
-def db_log_processor(_logger: Any, _method: str, event_dict: Dict[str, Any]) -> Dict[str, Any]:
+def db_log_processor(
+    _logger: Any,
+    _method: str,
+    event_dict: Dict[str, Any],
+) -> Dict[str, Any]:
     """
     structlog processor。把日志事件入队，但不修改原 event_dict（继续走后续 processors 输出到 stdout）。
 
@@ -49,7 +52,9 @@ def db_log_processor(_logger: Any, _method: str, event_dict: Dict[str, Any]) -> 
     """
     try:
         snapshot = dict(event_dict)
-        snapshot["_logger_name"] = _logger.name if hasattr(_logger, "name") else str(_logger)
+        snapshot["_logger_name"] = (
+            _logger.name if hasattr(_logger, "name") else str(_logger)
+        )
         snapshot["_method"] = _method
         queue_log(snapshot)
     except Exception:
@@ -62,8 +67,16 @@ def _serialize_context(event_dict: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """从 event_dict 抽出非内置字段作为 context。"""
     ctx = {}
     skip_keys = {
-        "event", "level", "timestamp", "logger", "_record", "_logger_name",
-        "_method", "exc_info", "stack_info", "request_id"
+        "event",
+        "level",
+        "timestamp",
+        "logger",
+        "_record",
+        "_logger_name",
+        "_method",
+        "exc_info",
+        "stack_info",
+        "request_id",
     }
     for key, value in event_dict.items():
         if key in skip_keys:

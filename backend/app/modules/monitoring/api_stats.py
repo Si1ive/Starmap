@@ -1,5 +1,4 @@
-"""
-API 调用统计中间件
+"""API 调用统计中间件。
 
 把每次 HTTP 请求的（endpoint, method, latency, status）按小时桶聚合到 api_call_stats。
 
@@ -10,11 +9,10 @@ API 调用统计中间件
 """
 
 import asyncio
-import os
 import sys
 import time
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Awaitable, Callable, Dict, Optional, Tuple
 
 from fastapi import Request, Response
@@ -65,7 +63,9 @@ class APIStatsMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: ASGIApp):
         super().__init__(app)
 
-    async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+    async def dispatch(
+        self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
         path = str(request.url.path)
         # 跳过监控自身和静态端点，避免污染
         if any(path.startswith(prefix) for prefix in self.SKIP_PATHS):
@@ -154,17 +154,19 @@ async def _flush_to_db() -> None:
                         )
                         or 0
                     )
-                    session.add(ApiCallStat(
-                        endpoint=endpoint,
-                        method=method,
-                        hour_bucket=hour_bucket,
-                        call_count=data["count"],
-                        error_count=data["errors"],
-                        total_latency_ms=data["total_ms"],
-                        max_latency_ms=data["max_ms"],
-                        p95_sample_ms=p95,
-                        latency_histogram=data["latency_histogram"],
-                    ))
+                    session.add(
+                        ApiCallStat(
+                            endpoint=endpoint,
+                            method=method,
+                            hour_bucket=hour_bucket,
+                            call_count=data["count"],
+                            error_count=data["errors"],
+                            total_latency_ms=data["total_ms"],
+                            max_latency_ms=data["max_ms"],
+                            p95_sample_ms=p95,
+                            latency_histogram=data["latency_histogram"],
+                        )
+                    )
             await session.commit()
     except Exception as e:
         # 失败的桶丢弃；下个周期累积新数据

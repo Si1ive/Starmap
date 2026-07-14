@@ -1,5 +1,4 @@
-"""
-系统资源采集器
+"""系统资源采集器。
 
 后台 task 每 N 秒一次用 psutil 采样 CPU / 内存 / 磁盘 / 进程级 RSS，写入 system_metrics。
 
@@ -58,8 +57,8 @@ def _safe_psutil_sample() -> dict:
 
     try:
         disk = psutil.disk_usage("/")
-        data["disk_used_gb"] = round(disk.used / (1024 ** 3), 2)
-        data["disk_total_gb"] = round(disk.total / (1024 ** 3), 2)
+        data["disk_used_gb"] = round(disk.used / (1024**3), 2)
+        data["disk_total_gb"] = round(disk.total / (1024**3), 2)
         data["disk_percent"] = float(disk.percent)
     except Exception:
         pass

@@ -28,7 +28,8 @@ app/
     corpus/                    # 文件、解析、实体抽取任务
     retrieval/                 # Segment、召回、章节扩展
     crawler/                   # 爬取源、任务、调度、日志
-    operations/                # 监控、配置、用户与审计
+    monitoring/                # 运行指标、服务日志、LLM 与召回监控
+    operations/                # 配置、用户与审计
   services/                    # 尚未迁移的兼容服务
   models/                      # ORM 注册入口和逐步拆分后的模型
 ```
@@ -204,6 +205,12 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
   `app/modules/monitoring`，对应管理接口保持 `/api/v1/admin/monitor/*`
   不变，`app/services/llm_call_recorder.py` 与
   `app/services/vector_recall_recorder.py` 已删除
+- API 延迟统计、数据库状态、服务日志查询与归档、系统资源采集和日志异步入库已迁移到
+  `app/modules/monitoring`；相关端点已从 `app/api/admin.py` 迁出，
+  `app/services/monitor_service.py`、`db_log_sink.py`、
+  `system_metrics_collector.py` 以及 `app/middleware/api_stats.py` 已删除
+- 无任何运行时调用且与现有爬虫统计查询重复的
+  `app/services/stats_collector.py` 已删除；爬虫源统计继续由实际在用的服务负责
 
 每个阶段都必须满足：
 

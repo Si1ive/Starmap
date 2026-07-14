@@ -9,7 +9,7 @@ from app.modules.monitoring.latency_histogram import (
     merge_histograms,
     record_latency,
 )
-from app.services.monitor_service import get_api_stats_overview
+from app.modules.monitoring.queries import get_api_stats_overview
 
 
 def test_latency_histogram_merges_and_calculates_real_percentiles():

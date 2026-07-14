@@ -1,5 +1,4 @@
-"""
-监控查询服务
+"""运行时监控查询服务。
 
 为 /admin/monitor/* 端点提供数据查询能力：
 - 服务日志（service_logs）：分页查询、按时间清理、归档到文件
@@ -23,9 +22,7 @@ from app.modules.monitoring.latency_histogram import (
     histogram_percentile,
     merge_histograms,
 )
-from app.models.mysql_models import (
-    ServiceLog, SystemMetric, ApiCallStat, LLMCallLog,
-)
+from app.models.mysql_models import ApiCallStat, ServiceLog, SystemMetric
 
 logger = get_logger(__name__)
 
@@ -75,9 +72,11 @@ async def query_service_logs(
         count_query = count_query.where(ServiceLog.created_at <= end_time)
 
     total = (await session.execute(count_query)).scalar_one() or 0
-    rows = (await session.execute(
-        query.offset((page - 1) * page_size).limit(page_size)
-    )).scalars().all()
+    rows = (
+        (await session.execute(query.offset((page - 1) * page_size).limit(page_size)))
+        .scalars()
+        .all()
+    )
 
     return {
         "total": int(total),
@@ -100,27 +99,36 @@ async def query_service_logs(
     }
 
 
-async def get_service_log_stats(session: AsyncSession, hours: int = 24) -> Dict[str, Any]:
+async def get_service_log_stats(
+    session: AsyncSession, hours: int = 24
+) -> Dict[str, Any]:
     since = datetime.utcnow() - timedelta(hours=hours)
 
-    by_level = (await session.execute(
-        select(ServiceLog.level, func.count(ServiceLog.id))
-        .where(ServiceLog.created_at >= since)
-        .group_by(ServiceLog.level)
-    )).all()
+    by_level = (
+        await session.execute(
+            select(ServiceLog.level, func.count(ServiceLog.id))
+            .where(ServiceLog.created_at >= since)
+            .group_by(ServiceLog.level)
+        )
+    ).all()
 
-    by_logger = (await session.execute(
-        select(ServiceLog.logger_name, func.count(ServiceLog.id))
-        .where(ServiceLog.created_at >= since)
-        .group_by(ServiceLog.logger_name)
-        .order_by(func.count(ServiceLog.id).desc())
-        .limit(10)
-    )).all()
+    by_logger = (
+        await session.execute(
+            select(ServiceLog.logger_name, func.count(ServiceLog.id))
+            .where(ServiceLog.created_at >= since)
+            .group_by(ServiceLog.logger_name)
+            .order_by(func.count(ServiceLog.id).desc())
+            .limit(10)
+        )
+    ).all()
 
     return {
         "window_hours": hours,
         "by_level": [{"level": lvl, "count": int(c)} for lvl, c in by_level],
-        "top_loggers": [{"logger": l or "unknown", "count": int(c)} for l, c in by_logger],
+        "top_loggers": [
+            {"logger": logger_name or "unknown", "count": int(count)}
+            for logger_name, count in by_logger
+        ],
     }
 
 
@@ -151,13 +159,24 @@ async def archive_service_logs(
     if older_than_days < 0:
         return {"archived": 0, "deleted": 0, "path": None}
 
-    archive_dir = archive_dir or str(Path(settings.UPLOAD_DIR if hasattr(settings, "UPLOAD_DIR") else "uploads") / "log_archives")
+    archive_dir = archive_dir or str(
+        Path(settings.UPLOAD_DIR if hasattr(settings, "UPLOAD_DIR") else "uploads")
+        / "log_archives"
+    )
     Path(archive_dir).mkdir(parents=True, exist_ok=True)
 
     cutoff = datetime.utcnow() - timedelta(days=older_than_days)
-    rows = (await session.execute(
-        select(ServiceLog).where(ServiceLog.created_at < cutoff).order_by(ServiceLog.id)
-    )).scalars().all()
+    rows = (
+        (
+            await session.execute(
+                select(ServiceLog)
+                .where(ServiceLog.created_at < cutoff)
+                .order_by(ServiceLog.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
 
     if not rows:
         return {"archived": 0, "deleted": 0, "path": None}
@@ -167,22 +186,28 @@ async def archive_service_logs(
 
     with gzip.open(out_path, "wt", encoding="utf-8") as f:
         for r in rows:
-            f.write(json.dumps({
-                "id": r.id,
-                "level": r.level,
-                "logger_name": r.logger_name,
-                "event": r.event,
-                "message": r.message,
-                "request_id": r.request_id,
-                "context": r.context,
-                "traceback": r.traceback,
-                "created_at": _iso_utc(r.created_at),
-            }, ensure_ascii=False) + "\n")
+            f.write(
+                json.dumps(
+                    {
+                        "id": r.id,
+                        "level": r.level,
+                        "logger_name": r.logger_name,
+                        "event": r.event,
+                        "message": r.message,
+                        "request_id": r.request_id,
+                        "context": r.context,
+                        "traceback": r.traceback,
+                        "created_at": _iso_utc(r.created_at),
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
 
     # 归档完成才清库（至少导出成功了）
-    deleted = (await session.execute(
-        delete(ServiceLog).where(ServiceLog.created_at < cutoff)
-    )).rowcount
+    deleted = (
+        await session.execute(delete(ServiceLog).where(ServiceLog.created_at < cutoff))
+    ).rowcount
     await session.commit()
 
     return {
@@ -196,9 +221,11 @@ async def archive_service_logs(
 
 
 async def get_system_metrics_latest(session: AsyncSession) -> Optional[Dict[str, Any]]:
-    row = (await session.execute(
-        select(SystemMetric).order_by(SystemMetric.id.desc()).limit(1)
-    )).scalar_one_or_none()
+    row = (
+        await session.execute(
+            select(SystemMetric).order_by(SystemMetric.id.desc()).limit(1)
+        )
+    ).scalar_one_or_none()
     if not row:
         return None
     return _metric_to_dict(row)
@@ -210,9 +237,17 @@ async def get_system_metrics_series(
     max_points: int = 200,
 ) -> List[Dict[str, Any]]:
     since = datetime.utcnow() - timedelta(hours=hours)
-    rows = (await session.execute(
-        select(SystemMetric).where(SystemMetric.sampled_at >= since).order_by(SystemMetric.id)
-    )).scalars().all()
+    rows = (
+        (
+            await session.execute(
+                select(SystemMetric)
+                .where(SystemMetric.sampled_at >= since)
+                .order_by(SystemMetric.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
     if not rows:
         return []
 
@@ -243,13 +278,21 @@ def _metric_to_dict(row: SystemMetric) -> Dict[str, Any]:
 # ===== API 统计 =====
 
 
-async def get_api_stats_overview(session: AsyncSession, hours: int = 24) -> Dict[str, Any]:
+async def get_api_stats_overview(
+    session: AsyncSession, hours: int = 24
+) -> Dict[str, Any]:
     since_bucket = (
         datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=hours)
     ).replace(minute=0, second=0, microsecond=0)
-    rows = (await session.execute(
-        select(ApiCallStat).where(ApiCallStat.hour_bucket >= since_bucket)
-    )).scalars().all()
+    rows = (
+        (
+            await session.execute(
+                select(ApiCallStat).where(ApiCallStat.hour_bucket >= since_bucket)
+            )
+        )
+        .scalars()
+        .all()
+    )
 
     total_calls = sum(int(r.call_count or 0) for r in rows)
     total_errors = sum(int(r.error_count or 0) for r in rows)
@@ -257,9 +300,7 @@ async def get_api_stats_overview(session: AsyncSession, hours: int = 24) -> Dict
     avg_latency = int(total_ms / total_calls) if total_calls else 0
     error_rate = round(total_errors / total_calls, 4) if total_calls else 0
 
-    latency_histogram = merge_histograms(
-        *(r.latency_histogram for r in rows)
-    )
+    latency_histogram = merge_histograms(*(r.latency_histogram for r in rows))
     histogram_samples = histogram_count(latency_histogram)
     legacy_p95 = max((int(r.p95_sample_ms or 0) for r in rows), default=0)
     histogram_p95 = histogram_percentile(
@@ -279,15 +320,19 @@ async def get_api_stats_overview(session: AsyncSession, hours: int = 24) -> Dict
     endpoint_aggregate: Dict[str, Dict[str, Any]] = {}
     for r in rows:
         key = f"{r.method} {r.endpoint}"
-        slot = endpoint_aggregate.setdefault(key, {
-            "endpoint": r.endpoint, "method": r.method,
-            "calls": 0,
-            "errors": 0,
-            "total_ms": 0,
-            "max_ms": 0,
-            "legacy_p95": 0,
-            "latency_histogram": {},
-        })
+        slot = endpoint_aggregate.setdefault(
+            key,
+            {
+                "endpoint": r.endpoint,
+                "method": r.method,
+                "calls": 0,
+                "errors": 0,
+                "total_ms": 0,
+                "max_ms": 0,
+                "legacy_p95": 0,
+                "latency_histogram": {},
+            },
+        )
         slot["calls"] += int(r.call_count or 0)
         slot["errors"] += int(r.error_count or 0)
         slot["total_ms"] += int(r.total_latency_ms or 0)
@@ -309,15 +354,17 @@ async def get_api_stats_overview(session: AsyncSession, hours: int = 24) -> Dict
             0.95,
             overflow_value=slot["max_ms"],
         )
-        endpoints.append({
-            "endpoint": slot["endpoint"],
-            "method": slot["method"],
-            "calls": slot["calls"],
-            "avg_latency": int(slot["total_ms"] / calls),
-            "max_latency": slot["max_ms"],
-            "p95": max(endpoint_p95 or 0, slot["legacy_p95"]),
-            "error_rate": round(slot["errors"] / calls * 100, 2),
-        })
+        endpoints.append(
+            {
+                "endpoint": slot["endpoint"],
+                "method": slot["method"],
+                "calls": slot["calls"],
+                "avg_latency": int(slot["total_ms"] / calls),
+                "max_latency": slot["max_ms"],
+                "p95": max(endpoint_p95 or 0, slot["legacy_p95"]),
+                "error_rate": round(slot["errors"] / calls * 100, 2),
+            }
+        )
     endpoints.sort(key=lambda x: x["calls"], reverse=True)
 
     return {
@@ -345,15 +392,20 @@ async def get_api_stats_overview(session: AsyncSession, hours: int = 24) -> Dict
                 ),
             ),
             "sample_count": histogram_samples,
-            "coverage_percent": min(
-                100.0,
-                round(histogram_samples / total_calls * 100, 2),
-            ) if total_calls else 0.0,
+            "coverage_percent": (
+                min(
+                    100.0,
+                    round(histogram_samples / total_calls * 100, 2),
+                )
+                if total_calls
+                else 0.0
+            ),
         },
         "endpoints": endpoints[:20],  # 调用 top20
         "slow_queries": sorted(
             [e for e in endpoints if e["max_latency"] >= 1000],
-            key=lambda e: e["max_latency"], reverse=True,
+            key=lambda e: e["max_latency"],
+            reverse=True,
         )[:20],
         "qps_trend": qps_trend,
     }
@@ -369,65 +421,78 @@ async def get_database_status_extended() -> Dict[str, Any]:
     # MySQL
     try:
         from app.db.mysql import mysql_client
+
         ok = await mysql_client.health_check()
-        databases.append({
-            "name": "MySQL",
-            "type": "RDBMS",
-            "status": "connected" if ok else "disconnected",
-            "version": "-",
-            "uptime": "-",
-            "connections": 0,
-            "max_connections": 0,
-            "size": "-",
-            "operations_per_sec": 0,
-            "cache_hit_rate": 0,
-            "last_check": datetime.utcnow().isoformat(),
-        })
+        databases.append(
+            {
+                "name": "MySQL",
+                "type": "RDBMS",
+                "status": "connected" if ok else "disconnected",
+                "version": "-",
+                "uptime": "-",
+                "connections": 0,
+                "max_connections": 0,
+                "size": "-",
+                "operations_per_sec": 0,
+                "cache_hit_rate": 0,
+                "last_check": datetime.utcnow().isoformat(),
+            }
+        )
     except Exception:
         databases.append({"name": "MySQL", "type": "RDBMS", "status": "disconnected"})
 
     # Redis
     try:
         from app.db.redis import redis_client
+
         info = await redis_client.client.info()
-        databases.append({
-            "name": "Redis",
-            "type": "Cache",
-            "status": "connected",
-            "version": info.get("redis_version", "-"),
-            "uptime": str(info.get("uptime_in_seconds", "-")) + "s",
-            "connections": int(info.get("connected_clients", 0)),
-            "max_connections": int(info.get("maxclients", 0) or 10000),
-            "size": info.get("used_memory_human", "-"),
-            "operations_per_sec": int(info.get("instantaneous_ops_per_sec", 0)),
-            "cache_hit_rate": 0,
-            "last_check": datetime.utcnow().isoformat(),
-        })
+        databases.append(
+            {
+                "name": "Redis",
+                "type": "Cache",
+                "status": "connected",
+                "version": info.get("redis_version", "-"),
+                "uptime": str(info.get("uptime_in_seconds", "-")) + "s",
+                "connections": int(info.get("connected_clients", 0)),
+                "max_connections": int(info.get("maxclients", 0) or 10000),
+                "size": info.get("used_memory_human", "-"),
+                "operations_per_sec": int(info.get("instantaneous_ops_per_sec", 0)),
+                "cache_hit_rate": 0,
+                "last_check": datetime.utcnow().isoformat(),
+            }
+        )
     except Exception:
         databases.append({"name": "Redis", "type": "Cache", "status": "disconnected"})
 
     # Qdrant（项目里 ChromaDB 字段，但实际是 Qdrant）
     try:
         from app.db.qdrant import qdrant_client
+
         if qdrant_client and qdrant_client.client:
             collections = await qdrant_client.list_collections()
-            databases.append({
-                "name": "Qdrant",
-                "type": "Vector",
-                "status": "connected",
-                "version": "-",
-                "uptime": "-",
-                "connections": 0,
-                "max_connections": 0,
-                "size": f"{len(collections)} collections",
-                "operations_per_sec": 0,
-                "cache_hit_rate": 0,
-                "last_check": datetime.utcnow().isoformat(),
-            })
+            databases.append(
+                {
+                    "name": "Qdrant",
+                    "type": "Vector",
+                    "status": "connected",
+                    "version": "-",
+                    "uptime": "-",
+                    "connections": 0,
+                    "max_connections": 0,
+                    "size": f"{len(collections)} collections",
+                    "operations_per_sec": 0,
+                    "cache_hit_rate": 0,
+                    "last_check": datetime.utcnow().isoformat(),
+                }
+            )
     except Exception:
         pass
 
     return {
-        "status": "connected" if all(d.get("status") == "connected" for d in databases) else "degraded",
+        "status": (
+            "connected"
+            if all(d.get("status") == "connected" for d in databases)
+            else "degraded"
+        ),
         "databases": databases,
     }
