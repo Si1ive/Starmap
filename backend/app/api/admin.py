@@ -2284,7 +2284,7 @@ async def list_relations_for_review(
     db: AsyncSession = Depends(get_db),
 ):
     """获取待审核的关系列表"""
-    from app.services.review_service import ReviewService
+    from app.modules.content.review_service import ReviewService
 
     service = ReviewService(db)
     result = await service.get_relations_for_review(
@@ -2308,7 +2308,7 @@ async def review_relation(
     db: AsyncSession = Depends(get_db),
 ):
     """审核关系"""
-    from app.services.review_service import ReviewService
+    from app.modules.content.review_service import ReviewService
 
     service = ReviewService(db)
     try:
@@ -2376,7 +2376,7 @@ async def get_review_stats(
     db: AsyncSession = Depends(get_db),
 ):
     """获取审核统计"""
-    from app.services.review_service import ReviewService
+    from app.modules.content.review_service import ReviewService
 
     service = ReviewService(db)
     result = await service.get_review_stats(subject_id)

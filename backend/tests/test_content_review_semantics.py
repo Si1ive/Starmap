@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.models.mysql_models import KnowledgePoint, Question
+from app.modules.content.review_service import ReviewService
 from app.modules.retrieval.segment_service import SegmentService
-from app.services.review_service import ReviewService
 
 
 class _ScalarOneResult:

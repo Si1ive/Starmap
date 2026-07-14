@@ -71,6 +71,10 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 
 状态：已完成。题目与知识点路由位于 `app/modules/content`，原 URL 保持不变。
 
+- 题目、知识点和知识关系的审核查询、审核写入及审核后索引重建已迁移到
+  `app/modules/content/review_service.py`，`app/services/review_service.py`
+  已删除
+
 内容状态约定：
 
 - `status=active`：内容可用于管理、章节关联、富化、分段和检索
