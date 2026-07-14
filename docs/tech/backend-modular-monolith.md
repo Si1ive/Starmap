@@ -146,6 +146,9 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - 大纲 Query 扩展、章节范围召回、题目到章节展开和交叉引用校验已迁移到
   `app/modules/retrieval/outline_service.py`，
   `app/services/outline_retrieval_service.py` 仅保留兼容导出
+- 知识点关系构建、语义相似边、关系查询和审核已迁移到
+  `app/modules/retrieval/relation_service.py`，
+  `app/services/relation_service.py` 仅保留兼容导出
 - sparse/hybrid 的 MySQL 关键词召回已与 dense 的 Qdrant payload 过滤保持一致，
   学科、章节、年份、考试范围、难度、题型、答案来源和标签均在截断候选前过滤
 

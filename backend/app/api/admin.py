@@ -2435,7 +2435,7 @@ async def build_knowledge_relations(
     db: AsyncSession = Depends(get_db),
 ):
     """构建知识点关系（规则 + 语义相似度边）。"""
-    from app.services.relation_service import RelationService
+    from app.modules.retrieval.relation_service import RelationService
 
     service = RelationService(db)
     try:
