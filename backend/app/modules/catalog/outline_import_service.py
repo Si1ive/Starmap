@@ -13,7 +13,6 @@
 """
 
 import json
-import re
 import uuid
 from datetime import datetime, date
 from typing import Any, Dict, List, Optional, Tuple
@@ -24,6 +23,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.logging import get_logger
 from app.models.mysql_models import (
     ExamOutline, CanonicalChapter, Subject, DocumentSection, ExamOutlineSubject,
+)
+from app.modules.catalog.outline_parser import (
+    detect_outline_format,
+    extract_outline_code,
+    parse_outline_json,
+    parse_outline_text,
 )
 from app.modules.retrieval.chapter_relation_retrieval import (
     validate_cross_references,
@@ -36,149 +41,6 @@ def _gen_id() -> str:
     return uuid.uuid4().hex[:32]
 
 
-# 编号匹配（带层级权重）
-NUMBER_PATTERNS: List[Tuple[re.Pattern, int]] = [
-    # 第X章/第X部分（最高级）
-    (re.compile(r'^\s*第\s*[一二三四五六七八九十百千万零\d]+\s*[章部篇]'), 1),
-    # 中文一、二、三
-    (re.compile(r'^\s*[一二三四五六七八九十]+\s*[、.]'), 1),
-    # 1.1.1 类阿拉伯数字编号
-    (re.compile(r'^\s*\d+(?:\.\d+){2,}'), 3),
-    (re.compile(r'^\s*\d+\.\d+'), 2),
-    (re.compile(r'^\s*\d+[.、]'), 1),
-    # (一) (1)
-    (re.compile(r'^\s*[（(]\s*[一二三四五六七八九十]+\s*[）)]'), 2),
-    (re.compile(r'^\s*[（(]\s*\d+\s*[）)]'), 3),
-    # ① ② 等圆圈数字
-    (re.compile(r'^\s*[①②③④⑤⑥⑦⑧⑨⑩]'), 3),
-]
-
-# 编号清理（去除编号留下纯名称）
-NUMBER_STRIP_RE = re.compile(
-    r'^\s*(?:'
-    r'第\s*[一二三四五六七八九十百千万零\d]+\s*[章部篇]\s*[:：、.]?'
-    r'|[一二三四五六七八九十]+\s*[、.]'
-    r'|\d+(?:\.\d+)*\s*[、.]?'
-    r'|[（(]\s*[一二三四五六七八九十\d]+\s*[）)]'
-    r'|[①②③④⑤⑥⑦⑧⑨⑩]'
-    r')\s*'
-)
-
-
-def _detect_level(line: str) -> int:
-    """根据行首编号或缩进推测层级（1=一级，越大越深）"""
-    stripped = line.lstrip()
-    indent = len(line) - len(stripped)
-
-    for pattern, level_hint in NUMBER_PATTERNS:
-        if pattern.match(stripped):
-            # 阿拉伯数字层数 = 点数 + 1
-            m = re.match(r'^\s*(\d+(?:\.\d+)*)', stripped)
-            if m:
-                dots = m.group(1).count(".")
-                return max(1, dots + 1)
-            return level_hint
-
-    # 没有编号：用缩进推（每 2 空格为一级）
-    if indent >= 4:
-        return 3
-    if indent >= 2:
-        return 2
-    return 1
-
-
-def _extract_outline_code(line: str) -> Optional[str]:
-    """从行首抽出大纲编号（1.1.1, 一、, (一), 第一章）"""
-    m = re.match(r'^\s*(\d+(?:\.\d+)*)', line)
-    if m:
-        return m.group(1)
-    m = re.match(r'^\s*(第\s*[一二三四五六七八九十百千万零\d]+\s*[章部篇])', line)
-    if m:
-        return m.group(1).replace(" ", "")
-    m = re.match(r'^\s*([一二三四五六七八九十]+)\s*[、.]', line)
-    if m:
-        return m.group(1)
-    m = re.match(r'^\s*[（(]\s*([一二三四五六七八九十\d]+)\s*[）)]', line)
-    if m:
-        return f"({m.group(1)})"
-    return None
-
-
-def _strip_number(line: str) -> str:
-    """剥离行首编号"""
-    return NUMBER_STRIP_RE.sub("", line.strip()).strip()
-
-
-def parse_outline_text(text: str) -> List[Dict[str, Any]]:
-    """
-    解析纯文本大纲。
-
-    返回 chapters 树（init_chapters 接受的格式）：
-    [{"name": "...", "code": "...", "children": [{...}, ...]}]
-    """
-    if not text or not text.strip():
-        return []
-
-    chapters_tree: List[Dict[str, Any]] = []
-    # 用栈维护当前父链（栈深 = 当前层级）
-    stack: List[Tuple[int, List[Dict[str, Any]]]] = [(0, chapters_tree)]
-
-    sort_order = 0
-    for raw_line in text.splitlines():
-        if not raw_line.strip():
-            continue
-        if raw_line.strip().startswith("#"):  # 允许注释
-            continue
-
-        level = _detect_level(raw_line)
-        outline_code = _extract_outline_code(raw_line)
-        name = _strip_number(raw_line)
-        if not name:
-            continue
-
-        chapter = {
-            "name": name[:200],
-            "outline_code": outline_code,
-            "sort_order": sort_order,
-            "children": [],
-        }
-        sort_order += 1
-
-        # 弹出栈直到找到父层级
-        while stack and stack[-1][0] >= level:
-            stack.pop()
-
-        parent_children = stack[-1][1] if stack else chapters_tree
-        parent_children.append(chapter)
-        stack.append((level, chapter["children"]))
-
-    return chapters_tree
-
-
-def parse_outline_json(text: str) -> List[Dict[str, Any]]:
-    """JSON 格式的大纲；接受根级数组或 {"chapters": [...]}"""
-    data = json.loads(text)
-    if isinstance(data, list):
-        return data
-    if isinstance(data, dict):
-        return data.get("chapters") or []
-    raise ValueError("无效的 JSON 大纲格式")
-
-
-def detect_format(filename: str, content: str) -> str:
-    """根据文件扩展名 + 内容启发式探测格式"""
-    name_lower = (filename or "").lower()
-    if name_lower.endswith(".json"):
-        return "json"
-    if name_lower.endswith((".txt", ".md")):
-        return "text"
-    # 启发：以 { 或 [ 开头当 JSON
-    head = content.lstrip()[:1]
-    if head in "[{":
-        return "json"
-    return "text"
-
-
 class OutlineImportService:
     """大纲导入服务"""
 
@@ -187,7 +49,7 @@ class OutlineImportService:
 
     async def preview(self, content: str, filename: str = "") -> Dict[str, Any]:
         """解析大纲文本并返回预览（不入库）"""
-        fmt = detect_format(filename, content)
+        fmt = detect_outline_format(filename, content)
         if fmt == "json":
             chapters = parse_outline_json(content)
         else:
@@ -379,7 +241,7 @@ class OutlineImportService:
             level = max(1, int(sec.level or 1))
             chapter = {
                 "name": (sec.title or "").strip()[:200],
-                "outline_code": _extract_outline_code(sec.title or ""),
+                "outline_code": extract_outline_code(sec.title or ""),
                 "sort_order": sort_order,
                 "children": [],
             }
