@@ -28,9 +28,10 @@ export interface QuestionListParams {
 export interface UpdateQuestionData {
   subject_id?: string
   chapter_id?: string
+  primary_chapter_id?: string
   type?: Question['type']
   content?: string
-  options?: { key: string; text: string }[]
+  options?: NonNullable<Question['options']>
   answer?: string
   explanation?: string
   difficulty?: Question['difficulty']
@@ -58,7 +59,7 @@ export const updateQuestion = (
   id: string,
   data: UpdateQuestionData
 ): Promise<ApiResponse<ContentMutationResult>> => {
-  return adminClient.put(`/questions/${id}`, data)
+  return adminClient.put(`/questions/${id}`, data, { timeout: 120000 })
 }
 
 export const deleteQuestion = (
@@ -78,7 +79,6 @@ export const reviewQuestion = (
   data: {
     review_status: 'approved' | 'rejected'
     review_notes?: string
-    primary_chapter_id?: string
   },
 ): Promise<ApiResponse<ContentReviewResult>> => {
   return adminClient.post(`/review/questions/${id}`, null, { params: data })

@@ -20,8 +20,16 @@ class UpdateKnowledgePointRequest(BaseModel):
 class UpdateQuestionRequest(BaseModel):
     subject_id: Optional[str] = None
     chapter_id: Optional[str] = None
+    primary_chapter_id: Optional[str] = None
     type: Optional[
-        Literal["choice", "fill", "judge", "short_answer", "design", "analysis"]
+        Literal[
+            "choice",
+            "fill",
+            "judge",
+            "short_answer",
+            "design",
+            "analysis",
+        ]
     ] = None
     content: Optional[str] = None
     options: Optional[List[dict]] = None

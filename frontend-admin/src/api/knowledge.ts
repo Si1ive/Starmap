@@ -87,7 +87,6 @@ export const reviewKnowledgePoint = (
   data: {
     review_status: 'approved' | 'rejected'
     review_notes?: string
-    primary_chapter_id?: string
     topic_terms?: string[]
   },
 ): Promise<ApiResponse<ContentReviewResult>> => {

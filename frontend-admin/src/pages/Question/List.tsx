@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Card, Table, Tag, Button, Input, Select, Space, Modal, message } from 'antd'
 import { AuditOutlined, DeleteOutlined, EyeOutlined, EditOutlined } from '@ant-design/icons'
@@ -35,18 +35,58 @@ const difficultyConfig: Record<string, { color: string; text: string }> = {
 const parseReviewStatus = (value: string | null): ReviewStatus | undefined =>
   value === 'pending' || value === 'approved' || value === 'rejected' ? value : undefined
 
+const parsePositiveInteger = (value: string | null, fallback?: number) => {
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
+}
+
+const readQuestionListParams = (searchParams: URLSearchParams): QuestionListParams => ({
+  page: parsePositiveInteger(searchParams.get('page'), 1),
+  page_size: parsePositiveInteger(searchParams.get('page_size'), 20),
+  question_id: searchParams.get('question_id')?.trim() || undefined,
+  subject_id: searchParams.get('subject_id') || undefined,
+  chapter_id: searchParams.get('chapter_id') || undefined,
+  type: searchParams.get('type') || undefined,
+  difficulty: searchParams.get('difficulty') || undefined,
+  exam_scope: searchParams.get('exam_scope') || undefined,
+  exam_year: parsePositiveInteger(searchParams.get('exam_year')),
+  keyword: searchParams.get('keyword')?.trim() || undefined,
+  review_status: parseReviewStatus(searchParams.get('review_status')),
+  status: searchParams.get('status') || undefined,
+})
+
+const writeQuestionListParams = (params: QuestionListParams) => {
+  const searchParams = new URLSearchParams()
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') {
+      searchParams.set(key, String(value))
+    }
+  })
+  return searchParams
+}
+
 const QuestionList = () => {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const queryClient = useQueryClient()
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
   const [reviewItem, setReviewItem] = useState<Question | null>(null)
-  const [params, setParams] = useState<QuestionListParams>(() => ({
-    page: 1,
-    page_size: 20,
-    question_id: searchParams.get('question_id')?.trim() || undefined,
-    review_status: parseReviewStatus(searchParams.get('review_status')),
-  }))
+  const params = useMemo(() => readQuestionListParams(searchParams), [searchParams])
+
+  const setParams = (
+    updater:
+      | QuestionListParams
+      | ((previous: QuestionListParams) => QuestionListParams),
+  ) => {
+    const nextParams =
+      typeof updater === 'function' ? updater(params) : updater
+    setSearchParams(writeQuestionListParams(nextParams), { replace: true })
+  }
+
+  const navigateWithFilters = (path: string) => {
+    const query = writeQuestionListParams(params).toString()
+    navigate(query ? `${path}?${query}` : path)
+  }
 
   const { data, isLoading } = useQuery({
     queryKey: ['questions', params],
@@ -91,17 +131,14 @@ const QuestionList = () => {
       id,
       reviewStatus,
       reviewNotes,
-      primaryChapterId,
     }: {
       id: string
       reviewStatus: 'approved' | 'rejected'
       reviewNotes?: string
-      primaryChapterId?: string
     }) =>
       reviewQuestion(id, {
         review_status: reviewStatus,
         review_notes: reviewNotes,
-        primary_chapter_id: primaryChapterId,
       }),
     onSuccess: (res, variables) => {
       const indexingStatus = res.data?.indexing?.status
@@ -136,22 +173,11 @@ const QuestionList = () => {
   const handleReviewStatusChange = (value: string) => {
     const reviewStatus = value === 'all' ? undefined : (value as ReviewStatus)
     setParams((prev) => ({ ...prev, page: 1, review_status: reviewStatus }))
-
-    const nextSearchParams = new URLSearchParams(searchParams)
-    if (reviewStatus) {
-      nextSearchParams.set('review_status', reviewStatus)
-    } else {
-      nextSearchParams.delete('review_status')
-    }
-    setSearchParams(nextSearchParams, { replace: true })
   }
 
   const clearQuestionFocus = () => {
     setParams((prev) => ({ ...prev, page: 1, question_id: undefined }))
     setSelectedRowKeys([])
-    const nextSearchParams = new URLSearchParams(searchParams)
-    nextSearchParams.delete('question_id')
-    setSearchParams(nextSearchParams, { replace: true })
   }
 
   const columns = [
@@ -235,7 +261,7 @@ const QuestionList = () => {
             type="link"
             size="small"
             icon={<EyeOutlined />}
-            onClick={() => navigate(`/admin/questions/${record.id}`)}
+            onClick={() => navigateWithFilters(`/admin/questions/${record.id}`)}
           >
             查看
           </Button>
@@ -243,7 +269,7 @@ const QuestionList = () => {
             type="link"
             size="small"
             icon={<EditOutlined />}
-            onClick={() => navigate(`/admin/questions/${record.id}/edit`)}
+            onClick={() => navigateWithFilters(`/admin/questions/${record.id}/edit`)}
           >
             编辑
           </Button>
@@ -282,9 +308,11 @@ const QuestionList = () => {
             </Tag>
           )}
           <Input.Search
+            key={params.keyword || ''}
             placeholder="搜索题干"
             style={{ width: 220 }}
             allowClear
+            defaultValue={params.keyword}
             onSearch={(value) =>
               setParams((prev) => ({ ...prev, page: 1, keyword: value.trim() || undefined }))
             }
@@ -413,7 +441,6 @@ const QuestionList = () => {
             id: reviewItem.id,
             reviewStatus: review.review_status,
             reviewNotes: review.review_notes,
-            primaryChapterId: review.primary_chapter_id,
           })
         }}
         details={

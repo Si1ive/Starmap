@@ -16,10 +16,14 @@ from app.models.mysql_models import (
     QuestionChapterLink,
     QuestionKnowledgeLink,
 )
+from app.modules.content.chapter_assignment import (
+    PrimaryChapterAssignmentService,
+)
 from app.modules.content.entity_assets import get_entity_assets
 from app.modules.retrieval.segment_service import SegmentService
 
 logger = get_logger(__name__)
+_UNSET = object()
 
 
 class ContentService:
@@ -38,6 +42,7 @@ class ContentService:
     QUESTION_INDEX_FIELDS = {
         "subject_id",
         "chapter_id",
+        "primary_chapter_id",
         "type",
         "content",
         "options",
@@ -290,6 +295,8 @@ class ContentService:
         if not question or question.status == "deleted":
             raise HTTPException(status_code=404, detail="题目不存在")
 
+        changes = dict(changes)
+        primary_chapter_id = changes.pop("primary_chapter_id", _UNSET)
         changed_fields = {
             field
             for field, value in changes.items()
@@ -297,6 +304,36 @@ class ContentService:
         }
         for field, value in changes.items():
             setattr(question, field, value)
+
+        assignment_fields_changed = bool(
+            changed_fields & {"subject_id", "chapter_id"}
+        )
+        assignment_target = primary_chapter_id
+        if (
+            assignment_target is _UNSET
+            and assignment_fields_changed
+            and question.primary_chapter_id
+        ):
+            assignment_target = question.primary_chapter_id
+
+        if assignment_target is not _UNSET and (
+            assignment_target != question.primary_chapter_id
+            or assignment_fields_changed
+        ):
+            assignment_service = PrimaryChapterAssignmentService(self.db)
+            try:
+                if assignment_target is None:
+                    await assignment_service.clear_question(question)
+                else:
+                    await assignment_service.assign_question(
+                        question,
+                        assignment_target,
+                    )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            changed_fields.update(
+                {"primary_chapter_id", "subject_id", "chapter_id"}
+            )
 
         if question.status != "active":
             return await SegmentService(self.db).commit_entity_segment_removal(

@@ -1,8 +1,13 @@
-import { useParams, useNavigate } from 'react-router-dom'
+import { useLocation, useParams, useNavigate } from 'react-router-dom'
 import { Card, Tag, Button, Descriptions, Spin, Space } from 'antd'
 import { ArrowLeftOutlined, EditOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
-import { getQuestionDetail, getSubjects, getChapters } from '@/api'
+import {
+  getCanonicalChapters,
+  getQuestionDetail,
+  getSubjects,
+  getChapters,
+} from '@/api'
 import EntityAssets from '@/components/EntityAssets'
 
 const typeConfig: Record<string, { color: string; text: string }> = {
@@ -30,7 +35,9 @@ const sourceTag = (src?: string) => {
 
 const QuestionDetail = () => {
   const { id } = useParams<{ id: string }>()
+  const location = useLocation()
   const navigate = useNavigate()
+  const listPath = `/admin/questions${location.search}`
 
   const { data, isLoading } = useQuery({
     queryKey: ['question', id],
@@ -56,6 +63,16 @@ const QuestionDetail = () => {
   const chapters = chaptersData?.data || []
   const chapter = chapters.find((c) => c.id === question?.chapter_id)
 
+  const { data: canonicalData } = useQuery({
+    queryKey: ['canonicalChapters', question?.subject_id, 'flat'],
+    queryFn: () => getCanonicalChapters(question?.subject_id ?? ''),
+    enabled: !!question?.subject_id,
+  })
+
+  const canonicalChapter = (canonicalData?.data || []).find(
+    (item) => item.id === question?.primary_chapter_id,
+  )
+
   if (isLoading) {
     return (
       <div style={{ textAlign: 'center', padding: 100 }}>
@@ -75,7 +92,7 @@ const QuestionDetail = () => {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
         <Space>
-          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/admin/questions')}>
+          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(listPath)}>
             返回
           </Button>
           <h2 style={{ margin: 0 }}>题目详情</h2>
@@ -83,7 +100,7 @@ const QuestionDetail = () => {
         <Button
           type="primary"
           icon={<EditOutlined />}
-          onClick={() => navigate(`/admin/questions/${id}/edit`)}
+          onClick={() => navigate(`/admin/questions/${id}/edit${location.search}`)}
         >
           编辑
         </Button>
@@ -160,6 +177,9 @@ const QuestionDetail = () => {
         <Descriptions bordered column={2}>
           <Descriptions.Item label="学科">{subject?.name || question.subject_id}</Descriptions.Item>
           <Descriptions.Item label="章节">{chapter?.name || question.chapter_id}</Descriptions.Item>
+          <Descriptions.Item label="考点">
+            {canonicalChapter?.name || question.primary_chapter_id || '-'}
+          </Descriptions.Item>
           <Descriptions.Item label="来源">{question.source || '-'}</Descriptions.Item>
           <Descriptions.Item label="年份">{question.exam_year && question.exam_year > 0 ? question.exam_year : '-'}</Descriptions.Item>
           <Descriptions.Item label="状态">

@@ -13,10 +13,14 @@ from sqlalchemy.orm import aliased
 
 from app.core.logging import get_logger
 from app.models.mysql_models import (
-    KnowledgePoint, Question, DocumentSectionMapping, CanonicalChapter,
-    KnowledgeRelation, KnowledgePointChapterLink, QuestionChapterLink,
+    DocumentSectionMapping,
+    KnowledgePoint,
+    KnowledgeRelation,
+    Question,
 )
-from app.modules.catalog.chapter_compat import resolve_legacy_chapter_id
+from app.modules.content.chapter_assignment import (
+    PrimaryChapterAssignmentService,
+)
 from app.modules.retrieval.segment_service import SegmentService
 
 logger = get_logger(__name__)
@@ -97,21 +101,11 @@ class ReviewService:
         # 更新章节归属
         if primary_chapter_id and primary_chapter_id != kp.primary_chapter_id:
             should_rebuild_index = True
-            canonical_chapter = await self.db.get(CanonicalChapter, primary_chapter_id)
-            kp.primary_chapter_id = primary_chapter_id
-            if canonical_chapter and canonical_chapter.subject_id:
-                kp.subject_id = canonical_chapter.subject_id
-            legacy_chapter_id = await resolve_legacy_chapter_id(
-                self.db,
-                canonical_chapter_id=primary_chapter_id,
-                subject_id=kp.subject_id,
-            )
-            if legacy_chapter_id:
-                kp.chapter_id = legacy_chapter_id
-
-            # 更新章节关联
-            await self._update_chapter_links(
-                "knowledge_point", knowledge_point_id, primary_chapter_id
+            await PrimaryChapterAssignmentService(
+                self.db
+            ).assign_knowledge_point(
+                kp,
+                primary_chapter_id,
             )
 
         # 更新主题术语
@@ -223,21 +217,9 @@ class ReviewService:
         # 更新章节归属
         if primary_chapter_id and primary_chapter_id != q.primary_chapter_id:
             should_rebuild_index = True
-            canonical_chapter = await self.db.get(CanonicalChapter, primary_chapter_id)
-            q.primary_chapter_id = primary_chapter_id
-            if canonical_chapter and canonical_chapter.subject_id:
-                q.subject_id = canonical_chapter.subject_id
-            legacy_chapter_id = await resolve_legacy_chapter_id(
-                self.db,
-                canonical_chapter_id=primary_chapter_id,
-                subject_id=q.subject_id,
-            )
-            if legacy_chapter_id:
-                q.chapter_id = legacy_chapter_id
-
-            # 更新章节关联
-            await self._update_chapter_links(
-                "question", question_id, primary_chapter_id
+            await PrimaryChapterAssignmentService(self.db).assign_question(
+                q,
+                primary_chapter_id,
             )
 
         q.review_status = review_status
@@ -450,80 +432,6 @@ class ReviewService:
         return stats
 
     # ========== 辅助方法 ==========
-
-    async def _update_chapter_links(
-        self,
-        entity_type: str,
-        entity_id: str,
-        primary_chapter_id: str,
-    ):
-        """更新章节关联"""
-        if entity_type == "knowledge_point":
-            # 删除旧的主章节标记
-            result = await self.db.execute(
-                select(KnowledgePointChapterLink).where(
-                    and_(
-                        KnowledgePointChapterLink.knowledge_point_id == entity_id,
-                        KnowledgePointChapterLink.is_primary == True,
-                    )
-                )
-            )
-            old_link = result.scalar_one_or_none()
-            if old_link:
-                old_link.is_primary = False
-
-            # 创建或更新新的主章节关联
-            result = await self.db.execute(
-                select(KnowledgePointChapterLink).where(
-                    and_(
-                        KnowledgePointChapterLink.knowledge_point_id == entity_id,
-                        KnowledgePointChapterLink.canonical_chapter_id == primary_chapter_id,
-                    )
-                )
-            )
-            link = result.scalar_one_or_none()
-            if link:
-                link.is_primary = True
-            else:
-                link = KnowledgePointChapterLink(
-                    knowledge_point_id=entity_id,
-                    canonical_chapter_id=primary_chapter_id,
-                    is_primary=True,
-                )
-                self.db.add(link)
-
-        elif entity_type == "question":
-            # 类似处理题目
-            result = await self.db.execute(
-                select(QuestionChapterLink).where(
-                    and_(
-                        QuestionChapterLink.question_id == entity_id,
-                        QuestionChapterLink.is_primary == True,
-                    )
-                )
-            )
-            old_link = result.scalar_one_or_none()
-            if old_link:
-                old_link.is_primary = False
-
-            result = await self.db.execute(
-                select(QuestionChapterLink).where(
-                    and_(
-                        QuestionChapterLink.question_id == entity_id,
-                        QuestionChapterLink.canonical_chapter_id == primary_chapter_id,
-                    )
-                )
-            )
-            link = result.scalar_one_or_none()
-            if link:
-                link.is_primary = True
-            else:
-                link = QuestionChapterLink(
-                    question_id=entity_id,
-                    canonical_chapter_id=primary_chapter_id,
-                    is_primary=True,
-                )
-                self.db.add(link)
 
     async def _rebuild_entity_index(
         self,

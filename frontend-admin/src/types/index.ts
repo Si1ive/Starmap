@@ -209,7 +209,13 @@ export interface Question {
   source_section_path?: string
   type: 'choice' | 'fill' | 'judge' | 'short_answer' | 'design' | 'analysis'
   content: string
-  options?: { key?: string; label?: string; option_label?: string; text: string }[]
+  options?: {
+    key?: string
+    label?: string
+    option_label?: string
+    text: string
+    source?: 'extracted' | 'ai_generated' | 'manual' | string
+  }[]
   answer: string
   explanation?: string
   answer_source?: 'none' | 'extracted' | 'llm' | 'manual'
@@ -568,4 +574,6 @@ export interface CanonicalChapter {
   level: number
   sort_order: number
   aliases?: string[]
+  children?: CanonicalChapter[]
+  status?: 'active' | 'inactive'
 }

@@ -88,17 +88,14 @@ const KnowledgeList = () => {
       id,
       reviewStatus,
       reviewNotes,
-      primaryChapterId,
     }: {
       id: string
       reviewStatus: 'approved' | 'rejected'
       reviewNotes?: string
-      primaryChapterId?: string
     }) =>
       reviewKnowledgePoint(id, {
         review_status: reviewStatus,
         review_notes: reviewNotes,
-        primary_chapter_id: primaryChapterId,
       }),
     onSuccess: (res, variables) => {
       const indexingStatus = res.data?.indexing?.status
@@ -375,7 +372,6 @@ const KnowledgeList = () => {
             id: reviewItem.id,
             reviewStatus: review.review_status,
             reviewNotes: review.review_notes,
-            primaryChapterId: review.primary_chapter_id,
           })
         }}
         details={

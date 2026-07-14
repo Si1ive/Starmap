@@ -1,8 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Button, Descriptions, Drawer, Input, Select, Space, Tag } from 'antd'
+import { useEffect, useState } from 'react'
+import { Button, Descriptions, Drawer, Input, Space, Tag } from 'antd'
 import { CheckOutlined, CloseOutlined } from '@ant-design/icons'
-import { useQuery } from '@tanstack/react-query'
-import { getCanonicalChapters } from '@/api/corpus'
 
 const { TextArea } = Input
 
@@ -46,7 +44,6 @@ interface ContentReviewDrawerProps {
   onSubmit: (data: {
     review_status: Exclude<ReviewStatus, 'pending'>
     review_notes?: string
-    primary_chapter_id?: string
   }) => void
 }
 
@@ -60,34 +57,16 @@ const ContentReviewDrawer = ({
   onSubmit,
 }: ContentReviewDrawerProps) => {
   const [reviewNotes, setReviewNotes] = useState('')
-  const [primaryChapterId, setPrimaryChapterId] = useState<string>()
 
   useEffect(() => {
     if (!open || !item) return
     setReviewNotes(item.review_notes || '')
-    setPrimaryChapterId(item.primary_chapter_id || undefined)
   }, [item, open])
-
-  const { data: chaptersData, isLoading: isChapterLoading } = useQuery({
-    queryKey: ['contentReviewCanonicalChapters', item?.subject_id],
-    queryFn: () => getCanonicalChapters(item?.subject_id || ''),
-    enabled: open && !!item?.subject_id,
-  })
-
-  const chapterOptions = useMemo(
-    () =>
-      (chaptersData?.data || []).map((chapter) => ({
-        label: `${chapter.code ? `${chapter.code} ` : ''}${chapter.name}`,
-        value: chapter.id,
-      })),
-    [chaptersData],
-  )
 
   const submit = (reviewStatus: Exclude<ReviewStatus, 'pending'>) => {
     onSubmit({
       review_status: reviewStatus,
       review_notes: reviewNotes.trim() || undefined,
-      primary_chapter_id: primaryChapterId,
     })
   }
 
@@ -117,19 +96,6 @@ const ContentReviewDrawer = ({
               </Descriptions.Item>
             ))}
             <Descriptions.Item label="识别章节">{item.source_section_path || '-'}</Descriptions.Item>
-            <Descriptions.Item label="映射考点">
-              <Select
-                allowClear
-                showSearch
-                optionFilterProp="label"
-                placeholder="选择大纲考点"
-                loading={isChapterLoading}
-                value={primaryChapterId}
-                onChange={setPrimaryChapterId}
-                options={chapterOptions}
-                style={{ width: '100%' }}
-              />
-            </Descriptions.Item>
             <Descriptions.Item label="人工核验">
               <ReviewStatusTag status={item.review_status} />
             </Descriptions.Item>
