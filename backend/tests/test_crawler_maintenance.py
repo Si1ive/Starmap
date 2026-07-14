@@ -10,7 +10,7 @@ from app.modules.crawler.cleanup_service import CrawlerCleanupService
 from app.modules.crawler.schedule_service import CrawlerScheduleService
 from app.modules.crawler.scrapy_bridge import ScrapyBridgeService
 from app.modules.crawler.task_service import CrawlerTaskService
-from app.services.system_settings_service import SystemSettingsService
+from app.modules.operations.settings_service import SystemSettingsService
 
 
 def test_cleanup_options_normalize_aliases_and_defaults():

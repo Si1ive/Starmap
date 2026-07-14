@@ -29,7 +29,7 @@ from app.modules.corpus.document_parsers import (
     ParserUnavailableError,
     choose_parser,
 )
-from app.services.system_settings_service import SystemSettingsService
+from app.modules.operations.settings_service import SystemSettingsService
 
 logger = get_logger(__name__)
 

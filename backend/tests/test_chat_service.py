@@ -12,7 +12,7 @@ from app.models.mysql_models import ChatMessageRecord, ChatSession
 from app.models.transaction import ChatRequest, ChatResponse, SourceItem
 from app.modules.retrieval.service import RetrievalService
 from app.services.chat_service import ChatService
-from app.services.system_settings_service import SystemSettingsService
+from app.modules.operations.settings_service import SystemSettingsService
 
 
 class TestChatService:

@@ -103,7 +103,7 @@
 
 ## 4.3 系统设置持久化
 
-文件：`backend/app/services/system_settings_service.py`
+文件：`backend/app/modules/operations/settings_service.py`
 
 当前实现采用数据库表：
 
@@ -298,7 +298,7 @@
 
 - `backend/app/modules/corpus/document_parsers.py`
 - `backend/app/services/document_parse_service.py`
-- `backend/app/services/system_settings_service.py`
+- `backend/app/modules/operations/settings_service.py`
 - `backend/app/api/admin.py`
 - `frontend-admin/src/pages/Settings/index.tsx`
 - `frontend-admin/src/api/settings.ts`

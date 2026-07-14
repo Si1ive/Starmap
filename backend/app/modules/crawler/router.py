@@ -34,7 +34,7 @@ from app.modules.crawler.source_service import CrawlerSourceService
 from app.modules.crawler.stats_service import CrawlerStatsService
 from app.modules.crawler.task_service import CrawlerTaskService
 from app.modules.operations.security import get_request_admin_id
-from app.services.system_settings_service import SystemSettingsService
+from app.modules.operations.settings_service import SystemSettingsService
 
 logger = get_logger(__name__)
 

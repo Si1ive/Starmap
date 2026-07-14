@@ -339,7 +339,7 @@ class ChatService:
 
         try:
             from app.modules.retrieval.service import RetrievalService
-            from app.services.system_settings_service import SystemSettingsService
+            from app.modules.operations.settings_service import SystemSettingsService
 
             async with mysql_client.session() as db:
                 # 读取问答 LLM 配置（与大纲/题目结构/向量化各自独立）

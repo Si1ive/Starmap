@@ -208,7 +208,7 @@ async def get_settings(db: Optional[AsyncSession] = Depends(get_optional_db)):
         get_supported_parser_names,
         inspect_parser_health,
     )
-    from app.services.system_settings_service import SystemSettingsService, LLM_CONFIG_KEYS
+    from app.modules.operations.settings_service import SystemSettingsService, LLM_CONFIG_KEYS
 
     runtime_settings = await SystemSettingsService(db).load()
     # 对所有 LLM 配置块统一脱敏 api_key
@@ -334,7 +334,7 @@ def _build_llm_client(kind: str, config: dict):
 @router.get("/settings/llm/{kind}/status", response_model=ApiResponse)
 async def get_llm_status(kind: str, db: AsyncSession = Depends(get_db)):
     """获取指定 LLM 配置块状态，不发起外部请求。kind ∈ llm/pdf_structure_llm/outline_llm/embedding。"""
-    from app.services.system_settings_service import SystemSettingsService, LLM_CONFIG_KEYS
+    from app.modules.operations.settings_service import SystemSettingsService, LLM_CONFIG_KEYS
 
     if kind not in LLM_CONFIG_KEYS:
         raise HTTPException(status_code=400, detail=f"未知的 LLM 配置块: {kind}")
@@ -397,7 +397,7 @@ async def test_llm(
     db: AsyncSession = Depends(get_db),
 ):
     """按当前表单或已保存配置测试指定 LLM 配置块的连通性。"""
-    from app.services.system_settings_service import SystemSettingsService, LLM_CONFIG_KEYS
+    from app.modules.operations.settings_service import SystemSettingsService, LLM_CONFIG_KEYS
 
     if kind not in LLM_CONFIG_KEYS:
         raise HTTPException(status_code=400, detail=f"未知的 LLM 配置块: {kind}")
@@ -471,7 +471,7 @@ async def update_settings(
     
     所有顶级 section 统一落库；PDF 解析器切换额外记录审计日志。
     """
-    from app.services.system_settings_service import SystemSettingsService, LLM_CONFIG_KEYS
+    from app.modules.operations.settings_service import SystemSettingsService, LLM_CONFIG_KEYS
 
     runtime_service = SystemSettingsService(db)
     ip_address = request.client.host if request.client else None

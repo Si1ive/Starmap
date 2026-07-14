@@ -162,7 +162,8 @@ for match in pair_re.finditer(answer_text):
 
 ### 5.1 enrich_llm 配置
 
-**文件**: `backend/app/services/system_settings_service.py`  
+**文件**: `backend/app/modules/operations/settings_service.py`
+
 **配置块**: `enrich_llm` (第 5 个 LLM 配置块,前 4 个为 llm/pdf_structure_llm/outline_llm/doc_meta_llm)
 
 ```python
@@ -677,8 +678,5 @@ await db.commit()
 **技术栈**: FastAPI + SQLAlchemy 2.0 async + Qdrant + OpenAI-compatible LLM + React Query + TypeScript。
 
 **提交历史**: 8 commits (`3a0045c..e298eb6`),已推送至 `origin/main`。
-
-
-
 
 

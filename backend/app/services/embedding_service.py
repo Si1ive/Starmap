@@ -175,7 +175,7 @@ def get_embedding_service(config: Optional[Dict[str, Any]] = None) -> EmbeddingS
 async def get_embedding_service_from_settings(db) -> EmbeddingService:
     """从系统设置读取 embedding 配置并构造服务（带 db 的调用方用）。"""
     try:
-        from app.services.system_settings_service import SystemSettingsService
+        from app.modules.operations.settings_service import SystemSettingsService
         runtime_settings = await SystemSettingsService(db).load()
         cfg = runtime_settings.get("embedding", {}) or {}
     except Exception as e:
