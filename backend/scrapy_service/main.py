@@ -21,6 +21,8 @@ sys.path.insert(0, str(project_root))
 from scrapy.crawler import CrawlerProcess
 from scrapy.utils.project import get_project_settings
 
+from runtime_config import build_scrapy_setting_overrides, parse_runtime_config
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
@@ -91,6 +93,7 @@ def start_task_consumer():
         source = task.get("source", "github")
         source_id = task.get("source_id")
         config = task.get("config") or {}
+        runtime_config = task.get("runtime_config") or {}
 
         logger.info(f"Received task: {task_id}, spider={spider_type}, source={source}")
 
@@ -108,7 +111,6 @@ def start_task_consumer():
         _publish_progress(task_id, "running", 0)
 
         command = [sys.executable, str(Path(__file__).resolve()), "--mode", "single", "--task-id", task_id, "--spider", spider_type, "--source", source]
-
         if source_id:
             command.extend(["--source-id", str(source_id)])
 
@@ -121,8 +123,9 @@ def start_task_consumer():
             if config.get("file_types"):
                 ft = config["file_types"]
                 command.extend(["--file-types", ",".join(ft) if isinstance(ft, list) else str(ft)])
-            if config.get("max_depth"):
-                command.extend(["--max-depth", str(config["max_depth"])])
+            max_depth = config.get("max_depth") or runtime_config.get("max_depth")
+            if max_depth:
+                command.extend(["--max-depth", str(max_depth)])
 
         # Knowledge spider parameters
         if spider_type == "knowledge":
@@ -133,7 +136,19 @@ def start_task_consumer():
             if config.get("chapter_id"):
                 command.extend(["--chapter-id", config["chapter_id"]])
 
-        completed = subprocess.run(command, cwd=str(project_root), check=False)
+        child_env = os.environ.copy()
+        if runtime_config:
+            child_env["CRAWLER_RUNTIME_CONFIG_JSON"] = json.dumps(
+                runtime_config,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        completed = subprocess.run(
+            command,
+            cwd=str(project_root),
+            check=False,
+            env=child_env,
+        )
         if completed.returncode == 0:
             _publish_log(task_id, "INFO", "Task subprocess completed", status="success", source_id=source_id)
         else:
@@ -142,7 +157,20 @@ def start_task_consumer():
             _publish_progress(task_id, "failed", 100, error_message=error_message)
 
 
-def run_single_task(task_id, spider_type, source, source_id=None, repo_url=None, search_query=None, file_types="pdf", max_depth=5, pdf_path=None, subject_id=None, chapter_id=None):
+def run_single_task(
+    task_id,
+    spider_type,
+    source,
+    source_id=None,
+    repo_url=None,
+    search_query=None,
+    file_types="pdf",
+    max_depth=5,
+    pdf_path=None,
+    subject_id=None,
+    chapter_id=None,
+    runtime_config=None,
+):
     """Run a single task directly."""
     logger.info(f"Running single task: {task_id}, spider={spider_type}")
 
@@ -150,6 +178,8 @@ def run_single_task(task_id, spider_type, source, source_id=None, repo_url=None,
     settings.set("EXTENSIONS", {
         "starmap_scrapy.extensions.progress_reporter.ProgressReporterExtension": 200,
     }, priority="cmdline")
+    for key, value in build_scrapy_setting_overrides(runtime_config or {}).items():
+        settings.set(key, value, priority="cmdline")
     process = CrawlerProcess(settings)
 
     spider_kwargs = {"task_id": task_id, "source": source, "source_id": source_id}
@@ -184,12 +214,21 @@ def main():
     parser.add_argument("--pdf-path", default=None)
     parser.add_argument("--subject-id", default=None)
     parser.add_argument("--chapter-id", default=None)
+    parser.add_argument(
+        "--runtime-config-json",
+        default=os.getenv("CRAWLER_RUNTIME_CONFIG_JSON"),
+        help="JSON crawler runtime settings snapshot",
+    )
 
     args = parser.parse_args()
 
     if args.mode == "consumer":
         start_task_consumer()
     else:
+        try:
+            runtime_config = parse_runtime_config(args.runtime_config_json)
+        except (json.JSONDecodeError, ValueError) as exc:
+            parser.error(f"invalid --runtime-config-json: {exc}")
         run_single_task(
             task_id=args.task_id,
             spider_type=args.spider,
@@ -202,6 +241,7 @@ def main():
             pdf_path=args.pdf_path,
             subject_id=args.subject_id,
             chapter_id=args.chapter_id,
+            runtime_config=runtime_config,
         )
 
 

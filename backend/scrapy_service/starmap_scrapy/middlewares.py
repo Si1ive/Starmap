@@ -42,9 +42,12 @@ class StarMapSpiderMiddleware:
 class StarMapDownloaderMiddleware:
     """Downloader middleware for StarMap project."""
 
+    def __init__(self, proxy_url=""):
+        self.proxy_url = proxy_url
+
     @classmethod
     def from_crawler(cls, crawler):
-        middleware = cls()
+        middleware = cls(crawler.settings.get("GLOBAL_PROXY_URL", ""))
         crawler.signals.connect(middleware.spider_opened, signal=signals.spider_opened)
         return middleware
 
@@ -53,6 +56,8 @@ class StarMapDownloaderMiddleware:
         # Add task_id to request meta if available
         if hasattr(spider, "task_id") and spider.task_id:
             request.meta["task_id"] = spider.task_id
+        if self.proxy_url and "proxy" not in request.meta:
+            request.meta["proxy"] = self.proxy_url
         return None
 
     def process_response(self, request, response, spider):
@@ -90,16 +95,30 @@ class RotateUserAgentMiddleware:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
     ]
 
-    def __init__(self):
+    def __init__(self, rotate_enabled=True, fixed_user_agent=""):
         self.user_agents = self.USER_AGENTS.copy()
+        self.rotate_enabled = rotate_enabled
+        self.fixed_user_agent = fixed_user_agent
 
     @classmethod
     def from_crawler(cls, crawler):
-        return cls()
+        return cls(
+            rotate_enabled=crawler.settings.getbool(
+                "ROTATE_USER_AGENT_ENABLED",
+                True,
+            ),
+            fixed_user_agent=crawler.settings.get("USER_AGENT", ""),
+        )
 
     def process_request(self, request, spider):
-        """Rotate user agent for each request."""
-        user_agent = random.choice(self.user_agents)
+        """Apply either a rotating or fixed User-Agent."""
+        user_agent = (
+            random.choice(self.user_agents)
+            if self.rotate_enabled
+            else self.fixed_user_agent
+        )
+        if not user_agent:
+            return None
         request.headers["User-Agent"] = user_agent
         return None
 

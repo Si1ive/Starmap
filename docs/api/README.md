@@ -92,6 +92,8 @@
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| GET | `/api/v1/admin/crawler/config` | 获取实际生效的 Scrapy 运行配置 |
+| PUT | `/api/v1/admin/crawler/config` | 校验并更新 Scrapy 运行配置 |
 | GET | `/api/v1/admin/crawler/tasks` | 任务列表 |
 | POST | `/api/v1/admin/crawler/tasks` | 创建任务 |
 | POST | `/api/v1/admin/crawler/tasks/{task_id}/start` | 启动任务 |

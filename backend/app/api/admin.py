@@ -285,6 +285,44 @@ async def get_dashboard_charts(db: AsyncSession = Depends(get_db)):
 
 # ========== 爬虫管理相关 ==========
 
+@router.get("/crawler/config", response_model=ApiResponse)
+async def get_crawler_config(
+    db: Optional[AsyncSession] = Depends(get_optional_db),
+):
+    """获取下一次爬虫任务将使用的运行配置。"""
+    from app.services.system_settings_service import SystemSettingsService
+
+    config = await SystemSettingsService(db).get_crawler_runtime_config()
+    return ApiResponse(code=200, message="success", data=config)
+
+
+@router.put("/crawler/config", response_model=ApiResponse)
+async def update_crawler_config(
+    data: dict,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """更新爬虫运行配置，并记录操作审计。"""
+    from app.services.system_settings_service import SystemSettingsService
+
+    auth_header = request.headers.get("Authorization", "")
+    user_id: Optional[str] = None
+    if auth_header.startswith("Bearer mock_jwt_token_"):
+        user_id = auth_header.replace("Bearer mock_jwt_token_", "", 1)
+
+    try:
+        config = await SystemSettingsService(db).update_crawler_settings(
+            data,
+            user_id=user_id,
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("User-Agent"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return ApiResponse(code=200, message="配置已保存", data=config)
+
+
 @router.get("/crawler/tasks", response_model=ApiResponse)
 async def get_crawler_tasks(
     page: int = 1,
@@ -1722,7 +1760,10 @@ async def update_settings(
         if isinstance(section, dict) and section.get("api_key") == SECRET_KEEP_MASK:
             section["api_key"] = current_settings.get(key, {}).get("api_key", "")
     parser_section = payload.pop("pdf_parser", None) if isinstance(payload.get("pdf_parser"), dict) else None
-    saved_runtime = await runtime_service.save_partial(payload) if payload else current_settings
+    try:
+        saved_runtime = await runtime_service.save_partial(payload) if payload else current_settings
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
     if parser_section is not None:
         try:

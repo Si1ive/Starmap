@@ -89,6 +89,7 @@ podman ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 - `backend` 启动前自动执行 `alembic upgrade head`
 - PDF 解析请求超时可在后台“系统配置 -> PDF解析器”调整，`MinerU` 窗口大小也可在同处调整
 - PDF 题目结构修复的 LLM 兜底在后台“系统配置 -> PDF结构LLM”单独配置；API Key 可留空并使用后端 `OPENAI_API_KEY`
+- Scrapy 并发、限速、超时、重试、网络策略和代理可在后台“爬虫管理 -> 爬虫配置”调整；每个任务会记录实际运行配置快照
 
 说明：`pdf-parser-service` 默认使用较轻量但可实际解析的 `mineru[pipeline]>=3.3,<4` 安装规格，避免 `macOS + Podman` 下首次构建直接拉起 `mineru[all]` 导致镜像层过大。若你明确需要完整依赖，再额外导出：
 

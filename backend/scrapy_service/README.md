@@ -142,14 +142,24 @@ scrapy_service/
 
 ## 配置说明
 
-### Scrapy Settings
+### 运行配置
 
-| 配置项 | 说明 | 默认值 |
-|--------|------|--------|
-| CONCURRENT_REQUESTS | 并发请求数 | 4 |
-| DOWNLOAD_DELAY | 请求间隔(秒) | 1 |
-| AUTOTHROTTLE_ENABLED | 自动限速 | True |
-| RETRY_TIMES | 重试次数 | 3 |
+管理端“爬虫配置”保存到后端 `system_configs.crawler`。任务发布到 Redis
+时会携带一份配置快照和指纹，Scrapy 子进程按快照设置并发、单域名并发、
+请求间隔、超时、重试、深度、重定向、robots.txt、User-Agent、HTTP 代理
+和日志级别。任务发布日志保留脱敏后的快照，便于追踪历史任务实际使用的
+配置。
+
+未保存配置时使用以下关键默认值：
+
+| 配置项 | Scrapy 设置 | 默认值 |
+|--------|-------------|--------|
+| 请求并发数 | `CONCURRENT_REQUESTS` | 4 |
+| 单域名并发数 | `CONCURRENT_REQUESTS_PER_DOMAIN` | 2 |
+| 请求间隔 | `DOWNLOAD_DELAY` | 1 秒 |
+| 请求超时 | `DOWNLOAD_TIMEOUT` | 60 秒 |
+| 重试次数 | `RETRY_TIMES` | 3 |
+| 最大爬取深度 | `DEPTH_LIMIT` / Spider `max_depth` | 5 |
 
 ### 环境变量
 
@@ -217,7 +227,7 @@ scrapy crawl person -a keywords=周杰伦 -L INFO
 
 ### 队列消费机制
 
-`python main.py --mode consumer` 会常驻监听 Redis `starmap:crawl:tasks` 队列。每个任务以独立子进程执行 `single` 模式，避免 Scrapy/Twisted reactor 在同一进程内重复启动。
+`python main.py --mode consumer` 会常驻监听 Redis `crawler:tasks` 队列。每个任务以独立子进程执行 `single` 模式，避免 Scrapy/Twisted reactor 在同一进程内重复启动。运行配置快照通过子进程环境变量传递，代理凭据不会出现在系统进程命令行中。
 
 ## 故障排查
 
@@ -233,7 +243,7 @@ scrapy crawl person -a keywords=周杰伦 -L INFO
 
 3. **爬虫被反爬**
    - 增加 `DOWNLOAD_DELAY`
-   - 启用代理池
+   - 在管理端配置 HTTP 代理
    - 更换 User-Agent
 
 ### 调试模式

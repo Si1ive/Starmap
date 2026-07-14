@@ -6,6 +6,7 @@ Handles task publishing, progress subscription, and status synchronization.
 """
 
 import asyncio
+import hashlib
 import json
 from typing import Optional, Dict, Any, Callable
 from datetime import datetime, timezone
@@ -20,6 +21,7 @@ from app.core.websocket import log_websocket_manager
 from app.db.mysql import mysql_client
 from app.models.mysql_models import CrawlSource, CrawlTask
 from app.services.log_service import CrawlerLogService
+from app.services.system_settings_service import SystemSettingsService
 
 logger = get_logger(__name__)
 
@@ -94,6 +96,18 @@ class ScrapyBridgeService:
             if source:
                 source_id = source.id
             source_code = self._get_spider_key(source, source_code)
+            runtime_config = await SystemSettingsService(
+                self.db
+            ).get_crawler_runtime_config()
+            runtime_fingerprint = hashlib.sha256(
+                json.dumps(
+                    runtime_config,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()[:16]
+            published_at = datetime.now(timezone.utc).isoformat()
 
             # Build task message
             task_message = {
@@ -104,7 +118,9 @@ class ScrapyBridgeService:
                 "source_id": source_id,
                 "keywords": keywords,
                 "config": config,
-                "published_at": datetime.now(timezone.utc).isoformat(),
+                "runtime_config": runtime_config,
+                "runtime_config_fingerprint": runtime_fingerprint,
+                "published_at": published_at,
             }
             
             # Push to Redis queue
@@ -120,6 +136,15 @@ class ScrapyBridgeService:
                 "stage": "execution",
                 "status": "pending",
                 "message": f"Task published to Scrapy queue: {task.name}",
+                "details": {
+                    "runtime_config": (
+                        SystemSettingsService.redact_crawler_runtime_config(
+                            runtime_config
+                        )
+                    ),
+                    "runtime_config_fingerprint": runtime_fingerprint,
+                    "published_at": published_at,
+                },
             })
             
             return True

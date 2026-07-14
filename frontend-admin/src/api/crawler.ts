@@ -179,13 +179,32 @@ export const getCrawlerLogAnalysis = (days = 7): Promise<ApiResponse<Record<stri
   return adminClient.get('/crawler/logs/analysis', { params: { days } })
 }
 
-// ===== 爬虫配置 (复用 settings API) =====
+// ===== 爬虫配置 =====
 
-export const getCrawlerConfig = (): Promise<ApiResponse<Record<string, unknown>>> => {
+export interface CrawlerRuntimeConfig {
+  concurrent_requests: number
+  concurrent_requests_per_domain: number
+  download_delay_seconds: number
+  request_timeout_seconds: number
+  retry_times: number
+  rotate_user_agent: boolean
+  user_agent: string
+  obey_robots_txt: boolean
+  follow_redirects: boolean
+  max_redirect_times: number
+  max_depth: number
+  proxy_enabled: boolean
+  proxy_url: string
+  log_level: 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR'
+}
+
+export const getCrawlerConfig = (): Promise<ApiResponse<CrawlerRuntimeConfig>> => {
   return adminClient.get('/crawler/config')
 }
 
-export const updateCrawlerConfig = (data: Record<string, unknown>): Promise<ApiResponse<null>> => {
+export const updateCrawlerConfig = (
+  data: CrawlerRuntimeConfig,
+): Promise<ApiResponse<CrawlerRuntimeConfig>> => {
   return adminClient.put('/crawler/config', data)
 }
 
