@@ -20,7 +20,7 @@ from app.db.redis import redis_client
 from app.db.mysql import mysql_client
 from app.modules.catalog import router as catalog_router
 from app.modules.content import router as content_router
-from app.modules.corpus import router as corpus_router
+from app.modules.corpus.router import router as corpus_router
 from app.modules.operations import router as operations_router
 from app.modules.operations.security import (
     require_current_admin,

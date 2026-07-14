@@ -99,7 +99,11 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
   已迁移到 `app/modules/corpus`
 - 实体抽取任务使用文档行锁避免并发重复创建，运行记录先落库再派发后台任务
 - PDF 页渲染移入线程池，避免同步转换阻塞 FastAPI 事件循环
-- 后续阶段 3C：继续拆分实体抽取中的解析规则、LLM 修复和实体持久化职责
+- 阶段 3C 进行中：题目选项完整性、题号连续性、综合诊断和确定性规则修复已迁移到
+  `app/modules/corpus/question_validation.py`
+- `app.modules.corpus` 包初始化不再隐式加载 Router，避免领域规则反向触发接口层和
+  抽取任务加载
+- 后续继续拆分实体抽取中的 LLM 修复、版面分组和实体持久化职责
 
 ### 阶段 4：检索与关系
 
