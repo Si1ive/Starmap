@@ -130,7 +130,10 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - 阶段 3C 已完成：题目选项完整性、题号连续性、综合诊断和确定性规则修复已迁移到
   `app/modules/corpus/question_validation.py`
 - LLM 兜底修复、三题上下文提示、选项来源核验和修复审计已迁移到
-  `app/modules/corpus/question_llm_repair.py`
+  `app/modules/corpus/question_llm_repair.py`；选择题/主观题修复模板与题型分流已拆分到
+  `app/modules/corpus/question_repair_prompts.py`，三题来源文本收集、空白归一化、
+  题干缩减和选项补全安全校验已拆分到
+  `app/modules/corpus/question_repair_rules.py`
 - bbox 页面统计、单双栏阅读顺序、题目边界、选项恢复和跨页合并已迁移到
   `app/modules/corpus/question_layout.py`；A-D 标记识别、内联选项定位、MinerU
   粘连选项恢复和选项文本切分进一步拆分到
