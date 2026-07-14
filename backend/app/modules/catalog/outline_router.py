@@ -383,39 +383,12 @@ async def upload_parse_outline(
 @router.get("/outlines/runs/{run_id}", response_model=ApiResponse)
 async def get_outline_run_detail(run_id: str, db: AsyncSession = Depends(get_db)):
     """获取大纲入库任务详情（用于进度轮询）"""
-    from app.models.mysql_models import OutlineIngestionRun
+    from app.modules.catalog.outline_run_service import OutlineRunService
 
-    run = await db.get(OutlineIngestionRun, run_id)
-    if not run:
+    data = await OutlineRunService(db).get_detail(run_id)
+    if not data:
         raise HTTPException(status_code=404, detail="任务不存在")
-
-    progress = 0
-    if run.total_subjects > 0:
-        progress = round((run.processed_subjects / run.total_subjects) * 100, 1)
-
-    return ApiResponse(data={
-        "id": run.id,
-        "document_id": run.document_id,
-        "outline_id": run.outline_id,
-        "outline_name": run.outline_name,
-        "year": run.year,
-        "version": run.version,
-        "status": run.status,
-        "current_stage": run.current_stage,
-        "stage_detail": run.stage_detail,
-        "progress": progress,
-        "total_subjects": run.total_subjects,
-        "processed_subjects": run.processed_subjects,
-        "successful_subjects": run.successful_subjects,
-        "current_subject_name": run.current_subject_name,
-        "created_chapters": run.created_chapters,
-        "updated_chapters": run.updated_chapters,
-        "error_detail": run.error_detail,
-        "result_summary": run.result_summary,
-        "started_at": run.started_at.isoformat() if run.started_at else None,
-        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
-        "created_at": run.created_at.isoformat() if run.created_at else None,
-    })
+    return ApiResponse(data=data)
 
 
 @router.get("/outlines/runs", response_model=ApiResponse)
@@ -426,55 +399,24 @@ async def list_outline_runs(
     db: AsyncSession = Depends(get_db)
 ):
     """列出大纲入库任务（支持按 document_id 和 status 过滤）"""
-    from app.models.mysql_models import OutlineIngestionRun
+    from app.modules.catalog.outline_run_service import OutlineRunService
 
-    query = select(OutlineIngestionRun).order_by(OutlineIngestionRun.created_at.desc()).limit(limit)
-    if document_id:
-        query = query.where(OutlineIngestionRun.document_id == document_id)
-    if status:
-        query = query.where(OutlineIngestionRun.status == status)
-
-    runs = (await db.execute(query)).scalars().all()
-
-    return ApiResponse(data={
-        "items": [
-            {
-                "id": r.id,
-                "document_id": r.document_id,
-                "outline_id": r.outline_id,
-                "outline_name": r.outline_name,
-                "file_name": (r.result_summary or {}).get("file_name") if isinstance(r.result_summary, dict) else None,
-                "status": r.status,
-                "current_stage": r.current_stage,
-                "stage_detail": r.stage_detail,
-                "progress": round((r.processed_subjects / r.total_subjects * 100), 1) if r.total_subjects > 0 else 0,
-                "total_subjects": r.total_subjects,
-                "processed_subjects": r.processed_subjects,
-                "successful_subjects": r.successful_subjects,
-                "current_subject_name": r.current_subject_name,
-                "created_chapters": r.created_chapters,
-                "updated_chapters": r.updated_chapters,
-                "error_detail": r.error_detail,
-                "started_at": r.started_at.isoformat() if r.started_at else None,
-                "completed_at": r.completed_at.isoformat() if r.completed_at else None,
-                "created_at": r.created_at.isoformat() if r.created_at else None,
-            }
-            for r in runs
-        ]
-    })
+    return ApiResponse(
+        data=await OutlineRunService(db).list_runs(
+            document_id=document_id,
+            status=status,
+            limit=limit,
+        )
+    )
 
 
 @router.delete("/outlines/runs/{run_id}", response_model=ApiResponse)
 async def delete_outline_run(run_id: str, db: AsyncSession = Depends(get_db)):
     """删除大纲入库任务记录（不影响已入库的大纲数据）"""
-    from app.models.mysql_models import OutlineIngestionRun
+    from app.modules.catalog.outline_run_service import OutlineRunService
 
-    run = await db.get(OutlineIngestionRun, run_id)
-    if not run:
+    if not await OutlineRunService(db).delete_run(run_id):
         raise HTTPException(status_code=404, detail="任务不存在")
-
-    await db.delete(run)
-    await db.commit()
     return ApiResponse(message="任务记录已删除", data={"run_id": run_id})
 
 
@@ -484,23 +426,9 @@ async def batch_delete_outline_runs(
     db: AsyncSession = Depends(get_db),
 ):
     """批量删除大纲入库任务记录"""
-    from app.models.mysql_models import OutlineIngestionRun
-
-    if not req.ids:
-        return ApiResponse(data={"deleted_count": 0, "requested_count": 0})
-
-    result = await db.execute(
-        select(OutlineIngestionRun).where(OutlineIngestionRun.id.in_(req.ids))
-    )
-    runs = result.scalars().all()
-    for run in runs:
-        await db.delete(run)
-    await db.commit()
+    from app.modules.catalog.outline_run_service import OutlineRunService
 
     return ApiResponse(
         message="批量删除成功",
-        data={
-            "deleted_count": len(runs),
-            "requested_count": len(set(req.ids)),
-        },
+        data=await OutlineRunService(db).batch_delete(req.ids),
     )
