@@ -128,7 +128,9 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - 实体抽取任务使用文档行锁避免并发重复创建，运行记录先落库再派发后台任务
 - PDF 页渲染移入线程池，避免同步转换阻塞 FastAPI 事件循环
 - 阶段 3C 已完成：题目选项完整性、题号连续性、综合诊断和确定性规则修复已迁移到
-  `app/modules/corpus/question_validation.py`
+  `app/modules/corpus/question_validation.py`；题号正则、题号信息提取、模式分段、
+  连续性问题检测和全局统计进一步拆分到
+  `app/modules/corpus/question_number_rules.py`，原校验模块保留兼容导出
 - LLM 兜底修复、三题上下文提示、选项来源核验和修复审计已迁移到
   `app/modules/corpus/question_llm_repair.py`；选择题/主观题修复模板与题型分流已拆分到
   `app/modules/corpus/question_repair_prompts.py`，三题来源文本收集、空白归一化、
