@@ -7,6 +7,8 @@ from app.modules.corpus.document_parsers import (
     _normalize_payload_block_type,
     _parsed_document_result_from_dict,
     choose_parser,
+    get_parser,
+    get_supported_parser_names,
     inspect_parser_health,
 )
 from app.modules.corpus.parser_types import ParsedDocumentResult
@@ -146,6 +148,17 @@ def _remote_runtime_config():
         "request_timeout_seconds": 120,
         "processing_window_size": 2,
     }
+
+
+def test_only_mineru_parser_is_supported():
+    assert get_supported_parser_names() == ["mineru"]
+    assert isinstance(get_parser("mineru"), MinerUParser)
+
+    with pytest.raises(ValueError, match="不支持的解析器"):
+        get_parser("docling")
+
+    with pytest.raises(ValueError, match="不支持的解析器"):
+        choose_parser("docling", _remote_runtime_config())
 
 
 def test_remote_parser_service_posts_file_with_runtime_options(monkeypatch, tmp_path):

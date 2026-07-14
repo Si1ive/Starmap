@@ -51,8 +51,8 @@ async def test_parse_document_rejects_duplicate_primary_parse():
 
 def test_serialize_parse_result_contains_structured_payload():
     result = ParsedDocumentResult(
-        parser_name="docling",
-        parser_version="2.x",
+        parser_name="mineru",
+        parser_version="3.x",
         pages=[ParsedPage(page_no=1, width=100, height=200)],
         blocks=[ParsedBlock(page_no=1, block_type="title", order_no=0, content_text="第1章")],
         assets=[ParsedAsset(page_no=1, asset_type="figure", caption_text="图1")],
@@ -63,7 +63,7 @@ def test_serialize_parse_result_contains_structured_payload():
 
     payload = ParsedDocumentStore.serialize_parse_result(result)
 
-    assert payload["parser_name"] == "docling"
+    assert payload["parser_name"] == "mineru"
     assert payload["page_count"] == 1
     assert payload["block_count"] == 1
     assert payload["asset_count"] == 1

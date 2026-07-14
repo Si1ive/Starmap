@@ -5,7 +5,7 @@
 ## 目标
 
 - 将 PDF 解析负载从主后端剥离
-- 支持 `Docling` / `MinerU` 两类解析器
+- 固定使用 `MinerU`，避免多解析器输出差异进入下游
 - 兼容本机 Podman 和后续远程部署
 
 ## 平台约束
@@ -26,7 +26,7 @@
 
 请求参数：
 
-- `parser_name`: `docling` / `mineru`，可选
+- `parser_name`: 仅支持 `mineru`，可选
 
 返回：
 
@@ -39,7 +39,7 @@
 表单参数：
 
 - `file`: PDF 文件
-- `parser_name`: `docling` / `mineru`，可选
+- `parser_name`: 仅支持 `mineru`，可选
 
 返回：
 
@@ -70,36 +70,14 @@ pip install "mineru[all]>=3.3,<4"
 podman build \
   -f backend/parser_service/Dockerfile \
   -t starmap-pdf-parser:mineru \
-  --build-arg PARSER_FLAVOR=mineru \
   --build-arg MINERU_PACKAGE_SPEC='mineru[pipeline]>=3.3,<4' \
-  backend
-```
-
-构建 `Docling` 镜像：
-
-```bash
-podman build \
-  -f backend/parser_service/Dockerfile \
-  -t starmap-pdf-parser:docling \
-  --build-arg PARSER_FLAVOR=docling \
-  backend
-```
-
-同时安装两套依赖，仅用于开发调试：
-
-```bash
-podman build \
-  -f backend/parser_service/Dockerfile \
-  -t starmap-pdf-parser:both \
-  --build-arg PARSER_FLAVOR=both \
   backend
 ```
 
 ## 运行建议
 
 - 本地联调默认：
-  - `PARSER_FLAVOR=both`
-  - `PDF_PARSER_SERVICE_DEFAULT=mineru`
+  - 只构建并运行 MinerU 镜像
 - `MinerU` 首次启动会下载模型；当前 `docker-compose.podman.yml` 已将 `/root/.cache` 挂载为持久卷，后续重建容器不会重复全量下载
 - `MinerU` 配置文件默认落在 `MINERU_TOOLS_CONFIG_JSON=/root/.cache/mineru/mineru.json`，避免配置写在容器易失层
 - 若你在 `Linux` 机器上追求更完整的官方依赖集合，可显式传入 `MINERU_PACKAGE_SPEC='mineru[all]>=3.3,<4'`

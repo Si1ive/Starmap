@@ -1,7 +1,7 @@
 """
 目录大纲 LLM 拆分服务
 
-把 MinerU/Docling 解析出的大纲 markdown，用 LLM 拆成结构化的章节树：
+把 MinerU 解析出的大纲 markdown，用 LLM 拆成结构化的章节树：
 - 四门课（数据结构/计组/操作系统/计网）先按科目名粗切，再逐门细拆
 - 每门课产出：考察目标（exam_objective）+ 多层章节树（每节点含 name/outline_code/description）
 - 复习指导（exam_guidance）不在这一步生成，入库后另行批量触发

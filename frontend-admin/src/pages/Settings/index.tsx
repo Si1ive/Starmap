@@ -262,14 +262,10 @@ const Settings = () => {
   })
 
   const handleSubmit = (values: Partial<SystemSettings>) => {
-    const nextParser = values.pdf_parser?.active_parser
-    const currentParser = parserSettings?.active_parser
     const nextTarget = values.pdf_parser?.deployment_target
     const currentTarget = parserSettings?.deployment_target
     const switchNotes = values.pdf_parser?.service_switch_notes?.trim() || ''
-    const isSwitching =
-      (!!nextParser && !!currentParser && nextParser !== currentParser) ||
-      (!!nextTarget && !!currentTarget && nextTarget !== currentTarget)
+    const isSwitching = !!nextTarget && !!currentTarget && nextTarget !== currentTarget
 
     if (nextTarget === 'remote' && !values.pdf_parser?.remote_service_endpoint?.trim()) {
       message.error('远程模式必须填写远程解析服务地址')
@@ -277,19 +273,19 @@ const Settings = () => {
     }
 
     if (isSwitching) {
-      const targetStatus = availableParsers.find((item) => item.parser_name === nextParser)
+      const targetStatus = availableParsers.find((item) => item.parser_name === 'mineru')
       if (!switchNotes) {
-        message.error('切换解析器前必须填写切换备注')
+        message.error('切换部署位置前必须填写变更备注')
         return
       }
       if (nextTarget === 'local' && (!targetStatus || targetStatus.health_status !== 'ready')) {
-        message.error(`目标解析器 ${nextParser} 当前不可用，请先完成停旧启新和依赖校验`)
+        message.error('MinerU 本地解析服务当前不可用，请先完成服务部署和依赖校验')
         return
       }
 
       Modal.confirm({
-        title: '确认切换系统级 PDF 解析配置',
-        content: `将从 ${currentParser}/${currentTarget} 切换到 ${nextParser}/${nextTarget}。这会影响后续所有文档解析，请确认旧服务已下线、新服务已启动，并已准备好回滚方案。`,
+        title: '确认切换 MinerU 部署位置',
+        content: `将从 ${currentTarget} 切换到 ${nextTarget}。这会影响后续所有文档解析，请确认目标服务已启动，并已准备好回滚方案。`,
         okText: '确认切换',
         cancelText: '取消',
         onOk: () => mutation.mutate(values),
@@ -370,19 +366,11 @@ const Settings = () => {
           <TabPane tab="PDF解析器" key="pdf-parser">
             <Card>
               <Alert
-                type="warning"
-                showIcon
-                style={{ marginBottom: 16 }}
-                message="这是系统级切换，不是单文件参数"
-                description="切换 PDF 解析器或服务部署位置意味着你要停掉当前服务、下线原实现，再启用新的解析服务。同一时间只允许一个解析器处于激活状态。"
-              />
-
-              <Alert
                 type="info"
                 showIcon
                 style={{ marginBottom: 16 }}
-                message="推荐策略：默认使用 MinerU + 本地 Podman 服务"
-                description="MinerU 更适合作为当前项目的主流默认方案；Docling 保留为高性能备选。本地和远程模式使用相同的健康检查、文件解析与任务进度协议。"
+                message="解析器固定使用 MinerU"
+                description="这里只配置 MinerU 的部署位置、服务地址、超时和处理窗口。切换本地或远程服务会影响后续所有文档解析。"
               />
 
               {activeRuntimeStatus && (
@@ -421,11 +409,8 @@ const Settings = () => {
                 ))}
               </div>
 
-              <Form.Item name={['pdf_parser', 'active_parser']} label="当前激活解析器">
-                <Select>
-                  <Option value="mineru">MinerU（推荐默认）</Option>
-                  <Option value="docling">Docling（性能优先）</Option>
-                </Select>
+              <Form.Item name={['pdf_parser', 'active_parser']} hidden>
+                <Input />
               </Form.Item>
 
               <Form.Item name={['pdf_parser', 'deployment_target']} label="部署位置">
@@ -475,16 +460,16 @@ const Settings = () => {
                 <InputNumber min={1} max={64} style={{ width: '100%' }} />
               </Form.Item>
 
-              <Form.Item name={['pdf_parser', 'service_mode']} label="运行模式">
-                <Input disabled />
+              <Form.Item label="运行模式">
+                <Input disabled value="MinerU 固定模式" />
               </Form.Item>
 
               <Form.Item
                 name={['pdf_parser', 'service_switch_notes']}
-                label="切换备注"
-                tooltip="记录本次服务切换的原因、依赖变更、安装步骤或回滚说明"
+                label="变更备注"
+                tooltip="记录本次部署位置或服务地址变更的原因、步骤和回滚说明"
               >
-                <TextArea rows={4} placeholder="例如：已停用 Docling 容器，切换为 MinerU OCR 服务，等待重建解析镜像" />
+                <TextArea rows={4} placeholder="例如：将 MinerU 解析服务迁移到远程 Linux 主机，已验证健康检查和回滚地址" />
               </Form.Item>
             </Card>
 

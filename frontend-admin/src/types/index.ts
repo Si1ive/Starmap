@@ -349,7 +349,7 @@ export interface ParseRun {
   created_at?: string
 }
 
-export type DocumentParserName = 'docling' | 'mineru'
+export type DocumentParserName = 'mineru'
 
 export type ParseMode = 'primary' | 'fallback' | 'retry' | 'manual_fix'
 

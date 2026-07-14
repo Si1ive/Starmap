@@ -26,7 +26,7 @@ podman-compose -f docker-compose.podman.yml up -d
 
 当前 `docker-compose.podman.yml` 已内置以下行为：
 
-- `pdf-parser-service` 默认以 `PARSER_FLAVOR=both` 构建，同时提供 `docling` / `mineru`
+- `pdf-parser-service` 只安装并运行 `MinerU`
 - `pdf-parser-service` 挂载持久化 `mineru_cache` 卷，避免模型重复下载
 - 全新 MySQL 数据卷会先初始化通用基础表和 408 基础表
 - `backend` 启动前自动执行 `alembic upgrade head`，用于补齐 `document_pages` 等解析链路表
@@ -35,11 +35,9 @@ podman-compose -f docker-compose.podman.yml up -d
 
 ### 2.1 启动本地 PDF 解析服务
 
-默认按双依赖构建独立解析服务镜像，激活解析器仍由后台系统设置控制：
+默认构建独立 MinerU 解析服务镜像：
 
 ```bash
-export PDF_PARSER_FLAVOR=both
-export PDF_PARSER_SERVICE_DEFAULT=mineru
 export MINERU_PACKAGE_SPEC='mineru[pipeline]>=3.3,<4'
 podman-compose -f docker-compose.podman.yml up -d pdf-parser-service
 ```
@@ -49,8 +47,6 @@ podman-compose -f docker-compose.podman.yml up -d pdf-parser-service
 ```bash
 export MINERU_PACKAGE_SPEC='mineru[all]>=3.3,<4'
 ```
-
-如只想在镜像层单装某一种解析器，仍可显式改回 `mineru` 或 `docling`。
 
 注意：
 

@@ -1,16 +1,15 @@
 """
-文档解析器适配层
+MinerU 文档解析适配层
 
 目标：
-1. 屏蔽 Docling / MinerU 原始输出差异
+1. 屏蔽 MinerU 原始输出差异
 2. 统一向 DocumentParseService 提供标准化解析结果
-3. 支持后端按请求或策略切换解析器
+3. 支持嵌入、本地服务和远程服务三种部署方式
 """
 
 from __future__ import annotations
 
 import base64
-import inspect
 import json
 import os
 import tempfile
@@ -77,268 +76,6 @@ def _patch_mineru_pdf_rendering() -> None:
         _load_images_from_pdf_bytes_range_single_process
     )
     pdf_image_tools._starmap_single_process_render_patch = True  # type: ignore[attr-defined]
-
-
-BLOCK_TYPE_MAP = {
-    "Title": "title",
-    "TitleItem": "title",
-    "TITLE": "title",
-    "Heading": "heading",
-    "SectionHeaderItem": "heading",
-    "SECTION_HEADER": "heading",
-    "Paragraph": "paragraph",
-    "TextItem": "paragraph",
-    "TEXT": "paragraph",
-    "PARAGRAPH": "paragraph",
-    "REFERENCE": "paragraph",
-    "HANDWRITTEN_TEXT": "paragraph",
-    "ListItem": "list",
-    "List": "list",
-    "LIST_ITEM": "list",
-    "Table": "table",
-    "TableItem": "table",
-    "TABLE": "table",
-    "DOCUMENT_INDEX": "table",
-    "TableCaption": "table_caption",
-    "Picture": "figure",
-    "Figure": "figure",
-    "PictureItem": "figure",
-    "PICTURE": "figure",
-    "CHART": "figure",
-    "FigureCaption": "figure_caption",
-    "Equation": "formula",
-    "FormulaItem": "formula",
-    "FORMULA": "formula",
-    "CodeBlock": "code",
-    "CodeItem": "code",
-    "CODE": "code",
-    "PageBreak": "unknown",
-}
-
-
-def _map_docling_block_type(docling_type: str) -> str:
-    return BLOCK_TYPE_MAP.get(docling_type, "paragraph")
-
-
-def _resolve_docling_type(item: Any) -> str:
-    candidates = [type(item).__name__]
-    label = getattr(item, "label", None)
-    if label is not None:
-        label_value = getattr(label, "value", None)
-        if label_value:
-            candidates.append(str(label_value))
-            candidates.append(str(label_value).upper())
-        candidates.append(str(label))
-
-    for candidate in candidates:
-        mapped = BLOCK_TYPE_MAP.get(candidate)
-        if mapped:
-            return mapped
-    return "paragraph"
-
-
-def _extract_page_no(item: Any) -> int:
-    if hasattr(item, "prov") and item.prov:
-        prov = item.prov
-        if isinstance(prov, list) and len(prov) > 0:
-            return getattr(prov[0], "page_no", 1) or 1
-        return getattr(prov, "page_no", 1) or 1
-    return 1
-
-
-def _extract_bbox(item: Any) -> Optional[dict]:
-    if hasattr(item, "prov") and item.prov:
-        prov = item.prov
-        if isinstance(prov, list) and len(prov) > 0:
-            prov = prov[0]
-        if hasattr(prov, "bbox") and prov.bbox:
-            box = prov.bbox
-            return {
-                "l": getattr(box, "l", None),
-                "t": getattr(box, "t", None),
-                "r": getattr(box, "r", None),
-                "b": getattr(box, "b", None),
-            }
-    return None
-
-
-def _extract_text(item: Any, doc: Any = None) -> str:
-    if hasattr(item, "text") and item.text:
-        return item.text
-    caption_text = getattr(item, "caption_text", None)
-    if callable(caption_text) and doc is not None:
-        try:
-            text = caption_text(doc)
-            if text:
-                return text
-        except Exception:
-            pass
-    if hasattr(item, "caption") and item.caption:
-        return item.caption
-    return ""
-
-
-def _call_docling_export(item: Any, method_name: str, doc: Any = None) -> str:
-    method = getattr(item, method_name, None)
-    if not callable(method):
-        return ""
-
-    try:
-        signature = inspect.signature(method)
-    except (TypeError, ValueError):
-        signature = None
-
-    try:
-        if signature is not None and len(signature.parameters) >= 1 and doc is not None:
-            return method(doc)
-        return method()
-    except Exception:
-        return ""
-
-
-def _extract_md(item: Any, doc: Any = None) -> str:
-    markdown = _call_docling_export(item, "export_to_markdown", doc)
-    if markdown:
-        return markdown
-    return _extract_text(item, doc)
-
-
-def _iterate_docling_items(doc: Any) -> List[Any]:
-    iterate_items = getattr(doc, "iterate_items", None)
-    if callable(iterate_items):
-        return [item for item, _ in iterate_items(with_groups=False, traverse_pictures=True)]
-
-    body = getattr(doc, "body", None)
-    if body is None:
-        return []
-
-    walk = getattr(body, "walk", None)
-    if callable(walk):
-        return list(walk())
-
-    return []
-
-
-def _export_docling_markdown(doc: Any) -> str:
-    exporter = getattr(doc, "export_to_markdown", None)
-    if not callable(exporter):
-        return ""
-
-    try:
-        return exporter(traverse_pictures=True)
-    except TypeError:
-        try:
-            return exporter()
-        except Exception:
-            return ""
-    except Exception:
-        return ""
-
-
-class DoclingParser:
-    name = "docling"
-    version = "2.x"
-
-    def parse(self, file_path: str) -> ParsedDocumentResult:
-        try:
-            from docling.document_converter import DocumentConverter
-        except Exception as exc:
-            raise ParserUnavailableError(
-                self.name,
-                "docling 未安装或当前版本接口不兼容，请先安装并验证 Docling 本地可用"
-            ) from exc
-
-        converter = DocumentConverter()
-        result = converter.convert(file_path)
-        doc = result.document
-
-        pages: List[ParsedPage] = []
-        for index, page in enumerate(getattr(doc, "pages", []) or []):
-            page_no = index + 1
-            width = getattr(page, "width", None) or getattr(page, "size", None)
-            height = getattr(page, "height", None)
-            if hasattr(page, "size") and page.size:
-                width = getattr(page.size, "width", width)
-                height = getattr(page.size, "height", height)
-            pages.append(
-                ParsedPage(
-                    page_no=page_no,
-                    width=int(width) if width else None,
-                    height=int(height) if height else None,
-                )
-            )
-
-        blocks: List[ParsedBlock] = []
-        assets: List[ParsedAsset] = []
-        order_counters: Dict[int, int] = {}
-        for item in _iterate_docling_items(doc):
-            block_type = _resolve_docling_type(item)
-            page_no = _extract_page_no(item)
-            order_no = order_counters.get(page_no, 0)
-            order_counters[page_no] = order_no + 1
-
-            content_text = _extract_text(item, doc) or None
-            content_md = _extract_md(item, doc)
-
-            block = ParsedBlock(
-                page_no=page_no,
-                block_type=block_type,
-                order_no=order_no,
-                content_text=content_text,
-                content_md=content_md if content_md and content_md != content_text else None,
-                bbox=_extract_bbox(item),
-            )
-
-            if block_type == "table":
-                html_table = _call_docling_export(item, "export_to_html", doc)
-                if html_table:
-                    block.html_table = html_table
-
-            if block_type == "formula" and hasattr(item, "text"):
-                block.latex = getattr(item, "text", None)
-
-            if block_type in {"figure", "table"}:
-                assets.append(
-                    ParsedAsset(
-                        page_no=page_no,
-                        asset_type=block_type,
-                        caption_text=content_text,
-                        bbox=block.bbox,
-                    )
-                )
-
-            blocks.append(block)
-
-        document_markdown = _export_docling_markdown(doc)
-
-        # Docling 的原始输出是对象，我们转换为可序列化的字典
-        raw_output = None
-        try:
-            # 尝试导出为JSON格式，仅保留核心结构信息
-            raw_output = {
-                "parser": self.name,
-                "parser_version": self.version,
-                "page_count": len(pages),
-                "items_count": len(blocks),
-                # Docling 对象太大，只保留元数据
-                "metadata": {
-                    "has_pages": bool(pages),
-                    "has_body": hasattr(doc, "body"),
-                },
-            }
-        except Exception:
-            pass
-
-        return ParsedDocumentResult(
-            parser_name=self.name,
-            parser_version=self.version,
-            pages=pages,
-            blocks=blocks,
-            assets=assets,
-            document_markdown=document_markdown,
-            metadata={"source_file": file_path},
-            raw_output=raw_output,
-        )
 
 
 class MinerUParser:
@@ -776,9 +513,6 @@ class RemoteParserServiceClient(HttpParserServiceClient):
 
 def _normalize_runtime_config(runtime_config: Optional[Dict[str, Any]] = None) -> PdfParserRuntimeConfig:
     config = runtime_config or {}
-    active_parser = str(config.get("active_parser") or "mineru").strip().lower()
-    if active_parser not in {"docling", "mineru"}:
-        active_parser = "mineru"
 
     deployment_target = str(config.get("deployment_target") or "local").strip().lower()
     if deployment_target not in {"local", "remote", "embedded"}:
@@ -805,7 +539,7 @@ def _normalize_runtime_config(runtime_config: Optional[Dict[str, Any]] = None) -
     remote_endpoint = str(config.get("remote_service_endpoint") or "").strip()
 
     return PdfParserRuntimeConfig(
-        active_parser=active_parser,
+        active_parser="mineru",
         deployment_target=deployment_target,
         local_service_endpoint=local_endpoint,
         remote_service_endpoint=remote_endpoint,
@@ -950,15 +684,13 @@ def _is_valid_url(value: str) -> bool:
 
 def get_parser(parser_name: str) -> DocumentParser:
     normalized = (parser_name or "").strip().lower()
-    if normalized == "docling":
-        return DoclingParser()
     if normalized == "mineru":
         return MinerUParser()
     raise ValueError(f"不支持的解析器: {parser_name}")
 
 
 def get_supported_parser_names() -> List[str]:
-    return ["docling", "mineru"]
+    return ["mineru"]
 
 
 def inspect_parser_health(
@@ -972,19 +704,14 @@ def inspect_parser_health(
     if config.deployment_target == "embedded":
         parser = get_parser(normalized)
         try:
-            if normalized == "docling":
-                from docling.document_converter import DocumentConverter
+            try:
+                from mineru.cli.common import convert_single_pdf  # type: ignore
 
-                _ = DocumentConverter
-            elif normalized == "mineru":
-                try:
-                    from mineru.cli.common import convert_single_pdf  # type: ignore
+                _ = convert_single_pdf
+            except Exception:
+                from mineru.cli.common import do_parse  # type: ignore
 
-                    _ = convert_single_pdf
-                except Exception:
-                    from mineru.cli.common import do_parse  # type: ignore
-
-                    _ = do_parse
+                _ = do_parse
 
             return {
                 "parser_name": parser.name,
@@ -1109,8 +836,8 @@ def choose_parser(
     - 部署目标为 remote 时，调用远程 HTTP 解析服务
     """
     config = _normalize_runtime_config(runtime_config)
-    parser_name = (requested_parser or config.active_parser or "mineru").strip().lower()
-    if parser_name not in {"docling", "mineru"}:
+    parser_name = (requested_parser or "mineru").strip().lower()
+    if parser_name != "mineru":
         raise ValueError(f"不支持的解析器: {parser_name}")
 
     if config.deployment_target == "local":

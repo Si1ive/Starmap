@@ -3,7 +3,7 @@
 
 职责：
 1. 在独立容器中提供 `/health` 与 `/parse` 接口
-2. 使用本地已安装的 Docling / MinerU 依赖执行解析
+2. 使用本地已安装的 MinerU 依赖执行解析
 3. 将解析结果标准化返回给主 backend
 """
 
@@ -39,7 +39,7 @@ logger = get_logger(__name__)
 _MINERU_RUNTIME_LOCK = threading.Lock()
 
 APP_VERSION = "1.0.0"
-DEFAULT_PARSER = os.getenv("PDF_PARSER_SERVICE_DEFAULT", "mineru").strip().lower() or "mineru"
+DEFAULT_PARSER = "mineru"
 
 # ========== 解析进度追踪 ==========
 # MinerU 解析被 _MINERU_RUNTIME_LOCK 串行化，同一时刻最多一个任务在跑，
@@ -156,7 +156,7 @@ async def startup_event() -> None:
 
 def _resolve_parser_name(parser_name: Optional[str]) -> str:
     normalized = (parser_name or DEFAULT_PARSER).strip().lower()
-    if normalized not in {"docling", "mineru"}:
+    if normalized != "mineru":
         raise HTTPException(status_code=400, detail=f"不支持的解析器: {parser_name}")
     return normalized
 
@@ -282,9 +282,7 @@ async def parse_document(
         with tempfile.TemporaryDirectory(prefix="parser_service_") as temp_dir:
             temp_path = Path(temp_dir) / f"input{suffix}"
             temp_path.write_bytes(await file.read())
-            with _temporary_mineru_processing_window_size(
-                processing_window_size if normalized == "mineru" else None
-            ):
+            with _temporary_mineru_processing_window_size(processing_window_size):
                 result = parser.parse(str(temp_path))
             payload = _serialize_parse_result(result)
             payload["metadata"] = {
@@ -293,7 +291,7 @@ async def parse_document(
                 "service_parser": normalized,
                 **(
                     {"processing_window_size": processing_window_size}
-                    if normalized == "mineru" and processing_window_size is not None
+                    if processing_window_size is not None
                     else {}
                 ),
             }

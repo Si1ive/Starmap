@@ -2,7 +2,7 @@ import adminClient from './client'
 import type { ApiResponse } from '@/types'
 
 export interface PdfParserRuntimeStatus {
-  parser_name: 'docling' | 'mineru'
+  parser_name: 'mineru'
   parser_version: string
   health_status: 'ready' | 'unavailable'
   is_available: boolean
@@ -43,8 +43,8 @@ export interface SystemSettings {
   enrich_llm: LlmConfig
   embedding: EmbeddingConfig
   pdf_parser: {
-    active_parser: 'docling' | 'mineru'
-    service_mode: 'single_active'
+    active_parser: 'mineru'
+    service_mode: 'mineru_only'
     service_switch_notes: string
     deployment_target: 'local' | 'remote'
     local_service_endpoint: string

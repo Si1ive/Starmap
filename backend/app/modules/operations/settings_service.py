@@ -3,7 +3,7 @@
 
 当前用途：
 1. 提供轻量级系统设置读写能力
-2. 支持 PDF 解析器的单活切换配置
+2. 支持 MinerU PDF 解析服务的部署与运行配置
 
 说明：
 - 当前采用 MySQL `system_configs` 表持久化
@@ -83,15 +83,8 @@ class SystemSettingsService:
         return await self.save(merged)
 
     async def get_active_pdf_parser(self) -> str:
-        """获取当前激活的 PDF 解析器。"""
-        data = await self.load()
-        parser_name = (
-            data.get("pdf_parser", {}).get("active_parser") or self._default_settings()["pdf_parser"]["active_parser"]
-        )
-        normalized = str(parser_name).strip().lower()
-        if normalized not in {"docling", "mineru"}:
-            return self._default_settings()["pdf_parser"]["active_parser"]
-        return normalized
+        """返回系统唯一支持的 PDF 解析器。"""
+        return "mineru"
 
     async def get_pdf_parser_runtime_config(self) -> Dict[str, Any]:
         data = await self.load()
@@ -99,6 +92,8 @@ class SystemSettingsService:
         defaults = self._default_settings()["pdf_parser"]
         merged = copy.deepcopy(defaults)
         merged.update(parser_config if isinstance(parser_config, dict) else {})
+        merged["active_parser"] = "mineru"
+        merged["service_mode"] = "mineru_only"
         return merged
 
     async def get_crawler_runtime_config(self) -> Dict[str, Any]:
@@ -157,10 +152,10 @@ class SystemSettingsService:
         ip_address: Optional[str] = None,
         user_agent: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """更新当前激活的 PDF 解析器配置，并记录审计日志。"""
+        """更新 MinerU 解析服务配置，并记录审计日志。"""
         normalized = str(parser_name).strip().lower()
-        if normalized not in {"docling", "mineru"}:
-            raise ValueError("pdf_parser.active_parser 仅支持 docling 或 mineru")
+        if normalized != "mineru":
+            raise ValueError("PDF 解析器已固定为 mineru")
         target = str(deployment_target or "local").strip().lower()
         if target not in {"local", "remote"}:
             raise ValueError("pdf_parser.deployment_target 仅支持 local 或 remote")
@@ -249,8 +244,8 @@ class SystemSettingsService:
                 )
 
         current["pdf_parser"] = {
-            "active_parser": normalized,
-            "service_mode": "single_active",
+            "active_parser": "mineru",
+            "service_mode": "mineru_only",
             "service_switch_notes": notes,
             "deployment_target": target,
             "local_service_endpoint": next_local_endpoint,
@@ -468,6 +463,8 @@ class SystemSettingsService:
                 merged[key] = cls._deep_merge_dicts(merged[key], value)
             else:
                 merged[key] = value
+        merged["pdf_parser"]["active_parser"] = "mineru"
+        merged["pdf_parser"]["service_mode"] = "mineru_only"
         return merged
 
     @classmethod
@@ -499,11 +496,8 @@ class SystemSettingsService:
                 continue
             if key == "pdf_parser":
                 sanitized[key] = {
-                    "active_parser": value.get(
-                        "active_parser",
-                        defaults["pdf_parser"]["active_parser"],
-                    ),
-                    "service_mode": "single_active",
+                    "active_parser": "mineru",
+                    "service_mode": "mineru_only",
                     "service_switch_notes": value.get("service_switch_notes", ""),
                     "deployment_target": value.get(
                         "deployment_target",
@@ -609,7 +603,7 @@ class SystemSettingsService:
             },
             "pdf_parser": {
                 "active_parser": "mineru",
-                "service_mode": "single_active",
+                "service_mode": "mineru_only",
                 "service_switch_notes": "",
                 "deployment_target": "local",
                 "local_service_endpoint": settings.PDF_PARSER_LOCAL_ENDPOINT,
@@ -638,7 +632,7 @@ class SystemSettingsService:
     @staticmethod
     def _default_description(config_key: str) -> str:
         if config_key == "pdf_parser":
-            return "PDF 解析器单活切换配置"
+            return "MinerU 解析服务运行配置"
         if config_key == "llm":
             return "问答 LLM 配置"
         if config_key == "pdf_structure_llm":

@@ -25,12 +25,9 @@ class RegisterByDownloadRequest(BaseModel):
 
 
 class ParseCorpusFileRequest(BaseModel):
-    parser_name: Optional[Literal["docling", "mineru"]] = Field(
+    parser_name: Optional[Literal["mineru"]] = Field(
         default=None,
-        description=(
-            "仅用于开发期临时覆盖；正式运行应通过系统设置"
-            "切换单活解析器"
-        ),
+        description="固定使用 MinerU；保留该字段用于显式声明和接口兼容",
     )
     parse_mode: Literal["primary", "fallback", "retry", "manual_fix"] = Field(
         default="primary",
