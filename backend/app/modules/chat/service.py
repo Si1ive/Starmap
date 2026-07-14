@@ -18,6 +18,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.mysql import mysql_client
 from app.db.redis import RedisClient, get_redis_client
+from app.modules.chat.retrieval_context import build_retrieval_context
 from app.models.transaction import (
     ChatHistory,
     ChatMessage,
@@ -361,64 +362,7 @@ class ChatService:
                     limit=5,
                 )
 
-                # 构建上下文和来源引用
-                primary = results.get("results", [])
-                outline_expansion = results.get("outline_expansion", {})
-                matched_chapters = outline_expansion.get("matched_chapters", [])
-
-                # 如果大纲定位到了考点，加入上下文提示
-                if matched_chapters:
-                    chapter_names = [ch.get("name", "") for ch in matched_chapters[:3]]
-                    context_parts.append(
-                        f"[大纲定位] 用户问题涉及考点: {', '.join(chapter_names)}"
-                    )
-
-                seen_sources = set()
-                for i, item in enumerate(primary, 1):
-                    content = item.get("context_text") or item.get("content_text", "")
-                    if content:
-                        source_info = ""
-                        src = item.get("source", {})
-                        if src.get("filename"):
-                            source_info = f" [来源: {src['filename']}"
-                            if src.get("page_no"):
-                                source_info += f" 第{src['page_no']}页"
-                            source_info += "]"
-                        context_parts.append(f"[{i}]{source_info}\n{content}")
-
-                    # 收集来源引用。实体链接优先，文档和页码用于追溯原文。
-                    entity_type = item.get("entity_type")
-                    entity_id = item.get("entity_id")
-                    document_id = item.get("source", {}).get("document_id")
-                    source_key = (entity_type, entity_id, document_id)
-                    if source_key in seen_sources or not any(source_key):
-                        continue
-                    seen_sources.add(source_key)
-
-                    if entity_type == "knowledge_point" and entity_id:
-                        source_url = f"/knowledge/{entity_id}"
-                    elif entity_type == "question" and entity_id:
-                        source_url = f"/practice?question_id={entity_id}"
-                    else:
-                        source_url = None
-
-                    source_title = item.get("source", {}).get("filename")
-                    if not source_title:
-                        source_title = {
-                            "knowledge_point": "知识点",
-                            "question": "题目",
-                        }.get(entity_type, "知识库内容")
-
-                    sources.append(SourceItem(
-                        type=entity_type or "document",
-                        title=source_title,
-                        content=(item.get("content_text") or "")[:240] or None,
-                        url=source_url,
-                        entity_id=entity_id,
-                        document_id=document_id,
-                        page_no=item.get("source", {}).get("page_no"),
-                        score=item.get("score"),
-                    ))
+                context_parts, sources = build_retrieval_context(results)
 
         except Exception as e:
             logger.warning("检索服务异常，降级为直接回答", error=str(e))
