@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import os
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
@@ -32,6 +31,7 @@ from app.modules.crawler.schedule_service import CrawlerScheduleService
 from app.modules.crawler.scrapy_bridge import ScrapyBridgeService
 from app.modules.crawler.source_service import CrawlerSourceService
 from app.modules.crawler.stats_service import CrawlerStatsService
+from app.modules.crawler.storage import DOWNLOAD_STORE
 from app.modules.crawler.task_service import CrawlerTaskService
 from app.modules.operations.security import get_request_admin_id
 from app.modules.operations.settings_service import SystemSettingsService
@@ -39,12 +39,6 @@ from app.modules.operations.settings_service import SystemSettingsService
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/admin/crawler", tags=["爬虫管理"])
-
-DOWNLOAD_STORE = os.getenv(
-    "DOWNLOAD_STORE",
-    str(Path(__file__).resolve().parents[3] / "downloads"),
-)
-
 
 # ========== 爬虫管理相关 ==========
 

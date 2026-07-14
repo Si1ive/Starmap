@@ -239,6 +239,9 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - `/api/v1/admin/crawler/*` 管理端点已迁移到 `app/modules/crawler/router.py`，
   包括任务、爬取源、统计、调度、日志、文件重试和实时日志接口；URL、鉴权和响应
   行为保持不变，并由路由归属契约测试防止重新回流到 `app/api/admin.py`
+- 已下载文件列表、详情和预览接口已迁移到 `app/modules/crawler/file_router.py`；
+  下载根目录统一由 `crawler/storage.py` 管理，文件预览改为真实父目录校验，
+  避免相似路径前缀绕过访问边界
 
 每个阶段都必须满足：
 

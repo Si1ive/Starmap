@@ -207,6 +207,20 @@ def test_crawler_routes_are_owned_by_crawler_module():
         assert routes[path].endpoint.__module__ == "app.modules.crawler.router"
 
 
+def test_downloaded_file_routes_are_owned_by_crawler_module():
+    routes = _routes_by_path()
+
+    for path in (
+        "/api/v1/admin/files/downloaded",
+        "/api/v1/admin/files/downloaded/{file_id}",
+        "/api/v1/admin/files/downloaded/{file_id}/preview",
+    ):
+        assert (
+            routes[path].endpoint.__module__
+            == "app.modules.crawler.file_router"
+        )
+
+
 def test_crawler_routes_keep_existing_http_methods():
     methods = _methods_by_path()
     expected = {

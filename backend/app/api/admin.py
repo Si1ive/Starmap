@@ -4,7 +4,6 @@
 当前保留尚未按业务域迁移的 PDF 入库、关系审核和大纲等后台接口。
 """
 
-import os
 import asyncio
 import uuid
 from pathlib import Path
@@ -12,7 +11,6 @@ from typing import Optional, List, Any, Dict
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
-from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, or_, and_, delete
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -133,149 +131,6 @@ async def get_ingest_tasks(
         "page": page,
         "page_size": page_size,
     })
-
-
-# ========== 已下载文件 ==========
-
-DOWNLOAD_STORE = os.getenv("DOWNLOAD_STORE", str(Path(__file__).parent.parent.parent / "downloads"))
-
-
-@router.get("/files/downloaded", response_model=ApiResponse)
-async def get_downloaded_files(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    file_type: Optional[str] = Query(None),
-    status: Optional[str] = Query(None),
-    task_id: Optional[str] = Query(None),
-    keyword: Optional[str] = Query(None),
-    db: AsyncSession = Depends(get_db)
-):
-    """获取已下载文件列表"""
-    from app.models.mysql_models import DownloadedFile
-
-    query = select(DownloadedFile)
-
-    if file_type:
-        query = query.where(DownloadedFile.file_type == file_type)
-    if status:
-        query = query.where(DownloadedFile.status == status)
-    if task_id:
-        query = query.where(DownloadedFile.task_id == task_id)
-    if keyword:
-        like_pattern = f"%{keyword}%"
-        query = query.where(
-            (DownloadedFile.file_name.like(like_pattern)) |
-            (DownloadedFile.repo_name.like(like_pattern))
-        )
-
-    count_query = select(func.count()).select_from(query.subquery())
-    total = await db.scalar(count_query) or 0
-
-    query = query.order_by(DownloadedFile.created_at.desc())
-    query = query.offset((page - 1) * page_size).limit(page_size)
-    result = await db.execute(query)
-    files = result.scalars().all()
-
-    return ApiResponse(data={
-        "items": [
-            {
-                "id": f.id,
-                "task_id": f.task_id,
-                "repo_name": f.repo_name,
-                "repo_url": f.repo_url,
-                "file_path": f.file_path,
-                "file_name": f.file_name,
-                "file_type": f.file_type,
-                "file_size": f.file_size,
-                "download_url": f.download_url,
-                "local_path": f.local_path,
-                "status": f.status,
-                "error_detail": f.error_detail,
-                "created_at": f.created_at.isoformat() if f.created_at else None,
-                "updated_at": f.updated_at.isoformat() if f.updated_at else None,
-            }
-            for f in files
-        ],
-        "total": total,
-        "page": page,
-        "page_size": page_size,
-    })
-
-
-@router.get("/files/downloaded/{file_id}", response_model=ApiResponse)
-async def get_downloaded_file_detail(
-    file_id: str,
-    db: AsyncSession = Depends(get_db)
-):
-    """获取已下载文件详情"""
-    from app.models.mysql_models import DownloadedFile
-
-    result = await db.execute(
-        select(DownloadedFile).where(DownloadedFile.id == file_id)
-    )
-    f = result.scalar_one_or_none()
-    if not f:
-        raise HTTPException(status_code=404, detail="文件不存在")
-
-    return ApiResponse(data={
-        "id": f.id,
-        "task_id": f.task_id,
-        "repo_name": f.repo_name,
-        "repo_url": f.repo_url,
-        "file_path": f.file_path,
-        "file_name": f.file_name,
-        "file_type": f.file_type,
-        "file_size": f.file_size,
-        "download_url": f.download_url,
-        "local_path": f.local_path,
-        "status": f.status,
-        "error_detail": f.error_detail,
-        "created_at": f.created_at.isoformat() if f.created_at else None,
-        "updated_at": f.updated_at.isoformat() if f.updated_at else None,
-    })
-
-
-@router.get("/files/downloaded/{file_id}/preview")
-async def preview_downloaded_file(
-    file_id: str,
-    db: AsyncSession = Depends(get_db)
-):
-    """预览/下载已下载的文件"""
-    from app.models.mysql_models import DownloadedFile
-
-    result = await db.execute(
-        select(DownloadedFile).where(DownloadedFile.id == file_id)
-    )
-    f = result.scalar_one_or_none()
-    if not f:
-        raise HTTPException(status_code=404, detail="文件不存在")
-
-    if not f.local_path:
-        raise HTTPException(status_code=404, detail="文件路径不存在")
-
-    local_path = Path(f.local_path).resolve()
-    download_store = Path(DOWNLOAD_STORE).resolve()
-
-    # 路径安全校验：确保文件在下载目录内
-    if not str(local_path).startswith(str(download_store)):
-        raise HTTPException(status_code=403, detail="文件路径不允许访问")
-
-    if not local_path.exists():
-        raise HTTPException(status_code=404, detail="文件不存在于磁盘")
-
-    media_type = {
-        "pdf": "application/pdf",
-        "doc": "application/msword",
-        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "ppt": "application/vnd.ms-powerpoint",
-        "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    }.get(f.file_type or "", "application/octet-stream")
-
-    return FileResponse(
-        path=str(local_path),
-        media_type=media_type,
-        filename=f.file_name,
-    )
 
 
 # ========== 审核相关 ==========
