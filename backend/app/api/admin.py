@@ -3361,7 +3361,7 @@ async def get_asset_metadata(asset_id: str, db: AsyncSession = Depends(get_db)):
 @router.post("/knowledge/{kp_id}/link-chapters", response_model=ApiResponse)
 async def link_knowledge_point_to_chapters(kp_id: str, db: AsyncSession = Depends(get_db)):
     """手动触发知识点关联大纲章节"""
-    from app.services.chapter_link_service import ChapterLinkService
+    from app.modules.catalog.chapter_link_service import ChapterLinkService
     service = ChapterLinkService(db)
     try:
         result = await service.link_knowledge_point_to_chapters(kp_id)
@@ -3375,7 +3375,7 @@ async def link_knowledge_point_to_chapters(kp_id: str, db: AsyncSession = Depend
 @router.post("/questions/{question_id}/link-chapters", response_model=ApiResponse)
 async def link_question_to_chapters(question_id: str, db: AsyncSession = Depends(get_db)):
     """手动触发题目关联大纲章节"""
-    from app.services.chapter_link_service import ChapterLinkService
+    from app.modules.catalog.chapter_link_service import ChapterLinkService
     service = ChapterLinkService(db)
     try:
         result = await service.link_question_to_chapters(question_id)
@@ -3389,7 +3389,7 @@ async def link_question_to_chapters(question_id: str, db: AsyncSession = Depends
 @router.post("/documents/{document_id}/link-chapters", response_model=ApiResponse)
 async def batch_link_document_chapters(document_id: str, db: AsyncSession = Depends(get_db)):
     """批量关联文档下所有已审核实体到大纲章节"""
-    from app.services.chapter_link_service import ChapterLinkService
+    from app.modules.catalog.chapter_link_service import ChapterLinkService
     service = ChapterLinkService(db)
     try:
         result = await service.batch_link_document(document_id)

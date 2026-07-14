@@ -12,7 +12,7 @@ from app.modules.content.schemas import (
     UpdateQuestionRequest,
 )
 from app.modules.content.service import ContentService
-from app.services.chapter_link_service import ChapterLinkService
+from app.modules.catalog.chapter_link_service import ChapterLinkService
 from app.services.review_service import ReviewService
 
 router = APIRouter(prefix="/admin", tags=["题目与知识点"])

@@ -216,7 +216,7 @@ class QuestionBuilder:
         subject_id = base.get("subject_id")
         resolved_source = base.get("chapter_link_source")
         try:
-            from app.services.chapter_link_service import ChapterLinkService
+            from app.modules.catalog.chapter_link_service import ChapterLinkService
 
             resolved = await ChapterLinkService(
                 self.db
@@ -317,7 +317,7 @@ class QuestionBuilder:
             stem = content
 
         if not primary_chapter_id:
-            from app.services.chapter_link_service import ChapterLinkService
+            from app.modules.catalog.chapter_link_service import ChapterLinkService
 
             try:
                 resolved = await ChapterLinkService(

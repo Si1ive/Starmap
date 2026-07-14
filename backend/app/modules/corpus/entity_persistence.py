@@ -230,7 +230,7 @@ class KnowledgePointPersistence:
 
         title_text = getattr(title_block, "content_text", None) or ""
         if not primary_chapter_id:
-            from app.services.chapter_link_service import ChapterLinkService
+            from app.modules.catalog.chapter_link_service import ChapterLinkService
 
             resolved = await ChapterLinkService(
                 self.db
