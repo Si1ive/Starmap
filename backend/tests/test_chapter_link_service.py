@@ -101,3 +101,44 @@ async def test_chapter_link_service_delegates_matched_results_to_store():
         ],
         "existing",
     )
+
+
+@pytest.mark.asyncio
+async def test_chapter_link_service_uses_document_mapping_before_vector_search():
+    service = ChapterLinkService(SimpleNamespace())
+    mapping = {
+        "chapter_id": "chapter-1",
+        "relevance": 0.93,
+        "source": "document_mapping",
+        "is_primary": True,
+        "mapping_type": "exact",
+    }
+    expected = {
+        "linked_count": 1,
+        "primary_chapter": {"id": "chapter-1"},
+        "related_chapters": [],
+        "strategy_used": "document_mapping",
+    }
+    service.document_resolver.resolve = AsyncMock(return_value=mapping)
+    service._match_by_vector_search = AsyncMock()
+    service.link_store.save_links = AsyncMock(return_value=expected)
+    entity = SimpleNamespace(
+        id="question-1",
+        primary_chapter_id=None,
+        source_document_id="document-1",
+    )
+
+    result = await service._link_entity_to_chapters(entity, "question")
+
+    assert result == expected
+    service.document_resolver.resolve.assert_awaited_once_with(
+        entity,
+        "question",
+    )
+    service._match_by_vector_search.assert_not_awaited()
+    service.link_store.save_links.assert_awaited_once_with(
+        entity,
+        "question",
+        [mapping],
+        "document_mapping",
+    )

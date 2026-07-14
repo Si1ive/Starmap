@@ -24,9 +24,13 @@ from app.modules.catalog.chapter_matcher import (
 )
 from app.modules.catalog.chapter_compat import resolve_legacy_chapter_id
 from app.modules.catalog.chapter_link_store import ChapterLinkStore
+from app.modules.catalog.document_chapter_resolver import (
+    DocumentSectionChapterResolver,
+)
 from app.models.mysql_models import (
-    KnowledgePoint, Question, CanonicalChapter,
-    EntitySourceLink, DocumentBlock, DocumentSection, DocumentSectionMapping
+    CanonicalChapter,
+    KnowledgePoint,
+    Question,
 )
 
 logger = get_logger(__name__)
@@ -39,6 +43,7 @@ class ChapterLinkService:
         self.db = db
         self.matcher = ChapterMatcher(db)
         self.link_store = ChapterLinkStore(db)
+        self.document_resolver = DocumentSectionChapterResolver(db)
 
     # ========== 公共接口 ==========
 
@@ -272,7 +277,10 @@ class ChapterLinkService:
 
         # 策略 2: 文档映射
         if not results and entity.source_document_id:
-            mapping_result = await self._match_by_document_mapping(entity, entity_type)
+            mapping_result = await self.document_resolver.resolve(
+                entity,
+                entity_type,
+            )
             if mapping_result:
                 results = [mapping_result]
                 strategy_used = "document_mapping"
@@ -305,64 +313,6 @@ class ChapterLinkService:
             results,
             strategy_used,
         )
-
-    # ========== 策略 2: 文档映射 ==========
-
-    async def _match_by_document_mapping(
-        self, entity, entity_type: str
-    ) -> Optional[Dict[str, Any]]:
-        """
-        通过文档section映射查找章节
-
-        流程:
-        1. entity → EntitySourceLink → 第一个 block
-        2. block.page_no → DocumentSection (该页所在的section)
-        3. DocumentSection → DocumentSectionMapping (approved)
-        4. 返回 canonical_chapter_id
-        """
-        # 1. 查询实体的第一个来源 block
-        source_link_query = select(EntitySourceLink).where(
-            EntitySourceLink.entity_type == entity_type,
-            EntitySourceLink.entity_id == entity.id
-        ).order_by(EntitySourceLink.id).limit(1)
-
-        source_link = (await self.db.execute(source_link_query)).scalar_one_or_none()
-        if not source_link or not source_link.block_ids:
-            return None
-
-        first_block_id = source_link.block_ids[0]
-        block = await self.db.get(DocumentBlock, first_block_id)
-        if not block:
-            return None
-
-        # 2. 查询该页所在的 DocumentSection（取最深层级的）
-        section_query = select(DocumentSection).where(
-            DocumentSection.document_id == entity.source_document_id,
-            DocumentSection.page_start <= block.page_no,
-            DocumentSection.page_end >= block.page_no
-        ).order_by(DocumentSection.level.desc())  # 优先取最深层级
-
-        section = (await self.db.execute(section_query)).scalar_one_or_none()
-        if not section:
-            return None
-
-        # 3. 查询该 section 的 approved 映射
-        mapping_query = select(DocumentSectionMapping).where(
-            DocumentSectionMapping.document_section_id == section.id,
-            DocumentSectionMapping.review_status == "approved"
-        ).order_by(DocumentSectionMapping.confidence.desc())
-
-        mapping = (await self.db.execute(mapping_query)).scalar_one_or_none()
-        if not mapping:
-            return None
-
-        return {
-            "chapter_id": mapping.canonical_chapter_id,
-            "relevance": float(mapping.confidence),
-            "source": "document_mapping",
-            "is_primary": True,
-            "mapping_type": mapping.mapping_type
-        }
 
     # ========== 抽取阶段直接解析章节（无 section mapping 时使用） ==========
 
