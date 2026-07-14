@@ -11,20 +11,14 @@
 """
 
 import uuid
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
 
-from sqlalchemy import select, and_, delete
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from qdrant_client.models import (
-    PointStruct,
-    Filter,
-    FieldCondition,
-    MatchValue,
-    PointIdsList,
-)
+from qdrant_client.models import PointStruct
 
 from app.core.logging import get_logger
-from app.db.qdrant import QdrantManager, qdrant_manager
+from app.db.qdrant import qdrant_manager
 from app.models.mysql_models import (
     KnowledgePoint, Question, RetrievalSegment,
     KnowledgePointChapterLink, QuestionChapterLink,
@@ -33,6 +27,7 @@ from app.models.mysql_models import (
 from app.infrastructure.ai.embedding_service import (
     get_embedding_service_from_settings,
 )
+from app.modules.retrieval.segment_store import SegmentStore
 
 logger = get_logger(__name__)
 
@@ -52,6 +47,7 @@ class SegmentService:
         self.db = db
         self.embedding = None  # 惰性加载：首次用时从系统设置读 embedding 配置
         self.qdrant = qdrant_manager
+        self.segment_store = SegmentStore(db, self.qdrant)
 
     async def _ensure_embedding(self):
         """惰性构造 embedding 服务（按系统设置的 embedding 配置）。"""
@@ -218,7 +214,7 @@ class SegmentService:
             )
             created += 1
 
-        cleanup_warning = await self._store_segments(
+        cleanup_warning = await self.segment_store.store_segments(
             entity_type="knowledge_point",
             entity_ids=[kp.id for kp in kps],
             collection=qdrant_manager.COLLECTION_KNOWLEDGE_SEGMENTS,
@@ -273,12 +269,7 @@ class SegmentService:
         if not chapters:
             return {"segments_count": 0, "message": "没有可用的大纲章节"}
 
-        # 2. 如需重建，先删除旧 segments
-        if rebuild:
-            chapter_ids = [ch.id for ch in chapters]
-            await self._delete_segments("canonical_chapter", chapter_ids)
-
-        # 3. 构建 segments 并收集待 embedding 文本
+        # 2. 构建 segments 并收集待 embedding 文本
         segments_to_create: List[Dict[str, Any]] = []
         texts_to_embed: List[str] = []
 
@@ -335,13 +326,14 @@ class SegmentService:
                 })
                 texts_to_embed.append(context_text)
 
-        # 4. 批量生成 embeddings
+        # 3. 批量生成 embeddings
         logger.info("开始生成大纲章节 embeddings", count=len(texts_to_embed))
         await self._ensure_embedding()
         embeddings = await self.embedding.embed_batch(texts_to_embed)
 
-        # 5. 写入 MySQL + Qdrant
+        # 4. 写入 MySQL + Qdrant
         created = 0
+        new_segments: List[RetrievalSegment] = []
         qdrant_points: List[PointStruct] = []
 
         for seg_data, vector in zip(segments_to_create, embeddings):
@@ -363,7 +355,7 @@ class SegmentService:
                 metadata_json=seg_data.get("meta"),
                 qdrant_point_id=qdrant_point_id,
             )
-            self.db.add(segment)
+            new_segments.append(segment)
 
             # Qdrant payload
             collection = qdrant_manager.COLLECTION_KNOWLEDGE_SEGMENTS  # 大纲章节用知识库 collection
@@ -381,16 +373,20 @@ class SegmentService:
             )
             created += 1
 
-        # 批量写入 Qdrant
-        if qdrant_points:
-            self.qdrant.upsert_points(
-                qdrant_manager.COLLECTION_KNOWLEDGE_SEGMENTS, qdrant_points
-            )
-
-        await self.db.commit()
+        cleanup_warning = await self.segment_store.store_segments(
+            entity_type="canonical_chapter",
+            entity_ids=[chapter.id for chapter in chapters],
+            collection=qdrant_manager.COLLECTION_KNOWLEDGE_SEGMENTS,
+            segments=new_segments,
+            qdrant_points=qdrant_points,
+            rebuild=rebuild,
+        )
 
         logger.info("大纲章节 segments 构建完成", count=created)
-        return {"segments_count": created, "chapters_count": len(chapters)}
+        result = {"segments_count": created, "chapters_count": len(chapters)}
+        if cleanup_warning:
+            result["cleanup_warning"] = cleanup_warning
+        return result
 
     # ========== 题目 segment ==========
 
@@ -563,7 +559,7 @@ class SegmentService:
             )
             created += 1
 
-        cleanup_warning = await self._store_segments(
+        cleanup_warning = await self.segment_store.store_segments(
             entity_type="question",
             entity_ids=[q.id for q in questions],
             collection=qdrant_manager.COLLECTION_QUESTION_SEGMENTS,
@@ -673,185 +669,19 @@ class SegmentService:
     ) -> None:
         """同步删除实体在 MySQL 与 Qdrant 中的检索单元。"""
         if entity_ids:
-            await self._delete_segments(entity_type, entity_ids)
+            await self.segment_store.delete_segments(entity_type, entity_ids)
 
     async def commit_entity_segment_removal(
         self,
         entity_type: str,
         entity_ids: List[str],
     ) -> Dict[str, Any]:
-        """
-        将当前事务中的实体变更与 MySQL segment 删除一起提交，再清理 Qdrant。
-
-        提交失败时 Qdrant 保持不变；Qdrant 清理失败时 MySQL 已不再引用旧点，
-        检索补全会忽略这些残留点。
-        """
-        old_segments = await self._get_entity_segments(entity_type, entity_ids)
-        collection = (
-            qdrant_manager.COLLECTION_KNOWLEDGE_SEGMENTS
-            if entity_type in ("knowledge_point", "canonical_chapter")
-            else qdrant_manager.COLLECTION_QUESTION_SEGMENTS
+        return await self.segment_store.commit_entity_segment_removal(
+            entity_type,
+            entity_ids,
         )
-        old_qdrant_ids = [
-            segment.qdrant_point_id
-            for segment in old_segments
-            if segment.qdrant_point_id
-        ]
-
-        try:
-            await self._delete_segment_rows(entity_type, entity_ids)
-            await self.db.commit()
-        except Exception:
-            await self.db.rollback()
-            raise
-
-        result: Dict[str, Any] = {
-            "status": "success",
-            "segments_count": len(old_segments),
-        }
-        if not old_qdrant_ids:
-            return result
-
-        try:
-            self._delete_qdrant_points(collection, old_qdrant_ids)
-        except Exception as cleanup_error:
-            logger.warning(
-                "实体删除后的 Qdrant 点清理失败",
-                entity_type=entity_type,
-                entity_ids=entity_ids,
-                error=str(cleanup_error),
-            )
-            result["status"] = "warning"
-            result["cleanup_warning"] = str(cleanup_error)[:500]
-        return result
 
     # ========== 辅助方法 ==========
-
-    async def _store_segments(
-        self,
-        *,
-        entity_type: str,
-        entity_ids: List[str],
-        collection: str,
-        segments: List[RetrievalSegment],
-        qdrant_points: List[PointStruct],
-        rebuild: bool,
-    ) -> Optional[str]:
-        """
-        写入新 segments，并在提交后清理旧 Qdrant 点。
-
-        新向量写入或 MySQL 提交失败时保留旧索引；旧 Qdrant 点清理失败时，
-        MySQL 已只引用新点，检索补全会忽略旧点，同时返回可追溯警告。
-        """
-        old_qdrant_ids: List[str] = []
-        if rebuild:
-            old_segments = await self._get_entity_segments(entity_type, entity_ids)
-            old_qdrant_ids = [
-                segment.qdrant_point_id
-                for segment in old_segments
-                if segment.qdrant_point_id
-            ]
-
-        new_qdrant_ids = [str(point.id) for point in qdrant_points]
-        try:
-            if qdrant_points:
-                self.qdrant.upsert_points(collection, qdrant_points)
-
-            if rebuild:
-                await self._delete_segment_rows(entity_type, entity_ids)
-
-            self.db.add_all(segments)
-            await self.db.commit()
-        except Exception:
-            await self.db.rollback()
-            if new_qdrant_ids:
-                try:
-                    self._delete_qdrant_points(collection, new_qdrant_ids)
-                except Exception as cleanup_error:
-                    logger.warning(
-                        "新 Qdrant 点回滚清理失败",
-                        entity_type=entity_type,
-                        entity_ids=entity_ids,
-                        error=str(cleanup_error),
-                    )
-            raise
-
-        if not old_qdrant_ids:
-            return None
-
-        try:
-            self._delete_qdrant_points(collection, old_qdrant_ids)
-        except Exception as cleanup_error:
-            logger.warning(
-                "旧 Qdrant 点清理失败",
-                entity_type=entity_type,
-                entity_ids=entity_ids,
-                error=str(cleanup_error),
-            )
-            return str(cleanup_error)[:500]
-        return None
-
-    async def _get_entity_segments(
-        self,
-        entity_type: str,
-        entity_ids: List[str],
-    ) -> List[RetrievalSegment]:
-        result = await self.db.execute(
-            select(RetrievalSegment).where(
-                and_(
-                    RetrievalSegment.entity_type == entity_type,
-                    RetrievalSegment.entity_id.in_(entity_ids),
-                )
-            )
-        )
-        return list(result.scalars().all())
-
-    async def _delete_segment_rows(
-        self,
-        entity_type: str,
-        entity_ids: List[str],
-    ) -> None:
-        await self.db.execute(
-            delete(RetrievalSegment).where(
-                and_(
-                    RetrievalSegment.entity_type == entity_type,
-                    RetrievalSegment.entity_id.in_(entity_ids),
-                )
-            )
-        )
-
-    def _delete_qdrant_points(
-        self,
-        collection: str,
-        point_ids: List[str],
-    ) -> None:
-        self.qdrant.client.delete(
-            collection_name=collection,
-            points_selector=PointIdsList(points=point_ids),
-        )
-
-    async def _delete_segments(self, entity_type: str, entity_ids: List[str]):
-        """删除指定实体的旧 segments（MySQL + Qdrant）"""
-        old_segments = await self._get_entity_segments(entity_type, entity_ids)
-
-        # 收集 Qdrant point IDs 按 collection 分组
-        # canonical_chapter 和 knowledge_point 都用 KNOWLEDGE_SEGMENTS collection
-        collection = (
-            qdrant_manager.COLLECTION_KNOWLEDGE_SEGMENTS
-            if entity_type in ("knowledge_point", "canonical_chapter")
-            else qdrant_manager.COLLECTION_QUESTION_SEGMENTS
-        )
-        qdrant_ids = [s.qdrant_point_id for s in old_segments if s.qdrant_point_id]
-
-        # 删除 Qdrant 点
-        if qdrant_ids:
-            try:
-                self._delete_qdrant_points(collection, qdrant_ids)
-            except Exception as e:
-                logger.warning("Qdrant 删除失败，继续处理", error=str(e))
-
-        # 删除 MySQL 记录
-        await self._delete_segment_rows(entity_type, entity_ids)
 
     async def _get_chapter_links(
         self, entity_type: str, entity_ids: List[str]

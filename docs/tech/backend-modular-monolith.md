@@ -172,9 +172,12 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - 原 `/api/v1/admin/segments/*` 和 `/api/v1/admin/search*` URL 保持不变
 - 检索编排实现已迁移到 `app/modules/retrieval/service.py`，
   `app/services/retrieval_service.py` 已删除
-- Segment 构建、重建、删除和 MySQL/Qdrant 一致性事务已迁移到
-  `app/modules/retrieval/segment_service.py`，
+- Segment 生成与重建编排已迁移到
+  `app/modules/retrieval/segment_service.py`；MySQL/Qdrant 双写、回滚和提交后旧向量
+  清理已进一步拆分到 `app/modules/retrieval/segment_store.py`，
   `app/services/segment_service.py` 已删除
+- 知识点、题目和标准章节已统一通过 `SegmentStore` 写入，重建时不再提前删除
+  标准章节旧向量，避免新索引写入失败后丢失可用检索数据
 - 大纲 Query 扩展、章节范围召回、题目到章节展开和交叉引用校验已迁移到
   `app/modules/retrieval/outline_service.py`，
   `app/services/outline_retrieval_service.py` 已删除
