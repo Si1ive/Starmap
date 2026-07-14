@@ -65,6 +65,24 @@ def test_corpus_file_and_parse_routes_are_owned_by_corpus_module():
         assert routes[path].endpoint.__module__ == "app.modules.corpus.router"
 
 
+def test_corpus_document_workflow_routes_are_owned_by_corpus_module():
+    routes = _routes_by_path()
+
+    for path in (
+        "/api/v1/admin/corpus/documents/{document_id}/blocks",
+        "/api/v1/admin/corpus/documents/{document_id}/sections",
+        "/api/v1/admin/corpus/documents/{document_id}/page-analysis",
+        "/api/v1/admin/corpus/documents/{document_id}/extract-sections",
+        "/api/v1/admin/corpus/documents/{document_id}/map-chapters",
+        "/api/v1/admin/corpus/documents/{document_id}/section-mappings",
+        "/api/v1/admin/corpus/documents/{document_id}/chapter-diagnostics",
+        "/api/v1/admin/corpus/documents/{document_id}/content-overview",
+        "/api/v1/admin/corpus/documents/{document_id}/extract-entities",
+        "/api/v1/admin/corpus/documents/{document_id}/extraction-status",
+    ):
+        assert routes[path].endpoint.__module__ == "app.modules.corpus.router"
+
+
 def test_application_has_no_duplicate_method_path_pairs():
     seen = set()
     duplicates = []

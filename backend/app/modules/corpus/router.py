@@ -7,18 +7,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import ApiResponse, BatchIdsRequest
 from app.db import get_db
+from app.modules.corpus.document_service import CorpusDocumentService
+from app.modules.corpus.errors import (
+    CorpusFileNotFoundError,
+    DocumentNotFoundError,
+    DocumentPageNotFoundError,
+    PageRenderError,
+    ParseConflictError,
+    ParseRunNotFoundError,
+    SourceFileNotFoundError,
+)
+from app.modules.corpus.extraction_tasks import EntityExtractionTaskService
 from app.modules.corpus.schemas import (
     ParseCorpusFileRequest,
     RegisterByDownloadRequest,
     RegisterFileRequest,
     ScanRequest,
 )
-from app.modules.corpus.service import (
-    CorpusApplicationService,
-    CorpusFileNotFoundError,
-    ParseConflictError,
-    ParseRunNotFoundError,
-)
+from app.modules.corpus.service import CorpusApplicationService
 from app.services.document_parsers import ParserUnavailableError
 
 router = APIRouter(prefix="/admin", tags=["语料库"])
@@ -212,3 +218,247 @@ async def get_parse_run_detail(
     except ParseRunNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return ApiResponse(data=result)
+
+
+@router.get(
+    "/corpus/documents/{document_id}/blocks",
+    response_model=ApiResponse,
+)
+async def list_document_blocks(
+    document_id: str,
+    page_no: Optional[int] = None,
+    block_type: Optional[str] = None,
+    review_status: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await CorpusDocumentService(db).list_blocks(
+        document_id,
+        page_no=page_no,
+        block_type=block_type,
+        review_status=review_status,
+        page=page,
+        page_size=page_size,
+    )
+    return ApiResponse(data=result)
+
+
+@router.get(
+    "/corpus/documents/{document_id}/sections",
+    response_model=ApiResponse,
+)
+async def get_document_sections(
+    document_id: str,
+    tree: bool = Query(False, description="是否返回树形结构"),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await CorpusDocumentService(db).get_sections(
+        document_id,
+        tree=tree,
+    )
+    return ApiResponse(data=result)
+
+
+@router.get(
+    "/corpus/documents/{document_id}/page-analysis",
+    response_model=ApiResponse,
+)
+async def get_document_page_analysis(
+    document_id: str,
+    page_no: int = Query(..., ge=1, description="页码，从1开始"),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        result = await CorpusDocumentService(db).get_page_analysis(
+            document_id,
+            page_no=page_no,
+        )
+    except (
+        DocumentNotFoundError,
+        DocumentPageNotFoundError,
+        SourceFileNotFoundError,
+    ) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PageRenderError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return ApiResponse(data=result)
+
+
+@router.post(
+    "/corpus/documents/{document_id}/extract-sections",
+    response_model=ApiResponse,
+)
+async def extract_document_sections(
+    document_id: str,
+    force: bool = Query(False, description="是否强制重建已有标题树"),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        result = await CorpusDocumentService(db).extract_sections(
+            document_id,
+            force=force,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if detail.startswith("文档不存在") else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"提取失败: {str(exc)[:200]}",
+        ) from exc
+    return ApiResponse(data=result)
+
+
+@router.post(
+    "/corpus/documents/{document_id}/map-chapters",
+    response_model=ApiResponse,
+)
+async def map_document_chapters(
+    document_id: str,
+    subject_id: Optional[str] = Query(
+        None,
+        description="学科ID，不传则遍历所有学科匹配",
+    ),
+    outline_id: Optional[str] = Query(
+        None,
+        description="大纲ID；传入则只匹配该大纲下章节",
+    ),
+    auto_approve_threshold: float = Query(
+        0.90,
+        ge=0,
+        le=1,
+        description="自动通过阈值",
+    ),
+    force: bool = Query(False, description="是否强制重建已有章节映射"),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        result = await CorpusDocumentService(db).map_chapters(
+            document_id,
+            subject_id=subject_id,
+            outline_id=outline_id,
+            auto_approve_threshold=auto_approve_threshold,
+            force=force,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"映射失败: {str(exc)[:200]}",
+        ) from exc
+    return ApiResponse(data=result)
+
+
+@router.get(
+    "/corpus/documents/{document_id}/section-mappings",
+    response_model=ApiResponse,
+)
+async def get_document_section_mappings(
+    document_id: str,
+    review_status: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await CorpusDocumentService(db).get_section_mappings(
+        document_id,
+        review_status=review_status,
+    )
+    return ApiResponse(data=result)
+
+
+@router.get(
+    "/corpus/documents/{document_id}/chapter-diagnostics",
+    response_model=ApiResponse,
+)
+async def get_document_chapter_diagnostics(
+    document_id: str,
+    page_no: Optional[int] = Query(None, ge=1, description="只查看指定页"),
+    include_blocks: bool = Query(True, description="是否返回块级诊断明细"),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        result = await CorpusDocumentService(db).get_chapter_diagnostics(
+            document_id,
+            page_no=page_no,
+            include_blocks=include_blocks,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if detail.startswith("文档不存在") else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"诊断失败: {str(exc)[:200]}",
+        ) from exc
+    return ApiResponse(data=result)
+
+
+@router.get(
+    "/corpus/documents/{document_id}/content-overview",
+    response_model=ApiResponse,
+)
+async def get_document_content_overview(
+    document_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        result = await CorpusDocumentService(db).get_content_overview(
+            document_id
+        )
+    except DocumentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ApiResponse(data=result)
+
+
+@router.post(
+    "/corpus/documents/{document_id}/extract-entities",
+    response_model=ApiResponse,
+)
+async def extract_document_entities(
+    document_id: str,
+    extract_knowledge: bool = Query(True, description="是否抽取知识点"),
+    extract_questions: bool = Query(True, description="是否抽取题目"),
+    subject_id: Optional[str] = Query(
+        None,
+        description="章节映射不足时使用的兜底学科ID",
+    ),
+    db: AsyncSession = Depends(get_db),
+):
+    service = EntityExtractionTaskService(db)
+    try:
+        run, created = await service.start(
+            document_id,
+            extract_knowledge=extract_knowledge,
+            extract_questions=extract_questions,
+            subject_id=subject_id,
+        )
+    except DocumentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"创建抽取任务失败: {str(exc)[:200]}",
+        ) from exc
+    return ApiResponse(
+        message="抽取任务已启动" if created else "抽取任务正在执行",
+        data=service.serialize(run),
+    )
+
+
+@router.get(
+    "/corpus/documents/{document_id}/extraction-status",
+    response_model=ApiResponse,
+)
+async def get_document_entity_extraction_status(
+    document_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    service = EntityExtractionTaskService(db)
+    try:
+        run = await service.get_latest(document_id)
+    except DocumentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ApiResponse(data=service.serialize(run) if run else None)

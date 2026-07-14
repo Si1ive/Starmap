@@ -13,6 +13,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.mysql import mysql_client
+from app.modules.corpus.errors import (
+    CorpusFileNotFoundError,
+    ParseConflictError,
+    ParseRunNotFoundError,
+)
 from app.models.mysql_models import (
     CorpusFile,
     Document,
@@ -27,18 +32,6 @@ logger = get_logger(__name__)
 UPLOAD_CHUNK_BYTES = 1024 * 1024
 
 _parse_tasks: set[asyncio.Task[Any]] = set()
-
-
-class CorpusFileNotFoundError(LookupError):
-    """Raised when a requested corpus file does not exist."""
-
-
-class ParseRunNotFoundError(LookupError):
-    """Raised when a requested parse run does not exist."""
-
-
-class ParseConflictError(ValueError):
-    """Raised when a parse request conflicts with current file state."""
 
 
 class CorpusApplicationService:
