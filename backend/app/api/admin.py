@@ -3085,7 +3085,7 @@ async def upload_parse_outline(
     corpus_file_id = reg["corpus_file_id"]
 
     # 3) 立即创建 OutlineIngestionRun（document_id 可空），让任务列表立即可见
-    from app.services.document_parse_service import generate_id
+    from app.modules.corpus.document_parse_service import generate_id
     run_id = generate_id()
     run = OutlineIngestionRun(
         id=run_id,
@@ -3104,7 +3104,7 @@ async def upload_parse_outline(
         run_id: str, corpus_file_id: str, parser_name: Optional[str], is_new: bool, file_name: str
     ):
         from app.db.mysql import mysql_client
-        from app.services.document_parse_service import DocumentParseService
+        from app.modules.corpus.document_parse_service import DocumentParseService
         from app.services.outline_llm_service import OutlineLLMService
         from app.models.mysql_models import DocumentBlock
 

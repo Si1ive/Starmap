@@ -100,6 +100,8 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - 文档原生标题树提取和查询已迁移到
   `app/modules/corpus/document_section_service.py`，标题识别与题目误判过滤规则位于
   `app/modules/corpus/section_heading.py`，旧 Service 路径仅保留兼容导出
+- 文档解析编排已迁移到 `app/modules/corpus/document_parse_service.py`，
+  语料域调用改为模块内依赖，旧 Service 路径仅保留兼容导出
 - 实体抽取任务使用文档行锁避免并发重复创建，运行记录先落库再派发后台任务
 - PDF 页渲染移入线程池，避免同步转换阻塞 FastAPI 事件循环
 - 阶段 3C 进行中：题目选项完整性、题号连续性、综合诊断和确定性规则修复已迁移到

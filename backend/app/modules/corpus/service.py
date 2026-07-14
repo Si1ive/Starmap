@@ -25,7 +25,7 @@ from app.models.mysql_models import (
     ParseRun,
 )
 from app.services.corpus_service import CorpusService, SUPPORTED_EXTENSIONS
-from app.services.document_parse_service import DocumentParseService
+from app.modules.corpus.document_parse_service import DocumentParseService
 
 logger = get_logger(__name__)
 

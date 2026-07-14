@@ -22,8 +22,8 @@ from app.modules.catalog.chapter_diagnostics_service import (
     ChapterOwnershipDiagnosticsService,
 )
 from app.modules.catalog.chapter_mapping_service import ChapterMappingService
+from app.modules.corpus.document_parse_service import DocumentParseService
 from app.modules.corpus.document_section_service import DocumentSectionService
-from app.services.document_parse_service import DocumentParseService
 
 logger = get_logger(__name__)
 

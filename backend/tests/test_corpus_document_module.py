@@ -5,8 +5,8 @@ import pytest
 
 from app.models.mysql_models import CorpusFile, Document
 from app.modules.corpus.document_service import CorpusDocumentService
+from app.modules.corpus.document_parse_service import DocumentParseService
 from app.modules.corpus.extraction_tasks import EntityExtractionTaskService
-from app.services.document_parse_service import DocumentParseService
 
 
 def test_extract_raw_page_data_supports_mineru_page_indexes():
