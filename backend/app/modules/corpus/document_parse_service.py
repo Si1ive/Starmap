@@ -25,7 +25,7 @@ from app.modules.corpus.document_store import (
     generate_id,
 )
 from app.modules.corpus.entity_persistence import cleanup_document_entities
-from app.modules.corpus.document_parsers import choose_parser
+from app.modules.corpus.parser_runtime import choose_parser
 from app.modules.corpus.parser_types import ParserUnavailableError
 from app.modules.operations.settings_service import SystemSettingsService
 

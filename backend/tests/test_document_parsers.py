@@ -2,7 +2,7 @@ import base64
 
 import pytest
 
-from app.modules.corpus.document_parsers import (
+from app.modules.corpus.parser_runtime import (
     choose_parser,
     get_parser,
     get_supported_parser_names,
@@ -246,7 +246,7 @@ def test_remote_parser_health_uses_configured_service(monkeypatch):
             },
         })
 
-    monkeypatch.setattr("app.modules.corpus.document_parsers.requests.get", fake_get)
+    monkeypatch.setattr("app.modules.corpus.parser_runtime.requests.get", fake_get)
 
     health = inspect_parser_health("mineru", _remote_runtime_config())
 

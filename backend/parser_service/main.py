@@ -22,7 +22,7 @@ from typing import Any, Dict, Optional
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 
 from app.core.logging import configure_logging, get_logger
-from app.modules.corpus.document_parsers import (
+from app.modules.corpus.parser_runtime import (
     get_parser,
     get_supported_parser_names,
     inspect_parser_health,

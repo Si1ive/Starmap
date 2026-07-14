@@ -1,11 +1,4 @@
-"""
-MinerU 文档解析适配层
-
-目标：
-1. 屏蔽 MinerU 原始输出差异
-2. 统一向 DocumentParseService 提供标准化解析结果
-3. 支持嵌入、本地服务和远程服务三种部署方式
-"""
+"""MinerU parser runtime selection, configuration, and health inspection."""
 
 from __future__ import annotations
 
@@ -16,9 +9,7 @@ from urllib.parse import urlparse
 import requests
 
 from app.core.config import settings
-from app.modules.corpus.mineru_parser import (
-    MinerUParser,
-)
+from app.modules.corpus.mineru_parser import MinerUParser
 from app.modules.corpus.parser_service_client import (
     LocalParserServiceClient,
     RemoteParserServiceClient,
@@ -31,10 +22,15 @@ from app.modules.corpus.parser_types import (
     PdfParserRuntimeConfig,
 )
 
-def _normalize_runtime_config(runtime_config: Optional[Dict[str, Any]] = None) -> PdfParserRuntimeConfig:
+
+def normalize_runtime_config(
+    runtime_config: Optional[Dict[str, Any]] = None,
+) -> PdfParserRuntimeConfig:
     config = runtime_config or {}
 
-    deployment_target = str(config.get("deployment_target") or "local").strip().lower()
+    deployment_target = str(
+        config.get("deployment_target") or "local"
+    ).strip().lower()
     if deployment_target not in {"local", "remote", "embedded"}:
         deployment_target = "local"
 
@@ -54,9 +50,12 @@ def _normalize_runtime_config(runtime_config: Optional[Dict[str, Any]] = None) -
         processing_window_size = 1
 
     local_endpoint = str(
-        config.get("local_service_endpoint") or settings.PDF_PARSER_LOCAL_ENDPOINT
+        config.get("local_service_endpoint")
+        or settings.PDF_PARSER_LOCAL_ENDPOINT
     ).strip()
-    remote_endpoint = str(config.get("remote_service_endpoint") or "").strip()
+    remote_endpoint = str(
+        config.get("remote_service_endpoint") or ""
+    ).strip()
 
     return PdfParserRuntimeConfig(
         active_parser="mineru",
@@ -68,7 +67,7 @@ def _normalize_runtime_config(runtime_config: Optional[Dict[str, Any]] = None) -
     )
 
 
-def _is_valid_url(value: str) -> bool:
+def is_valid_url(value: str) -> bool:
     parsed = urlparse((value or "").strip())
     return bool(parsed.scheme and parsed.netloc)
 
@@ -89,7 +88,7 @@ def inspect_parser_health(
     runtime_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     normalized = (parser_name or "").strip().lower()
-    config = _normalize_runtime_config(runtime_config)
+    config = normalize_runtime_config(runtime_config)
     checked_at = datetime.now(timezone.utc).isoformat()
 
     if config.deployment_target == "embedded":
@@ -131,8 +130,9 @@ def inspect_parser_health(
         if config.deployment_target == "local"
         else config.remote_service_endpoint
     )
-
-    target_label = "远程" if config.deployment_target == "remote" else "本地"
+    target_label = (
+        "远程" if config.deployment_target == "remote" else "本地"
+    )
 
     if not service_endpoint:
         return {
@@ -143,10 +143,12 @@ def inspect_parser_health(
             "checked_at": checked_at,
             "deployment_target": config.deployment_target,
             "service_endpoint": service_endpoint,
-            "error_detail": f"未配置{target_label}解析服务地址，请在系统设置或环境变量中补充",
+            "error_detail": (
+                f"未配置{target_label}解析服务地址，请在系统设置或环境变量中补充"
+            ),
         }
 
-    if not _is_valid_url(service_endpoint):
+    if not is_valid_url(service_endpoint):
         return {
             "parser_name": normalized,
             "parser_version": "service",
@@ -155,7 +157,9 @@ def inspect_parser_health(
             "checked_at": checked_at,
             "deployment_target": config.deployment_target,
             "service_endpoint": service_endpoint,
-            "error_detail": f"{target_label}解析服务地址格式不合法：{service_endpoint}",
+            "error_detail": (
+                f"{target_label}解析服务地址格式不合法：{service_endpoint}"
+            ),
         }
 
     try:
@@ -174,14 +178,19 @@ def inspect_parser_health(
                 "checked_at": checked_at,
                 "deployment_target": config.deployment_target,
                 "service_endpoint": service_endpoint,
-                "error_detail": f"{target_label}解析服务探活失败（HTTP {response.status_code}）：{detail}",
+                "error_detail": (
+                    f"{target_label}解析服务探活失败"
+                    f"（HTTP {response.status_code}）：{detail}"
+                ),
             }
 
         payload = response.json() if response.content else {}
         data = unwrap_service_payload(payload) if payload else {}
         return {
             "parser_name": str(data.get("parser_name") or normalized),
-            "parser_version": str(data.get("parser_version") or "service"),
+            "parser_version": str(
+                data.get("parser_version") or "service"
+            ),
             "health_status": str(data.get("health_status") or "ready"),
             "is_available": bool(data.get("is_available", True)),
             "checked_at": str(data.get("checked_at") or checked_at),
@@ -198,7 +207,10 @@ def inspect_parser_health(
             "checked_at": checked_at,
             "deployment_target": config.deployment_target,
             "service_endpoint": service_endpoint,
-            "error_detail": f"无法连接{target_label}解析服务 {service_endpoint}：{str(exc)[:200]}",
+            "error_detail": (
+                f"无法连接{target_label}解析服务 {service_endpoint}："
+                f"{str(exc)[:200]}"
+            ),
         }
     except Exception as exc:
         return {
@@ -209,7 +221,9 @@ def inspect_parser_health(
             "checked_at": checked_at,
             "deployment_target": config.deployment_target,
             "service_endpoint": service_endpoint,
-            "error_detail": f"{target_label}解析服务探活返回异常：{str(exc)[:200]}",
+            "error_detail": (
+                f"{target_label}解析服务探活返回异常：{str(exc)[:200]}"
+            ),
         }
 
 
@@ -217,16 +231,8 @@ def choose_parser(
     requested_parser: Optional[str],
     runtime_config: Optional[Dict[str, Any]] = None,
 ) -> DocumentParser:
-    """
-    解析器选择策略。
-
-    当前策略：
-    - 运行时只激活一个主解析器
-    - 指定 parser 时直接使用
-    - 部署目标为 local 时，调用本地 Podman 解析服务
-    - 部署目标为 remote 时，调用远程 HTTP 解析服务
-    """
-    config = _normalize_runtime_config(runtime_config)
+    """Choose the MinerU adapter for the configured deployment target."""
+    config = normalize_runtime_config(runtime_config)
     parser_name = (requested_parser or "mineru").strip().lower()
     if parser_name != "mineru":
         raise ValueError(f"不支持的解析器: {parser_name}")
@@ -245,7 +251,7 @@ def choose_parser(
                 parser_name,
                 "当前已切换到远程解析服务模式，但尚未配置远程服务地址",
             )
-        if not _is_valid_url(config.remote_service_endpoint):
+        if not is_valid_url(config.remote_service_endpoint):
             raise ParserUnavailableError(
                 parser_name,
                 f"远程解析服务地址格式不合法：{config.remote_service_endpoint}",

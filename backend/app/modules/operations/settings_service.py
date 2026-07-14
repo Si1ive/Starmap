@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.models.mysql_models import AuditLog, SystemConfig
-from app.modules.corpus.document_parsers import inspect_parser_health
+from app.modules.corpus.parser_runtime import inspect_parser_health
 
 logger = get_logger(__name__)
 

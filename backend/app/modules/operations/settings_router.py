@@ -25,7 +25,7 @@ async def get_settings(db: Optional[AsyncSession] = Depends(get_optional_db)):
 
     返回当前系统配置，优先读取数据库持久化内容。
     """
-    from app.modules.corpus.document_parsers import (
+    from app.modules.corpus.parser_runtime import (
         get_supported_parser_names,
         inspect_parser_health,
     )
