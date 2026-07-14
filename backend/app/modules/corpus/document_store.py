@@ -17,7 +17,7 @@ from app.models.mysql_models import (
     DocumentPage,
 )
 from app.modules.corpus.text_cleaning import clean_block_text
-from app.modules.corpus.document_parsers import (
+from app.modules.corpus.parser_types import (
     ParsedAsset,
     ParsedBlock,
     ParsedDocumentResult,

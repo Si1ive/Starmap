@@ -7,7 +7,7 @@ from app.modules.corpus.document_store import (
     ParsedDocumentStore,
     normalize_asset_type,
 )
-from app.modules.corpus.document_parsers import (
+from app.modules.corpus.parser_types import (
     ParsedAsset,
     ParsedBlock,
     ParsedDocumentResult,

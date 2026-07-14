@@ -23,14 +23,16 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 
 from app.core.logging import configure_logging, get_logger
 from app.modules.corpus.document_parsers import (
+    get_parser,
+    get_supported_parser_names,
+    inspect_parser_health,
+)
+from app.modules.corpus.parser_types import (
     ParsedAsset,
     ParsedBlock,
     ParsedDocumentResult,
     ParsedPage,
     ParserUnavailableError,
-    get_parser,
-    get_supported_parser_names,
-    inspect_parser_health,
 )
 
 logger = get_logger(__name__)

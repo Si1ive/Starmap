@@ -14,16 +14,24 @@ import inspect
 import json
 import os
 import tempfile
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 import requests
 
 from app.core.logging import get_logger
 from app.core.config import settings
+from app.modules.corpus.parser_types import (
+    DocumentParser,
+    ParsedAsset,
+    ParsedBlock,
+    ParsedDocumentResult,
+    ParsedPage,
+    ParserUnavailableError,
+    PdfParserRuntimeConfig,
+)
 
 logger = get_logger(__name__)
 
@@ -69,95 +77,6 @@ def _patch_mineru_pdf_rendering() -> None:
         _load_images_from_pdf_bytes_range_single_process
     )
     pdf_image_tools._starmap_single_process_render_patch = True  # type: ignore[attr-defined]
-
-
-class ParserUnavailableError(RuntimeError):
-    """解析器依赖未就绪或当前服务不可用。"""
-
-    def __init__(self, parser_name: str, detail: str):
-        self.parser_name = parser_name
-        self.detail = detail
-        super().__init__(detail)
-
-
-@dataclass
-class ParsedPage:
-    page_no: int
-    width: Optional[int] = None
-    height: Optional[int] = None
-
-
-@dataclass
-class ParsedBlock:
-    page_no: int
-    block_type: str
-    order_no: int
-    content_text: Optional[str] = None
-    content_md: Optional[str] = None
-    bbox: Optional[dict] = None
-    html_table: Optional[str] = None
-    latex: Optional[str] = None
-
-
-@dataclass
-class ParsedAsset:
-    page_no: int
-    asset_type: str = "figure"
-    caption_text: Optional[str] = None
-    bbox: Optional[dict] = None
-    file_path: Optional[str] = None
-    # 临时字段：解析阶段把图片字节读成 base64 内联传输（不入库）。
-    # parser_service（podman 容器）与主 backend 不共享文件系统，图片字节必须
-    # 随 JSON 内联回传，由主 backend 统一解码落盘到 uploads/assets。
-    image_base64: Optional[str] = None
-    image_ext: Optional[str] = None
-
-
-@dataclass
-class ParsedDocumentResult:
-    parser_name: str
-    parser_version: str
-    pages: List[ParsedPage]
-    blocks: List[ParsedBlock]
-    assets: List[ParsedAsset]
-    document_markdown: str = ""
-    confidence: Optional[float] = None
-    metadata: Optional[dict] = None
-    raw_output: Optional[dict] = None  # 解析器原始输出
-
-    @property
-    def page_count(self) -> int:
-        return len(self.pages)
-
-    @property
-    def block_count(self) -> int:
-        return len(self.blocks)
-
-    @property
-    def asset_count(self) -> int:
-        return len(self.assets)
-
-
-class DocumentParser(Protocol):
-    name: str
-    version: str
-
-    def parse(
-        self,
-        file_path: str,
-        task_id: Optional[str] = None,
-    ) -> ParsedDocumentResult:
-        ...
-
-
-@dataclass
-class PdfParserRuntimeConfig:
-    active_parser: str
-    deployment_target: str
-    local_service_endpoint: str
-    remote_service_endpoint: str
-    request_timeout_seconds: int
-    processing_window_size: Optional[int] = None
 
 
 BLOCK_TYPE_MAP = {
