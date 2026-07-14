@@ -5,119 +5,33 @@ pages/blocks/assets, and track parse run state.
 """
 
 import asyncio
-import base64
 import logging
 import re
 import time
-import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
-from sqlalchemy import select, delete
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.models.mysql_models import (
-    CorpusFile, ParseRun, Document,
-    DocumentPage, DocumentBlock, DocumentAsset,
+    CorpusFile,
+    ParseRun,
 )
+from app.modules.corpus.document_store import (
+    ParsedDocumentStore,
+    generate_id,
+)
+from app.modules.corpus.entity_persistence import cleanup_document_entities
 from app.services.document_parsers import (
     ParserUnavailableError,
-    ParsedAsset,
-    ParsedBlock,
-    ParsedDocumentResult,
-    ParsedPage,
     choose_parser,
 )
 from app.services.system_settings_service import SystemSettingsService
-from app.services.text_cleaning import clean_block_text
 
 logger = get_logger(__name__)
-BACKEND_ROOT = Path(__file__).resolve().parents[3]
-
-
-def generate_id() -> str:
-    return uuid.uuid4().hex[:32]
-
-
-
-def _normalize_asset_type_for_db(asset_type: Optional[str]) -> str:
-    """Normalize asset_type to DocumentAsset 枚举约束范围。"""
-    value = (asset_type or "figure").strip().lower()
-    if value in {"figure", "table", "formula", "page_crop", "other"}:
-        return value
-    if value in {"img", "image", "picture", "chart"}:
-        return "figure"
-    if value in {"eq", "formula_block", "formula_img", "equation"}:
-        return "formula"
-    if value in {"code"}:
-        # code 常用于文档里“截图式代码/伪公式”块。若未携带实际图片元信息，按 other 处理；有图片时再按图片接管。
-        return "other"
-    return "other"
-
-
-def _normalize_asset_type_for_db_with_hint(
-    asset_type: Optional[str],
-    has_image_hint: bool = False,
-) -> str:
-    """带图片存在性提示的 asset_type 归一化。"""
-    value = (asset_type or "figure").strip().lower()
-    if value in {"code"}:
-        return "figure" if has_image_hint else "other"
-    return _normalize_asset_type_for_db(value)
-
-
-def _asset_type_key_candidates(asset_type: Optional[str], has_image_hint: bool = False) -> List[str]:
-    """返回用于 block 桥接的候选类型键（原始 + 归一化）。"""
-    raw_type = (asset_type or "figure").strip().lower()
-    normalized = _normalize_asset_type_for_db_with_hint(raw_type, has_image_hint=has_image_hint)
-    if raw_type and raw_type != normalized:
-        return [normalized, raw_type]
-    return [normalized]
-
-
-def _is_image_path_hint(path_value: Optional[str]) -> bool:
-    if not path_value:
-        return False
-    value = str(path_value).strip().lower()
-    if not value:
-        return False
-    return any(value.endswith(suffix) for suffix in (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff"))
-
-
-def _resolve_asset_file_path(asset_data: ParsedAsset, persisted_path: Optional[str]) -> Optional[str]:
-    """优先 host 可读的持久化路径；无持久化则只接受本机真实存在路径。"""
-    if persisted_path:
-        return persisted_path
-
-    raw_path = getattr(asset_data, "file_path", None)
-    if not raw_path:
-        return None
-
-    p = Path(raw_path)
-    candidates = []
-    if p.is_absolute():
-        candidates.append(p)
-    else:
-        root_dir = BACKEND_ROOT
-        cwd = Path.cwd()
-        candidates.extend([
-            root_dir / p,
-            cwd / p,
-            Path("/tmp") / p,
-        ])
-
-    for candidate in candidates:
-        if candidate.exists() and candidate.is_file():
-            return str(candidate)
-
-    for base_dir in (BACKEND_ROOT, Path("/tmp")):
-        for found in base_dir.rglob(p.name):
-            if found.is_file():
-                return str(found)
-
-    return None
 
 
 class MinerUProgressHandler(logging.Handler):
@@ -205,6 +119,7 @@ class DocumentParseService:
 
     def __init__(self, db: AsyncSession):
         self.db = db
+        self.store = ParsedDocumentStore(db)
 
     def _generate_id(self) -> str:
         """生成唯一 ID"""
@@ -246,7 +161,9 @@ class DocumentParseService:
             raise ValueError(f"文件不存在于磁盘: {corpus_file.local_path}")
 
         if corpus_file.status == "parsed" and parse_mode in {"primary", "fallback"}:
-            existing_document = await self._get_document_by_corpus_file_id(corpus_file_id)
+            existing_document = await self.store.get_document_by_corpus_file_id(
+                corpus_file_id
+            )
             raise ValueError(
                 "该语料已成功解析，无需重复执行；如需重跑请使用 retry 或 manual_fix 模式"
                 if existing_document
@@ -284,18 +201,18 @@ class DocumentParseService:
             parse_result = await asyncio.to_thread(parser.parse, corpus_file.local_path)
 
             # 4. 创建/更新 Document
-            document = await self._get_or_create_document(
-                corpus_file, parse_run.id, parse_result
+            document = await self.store.get_or_create_document(
+                corpus_file,
+                parse_run.id,
             )
 
             # 5. 落库 pages、blocks、assets（assets 必须在 blocks 后，因为会读取 figure/table/formula block 二次注册）
-            await self._persist_pages(document.id, parse_result.pages)
-            await self._persist_blocks(document.id, parse_result.blocks)
-            await self._persist_assets(document.id, parse_result.assets)
+            await self.store.persist_pages(document.id, parse_result.pages)
+            await self.store.persist_blocks(document.id, parse_result.blocks)
+            await self.store.persist_assets(document.id, parse_result.assets)
 
             # 5.5 清理旧的抽取实体：blocks/assets 已重建，旧知识点/题目基于旧版面已失效，
             # 与版面在同一事务清掉，避免新版面配旧实体（坐标桥与来源引用错位）。
-            from app.services.entity_extraction_service import cleanup_document_entities
             removed = await cleanup_document_entities(self.db, document.id)
             if removed.get("knowledge_point") or removed.get("question"):
                 logger.info(
@@ -332,7 +249,9 @@ class DocumentParseService:
             # 更新文档
             document.page_count = parse_result.page_count
             document.document_markdown = parse_result.document_markdown or ""
-            document.document_json = self._serialize_parse_result(parse_result)
+            document.document_json = self.store.serialize_parse_result(
+                parse_result
+            )
             document.raw_parser_output = parse_result.raw_output
             document.status = "pending"
 
@@ -544,15 +463,17 @@ class DocumentParseService:
             await self.db.commit()
 
             # 4. 创建/更新 Document
-            document = await self._get_or_create_document(corpus_file, parse_run.id, parse_result)
+            document = await self.store.get_or_create_document(
+                corpus_file,
+                parse_run.id,
+            )
 
             # 5. 落库 pages、blocks、assets
-            await self._persist_pages(document.id, parse_result.pages)
-            await self._persist_blocks(document.id, parse_result.blocks)
-            await self._persist_assets(document.id, parse_result.assets)
+            await self.store.persist_pages(document.id, parse_result.pages)
+            await self.store.persist_blocks(document.id, parse_result.blocks)
+            await self.store.persist_assets(document.id, parse_result.assets)
 
             # 5.5 清理旧的抽取实体：与主链路同理，重解析重建版面后旧实体已失效。
-            from app.services.entity_extraction_service import cleanup_document_entities
             removed = await cleanup_document_entities(self.db, document.id)
             if removed.get("knowledge_point") or removed.get("question"):
                 logger.info(
@@ -588,7 +509,9 @@ class DocumentParseService:
             # 更新文档
             document.page_count = parse_result.page_count
             document.document_markdown = parse_result.document_markdown or ""
-            document.document_json = self._serialize_parse_result(parse_result)
+            document.document_json = self.store.serialize_parse_result(
+                parse_result
+            )
             document.raw_parser_output = parse_result.raw_output
             document.status = "pending"
 
@@ -630,277 +553,6 @@ class DocumentParseService:
             logger.error("后台解析任务失败", run_id=run_id, error=error_msg)
             return {"status": "failed", "run_id": run_id, "error": error_msg}
 
-    async def _get_document_by_corpus_file_id(self, corpus_file_id: str) -> Optional[Document]:
-        result = await self.db.execute(
-            select(Document).where(Document.corpus_file_id == corpus_file_id)
-        )
-        return result.scalar_one_or_none()
-
-    async def _get_or_create_document(
-        self,
-        corpus_file: CorpusFile,
-        parse_run_id: str,
-        parse_result: ParsedDocumentResult,
-    ) -> Document:
-        """Get existing or create new Document for a corpus file."""
-        result = await self.db.execute(
-            select(Document).where(Document.corpus_file_id == corpus_file.id)
-        )
-        document = result.scalar_one_or_none()
-
-        if not document:
-            document = Document(
-                id=generate_id(),
-                corpus_file_id=corpus_file.id,
-                title=corpus_file.file_name,
-                doc_type=corpus_file.doc_type,
-                language=corpus_file.language,
-                status="pending",
-            )
-            self.db.add(document)
-
-        document.latest_parse_run_id = parse_run_id
-        await self.db.flush()
-        return document
-
-    def _serialize_parse_result(self, parse_result: ParsedDocumentResult) -> Dict[str, Any]:
-        return {
-            "parser_name": parse_result.parser_name,
-            "parser_version": parse_result.parser_version,
-            "confidence": parse_result.confidence,
-            "metadata": parse_result.metadata or {},
-            "page_count": parse_result.page_count,
-            "block_count": parse_result.block_count,
-            "asset_count": parse_result.asset_count,
-            "pages": [
-                {
-                    "page_no": page.page_no,
-                    "width": page.width,
-                    "height": page.height,
-                }
-                for page in parse_result.pages
-            ],
-            "blocks": [
-                {
-                    "page_no": block.page_no,
-                    "block_type": block.block_type,
-                    "order_no": block.order_no,
-                    "content_text": block.content_text,
-                    "content_md": block.content_md,
-                    "bbox": block.bbox,
-                    "html_table": block.html_table,
-                    "latex": block.latex,
-                }
-                for block in parse_result.blocks
-            ],
-            "assets": [
-                {
-                    "page_no": asset.page_no,
-                    "asset_type": asset.asset_type,
-                    "caption_text": asset.caption_text,
-                    "bbox": asset.bbox,
-                    "file_path": asset.file_path,
-                }
-                for asset in parse_result.assets
-            ],
-        }
-
-    async def _persist_pages(self, document_id: str, pages: List[ParsedPage]) -> None:
-        """Persist page records."""
-        # 重解析前先清理旧页，避免 uk_document_pages_doc_page 重复写入报错。
-        await self.db.execute(delete(DocumentPage).where(DocumentPage.document_id == document_id))
-        await self.db.flush()
-
-        for page_data in pages:
-            page = DocumentPage(
-                id=generate_id(),
-                document_id=document_id,
-                page_no=page_data.page_no,
-                width=page_data.width,
-                height=page_data.height,
-            )
-            self.db.add(page)
-
-        await self.db.flush()
-
-    @staticmethod
-    def _write_asset_image(document_id: str, asset_data: ParsedAsset) -> Optional[str]:
-        """
-        把内联的 base64 图片字节解码落盘到 uploads/assets/<document_id>/，返回 host 绝对路径。
-
-        嵌入模式与服务模式都把图片字节以 base64 内联回传（见 ParsedAsset.image_base64），
-        由主 backend 在此统一写盘，确保 file_path 始终是主 backend 可读的 host 路径。
-        无 base64 时返回 None（如 block 提升的 asset、或读取失败的图片）。
-        """
-        b64 = getattr(asset_data, "image_base64", None)
-        if not b64:
-            return None
-
-        ext = getattr(asset_data, "image_ext", None) or ".png"
-        dest_dir = BACKEND_ROOT / "uploads" / "assets" / document_id
-        try:
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            dest = dest_dir / f"{generate_id()}{ext}"
-            dest.write_bytes(base64.b64decode(b64))
-            return str(dest)
-        except Exception as e:
-            logger.warning("资产图片落盘失败", document_id=document_id, error=str(e))
-            return None
-
-    @staticmethod
-    def _bbox_x1(bbox: Optional[dict]):
-        """取 bbox 的 x1 作为同页内的位置键（MinerU 同一图/表的 block 与 asset 共享 bbox）。"""
-        if not bbox:
-            return None
-        x1 = bbox.get("x1")
-        try:
-            return round(float(x1), 1) if x1 is not None else None
-        except (TypeError, ValueError):
-            return None
-
-    async def _persist_assets(self, document_id: str, assets: List[ParsedAsset]) -> None:
-        """
-        落库资产记录，并回填 DocumentBlock.asset_id 建立 block→asset 精确桥。
-
-        MinerU 对同一个 figure/table 会同时产出 block 和 asset 且共享 bbox，提升来的
-        asset 本就源自 block。这里按 (page, type, bbox.x1) 把每个 asset 对回它的 block，
-        写入 block.asset_id —— 下游按实体的 block_ids 即可精确绑定资产（不再按页笛卡尔积）。
-        """
-        from app.models.mysql_models import DocumentBlock as _Block
-
-        # 重解析前先清理旧资产，避免与新产物冲突。
-        await self.db.execute(delete(DocumentAsset).where(DocumentAsset.document_id == document_id))
-        await self.db.flush()
-
-        # 该文档的 figure/table/formula/code block：用于回填 asset_id + 提升为 asset
-        media_blocks = (await self.db.execute(
-            select(_Block).where(
-                _Block.document_id == document_id,
-                _Block.block_type.in_(["figure", "table", "formula", "code"]),
-            )
-        )).scalars().all()
-        for b in media_blocks:
-            b.asset_id = None  # 重新解析时重建桥
-
-        # (page_no, type, x1) → block，把 MinerU content_list 产出的 asset 对回它的 block
-        # 同页同类型缺坐标时（常见于某些矿石坐标输出），兜底按顺序匹配。
-        block_by_key: Dict[Any, Any] = {}
-        fallback_blocks: Dict[Tuple[int, str], List[Any]] = {}
-        for b in media_blocks:
-            bbox_x1 = self._bbox_x1(b.bbox)
-            block_by_key.setdefault((b.page_no, b.block_type, bbox_x1), b)
-            # code 图表偶发写成 code，且实际有图片；兼容回填时按 figure 二次兜底匹配。
-            if b.block_type == "code":
-                block_by_key.setdefault((b.page_no, "figure", self._bbox_x1(b.bbox)), b)
-            if bbox_x1 is None:
-                fallback_blocks.setdefault((b.page_no, b.block_type), []).append(b)
-                if b.block_type == "code":
-                    fallback_blocks.setdefault((b.page_no, "figure"), []).append(b)
-
-        explicit_keys = set()
-        fallback_matched: Dict[Tuple[int, str], int] = {}
-        for asset_data in assets:
-            # 图片字节以 base64 内联回传（嵌入/服务两种模式统一），在此解码落盘到
-            # uploads/assets/<document_id>/，file_path 由主 backend 生成、确保 host 可读。
-            persisted_path = self._write_asset_image(document_id, asset_data)
-            has_image_hint = bool(asset_data.image_base64) or _is_image_path_hint(asset_data.file_path)
-            asset_type = _normalize_asset_type_for_db_with_hint(asset_data.asset_type, has_image_hint)
-            asset = DocumentAsset(
-                id=generate_id(),
-                document_id=document_id,
-                page_no=asset_data.page_no,
-                asset_type=asset_type,
-                file_path=_resolve_asset_file_path(asset_data, persisted_path),
-                caption_text=asset_data.caption_text,
-                bbox=asset_data.bbox,
-                metadata_json=getattr(asset_data, "metadata", None),
-            )
-            self.db.add(asset)
-            has_image_hint = _is_image_path_hint(asset_data.file_path) or bool(asset_data.image_base64)
-            asset_x1 = self._bbox_x1(asset_data.bbox)
-            matched = None
-            for key in _asset_type_key_candidates(asset_data.asset_type, has_image_hint=has_image_hint):
-                keyed = (asset_data.page_no, key, asset_x1)
-                explicit_keys.add(keyed)
-                matched = block_by_key.get(keyed)
-                if matched is not None:
-                    matched.asset_id = asset.id
-                    break
-
-            # fallback：同页同类型无坐标时按顺序匹配
-            if matched is None and asset_x1 is None:
-                candidates_key = (asset_data.page_no, _normalize_asset_type_for_db_with_hint(asset_data.asset_type, has_image_hint))
-                # 若同类型无候选，回退到 figure，兼容 code 的二次桥接语义
-                candidates = fallback_blocks.get(candidates_key, [])
-                if not candidates:
-                    candidates = fallback_blocks.get((asset_data.page_no, "figure"), [])
-                candidate_pos = fallback_matched.get(candidates_key, 0)
-                if candidate_pos < len(candidates):
-                    matched = candidates[candidate_pos]
-                    fallback_matched[candidates_key] = candidate_pos + 1
-            if matched is not None:
-                matched.asset_id = asset.id  # 回填 block→asset 桥
-
-        # 把未被显式 asset 覆盖的 figure/table/formula block 提升为 asset，并回填 asset_id
-        for b in media_blocks:
-            if b.block_type == "code":
-                # code 默认不提升为资产（除非有显式 code 资产），以避免将纯文本代码误绑图片能力链路
-                continue
-
-            # 仅对有桥接需求的 media block 创建 fallback 资产；code 若通过显式资产已匹配则跳过。
-            key = (b.page_no, b.block_type, self._bbox_x1(b.bbox))
-            if key in explicit_keys or b.asset_id:
-                continue  # 已有同位置 asset 或已回填
-            metadata = {}
-            asset_type = _normalize_asset_type_for_db(b.block_type)
-            if b.block_type == "table" and b.html_table:
-                metadata["html"] = b.html_table
-            if b.block_type == "formula" and b.latex:
-                metadata["latex"] = b.latex
-            if b.content_text:
-                metadata.setdefault("text", b.content_text)
-            promoted = DocumentAsset(
-                id=generate_id(),
-                document_id=document_id,
-                page_no=b.page_no,
-                asset_type=asset_type,
-                file_path=None,
-                caption_text=b.content_text[:500] if b.content_text else None,
-                bbox=b.bbox,
-                metadata_json=metadata or None,
-            )
-            self.db.add(promoted)
-            b.asset_id = promoted.id
-
-        await self.db.flush()
-
-    async def _persist_blocks(self, document_id: str, blocks: List[ParsedBlock]) -> None:
-        """Persist block records."""
-        # 重解析前先清理旧块，确保新产物按新序号重建。
-        await self.db.execute(delete(DocumentBlock).where(DocumentBlock.document_id == document_id))
-        await self.db.flush()
-
-        for block_data in blocks:
-            content_text = clean_block_text(block_data.content_text)
-            content_md = clean_block_text(block_data.content_md)
-            if content_md and content_md == content_text:
-                content_md = None
-            block = DocumentBlock(
-                id=generate_id(),
-                document_id=document_id,
-                page_no=block_data.page_no,
-                block_type=block_data.block_type,
-                order_no=block_data.order_no,
-                content_text=content_text,
-                content_md=content_md,
-                bbox=block_data.bbox,
-                html_table=block_data.html_table,
-                latex=block_data.latex,
-            )
-            self.db.add(block)
-
-        await self.db.flush()
-
     async def get_parse_runs(self, corpus_file_id: str) -> List[Dict[str, Any]]:
         """获取文件的所有解析记录"""
         result = await self.db.execute(
@@ -928,88 +580,4 @@ class DocumentParseService:
         ]
 
     async def get_document_detail(self, document_id: str) -> Optional[Dict[str, Any]]:
-        """获取文档详情（含 pages 和 blocks）"""
-        result = await self.db.execute(
-            select(Document).where(Document.id == document_id)
-        )
-        document = result.scalar_one_or_none()
-        if not document:
-            return None
-
-        # pages
-        pages_result = await self.db.execute(
-            select(DocumentPage)
-            .where(DocumentPage.document_id == document_id)
-            .order_by(DocumentPage.page_no)
-        )
-        pages = [
-            {
-                "id": p.id,
-                "page_no": p.page_no,
-                "width": p.width,
-                "height": p.height,
-            }
-            for p in pages_result.scalars().all()
-        ]
-
-        # blocks
-        blocks_result = await self.db.execute(
-            select(DocumentBlock)
-            .where(DocumentBlock.document_id == document_id)
-            .order_by(DocumentBlock.page_no, DocumentBlock.order_no)
-        )
-        blocks = [
-            {
-                "id": b.id,
-                "page_no": b.page_no,
-                "block_type": b.block_type,
-                "order_no": b.order_no,
-                "content_text": b.content_text,
-                "content_md": b.content_md,
-                "html_table": b.html_table,
-                "latex": b.latex,
-                "bbox": b.bbox,
-                "review_status": b.review_status,
-            }
-            for b in blocks_result.scalars().all()
-        ]
-
-        # assets
-        assets_result = await self.db.execute(
-            select(DocumentAsset)
-            .where(DocumentAsset.document_id == document_id)
-            .order_by(DocumentAsset.page_no)
-        )
-        assets = [
-            {
-                "id": a.id,
-                "page_no": a.page_no,
-                "asset_type": a.asset_type,
-                "caption_text": a.caption_text,
-                "file_path": a.file_path,
-                "bbox": a.bbox,
-                "metadata": a.metadata_json,
-                "file_url": f"/api/v1/admin/assets/{a.id}/file" if a.file_path else None,
-            }
-            for a in assets_result.scalars().all()
-        ]
-
-        return {
-            "id": document.id,
-            "corpus_file_id": document.corpus_file_id,
-            "title": document.title,
-            "doc_type": document.doc_type,
-            "subject_id": document.subject_id,
-            "source_label": document.source_label,
-            "page_count": document.page_count,
-            "latest_parse_run_id": document.latest_parse_run_id,
-            "document_markdown": document.document_markdown,
-            "document_json": document.document_json,
-            "raw_parser_output": document.raw_parser_output,
-            "status": document.status,
-            "created_at": document.created_at.isoformat() if document.created_at else None,
-            "updated_at": document.updated_at.isoformat() if document.updated_at else None,
-            "pages": pages,
-            "blocks": blocks,
-            "assets": assets,
-        }
+        return await self.store.get_document_detail(document_id)

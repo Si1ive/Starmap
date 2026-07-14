@@ -672,7 +672,8 @@ class MinerUParser:
 
         MinerU 的图片产出在 output_dir（tempfile）内，解析结束临时目录销毁后即失效。
         嵌入模式下主 backend 直接拿到内存对象，服务模式下 base64 随 JSON 跨进程回传，
-        两种模式统一由主 backend 的 _persist_assets 写盘到 uploads/assets/，
+        两种模式统一由主 backend 的 ParsedDocumentStore.persist_assets
+        写盘到 uploads/assets/，
         file_path 由主 backend 生成，确保始终是主 backend 可读的 host 路径。
         """
         for asset in assets:

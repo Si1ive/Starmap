@@ -94,7 +94,8 @@ async def link_entity_assets_by_blocks(
     """
     按实体覆盖的 block_ids 精确绑定资产：只绑这些 block 上挂着的 asset。
 
-    依赖 _persist_assets 回填的 DocumentBlock.asset_id（block→asset 精确桥）。
+    依赖 ParsedDocumentStore.persist_assets 回填的
+    DocumentBlock.asset_id（block→asset 精确桥）。
     相比 link_entity_assets_by_pages 的按页笛卡尔积，这里只关联实体真正包含的
     figure/table/formula block 对应的资产，一图归一题/一知识点。
 

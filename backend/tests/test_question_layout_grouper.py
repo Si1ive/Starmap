@@ -6,7 +6,7 @@ QuestionLayoutGrouper 测试
 import pytest
 from types import SimpleNamespace
 
-from app.services.entity_extraction_service import (
+from app.modules.corpus.question_layout import (
     QuestionLayoutGrouper,
     PageStats,
     BlockTag,

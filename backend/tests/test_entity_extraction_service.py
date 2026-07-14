@@ -3,16 +3,15 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.services.entity_extraction_service import (
-    cleanup_document_entities,
-    OptionIntegrityChecker,
-    EntityExtractionService,
-    LLMFallbackFixer,
-)
 from app.modules.corpus.entity_persistence import (
     QuestionPersistence,
     build_knowledge_content,
+    cleanup_document_entities,
     extract_answers_from_blocks,
+    normalize_options,
+)
+from app.modules.corpus.extraction_diagnostics import (
+    build_question_extraction_diagnostic,
 )
 from app.modules.corpus.document_mapping import (
     DocumentChapterMappingResolver,
@@ -26,9 +25,13 @@ from app.modules.corpus.extraction_tasks import EntityExtractionRunExecutor
 from app.modules.corpus.question_builder import (
     build_extraction_meta,
     build_question_tags,
+    detect_merged_question_nos,
     detect_stem_year,
+    split_merged_questions,
 )
+from app.modules.corpus.question_llm_repair import LLMFallbackFixer
 from app.modules.corpus.question_pipeline import QuestionExtractionPipeline
+from app.modules.corpus.question_validation import OptionIntegrityChecker
 from app.modules.corpus.knowledge_pipeline import KnowledgeExtractionPipeline
 from app.models.mysql_models import CorpusFile, Document, EntityExtractionRun
 
@@ -80,25 +83,25 @@ def test_question_builder_metadata_rules():
 def test_detect_merged_question_nos_hits_successor():
     """第7题组文本里粘着第8题题号 → 检出后继题号 [8]。"""
     text = "7。 若 G 是一个具有 36 条边的图 A。11 B。10 C。9 D。8 8。 在有向图 G 的拓扑序列中"
-    assert EntityExtractionService._detect_merged_question_nos(text, base_no=7) == [8]
+    assert detect_merged_question_nos(text, base_no=7) == [8]
 
 
 def test_detect_merged_question_nos_no_false_positive_on_options():
     """选项里的数字（如 D。8 的答案值 8）不应被当成后继题号。"""
     # base_no=20 时，8 不在 21..23 范围内，不误报
     text = "20。 下列说法正确的是 A。11 B。10 C。9 D。8"
-    assert EntityExtractionService._detect_merged_question_nos(text, base_no=20) == []
+    assert detect_merged_question_nos(text, base_no=20) == []
 
 
 def test_detect_merged_question_nos_none_base():
     """无题号组无法判断后继，返回空。"""
-    assert EntityExtractionService._detect_merged_question_nos("任意文本 3。 xxx", base_no=None) == []
+    assert detect_merged_question_nos("任意文本 3。 xxx", base_no=None) == []
 
 
 def test_detect_merged_question_nos_multiple_successors():
     """连续粘连多题 → 检出全部后继。"""
     text = "5。 题干 A。x B。y C。z D。w 6。 第六题 A。1 B。2 7。 第七题"
-    assert EntityExtractionService._detect_merged_question_nos(text, base_no=5) == [6, 7]
+    assert detect_merged_question_nos(text, base_no=5) == [6, 7]
 
 
 # ===== LLM 切分兜底：解析 mock LLM 返回 =====
@@ -408,7 +411,7 @@ def test_llm_fallback_rejects_option_repair_for_subjective_question():
 
 
 def test_normalize_options_preserves_llm_option_source():
-    normalized = EntityExtractionService(None)._normalize_options([
+    normalized = normalize_options([
         {"key": "D", "text": "AI 补充选项", "source": "ai_generated"},
     ])
 
@@ -606,9 +609,7 @@ async def test_link_extracted_answers_only_fills_empty_answers():
 
 
 def test_question_diagnostic_counts_unassigned_question_as_saved():
-    service = EntityExtractionService(None)
-
-    diagnostic = service._build_question_extraction_diagnostic(
+    diagnostic = build_question_extraction_diagnostic(
         raw_questions=[{"id": "q1", "page_no": 1}],
         final_questions=[{"id": "q1", "page_no": 1}],
         validation_report={},
@@ -967,8 +968,12 @@ async def test_llm_split_parses_two_questions():
   {"question_no": 7, "stem": "第七题题干", "options": [{"key":"A","text":"11"},{"key":"B","text":"10"},{"key":"C","text":"9"},{"key":"D","text":"8"}]},
   {"question_no": 8, "stem": "第八题题干", "options": [{"key":"A","text":"甲"},{"key":"B","text":"乙"},{"key":"C","text":"丙"},{"key":"D","text":"丁"}]}
 ]'''
-    svc = EntityExtractionService(None)
-    parts = await svc._llm_split_merged_questions(_MockLLM(resp), "原始粘连文本", base_no=7, successor_nos=[8])
+    parts = await split_merged_questions(
+        _MockLLM(resp),
+        "原始粘连文本",
+        base_no=7,
+        successor_nos=[8],
+    )
     assert parts is not None
     assert len(parts) == 2
     assert parts[0]["question_no"] == 7 and len(parts[0]["options"]) == 4
@@ -979,13 +984,21 @@ async def test_llm_split_parses_two_questions():
 async def test_llm_split_returns_none_on_single_question():
     """LLM 判定只有一道题（数组长度 < 2）→ 返回 None，交回原逻辑。"""
     resp = '[{"question_no": 7, "stem": "只有一道", "options": []}]'
-    svc = EntityExtractionService(None)
-    parts = await svc._llm_split_merged_questions(_MockLLM(resp), "文本", base_no=7, successor_nos=[8])
+    parts = await split_merged_questions(
+        _MockLLM(resp),
+        "文本",
+        base_no=7,
+        successor_nos=[8],
+    )
     assert parts is None
 
 
 async def test_llm_split_returns_none_on_garbage():
     """LLM 返回非 JSON → 返回 None，不阻断主流程。"""
-    svc = EntityExtractionService(None)
-    parts = await svc._llm_split_merged_questions(_MockLLM("抱歉我无法处理"), "文本", base_no=7, successor_nos=[8])
+    parts = await split_merged_questions(
+        _MockLLM("抱歉我无法处理"),
+        "文本",
+        base_no=7,
+        successor_nos=[8],
+    )
     assert parts is None

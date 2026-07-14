@@ -99,9 +99,10 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
   已迁移到 `app/modules/corpus`
 - 文档原生标题树提取和查询已迁移到
   `app/modules/corpus/document_section_service.py`，标题识别与题目误判过滤规则位于
-  `app/modules/corpus/section_heading.py`，旧 Service 路径仅保留兼容导出
+  `app/modules/corpus/section_heading.py`，旧 Service 文件已删除
 - 文档解析编排已迁移到 `app/modules/corpus/document_parse_service.py`，
-  语料域调用改为模块内依赖，旧 Service 路径仅保留兼容导出
+  页面、块、资产持久化和文档详情查询位于
+  `app/modules/corpus/document_store.py`，旧 Service 文件已删除
 - 实体抽取任务使用文档行锁避免并发重复创建，运行记录先落库再派发后台任务
 - PDF 页渲染移入线程池，避免同步转换阻塞 FastAPI 事件循环
 - 阶段 3C 进行中：题目选项完整性、题号连续性、综合诊断和确定性规则修复已迁移到
@@ -131,7 +132,8 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
   负责，corpus 模块不再反向依赖旧 Service
 - `app.modules.corpus` 包初始化不再隐式加载 Router，避免领域规则反向触发接口层和
   抽取任务加载
-- `app/services/entity_extraction_service.py` 现作为旧调用方兼容门面保留
+- 实体抽取调用方和测试已直接依赖编排、布局、修复、诊断及持久化模块，
+  `app/services/entity_extraction_service.py` 兼容门面已删除
 
 ### 阶段 4：检索与关系
 
@@ -144,25 +146,25 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
   `app/modules/retrieval`
 - 原 `/api/v1/admin/segments/*` 和 `/api/v1/admin/search*` URL 保持不变
 - 检索编排实现已迁移到 `app/modules/retrieval/service.py`，
-  `app/services/retrieval_service.py` 仅保留兼容导出
+  `app/services/retrieval_service.py` 已删除
 - Segment 构建、重建、删除和 MySQL/Qdrant 一致性事务已迁移到
   `app/modules/retrieval/segment_service.py`，
-  `app/services/segment_service.py` 仅保留兼容导出
+  `app/services/segment_service.py` 已删除
 - 大纲 Query 扩展、章节范围召回、题目到章节展开和交叉引用校验已迁移到
   `app/modules/retrieval/outline_service.py`，
-  `app/services/outline_retrieval_service.py` 仅保留兼容导出
+  `app/services/outline_retrieval_service.py` 已删除
 - 知识点关系构建、语义相似边、关系查询和审核已迁移到
   `app/modules/retrieval/relation_service.py`，
-  `app/services/relation_service.py` 仅保留兼容导出
+  `app/services/relation_service.py` 已删除
 - 语料实体的章节解析、关联写入和历史题目章节回填已迁移到
   `app/modules/catalog/chapter_link_service.py`，
-  `app/services/chapter_link_service.py` 仅保留兼容导出；关键词打分和向量召回策略进一步拆分到
+  `app/services/chapter_link_service.py` 已删除；关键词打分和向量召回策略进一步拆分到
   `app/modules/catalog/chapter_matcher.py`
 - 标准章节树维护、文档 section 映射、映射审核和章节归属诊断已迁移到
   `app/modules/catalog`；其中标准章节树维护位于 `canonical_chapter_service.py`，
   section 映射与审核位于 `chapter_mapping_service.py`，
   页级、块级和 section 级章节归属诊断位于 `chapter_diagnostics_service.py`，
-  `app/services/chapter_mapping_service.py` 仅保留兼容导出
+  `app/services/chapter_mapping_service.py` 已删除
 - sparse/hybrid 的 MySQL 关键词召回已与 dense 的 Qdrant payload 过滤保持一致，
   学科、章节、年份、考试范围、难度、题型、答案来源和标签均在截断候选前过滤
 

@@ -2,9 +2,10 @@ import pytest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.modules.corpus.document_parse_service import (
-    DocumentParseService,
-    _normalize_asset_type_for_db,
+from app.modules.corpus.document_parse_service import DocumentParseService
+from app.modules.corpus.document_store import (
+    ParsedDocumentStore,
+    normalize_asset_type,
 )
 from app.services.document_parsers import ParsedDocumentResult, ParsedPage, ParsedBlock, ParsedAsset
 
@@ -44,7 +45,6 @@ async def test_parse_document_rejects_duplicate_primary_parse():
 
 
 def test_serialize_parse_result_contains_structured_payload():
-    service = DocumentParseService(AsyncMock())
     result = ParsedDocumentResult(
         parser_name="docling",
         parser_version="2.x",
@@ -56,7 +56,7 @@ def test_serialize_parse_result_contains_structured_payload():
         metadata={"source_file": "/tmp/demo.pdf"},
     )
 
-    payload = service._serialize_parse_result(result)
+    payload = ParsedDocumentStore.serialize_parse_result(result)
 
     assert payload["parser_name"] == "docling"
     assert payload["page_count"] == 1
@@ -68,5 +68,5 @@ def test_serialize_parse_result_contains_structured_payload():
 
 
 def test_normalize_asset_type_maps_unknown_to_other():
-    assert _normalize_asset_type_for_db("code") == "other"
-    assert _normalize_asset_type_for_db("table") == "table"
+    assert normalize_asset_type("code") == "other"
+    assert normalize_asset_type("table") == "table"
