@@ -119,9 +119,12 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - 文档解析编排已迁移到 `app/modules/corpus/document_parse_service.py`，
   页面、块、资产持久化和文档详情查询位于
   `app/modules/corpus/document_store.py`，旧 Service 文件已删除
-- Docling、MinerU 和远程解析服务的统一适配层已迁移到
-  `app/modules/corpus/document_parsers.py`；主后端、独立 parser 进程及测试均直接
-  依赖语料模块，`app/services/document_parsers.py` 已删除
+- 文档解析公共契约位于 `app/modules/corpus/parser_types.py`，嵌入式 MinerU
+  适配位于 `mineru_parser.py`，HTTP 服务客户端位于 `parser_service_client.py`，
+  运行时选择与探活位于 `parser_runtime.py`
+- 主后端、独立 parser 进程及测试均直接依赖上述语料模块；旧
+  `app/services/document_parsers.py` 和后续过渡聚合文件
+  `app/modules/corpus/document_parsers.py` 均已删除
 - 实体抽取任务使用文档行锁避免并发重复创建，运行记录先落库再派发后台任务
 - PDF 页渲染移入线程池，避免同步转换阻塞 FastAPI 事件循环
 - 阶段 3C 已完成：题目选项完整性、题号连续性、综合诊断和确定性规则修复已迁移到
@@ -146,7 +149,7 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
   `app/modules/corpus/knowledge_pipeline.py`
 - 文档加载、block 分类、题目/知识点分流、答案回连和事务提交已迁移到
   `app/modules/corpus/entity_extraction_pipeline.py`
-- Block 类型分类、文档来源元信息识别和 MinerU/Docling 文本清洗已迁移到
+- Block 类型分类、文档来源元信息识别和 MinerU 文本清洗已迁移到
   `app/modules/corpus/block_classifier.py`、`document_meta_service.py` 和
   `text_cleaning.py`，对应的旧 Service 文件已删除
 - 后台抽取运行状态、失败恢复和抽取后索引已由
@@ -229,10 +232,10 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - 登录改为读取 `admin_users`，所有后台接口使用签名 JWT 并在请求时重新校验账号状态
 - 当前 PBKDF2 密码格式兼容旧 bcrypt，旧哈希登录成功后自动升级
 - 非开发环境启动时强制校验 `ADMIN_JWT_SECRET`，避免默认密钥进入生产
-- 系统运行配置、PDF 解析器切换、爬虫配置校验和配置审计已迁移到
+- 系统运行配置、MinerU 部署配置、爬虫配置校验和配置审计已迁移到
   `app/modules/operations/settings_service.py`，各业务模块直接依赖运营配置接口，
   `app/services/system_settings_service.py` 已删除
-- `/api/v1/admin/settings*` 配置查询、保存、PDF 解析器切换历史及 LLM 连通性测试
+- `/api/v1/admin/settings*` 配置查询、保存、MinerU 配置历史及 LLM 连通性测试
   接口已迁移到 `app/modules/operations/settings_router.py`；原 URL、管理员鉴权、
   API Key 脱敏和响应行为保持不变
 - OpenAI 兼容 LLM 与 Embedding 客户端已迁移到 `app/infrastructure/ai`，由语料、

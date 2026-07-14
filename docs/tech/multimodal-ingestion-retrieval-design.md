@@ -47,8 +47,8 @@
 - 关系查询增强与可视化：可选独立图读模型，作为增强层而不是唯一事实源
 - 目标向量库：`Qdrant`
 - 向量检索底座统一使用 `Qdrant`
-- 文档解析主路线：`Docling`
-- 复杂页 fallback：`MinerU` 或云端文档理解服务
+- 文档解析主路线固定为：`MinerU`
+- 解析失败时明确返回错误，不自动切换其他解析实现
 
 ### 2.3 为什么目标向量库选择 Qdrant
 
@@ -159,11 +159,14 @@ segment 构建与上下文化增强
 
 ## 4.1 输入文件范围
 
-首期支持：
+文件注册层支持：
 
 - `pdf`
 - `docx`
 - `pptx`
+
+当前 MinerU 文档解析链路面向 `pdf`。其他格式可以登记和保留来源元数据，但进入
+解析任务前需要先转换为 PDF，或后续增加独立的格式转换模块。
 
 后续扩展：
 
@@ -191,28 +194,16 @@ segment 构建与上下文化增强
 
 ## 4.3 解析器策略
 
-### 主解析器
+### 固定解析器
 
-默认使用 `Docling`，原因：
+统一使用 `MinerU`，原因：
 
-- 对 PDF / DOCX / PPTX 的统一转换能力更适合作为主干
-- 输出结构化文档对象，便于保留版面顺序、标题、段落、列表、表格
-- 便于后续同时生成 Markdown 和结构化 JSON
+- 当前试卷和教材样本上的版面、公式、表格与扫描件解析效果更稳定
+- `content_list`、bbox、Markdown 和图片资产可以统一进入标准化文档模型
+- 单一实现减少运行时分支、配置歧义和不同解析器输出差异
 
-### fallback 解析器
-
-以下场景走 fallback：
-
-- 扫描型 PDF
-- 公式密集页
-- 表格复杂页
-- 图片题较多的页
-- 主解析器置信度过低
-
-fallback 方案：
-
-- `MinerU`
-- 云端文档理解服务
+解析失败时保留失败记录和明确错误，由人工重试或调整 MinerU 运行参数，不自动
+切换到其他解析器。
 
 ## 4.4 正规化输出
 
@@ -471,7 +462,7 @@ fallback 方案：
 |------|------|------|
 | `id` | varchar(32) | 解析任务ID |
 | `corpus_file_id` | varchar(32) | 文件ID |
-| `parser_name` | varchar(50) | docling/mineru/... |
+| `parser_name` | varchar(50) | 固定记录 mineru |
 | `parser_version` | varchar(50) | 解析器版本 |
 | `status` | enum | running/success/failed/partial |
 | `confidence` | decimal(5,4) | 整体置信度 |
@@ -481,10 +472,11 @@ fallback 方案：
 
 解析策略说明：
 
-- 解析层通过 `DocumentParser -> ParsedDocumentResult` 适配接口屏蔽 `Docling` 与 `MinerU` 的原始结构差异。
-- `DocumentParseService` 只依赖标准化结果并落库到统一表结构，因此手动切换解析器不会要求 `documents`、`document_pages`、`document_blocks`、`document_assets` 的上下游跟着改。
-- 运行模式采用单活解析器：同一时间只运行一个解析服务，通过后端默认值或单次请求参数手动切换，不做自动双路路由。
-- 差异仍然会体现在语义层面，例如分页颗粒度、块切分方式、表格/图片抽取丰富度、OCR 质量；这些差异通过标准化层被限制在内容质量范围内，而不是接口结构范围内。
+- 解析层通过 `DocumentParser -> ParsedDocumentResult` 契约隔离 MinerU 原始输出。
+- `DocumentParseService` 只依赖标准化结果并落库到统一表结构。
+- 运行时固定使用 MinerU，只允许选择本地或远程部署目标，不做解析实现切换和自动双路路由。
+- MinerU 版本差异可能影响分页颗粒度、块切分方式、表格/图片抽取丰富度和 OCR
+  质量；这些差异通过标准化层被限制在内容质量范围内，而不是接口结构范围内。
 
 ### 6.2.3 `documents`
 

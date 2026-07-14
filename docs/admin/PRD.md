@@ -52,7 +52,7 @@
 | | 爬虫状态 | 任务进度、日志 |
 | **系统配置** | 用户管理 | 管理员账号 |
 | | LLM配置 | OpenAI模型参数 |
-| | PDF解析器切换 | Docling / MinerU 系统级单活切换 |
+| | MinerU解析配置 | 本地/远程部署目标、超时、窗口与探活 |
 
 ---
 
@@ -172,7 +172,7 @@
 | /admin/corpus/files | GET | 语料文件列表 |
 | /admin/corpus/files/{id}/parse | POST | 触发文档解析 |
 | /admin/settings | GET/PUT | 系统配置 |
-| /admin/settings/pdf-parser/history | GET | 解析器切换历史 |
+| /admin/settings/pdf-parser/history | GET | MinerU运行配置变更历史 |
 | /chat | POST | RAG问答 |
 
 ---
@@ -202,7 +202,7 @@
 ### Phase 4: 管理端完善（进行中）
 - Dashboard改造
 - 语料入库与解析页面
-- 系统设置与 PDF 解析器切换
+- 系统设置与 MinerU 解析服务配置
 - 知识点/题目/审核页面
 
 ### Phase 5: 清理收敛

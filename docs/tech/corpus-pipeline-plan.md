@@ -2,7 +2,7 @@
 
 ## Context
 
-Phase 0 和 Phase 1 核心已完成（CorpusFile/ParseRun/Document/DocumentPage/DocumentBlock/DocumentAsset 模型、Docling 解析服务、scan_and_register、API 端点）。现在需要：
+Phase 0 和 Phase 1 核心已完成（CorpusFile/ParseRun/Document/DocumentPage/DocumentBlock/DocumentAsset 模型、MinerU 解析服务、scan_and_register、API 端点）。现在需要：
 
 1. **两个新需求**：文档自动学科/章节分析 + 本地文件上传
 2. **Phase 1 剩余迁移**：Revision 3（扩展 knowledge_points/questions）、Revision 4（entity_source_links/retrieval_segments）
@@ -17,7 +17,7 @@ Phase 0 和 Phase 1 核心已完成（CorpusFile/ParseRun/Document/DocumentPage/
 | CorpusFile / ParseRun / Document 模型 | ✅ | `mysql_models.py` |
 | DocumentPage / DocumentBlock / DocumentAsset 模型 | ✅ | `mysql_models.py` |
 | CorpusService (scan_and_register) | ✅ | `corpus_service.py` |
-| DocumentParseService (Docling 落库) | ✅ | `document_parse_service.py` |
+| DocumentParseService (MinerU 落库) | ✅ | `document_parse_service.py` |
 | Admin API (scan/detail/parse/document) | ✅ | `admin.py` |
 | Alembic 迁移 Revision 1 & 2 | ✅ 代码已写，未应用到 DB | `alembic/versions/` |
 
@@ -145,7 +145,7 @@ POST /admin/corpus/files/upload
 
 ```
 parse_document(corpus_file_id)
-  → Docling 解析
+  → MinerU 解析
   → 落库 pages/blocks/assets
   → 自动调用 classify_document(document_id)  ← 新增
   → 返回结果

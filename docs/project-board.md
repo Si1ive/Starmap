@@ -22,7 +22,7 @@
 | 任务 | 状态 | 说明 |
 |------|------|------|
 | 系统设置持久化 | ✅ | `/admin/settings` 全量落库 |
-| PDF解析器单活切换 | ✅ | Docling / MinerU 系统级切换 + 探活 + 审计历史 |
+| MinerU解析运行配置 | ✅ | 本地/远程部署目标 + 探活 + 配置审计历史 |
 | 本地 PDF parser service | ✅ | MinerU 独立服务 + 部署目标设置 |
 | 逐页解析进度上报 | ✅ | parser_service /progress + 前端进度展示 |
 | MinerU 图文解析 | ✅ | content_list 磁盘读取、图片 base64 内联、bbox 落库、图文资产桥接（6-27~7-01） |

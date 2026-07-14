@@ -10,7 +10,7 @@
 
 补充设计：
 
-- PDF 解析器的系统级切换方案见 [技术文档](../tech/pdf-parser-switching-design.md)
+- MinerU 解析运行时与部署目标设计见 [技术文档](../tech/pdf-parser-runtime-design.md)
 
 ## 1. 契约原则
 
@@ -134,8 +134,8 @@ HTTP `401`。实时日志 WebSocket 使用同一令牌，可通过 `Authorizatio
 
 说明：
 
-- 当前激活的 PDF 解析器不在入库页切换，而是通过 `/api/v1/admin/settings` 维护系统级单活配置。
-- 新环境默认 `MinerU`，`Docling` 作为性能优先备选；当激活解析器不可用时，`parse` 应返回明确错误提示，不做自动 fallback。
+- PDF 解析实现固定为 `MinerU`，入库页不提供解析器选择。
+- 当 MinerU 服务不可用时，`parse` 返回明确错误，不切换到其他解析实现。
 - `pdf_parser` 现支持两种部署位置：
   - `local`：访问本机 Podman 中的解析服务，默认读取 `local_service_endpoint`
   - `remote`：把解析请求转发到 `remote_service_endpoint` 指向的 HTTP 服务，并沿用同一解析协议与健康检查
@@ -176,8 +176,8 @@ hybrid 模式下保持一致，支持 `subject_id`、`chapter_ids`、`exam_year`
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/v1/admin/settings` | 读取系统设置与 PDF 解析器运行状态 |
-| PUT | `/api/v1/admin/settings` | 更新系统设置中的 PDF 解析器单活配置 |
-| GET | `/api/v1/admin/settings/pdf-parser/history` | 查看 PDF 解析器切换审计历史 |
+| PUT | `/api/v1/admin/settings` | 更新 MinerU 部署目标和运行参数 |
+| GET | `/api/v1/admin/settings/pdf-parser/history` | 查看 MinerU 运行配置变更历史 |
 
 ### 对话
 

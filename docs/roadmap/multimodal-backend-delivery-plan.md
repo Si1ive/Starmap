@@ -60,7 +60,7 @@
 |------|------|
 | `app/db/qdrant.py` | Qdrant 连接、collection 初始化、payload 读写 |
 | `app/services/corpus_service.py` | 文件扫描、注册、去重、状态流转 |
-| `app/services/document_parse_service.py` | 调度 Docling / fallback 解析器 |
+| `app/modules/corpus/document_parse_service.py` | 调度 MinerU 解析运行时 |
 | `app/services/document_store_service.py` | 文档、页、块、资产落库 |
 | `app/services/chapter_mapping_service.py` | 标准章节维护、原生标题树映射 |
 | `app/services/entity_extraction_service.py` | 知识点与题目抽取 |
@@ -111,7 +111,7 @@
 - `BE-B1` 实现目录扫描注册
 - `BE-B2` 实现 `sha256` 去重
 - `BE-B3` 实现解析任务状态机
-- `BE-B4` 接入 Docling 主解析器
+- `BE-B4` 接入 MinerU 主解析器
 - `BE-B5` 落库文档、页、块、资产
 - `BE-B6` 生成 `document_sections`
 - `BE-B7` 失败记录与重试
@@ -233,7 +233,7 @@
 |--------|------|------|------|
 | `BE-PARSE-01` | 扫描 `download/` 注册文件 | `BE-DB-01` | 能返回注册结果 |
 | `BE-PARSE-02` | 文件去重 | `BE-PARSE-01` | 同 hash 不重复注册 |
-| `BE-PARSE-03` | Docling 集成 | `BE-PARSE-01` | 输出 Markdown/JSON |
+| `BE-PARSE-03` | MinerU 集成 | `BE-PARSE-01` | 输出 Markdown/JSON |
 | `BE-PARSE-04` | block/asset 持久化 | `BE-PARSE-03` | 文档详情可读 |
 | `BE-PARSE-05` | 原生标题树提取 | `BE-PARSE-03` | 可生成 `document_sections` |
 | `BE-PARSE-06` | 失败重试与状态流转 | `BE-PARSE-04` `BE-PARSE-05` | 有失败记录与重试入口 |

@@ -97,8 +97,8 @@
 {
   "id": "pr_001",
   "corpus_file_id": "cf_001",
-  "parser_name": "docling",
-  "parser_version": "0.1.0",
+  "parser_name": "mineru",
+  "parser_version": "3.x",
   "parse_mode": "primary",
   "status": "success",
   "page_count": 24,
@@ -338,11 +338,11 @@
 
 ### `POST /api/v1/admin/corpus/files/{file_id}/parse`
 
-请求体可选；未传时使用后端当前单活默认解析器。
+请求体可选；未传时固定使用 MinerU。
 
 ```json
 {
-  "parser_name": "docling",
+  "parser_name": "mineru",
   "parse_mode": "primary"
 }
 ```
@@ -354,8 +354,8 @@
   "parse_run_id": "pr_001",
   "document_id": "doc_001",
   "status": "success",
-  "parser_name": "docling",
-  "parser_version": "2.x",
+  "parser_name": "mineru",
+  "parser_version": "3.x",
   "parse_mode": "primary",
   "page_count": 24,
   "block_count": 382,
@@ -366,9 +366,9 @@
 
 说明：
 
-- `parser_name` 支持 `docling` / `mineru`；用于手动指定本次解析器。
-- 系统设计为单活解析器运行模式，同一时间只运行一个解析服务，不做自动 fallback 路由。
-- `parse_mode` 仅保留执行语义标记，不再承担自动切换解析器的职责。
+- `parser_name` 仅支持 `mineru`；该字段保留用于显式声明和接口兼容。
+- 系统只运行 MinerU 解析服务，不做其他解析实现的自动 fallback。
+- `parse_mode` 仅保留主解析、重试和人工修复等执行语义。
 - 下游只消费标准化后的 `documents` / `document_pages` / `document_blocks` / `document_assets`，不直接依赖具体解析器原始输出。
 
 ## 5.4 解析任务列表
