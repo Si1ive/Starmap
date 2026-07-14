@@ -276,7 +276,8 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - 非开发环境启动时强制校验 `ADMIN_JWT_SECRET`，避免默认密钥进入生产
 - 系统运行配置、MinerU 部署配置、爬虫配置校验和配置审计已迁移到
   `app/modules/operations/settings_service.py`，各业务模块直接依赖运营配置接口，
-  `app/services/system_settings_service.py` 已删除
+  `app/services/system_settings_service.py` 已删除；爬虫默认值、运行参数校验、代理地址
+  规则和审计脱敏进一步拆分到 `app/modules/operations/crawler_settings.py`
 - `/api/v1/admin/settings*` 配置查询、保存、MinerU 配置历史及 LLM 连通性测试
   接口已迁移到 `app/modules/operations/settings_router.py`；原 URL、管理员鉴权、
   API Key 脱敏和响应行为保持不变
