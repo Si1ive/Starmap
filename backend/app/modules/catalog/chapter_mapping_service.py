@@ -1,7 +1,7 @@
 """Document section mapping and review workflows."""
 
 import uuid
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import select, and_, or_, delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +14,10 @@ from app.models.mysql_models import (
 from app.modules.catalog.chapter_diagnostics_rules import EXAM_DOC_TYPES
 from app.modules.catalog.chapter_diagnostics_service import (
     ChapterOwnershipDiagnosticsService,
+)
+from app.modules.catalog.section_mapping_rules import (
+    build_chapter_index,
+    match_section_multi,
 )
 
 logger = get_logger(__name__)
@@ -115,7 +119,7 @@ class ChapterMappingService:
         chapter_indices: Dict[str, Dict[str, Any]] = {}
         for sid, chapters in chapter_groups.items():
             if chapters:
-                chapter_indices[sid] = self._build_chapter_index(chapters)
+                chapter_indices[sid] = build_chapter_index(chapters)
 
         # 4. 逐个 section 进行映射，跨学科取最佳匹配
         mapped_count = 0
@@ -124,7 +128,7 @@ class ChapterMappingService:
         rejected = 0
 
         for section in sections:
-            match_result = self._match_section_multi(section, chapter_indices)
+            match_result = match_section_multi(section, chapter_indices)
 
             if match_result:
                 chapter_id, confidence, mapping_type = match_result
@@ -167,120 +171,6 @@ class ChapterMappingService:
             "pending_review": pending_review,
             "rejected": rejected,
         }
-
-    def _build_chapter_index(self, chapters: List[CanonicalChapter]) -> Dict[str, Any]:
-        """构建章节匹配索引"""
-        index = {}
-
-        for chapter in chapters:
-            # 主名称
-            name_lower = chapter.name.lower().strip()
-            index[name_lower] = {
-                'id': chapter.id,
-                'level': chapter.level,
-                'match_type': 'exact',
-            }
-
-            # 别名
-            if chapter.aliases:
-                for alias in chapter.aliases:
-                    alias_lower = alias.lower().strip()
-                    if alias_lower not in index:
-                        index[alias_lower] = {
-                            'id': chapter.id,
-                            'level': chapter.level,
-                            'match_type': 'alias',
-                        }
-
-            # 编码
-            if chapter.code:
-                code_lower = chapter.code.lower().strip()
-                if code_lower not in index:
-                    index[code_lower] = {
-                        'id': chapter.id,
-                        'level': chapter.level,
-                        'match_type': 'code',
-                    }
-
-        return index
-
-    def _match_section_multi(
-        self,
-        section: DocumentSection,
-        chapter_indices: Dict[str, Dict[str, Any]]
-    ) -> Optional[tuple]:
-        """
-        跨学科匹配 section 到标准章节，取所有学科中置信度最高的匹配
-
-        Returns:
-            (chapter_id, confidence, mapping_type) 或 None
-        """
-        best = None
-        for _sid, index in chapter_indices.items():
-            result = self._match_section(section, index)
-            if result:
-                if best is None or result[1] > best[1]:
-                    best = result
-        return best
-
-    def _match_section(
-        self,
-        section: DocumentSection,
-        chapter_index: Dict[str, Any]
-    ) -> Optional[tuple]:
-        """
-        匹配 section 到标准章节
-
-        Returns:
-            (chapter_id, confidence, mapping_type) 或 None
-        """
-        title = section.title.lower().strip()
-        section_path = section.section_path.lower().strip() if section.section_path else ""
-
-        # 1. 精确匹配
-        if title in chapter_index:
-            info = chapter_index[title]
-            return info['id'], 1.0, 'exact'
-
-        # 2. 路径匹配
-        if section_path:
-            for key, info in chapter_index.items():
-                if key in section_path or section_path in key:
-                    return info['id'], 0.85, 'partial'
-
-        # 3. 包含匹配
-        best_match = None
-        best_score = 0.0
-
-        for key, info in chapter_index.items():
-            # 检查标题是否包含章节名
-            if key in title:
-                score = len(key) / max(len(title), 1)
-                if score > best_score:
-                    best_score = score
-                    best_match = (info['id'], 0.7 + score * 0.2, 'partial')
-
-            # 检查章节名是否包含标题
-            if title in key and len(title) > 3:  # 避免太短的匹配
-                score = len(title) / max(len(key), 1)
-                if score > best_score:
-                    best_score = score
-                    best_match = (info['id'], 0.6 + score * 0.2, 'partial')
-
-        if best_match and best_match[1] >= 0.5:
-            return best_match
-
-        # 4. 关键词匹配
-        title_words = set(title.replace('>', ' ').replace('  ', ' ').split())
-        for key, info in chapter_index.items():
-            key_words = set(key.replace('>', ' ').replace('  ', ' ').split())
-            common_words = title_words & key_words
-            if len(common_words) >= 2:
-                score = len(common_words) / max(len(title_words), len(key_words), 1)
-                if score > 0.3:
-                    return info['id'], 0.5 + score * 0.3, 'related'
-
-        return None
 
     async def get_section_mappings(
         self,
