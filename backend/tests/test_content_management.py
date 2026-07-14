@@ -7,11 +7,12 @@ from pydantic import ValidationError
 from app.modules.content.chapter_assignment import (
     PrimaryChapterAssignmentService,
 )
+from app.modules.content.knowledge_point_service import KnowledgePointService
+from app.modules.content.question_service import QuestionService
 from app.modules.content.schemas import (
     UpdateKnowledgePointRequest,
     UpdateQuestionRequest,
 )
-from app.modules.content.service import ContentService
 from app.modules.retrieval.segment_service import SegmentService
 
 
@@ -45,7 +46,7 @@ def test_content_update_schemas_keep_editable_assignment_fields():
         "exam_year": 2025,
         "status": "pending",
     }
-    assert "primary_chapter_id" in ContentService.QUESTION_INDEX_FIELDS
+    assert "primary_chapter_id" in QuestionService.INDEX_FIELDS
 
 
 def test_content_update_schema_rejects_unsupported_draft_status():
@@ -132,15 +133,15 @@ async def test_question_update_commits_before_rebuilding_index(monkeypatch):
     async def commit():
         events.append("commit")
 
-    async def rebuild(entity_type, entity_id):
-        events.append(("rebuild", entity_type, entity_id))
+    async def rebuild(entity_id):
+        events.append(("rebuild", entity_id))
         return {"status": "success", "segments_count": 2}
 
     db.commit.side_effect = commit
-    service = ContentService(db)
+    service = QuestionService(db)
     monkeypatch.setattr(service, "_rebuild_entity_index", rebuild)
 
-    result = await service.update_question(
+    result = await service.update(
         question.id,
         {"content": "新题干", "exam_year": 2025},
     )
@@ -149,7 +150,7 @@ async def test_question_update_commits_before_rebuilding_index(monkeypatch):
     assert question.exam_year == 2025
     assert events == [
         "commit",
-        ("rebuild", "question", question.id),
+        ("rebuild", question.id),
     ]
     assert result == {"status": "success", "segments_count": 2}
 
@@ -176,8 +177,8 @@ async def test_question_update_assigns_primary_chapter_before_rebuilding(monkeyp
     async def commit():
         events.append("commit")
 
-    async def rebuild(entity_type, entity_id):
-        events.append(("rebuild", entity_type, entity_id))
+    async def rebuild(entity_id):
+        events.append(("rebuild", entity_id))
         return {"status": "success", "segments_count": 1}
 
     monkeypatch.setattr(
@@ -186,10 +187,10 @@ async def test_question_update_assigns_primary_chapter_before_rebuilding(monkeyp
         assign,
     )
     db.commit.side_effect = commit
-    service = ContentService(db)
+    service = QuestionService(db)
     monkeypatch.setattr(service, "_rebuild_entity_index", rebuild)
 
-    result = await service.update_question(
+    result = await service.update(
         question.id,
         {"primary_chapter_id": "canonical-new"},
     )
@@ -200,7 +201,7 @@ async def test_question_update_assigns_primary_chapter_before_rebuilding(monkeyp
     assert events == [
         ("assign", "canonical-new"),
         "commit",
-        ("rebuild", "question", question.id),
+        ("rebuild", question.id),
     ]
     assert result == {"status": "success", "segments_count": 1}
 
@@ -230,14 +231,14 @@ async def test_question_update_keeps_subject_aligned_with_existing_primary(
         "assign_question",
         assign,
     )
-    service = ContentService(db)
+    service = QuestionService(db)
     monkeypatch.setattr(
         service,
         "_rebuild_entity_index",
         AsyncMock(return_value={"status": "success"}),
     )
 
-    await service.update_question(
+    await service.update(
         question.id,
         {
             "subject_id": "subject-mismatched",
@@ -257,7 +258,7 @@ async def test_question_list_can_filter_exact_question_id():
         scalars=lambda: SimpleNamespace(all=lambda: [])
     )
 
-    result = await ContentService(db).list_questions(
+    result = await QuestionService(db).list(
         page=1,
         page_size=20,
         question_id="question-focus",
@@ -296,7 +297,7 @@ async def test_disabling_content_commits_with_segment_removal(monkeypatch):
         remove_segments,
     )
 
-    result = await ContentService(db).update_knowledge_point(
+    result = await KnowledgePointService(db).update(
         point.id,
         {"status": "pending"},
     )
@@ -311,8 +312,8 @@ async def test_delete_question_commits_content_and_index_removal_together(monkey
     question = SimpleNamespace(id="question-2", status="active")
     db = AsyncMock()
     db.get.return_value = question
-    service = ContentService(db)
-    service._delete_question_dependencies = AsyncMock()
+    service = QuestionService(db)
+    service._delete_dependencies = AsyncMock()
 
     async def remove_segments(_service, entity_type, entity_ids):
         return {"status": "warning", "cleanup_warning": "qdrant unavailable"}
@@ -323,10 +324,10 @@ async def test_delete_question_commits_content_and_index_removal_together(monkey
         remove_segments,
     )
 
-    result = await service.delete_question(question.id)
+    result = await service.delete(question.id)
 
     assert question.status == "deleted"
-    service._delete_question_dependencies.assert_awaited_once_with([question.id])
+    service._delete_dependencies.assert_awaited_once_with([question.id])
     assert result == {
         "id": question.id,
         "indexing": {

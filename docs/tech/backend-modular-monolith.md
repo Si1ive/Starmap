@@ -78,6 +78,9 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
   `app/modules/content/review_service.py`，`app/services/review_service.py`
   已删除；内容管理和审核列表共用的实体响应转换已集中到
   `app/modules/content/entity_serializers.py`，并保留两类接口原有字段和截断语义
+- 内容管理用例已按实体拆分到 `knowledge_point_service.py` 与
+  `question_service.py`，共享的编辑后索引重建位于 `entity_indexing.py`；
+  原模块内聚合文件 `app/modules/content/service.py` 已删除，路由直接依赖对应实体服务
 - 知识关系审核、删除及审核统计接口已迁移到
   `app/modules/content/relation_review_router.py`，并修复关系 `batch-delete`
   被动态 relation 路由截获的问题

@@ -21,11 +21,11 @@ from app.models.mysql_models import (
 from app.modules.content.chapter_assignment import (
     PrimaryChapterAssignmentService,
 )
+from app.modules.content.entity_indexing import rebuild_entity_index
 from app.modules.content.entity_serializers import (
     serialize_review_knowledge_point,
     serialize_review_question,
 )
-from app.modules.retrieval.segment_service import SegmentService
 
 logger = get_logger(__name__)
 
@@ -443,23 +443,8 @@ class ReviewService:
         entity_id: str,
     ) -> Dict[str, Any]:
         """审核已落库后增量重建索引，失败不回滚人工审核。"""
-        try:
-            result = await SegmentService(self.db).rebuild_entity_segments(
-                entity_type,
-                entity_id,
-            )
-        except Exception as exc:
-            await self.db.rollback()
-            logger.exception(
-                "审核后的索引重建失败",
-                entity_type=entity_type,
-                entity_id=entity_id,
-                error=str(exc),
-            )
-            return {
-                "status": "failed",
-                "error": str(exc)[:500],
-            }
-
-        status = "warning" if result.get("cleanup_warning") else "success"
-        return {"status": status, **result}
+        return await rebuild_entity_index(
+            self.db,
+            entity_type,
+            entity_id,
+        )

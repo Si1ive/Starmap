@@ -7,14 +7,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import ApiResponse, BatchIdsRequest
 from app.db import get_db
+from app.modules.catalog.chapter_link_service import ChapterLinkService
+from app.modules.content.enrichment_service import EnrichmentService
+from app.modules.content.knowledge_point_service import KnowledgePointService
+from app.modules.content.question_service import QuestionService
+from app.modules.content.review_service import ReviewService
 from app.modules.content.schemas import (
     UpdateKnowledgePointRequest,
     UpdateQuestionRequest,
 )
-from app.modules.content.enrichment_service import EnrichmentService
-from app.modules.content.review_service import ReviewService
-from app.modules.content.service import ContentService
-from app.modules.catalog.chapter_link_service import ChapterLinkService
 
 router = APIRouter(prefix="/admin", tags=["题目与知识点"])
 
@@ -31,7 +32,7 @@ async def get_knowledge_points(
     status: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
-    result = await ContentService(db).list_knowledge_points(
+    result = await KnowledgePointService(db).list(
         page=page,
         page_size=page_size,
         subject_id=subject_id,
@@ -49,7 +50,7 @@ async def get_knowledge_point_detail(
     point_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    return ApiResponse(data=await ContentService(db).get_knowledge_point(point_id))
+    return ApiResponse(data=await KnowledgePointService(db).get(point_id))
 
 
 @router.put("/knowledge/points/{point_id}", response_model=ApiResponse)
@@ -58,7 +59,7 @@ async def update_knowledge_point(
     req: UpdateKnowledgePointRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    result = await ContentService(db).update_knowledge_point(
+    result = await KnowledgePointService(db).update(
         point_id,
         req.model_dump(exclude_unset=True),
     )
@@ -70,7 +71,7 @@ async def delete_knowledge_point(
     point_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    result = await ContentService(db).delete_knowledge_point(point_id)
+    result = await KnowledgePointService(db).delete(point_id)
     return ApiResponse(message="删除成功", data=result)
 
 
@@ -79,7 +80,7 @@ async def batch_delete_knowledge_points(
     req: BatchIdsRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    result = await ContentService(db).batch_delete_knowledge_points(req.ids)
+    result = await KnowledgePointService(db).batch_delete(req.ids)
     return ApiResponse(message="删除成功", data=result)
 
 
@@ -99,7 +100,7 @@ async def get_questions(
     status: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
-    result = await ContentService(db).list_questions(
+    result = await QuestionService(db).list(
         page=page,
         page_size=page_size,
         question_id=question_id,
@@ -121,7 +122,7 @@ async def get_question_detail(
     question_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    return ApiResponse(data=await ContentService(db).get_question(question_id))
+    return ApiResponse(data=await QuestionService(db).get(question_id))
 
 
 @router.put("/questions/{question_id}", response_model=ApiResponse)
@@ -130,7 +131,7 @@ async def update_question(
     req: UpdateQuestionRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    result = await ContentService(db).update_question(
+    result = await QuestionService(db).update(
         question_id,
         req.model_dump(exclude_unset=True),
     )
@@ -142,7 +143,7 @@ async def delete_question(
     question_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    result = await ContentService(db).delete_question(question_id)
+    result = await QuestionService(db).delete(question_id)
     return ApiResponse(message="删除成功", data=result)
 
 
@@ -151,7 +152,7 @@ async def batch_delete_questions(
     req: BatchIdsRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    result = await ContentService(db).batch_delete_questions(req.ids)
+    result = await QuestionService(db).batch_delete(req.ids)
     return ApiResponse(message="删除成功", data=result)
 
 
