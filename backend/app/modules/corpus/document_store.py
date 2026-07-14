@@ -1,14 +1,11 @@
 """Persistence and query operations for normalized parser output."""
 
-import base64
 import uuid
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.logging import get_logger
 from app.models.mysql_models import (
     CorpusFile,
     Document,
@@ -16,115 +13,26 @@ from app.models.mysql_models import (
     DocumentBlock,
     DocumentPage,
 )
-from app.modules.corpus.text_cleaning import clean_block_text
+from app.modules.corpus.document_assets import (
+    asset_bbox_x1,
+    asset_type_key_candidates,
+    is_image_path_hint,
+    normalize_asset_type,
+    normalize_asset_type_with_hint,
+    resolve_asset_file_path,
+    write_asset_image,
+)
 from app.modules.corpus.parser_types import (
     ParsedAsset,
     ParsedBlock,
     ParsedDocumentResult,
     ParsedPage,
 )
-
-logger = get_logger(__name__)
-BACKEND_ROOT = Path(__file__).resolve().parents[3]
+from app.modules.corpus.text_cleaning import clean_block_text
 
 
 def generate_id() -> str:
     return uuid.uuid4().hex[:32]
-
-
-def normalize_asset_type(asset_type: Optional[str]) -> str:
-    """Normalize parser asset types to the database enum values."""
-    value = (asset_type or "figure").strip().lower()
-    if value in {"figure", "table", "formula", "page_crop", "other"}:
-        return value
-    if value in {"img", "image", "picture", "chart"}:
-        return "figure"
-    if value in {"eq", "formula_block", "formula_img", "equation"}:
-        return "formula"
-    return "other"
-
-
-def normalize_asset_type_with_hint(
-    asset_type: Optional[str],
-    has_image_hint: bool = False,
-) -> str:
-    """Normalize code blocks as figures only when an image is present."""
-    value = (asset_type or "figure").strip().lower()
-    if value == "code":
-        return "figure" if has_image_hint else "other"
-    return normalize_asset_type(value)
-
-
-def asset_type_key_candidates(
-    asset_type: Optional[str],
-    has_image_hint: bool = False,
-) -> List[str]:
-    """Return raw and normalized type keys used to bridge assets to blocks."""
-    raw_type = (asset_type or "figure").strip().lower()
-    normalized = normalize_asset_type_with_hint(
-        raw_type,
-        has_image_hint=has_image_hint,
-    )
-    if raw_type and raw_type != normalized:
-        return [normalized, raw_type]
-    return [normalized]
-
-
-def is_image_path_hint(path_value: Optional[str]) -> bool:
-    if not path_value:
-        return False
-    value = str(path_value).strip().lower()
-    if not value:
-        return False
-    return any(
-        value.endswith(suffix)
-        for suffix in (
-            ".png",
-            ".jpg",
-            ".jpeg",
-            ".webp",
-            ".gif",
-            ".bmp",
-            ".tiff",
-        )
-    )
-
-
-def resolve_asset_file_path(
-    asset_data: ParsedAsset,
-    persisted_path: Optional[str],
-) -> Optional[str]:
-    """Resolve an asset path that is readable by the main backend."""
-    if persisted_path:
-        return persisted_path
-
-    raw_path = getattr(asset_data, "file_path", None)
-    if not raw_path:
-        return None
-
-    path = Path(raw_path)
-    candidates = []
-    if path.is_absolute():
-        candidates.append(path)
-    else:
-        candidates.extend(
-            [
-                BACKEND_ROOT / path,
-                Path.cwd() / path,
-                Path("/tmp") / path,
-            ]
-        )
-
-    for candidate in candidates:
-        if candidate.exists() and candidate.is_file():
-            return str(candidate)
-
-    for base_dir in (BACKEND_ROOT, Path("/tmp")):
-        for found in base_dir.rglob(path.name):
-            if found.is_file():
-                return str(found)
-
-    return None
 
 
 class ParsedDocumentStore:
@@ -237,44 +145,6 @@ class ParsedDocumentStore:
 
         await self.db.flush()
 
-    @staticmethod
-    def write_asset_image(
-        document_id: str,
-        asset_data: ParsedAsset,
-    ) -> Optional[str]:
-        """Persist an inline base64 asset and return its backend path."""
-        encoded_image = getattr(asset_data, "image_base64", None)
-        if not encoded_image:
-            return None
-
-        extension = getattr(asset_data, "image_ext", None) or ".png"
-        destination_dir = (
-            BACKEND_ROOT / "uploads" / "assets" / document_id
-        )
-        try:
-            destination_dir.mkdir(parents=True, exist_ok=True)
-            destination = destination_dir / f"{generate_id()}{extension}"
-            destination.write_bytes(base64.b64decode(encoded_image))
-            return str(destination)
-        except Exception as exc:
-            logger.warning(
-                "资产图片落盘失败",
-                document_id=document_id,
-                error=str(exc),
-            )
-            return None
-
-    @staticmethod
-    def bbox_x1(bbox: Optional[dict]) -> Optional[float]:
-        """Return a stable x1 key for block-to-asset matching."""
-        if not bbox:
-            return None
-        x1 = bbox.get("x1")
-        try:
-            return round(float(x1), 1) if x1 is not None else None
-        except (TypeError, ValueError):
-            return None
-
     async def persist_assets(
         self,
         document_id: str,
@@ -304,7 +174,7 @@ class ParsedDocumentStore:
         block_by_key: Dict[Any, Any] = {}
         fallback_blocks: Dict[Tuple[int, str], List[Any]] = {}
         for block in media_blocks:
-            bbox_x1 = self.bbox_x1(block.bbox)
+            bbox_x1 = asset_bbox_x1(block.bbox)
             block_by_key.setdefault(
                 (block.page_no, block.block_type, bbox_x1),
                 block,
@@ -328,7 +198,7 @@ class ParsedDocumentStore:
         explicit_keys = set()
         fallback_matched: Dict[Tuple[int, str], int] = {}
         for asset_data in assets:
-            persisted_path = self.write_asset_image(
+            persisted_path = write_asset_image(
                 document_id,
                 asset_data,
             )
@@ -357,7 +227,7 @@ class ParsedDocumentStore:
             has_image_hint = is_image_path_hint(
                 asset_data.file_path
             ) or bool(asset_data.image_base64)
-            asset_x1 = self.bbox_x1(asset_data.bbox)
+            asset_x1 = asset_bbox_x1(asset_data.bbox)
             matched = None
             for key in asset_type_key_candidates(
                 asset_data.asset_type,
@@ -403,7 +273,7 @@ class ParsedDocumentStore:
             key = (
                 block.page_no,
                 block.block_type,
-                self.bbox_x1(block.bbox),
+                asset_bbox_x1(block.bbox),
             )
             if key in explicit_keys or block.asset_id:
                 continue
