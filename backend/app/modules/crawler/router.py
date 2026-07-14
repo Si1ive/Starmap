@@ -1,6 +1,5 @@
 """Crawler administration routes."""
 
-import asyncio
 import json
 from datetime import datetime
 from pathlib import Path
@@ -24,7 +23,6 @@ from app.api.schemas import ApiResponse
 from app.core.logging import get_logger
 from app.core.websocket import log_websocket_manager
 from app.db import get_db, get_optional_db
-from app.db.mysql import mysql_client
 from app.models.mysql_models import DownloadedFile
 from app.modules.crawler.log_service import CrawlerLogService
 from app.modules.crawler.schedule_service import CrawlerScheduleService
@@ -32,7 +30,6 @@ from app.modules.crawler.scrapy_bridge import ScrapyBridgeService
 from app.modules.crawler.source_service import CrawlerSourceService
 from app.modules.crawler.stats_service import CrawlerStatsService
 from app.modules.crawler.storage import DOWNLOAD_STORE
-from app.modules.crawler.task_service import CrawlerTaskService
 from app.modules.operations.security import get_request_admin_id
 from app.modules.operations.settings_service import SystemSettingsService
 
@@ -70,219 +67,6 @@ async def update_crawler_config(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return ApiResponse(code=200, message="配置已保存", data=config)
-
-
-@router.get("/tasks", response_model=ApiResponse)
-async def get_crawler_tasks(
-    page: int = 1,
-    page_size: int = 20,
-    status: Optional[str] = None,
-    task_type: Optional[str] = None,
-    source_id: Optional[str] = None,
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    获取爬虫任务列表
-    """
-    service = CrawlerTaskService(db)
-    skip = (page - 1) * page_size
-    tasks, total = await service.get_tasks(
-        skip=skip,
-        limit=page_size,
-        status=status,
-        task_type=task_type,
-        source_id=source_id,
-    )
-
-    items = []
-    for task in tasks:
-        items.append(
-            {
-                "id": task.id,
-                "name": task.name,
-                "task_type": task.task_type,
-                "source": task.source,
-                "source_id": task.source_id,
-                "target_count": task.target_count,
-                "completed_count": task.completed_count,
-                "success_count": task.success_count,
-                "failed_count": task.failed_count,
-                "success_rate": (
-                    round(task.success_count / task.completed_count * 100, 1)
-                    if task.completed_count
-                    else 0
-                ),
-                "progress": float(task.progress) if task.progress else 0,
-                "status": task.status,
-                "started_at": task.started_at.isoformat() if task.started_at else None,
-                "completed_at": (
-                    task.completed_at.isoformat() if task.completed_at else None
-                ),
-                "created_at": task.created_at.isoformat() if task.created_at else None,
-                "error_message": getattr(task, "error_message", None),
-            }
-        )
-
-    return ApiResponse(
-        code=200,
-        message="success",
-        data={
-            "items": items,
-            "total": total,
-            "page": page,
-            "page_size": page_size,
-            "total_pages": (total + page_size - 1) // page_size if total else 0,
-        },
-    )
-
-
-@router.post("/tasks", response_model=ApiResponse)
-async def create_crawler_task(data: dict, db: AsyncSession = Depends(get_db)):
-    """
-    创建爬虫任务
-
-    支持创建不同类型的爬虫任务，配置爬虫引擎参数。
-
-    请求示例:
-    ```json
-    {
-        "name": "下载 408 资料",
-        "task_type": "targeted",
-        "source_ids": ["source_001"],
-        "config": {
-            "spider_type": "github",
-            "source": "github",
-            "search_query": "408 考研 数据结构",
-            "concurrent_limit": 3,
-            "delay": 1.0,
-            "timeout": 60
-        },
-        "execute_now": true
-    }
-    ```
-    """
-    service = CrawlerTaskService(db)
-
-    # 构建任务配置
-    config = data.get("config", {})
-    source_ids = data.get("source_ids") or config.get("source_ids") or []
-    target_config = {
-        **config,
-        "source_ids": source_ids,
-    }
-
-    try:
-        task = await service.create_task(
-            name=data.get("name", "手动任务"),
-            task_type=data.get("task_type", "targeted"),
-            source_ids=source_ids,
-            target_config=target_config,
-            created_by=data.get("created_by"),
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-
-    # 如果请求立即执行
-    if data.get("execute_now", False):
-
-        async def _run_task_in_background(task_id: str):
-            async with mysql_client.session() as session:
-                bg_service = CrawlerTaskService(session)
-                await bg_service.execute_task(task_id)
-
-        asyncio.create_task(_run_task_in_background(task.id))
-
-    return ApiResponse(
-        code=200,
-        message="任务已创建",
-        data={
-            "id": task.id,
-            "name": task.name,
-            "task_type": task.task_type,
-            "source": task.source,
-            "source_id": task.source_id,
-            "target_count": task.target_count,
-            "completed_count": task.completed_count,
-            "success_count": task.success_count,
-            "failed_count": task.failed_count,
-            "success_rate": 0,
-            "progress": float(task.progress) if task.progress else 0,
-            "status": task.status,
-            "config": task.config,
-            "started_at": task.started_at.isoformat() if task.started_at else None,
-            "completed_at": (
-                task.completed_at.isoformat() if task.completed_at else None
-            ),
-            "created_at": task.created_at.isoformat() if task.created_at else None,
-            "error_message": task.error_message,
-        },
-    )
-
-
-@router.post("/tasks/{task_id}/start", response_model=ApiResponse)
-async def start_crawler_task(task_id: str, db: AsyncSession = Depends(get_db)):
-    """启动爬虫任务"""
-    service = CrawlerTaskService(db)
-    task = await service.get_task_by_id(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="任务不存在")
-    if task.status == "running":
-        raise HTTPException(status_code=400, detail="任务已在运行中")
-
-    # 使用独立的会话在后台执行任务，避免与请求上下文会话冲突
-    async def _run_task_in_background(task_id: str):
-        async with mysql_client.session() as session:
-            bg_service = CrawlerTaskService(session)
-            await bg_service.execute_task(task_id)
-
-    # 注意：不要 await，让任务在后台运行
-    asyncio.ensure_future(_run_task_in_background(task_id))
-
-    return ApiResponse(
-        code=200,
-        message="任务已启动",
-        data={
-            "id": task.id,
-            "status": "running",
-        },
-    )
-
-
-@router.post("/tasks/{task_id}/stop", response_model=ApiResponse)
-async def stop_crawler_task(task_id: str, db: AsyncSession = Depends(get_db)):
-    """停止爬虫任务"""
-    service = CrawlerTaskService(db)
-    task = await service.stop_task(task_id)
-
-    if not task:
-        raise HTTPException(status_code=404, detail="任务不存在")
-
-    return ApiResponse(
-        code=200,
-        message="任务已停止",
-        data={
-            "id": task.id,
-            "status": task.status,
-            "completed_at": (
-                task.completed_at.isoformat() if task.completed_at else None
-            ),
-        },
-    )
-
-
-@router.delete("/tasks/{task_id}", response_model=ApiResponse)
-async def delete_crawler_task(task_id: str, db: AsyncSession = Depends(get_db)):
-    """删除爬虫任务"""
-    service = CrawlerTaskService(db)
-    try:
-        success = await service.delete_task(task_id)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-
-    if not success:
-        raise HTTPException(status_code=404, detail="任务不存在")
-
-    return ApiResponse(code=200, message="任务已删除", data={"id": task_id})
 
 
 # ========== 爬取源管理 ==========

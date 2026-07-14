@@ -101,7 +101,7 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - 迁移语料文件、解析任务和实体抽取路由
 - 把抽取 Service 拆成编排、规则修复、持久化三个职责
 
-状态：进行中。
+状态：已完成。
 
 - 阶段 3A 已完成：语料文件登记、上传、查询、删除及解析任务路由已迁移到
   `app/modules/corpus`
@@ -124,7 +124,7 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
   依赖语料模块，`app/services/document_parsers.py` 已删除
 - 实体抽取任务使用文档行锁避免并发重复创建，运行记录先落库再派发后台任务
 - PDF 页渲染移入线程池，避免同步转换阻塞 FastAPI 事件循环
-- 阶段 3C 进行中：题目选项完整性、题号连续性、综合诊断和确定性规则修复已迁移到
+- 阶段 3C 已完成：题目选项完整性、题号连续性、综合诊断和确定性规则修复已迁移到
   `app/modules/corpus/question_validation.py`
 - LLM 兜底修复、三题上下文提示、选项来源核验和修复审计已迁移到
   `app/modules/corpus/question_llm_repair.py`
@@ -256,9 +256,10 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - 爬取源、任务执行、定时调度、文件统计、爬虫日志、Scrapy Redis Bridge 和
   WebSocket 日志处理实现已迁移到 `app/modules/crawler`；应用生命周期、调度器、
   管理接口和测试已直接依赖爬虫模块，对应 7 个旧 `app/services/*.py` 文件已删除
-- `/api/v1/admin/crawler/*` 管理端点已迁移到 `app/modules/crawler/router.py`，
-  包括任务、爬取源、统计、调度、日志、文件重试和实时日志接口；URL、鉴权和响应
-  行为保持不变，并由路由归属契约测试防止重新回流到 `app/api/admin.py`
+- `/api/v1/admin/crawler/*` 管理端点已迁移到 `app/modules/crawler`；任务 CRUD
+  和启停接口进一步拆分到 `task_router.py`，其余爬取源、统计、调度、日志、
+  文件重试和实时日志接口保留在模块聚合路由中；URL、鉴权和响应行为保持不变，
+  并由路由归属契约测试防止重新回流到集中式路由
 - 已下载文件列表、详情和预览接口已迁移到 `app/modules/crawler/file_router.py`；
   下载根目录统一由 `crawler/storage.py` 管理，文件预览改为真实父目录校验，
   避免相似路径前缀绕过访问边界

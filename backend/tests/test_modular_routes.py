@@ -332,10 +332,6 @@ def test_crawler_routes_are_owned_by_crawler_module():
 
     for path in (
         "/api/v1/admin/crawler/config",
-        "/api/v1/admin/crawler/tasks",
-        "/api/v1/admin/crawler/tasks/{task_id}/start",
-        "/api/v1/admin/crawler/tasks/{task_id}/stop",
-        "/api/v1/admin/crawler/tasks/{task_id}",
         "/api/v1/admin/crawler/sources",
         "/api/v1/admin/crawler/sources/defaults",
         "/api/v1/admin/crawler/sources/{source_id}",
@@ -360,6 +356,21 @@ def test_crawler_routes_are_owned_by_crawler_module():
         "/api/v1/admin/crawler/logs/stream",
     ):
         assert routes[path].endpoint.__module__ == "app.modules.crawler.router"
+
+
+def test_crawler_task_routes_are_owned_by_task_router():
+    routes = _routes_by_path()
+
+    for path in (
+        "/api/v1/admin/crawler/tasks",
+        "/api/v1/admin/crawler/tasks/{task_id}/start",
+        "/api/v1/admin/crawler/tasks/{task_id}/stop",
+        "/api/v1/admin/crawler/tasks/{task_id}",
+    ):
+        assert (
+            routes[path].endpoint.__module__
+            == "app.modules.crawler.task_router"
+        )
 
 
 def test_downloaded_file_routes_are_owned_by_crawler_module():
