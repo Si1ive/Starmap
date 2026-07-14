@@ -22,6 +22,7 @@ from app.core.logging import get_logger
 from app.models.mysql_models import (
     KnowledgePoint, KnowledgeRelation
 )
+from app.modules.retrieval.relation_detector import KnowledgeRelationDetector
 
 logger = get_logger(__name__)
 
@@ -30,23 +31,12 @@ def generate_id() -> str:
     return uuid.uuid4().hex[:32]
 
 
-# 关系类型优先级
-RELATION_PRIORITY = {
-    "common_confusion": 1,
-    "contrast_with": 2,
-    "prerequisite": 3,
-    "contains": 4,
-    "part_of": 5,
-    "used_in": 6,
-    "similar_to": 7,
-}
-
-
 class RelationService:
     """知识点关系构建服务"""
 
     def __init__(self, db: AsyncSession):
         self.db = db
+        self.detector = KnowledgeRelationDetector()
 
     async def build_relations(
         self,
@@ -101,7 +91,7 @@ class RelationService:
                 kp2 = kp_list[j]
 
                 # 检测关系
-                relations = self._detect_relations(kp1, kp2)
+                relations = self.detector.detect(kp1, kp2)
 
                 for relation_type, confidence, evidence, direction in relations:
                     # 检查关系是否已存在
@@ -224,92 +214,6 @@ class RelationService:
                 ))
                 count += 1
         return count
-
-    def _detect_relations(
-        self,
-        kp1: KnowledgePoint,
-        kp2: KnowledgePoint,
-    ) -> List[Tuple[str, float, Optional[str], str]]:
-        """
-        检测两个知识点之间的关系
-
-        Returns:
-            List of (relation_type, confidence, evidence, direction)
-        """
-        relations = []
-
-        # 获取术语集合
-        terms1 = set(kp1.topic_terms or []) | {kp1.title}
-        terms2 = set(kp2.topic_terms or []) | {kp2.title}
-
-        # 计算术语相似度
-        common_terms = terms1 & terms2
-        if not common_terms:
-            # 没有共同术语，检查是否在同一章节
-            if kp1.primary_chapter_id and kp1.primary_chapter_id == kp2.primary_chapter_id:
-                # 同一章节，可能是相似或对比关系
-                relations.append(("similar_to", 0.5, "同一章节", "both"))
-            return relations
-
-        # 有共同术语
-        term_similarity = len(common_terms) / max(len(terms1), len(terms2), 1)
-
-        # 检查是否是易混淆关系
-        # 策略：标题相似但内容不同
-        title_sim = self._string_similarity(kp1.title, kp2.title)
-        if title_sim > 0.6 and title_sim < 0.95:
-            evidence = f"标题相似度 {title_sim:.2f}，共同术语: {', '.join(list(common_terms)[:3])}"
-            relations.append(("common_confusion", 0.7, evidence, "both"))
-
-        # 检查是否是对比关系
-        # 策略：包含对比关键词
-        contrast_keywords = ['vs', '对比', '比较', '区别', '差异', '不同', '相反']
-        content1 = (kp1.content or "").lower()
-        content2 = (kp2.content or "").lower()
-        for kw in contrast_keywords:
-            if kw in content1 or kw in content2:
-                evidence = f"包含对比关键词: {kw}"
-                relations.append(("contrast_with", 0.6, evidence, "both"))
-                break
-
-        # 检查是否是先修关系
-        # 策略：一个知识点的内容提到另一个是前置知识
-        prerequisite_keywords = ['前置', '先修', '基础', '预备', '需要先了解', '首先']
-        for kw in prerequisite_keywords:
-            if kw in content1 and kp2.title in content1:
-                evidence = f"内容提到需要先了解: {kp2.title}"
-                relations.append(("prerequisite", 0.7, evidence, "backward"))
-                break
-            if kw in content2 and kp1.title in content2:
-                evidence = f"内容提到需要先了解: {kp1.title}"
-                relations.append(("prerequisite", 0.7, evidence, "forward"))
-                break
-
-        # 如果没有检测到特定关系，但有共同术语，标记为相似
-        if not relations and term_similarity > 0.3:
-            evidence = f"共同术语: {', '.join(list(common_terms)[:3])}"
-            relations.append(("similar_to", 0.5 + term_similarity * 0.3, evidence, "both"))
-
-        return relations
-
-    def _string_similarity(self, s1: str, s2: str) -> float:
-        """计算两个字符串的相似度（简单实现）"""
-        if not s1 or not s2:
-            return 0.0
-
-        s1 = s1.lower().strip()
-        s2 = s2.lower().strip()
-
-        if s1 == s2:
-            return 1.0
-
-        # 使用字符级别的 Jaccard 相似度
-        set1 = set(s1)
-        set2 = set(s2)
-        intersection = len(set1 & set2)
-        union = len(set1 | set2)
-
-        return intersection / union if union > 0 else 0.0
 
     async def _check_relation_exists(
         self,
