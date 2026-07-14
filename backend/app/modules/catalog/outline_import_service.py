@@ -12,7 +12,6 @@
 - 后续抽取知识点/题目时，可以传 outline_id 限定使用该大纲匹配章节
 """
 
-import json
 import uuid
 from datetime import datetime, date
 from typing import Any, Dict, List, Optional, Tuple
@@ -25,6 +24,7 @@ from app.models.mysql_models import (
     ExamOutline, CanonicalChapter, Subject, DocumentSection, ExamOutlineSubject,
 )
 from app.modules.catalog.outline_llm_parser import extract_outline_llm_json
+from app.modules.catalog.outline_prompts import build_outline_guidance_prompt
 from app.modules.catalog.outline_parser import (
     detect_outline_format,
     extract_outline_code,
@@ -595,7 +595,7 @@ class OutlineImportService:
                  "points": (c.description or "")[:500]}
                 for c in batch
             ]
-            prompt = self._build_guidance_prompt(objective, items)
+            prompt = build_outline_guidance_prompt(objective, items)
             try:
                 text = await client.chat(prompt, purpose="大纲章节复习指导生成")
                 data = extract_outline_llm_json(text)
@@ -626,18 +626,6 @@ class OutlineImportService:
             "updated_chapters": updated,
             "total_chapters": len(chapters),
         }
-
-    @staticmethod
-    def _build_guidance_prompt(objective: str, items: List[Dict[str, Any]]) -> str:
-        chapters_json = json.dumps(items, ensure_ascii=False, indent=2)
-        return (
-            "你是408考研复习规划专家。下面是一门课的考察目标，以及若干章节（含原文考点）。\n"
-            "请结合考察目标，为每个章节生成简洁的『复习指导』（重点内容 + 复习方向，2-4 句），"
-            "帮助考生抓住该章重点。\n\n"
-            f"考察目标：\n{objective or '（未提供，按通用408要求）'}\n\n"
-            f"章节列表（JSON，id 是章节标识）：\n{chapters_json}\n\n"
-            "只输出 JSON，格式：{\"guidance\": {\"<章节id>\": \"复习指导文本\", ...}}，不要任何解释。"
-        )
 
 async def list_outlines(session: AsyncSession) -> List[Dict[str, Any]]:
     rows = (await session.execute(

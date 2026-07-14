@@ -9,7 +9,6 @@
 与题目抽取的「题干/选项分离 + 兜底」机制完全无关，是独立的大纲处理路径。
 """
 
-import json
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import select
@@ -19,6 +18,11 @@ from app.core.logging import get_logger
 from app.infrastructure.ai.llm_client import OutlineLLMClient
 from app.models.mysql_models import Document, Subject
 from app.modules.catalog.outline_llm_parser import extract_outline_llm_json
+from app.modules.catalog.outline_prompts import (
+    build_outline_enhancement_prompt,
+    build_outline_objective_prompt,
+    build_outline_skeleton_prompt,
+)
 from app.modules.catalog.outline_segmentation import (
     segment_outline_subjects,
     split_outline_chapter_chunks,
@@ -32,80 +36,6 @@ from app.modules.catalog.outline_tree import (
 from app.modules.operations.settings_service import SystemSettingsService
 
 logger = get_logger(__name__)
-
-# 骨架拆分 prompt（不生成 enhanced_description 和 keywords，输出量小不会截断）
-_SKELETON_PROMPT = """下面是一门课《{subject_name}》的考试大纲文本。请把它拆成结构化的章节树（骨架）。
-
-要求：
-1. 先识别这门课开头的「考察目标」（概括性的整门课要求，通常三四句话），放进 exam_objective。
-2. 再把后续内容拆成多层级章节树 chapters。层级用嵌套 children 表达（如 一 / (一) / 1. / (1) 这样的层级关系）。
-3. 每个章节节点只包含：
-   - name：章节标题（去掉前面的编号），必填
-   - outline_code：原始编号（如 "1.1.1" / "一" / "(一)"），没有就 null
-   - description：该节点对应的考点正文原文（大纲里列的具体考点），没有就 null
-   - children：子章节数组，没有就空数组
-4. 重要：不要生成 enhanced_description、keywords 或任何其他字段。
-5. 只输出 JSON，不要任何解释文字。
-
-输出格式：
-{{
-  "exam_objective": "……",
-  "chapters": [
-    {{
-      "name": "哈希表",
-      "outline_code": "1.5",
-      "description": "大纲原文...",
-      "children": [...]
-    }}
-  ]
-}}
-
-大纲文本：
----
-{content}
----"""
-
-
-# 批量增强 prompt：为一批叶子节点生成 enhanced_description + keywords + cross_references
-# 每批 10-12 个节点，保证输出量不超 max_tokens
-_BATCH_ENHANCE_PROMPT = """你是408考研大纲解析专家。下面是一些《{subject_name}》的章节节点（每个节点含考点原文 description）。请为每个节点生成 enhanced_description、keywords 和 cross_references。
-
-每个节点的 enhanced_description 要求（2-3句话，包含）：
-- 核心内容概括
-- 常见考法
-- 易混淆概念
-
-keywords 要求（5-10个）：
-- 包含中英文名称
-- 包含同义词/别名
-- 包含该节点下的核心术语
-
-cross_references 要求（可选，标注跨科目/跨章节的强关联考点）：
-- relation_type: similar_to（相似考点）/ prerequisite（前置知识）/ contrast_with（对比考点）/ common_confusion（常见混淆）
-- target_chapter_id 必须从下方考点目录中选择，不得编造
-- reason 必须具体说明关联原因
-- 宁缺毋滥，只标注确实存在强关联的考点
-
-示例：
-节点 "哈希表" 考点 "哈希函数、冲突解决、链地址法、开放寻址法"
-→ enhanced_description: "哈希表是基于哈希函数的键值对存储结构。常考冲突解决方法（链地址法、开放寻址法）、哈希函数设计、装填因子分析。易混淆：线性探测 vs 二次探测。"
-→ keywords: ["散列表", "Hash Table", "冲突解决", "链地址法", "开放寻址", "线性探测", "二次探测", "装填因子"]
-→ cross_references: [{{"target_chapter_id": "chap_xxx", "relation_type": "similar_to", "reason": "缓存中的哈希映射与哈希表原理一致"}}]
-
-全科目考点目录（选择 target_chapter_id 时参考）：
-{chapter_catalog}
-
-只输出 JSON 对象，格式：
-{{
-  "items": [
-    {{"index": 0, "enhanced_description": "...", "keywords": ["...", ...], "cross_references": [{{"target_chapter_id": "...", "relation_type": "similar_to", "reason": "..."}}]}},
-    ...
-  ]
-}}
-
-节点列表：
-{items_json}"""
-
 
 # 每批最多 12 个叶子节点（保守估计每节点 300 token 输出 = 3600，远低于 16K 上限）
 _BATCH_SIZE = 12
@@ -298,7 +228,7 @@ class OutlineLLMService:
                  为每批节点生成 enhanced_description + keywords，写回骨架树。
         """
         # ===== 第1轮：拆骨架 =====
-        prompt = _SKELETON_PROMPT.format(subject_name=subject_name, content=content[:40000])
+        prompt = build_outline_skeleton_prompt(subject_name, content[:40000])
         last_err: Optional[Exception] = None
         skeleton: Optional[Dict[str, Any]] = None
         for attempt in range(2):
@@ -406,11 +336,10 @@ class OutlineLLMService:
                     {"index": j, "name": node["name"], "description": node.get("description") or ""}
                     for j, node in enumerate(batch)
                 ]
-                items_json = json.dumps(items, ensure_ascii=False, indent=2)
-                prompt = _BATCH_ENHANCE_PROMPT.format(
-                    subject_name=subject_name,
-                    chapter_catalog=chapter_catalog,
-                    items_json=items_json,
+                prompt = build_outline_enhancement_prompt(
+                    subject_name,
+                    chapter_catalog,
+                    items,
                 )
                 try:
                     text = await client.chat(prompt, purpose=f"大纲增强-{subject_name}-批{batch_idx+1}")
@@ -456,13 +385,7 @@ class OutlineLLMService:
         """
         # 1. 提取考察目标
         header = content[:5000]
-        objective_prompt = f"""请从以下《{subject_name}》大纲片段中提取"考察目标"部分。
-
-内容：
-{header}
-
-只输出 JSON：{{"exam_objective": "考察目标文本"}}
-如果找不到，返回 {{"exam_objective": null}}"""
+        objective_prompt = build_outline_objective_prompt(subject_name, header)
 
         exam_objective = None
         try:
@@ -479,7 +402,10 @@ class OutlineLLMService:
         # 3. 每块单独拆骨架
         all_chapters = []
         for i, chunk in enumerate(chunks):
-            chunk_prompt = _SKELETON_PROMPT.format(subject_name=subject_name, content=chunk[:30000])
+            chunk_prompt = build_outline_skeleton_prompt(
+                subject_name,
+                chunk[:30000],
+            )
             try:
                 text = await client.chat(chunk_prompt, purpose=f"大纲骨架拆分-{subject_name}-块{i+1}")
                 data = extract_outline_llm_json(text)
