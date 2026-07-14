@@ -259,6 +259,16 @@ export interface ContentQualityCheck {
   message: string
 }
 
+export interface ContentQualityIssue {
+  key: string
+  check_key: string
+  severity: 'warning' | 'fail'
+  entity_type: 'question' | 'knowledge_point' | 'extraction_result'
+  entity_id?: string | null
+  entity_label: string
+  message: string
+}
+
 export interface ContentQualityGate {
   policy_version: string
   status: 'passed' | 'warning' | 'blocked' | 'running' | 'failed' | 'not_run'
@@ -284,6 +294,7 @@ export interface ContentQualityGate {
     ai_generated_option_count: number
   }
   checks: ContentQualityCheck[]
+  issues: ContentQualityIssue[]
   latest_run?: {
     id: string
     status: 'running' | 'success' | 'failed'

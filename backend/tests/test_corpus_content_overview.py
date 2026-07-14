@@ -71,6 +71,7 @@ def test_quality_gate_passes_clean_exam_content():
     assert gate["score"] == 100
     assert gate["manual_review_required"] is False
     assert all(check["status"] == "pass" for check in gate["checks"])
+    assert gate["issues"] == []
 
 
 def test_quality_gate_warns_for_generated_option_and_missing_assignment():
@@ -83,7 +84,10 @@ def test_quality_gate_warns_for_generated_option_and_missing_assignment():
             {"key": "C", "text": "C"},
             {"key": "D", "text": "D", "source": "ai_generated"},
         ],
-        extraction_meta={"fixed_by_llm": True, "original_issues": [{"issue_type": "too_few"}]},
+        extraction_meta={
+            "fixed_by_llm": True,
+            "original_issues": [{"issue_type": "too_few"}],
+        },
     )
 
     gate = CorpusContentOverviewService.build_quality_gate(
@@ -99,11 +103,32 @@ def test_quality_gate_warns_for_generated_option_and_missing_assignment():
     assert gate["metrics"]["ai_generated_option_count"] == 1
     assert gate["metrics"]["llm_repaired_question_count"] == 1
     assert gate["metrics"]["original_issue_question_count"] == 1
+    assert {
+        issue["key"] for issue in gate["issues"]
+    } == {
+        "ai-generated-option:q1",
+        "question-unassigned:q1",
+    }
+    generated_issue = next(
+        issue
+        for issue in gate["issues"]
+        if issue["key"] == "ai-generated-option:q1"
+    )
+    assert generated_issue["entity_label"] == "第1题"
+    assert generated_issue["message"] == "选项 D 由 AI 生成，需要对照原卷核验"
 
 
 def test_quality_gate_blocks_unresolved_and_unsaved_questions():
     diagnostic = {
         "skipped_question_count": 1,
+        "unsaved_samples": [
+            {
+                "question_no": 8,
+                "page_no": 2,
+                "reason": "save_failed",
+                "text_excerpt": "测试未落库题目",
+            }
+        ],
         "validation": {
             "initial_issue_count": 3,
             "final_issue_count": 1,
@@ -136,6 +161,45 @@ def test_quality_gate_blocks_unresolved_and_unsaved_questions():
         for check in gate["checks"]
         if check["status"] == "fail"
     } == {"question_integrity", "save_integrity"}
+    structure_issue = next(
+        issue
+        for issue in gate["issues"]
+        if issue["key"] == "question-structure:q1"
+    )
+    assert structure_issue["entity_label"] == "第1题"
+    assert structure_issue["message"] == "仅识别到选项 A、B、C，缺少 D"
+    unsaved_issue = next(
+        issue
+        for issue in gate["issues"]
+        if issue["key"] == "question-unsaved:0"
+    )
+    assert unsaved_issue["entity_label"] == "第8题"
+    assert unsaved_issue["message"] == (
+        "未成功入库：数据库保存失败；题干：测试未落库题目"
+    )
+
+
+def test_quality_gate_identifies_duplicate_question_numbers():
+    gate = CorpusContentOverviewService.build_quality_gate(
+        document=_document(),
+        knowledge_points=[],
+        questions=[
+            _question(question_id="q1", number="30"),
+            _question(question_id="q2", number="30"),
+        ],
+        summary=_summary(question_count=2),
+        latest_run=_run(),
+    )
+
+    duplicate_issue = next(
+        issue
+        for issue in gate["issues"]
+        if issue["key"] == "question-number-duplicate:30"
+    )
+    assert gate["status"] == "warning"
+    assert duplicate_issue["entity_id"] == "q1"
+    assert duplicate_issue["entity_label"] == "第30题"
+    assert duplicate_issue["message"] == "该题号共出现 2 次，需要确认是否错误拆题"
 
 
 def test_quality_gate_blocks_exam_without_questions():

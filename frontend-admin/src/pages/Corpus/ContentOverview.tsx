@@ -76,15 +76,24 @@ function ChapterNameTag({ name }: { name: string }) {
       <Tag
         color="blue"
         style={{
-          display: 'block',
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
           maxWidth: '100%',
           marginInlineEnd: 0,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
         }}
       >
-        {name}
+        <span
+          style={{
+            minWidth: 0,
+            maxWidth: '100%',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {name}
+        </span>
       </Tag>
     </Tooltip>
   )
@@ -157,10 +166,20 @@ function QualityBadges({ meta }: { meta?: Record<string, any> | null }) {
 
 function QualityGateSummary({ gate }: { gate: ContentQualityGate }) {
   const config = qualityStatusConfig[gate.status]
+  const issues = gate.issues || []
+  const issueCheckKeys = new Set(issues.map((issue) => issue.check_key))
   const attentionChecks = gate.checks.filter((check) => (
     check.status !== 'pass' && check.status !== 'pending'
+      && !issueCheckKeys.has(check.key)
   ))
-  const metrics = gate.metrics
+  const conclusion = {
+    passed: '当前未发现阻断或待核验问题，可以入库。',
+    warning: '当前无阻断问题，入库前建议核验以下内容。',
+    blocked: '当前不建议入库，请先处理下方标记为“阻断”的问题。',
+    running: '抽取任务仍在执行，完成后会自动更新质量结论。',
+    failed: '最新抽取任务失败，请查看下方原因后重新执行。',
+    not_run: '尚未执行实体抽取，暂无可评估的入库内容。',
+  }[gate.status]
 
   return (
     <Alert
@@ -169,44 +188,82 @@ function QualityGateSummary({ gate }: { gate: ContentQualityGate }) {
       style={{ marginBottom: 16 }}
       message={(
         <Space wrap>
-          <Text strong>入库质量门禁</Text>
+          <Text strong>入库质量</Text>
           <Tag color={config.color}>{gate.label}</Tag>
-          <Text>{gate.score} 分</Text>
+          <Text type="secondary">{gate.score} 分</Text>
         </Space>
       )}
       description={(
-        <Space direction="vertical" size={8}>
-          <Text>{gate.summary}</Text>
-          {attentionChecks.length > 0 && (
-            <Space size={[0, 6]} wrap>
-              {attentionChecks.map((check) => (
-                <Tag
-                  key={check.key}
-                  color={check.status === 'fail' ? 'red' : check.status === 'running' ? 'blue' : 'gold'}
-                  title={check.message}
-                >
-                  {check.label}：{check.message}
-                </Tag>
+        <div>
+          <Text>{conclusion}</Text>
+          {(issues.length > 0 || attentionChecks.length > 0) && (
+            <div style={{ marginTop: 8, maxHeight: 280, overflowY: 'auto' }}>
+              {issues.map((issue) => (
+                <QualityIssueRow
+                  key={issue.key}
+                  level={issue.severity}
+                  label={issue.entity_label}
+                  message={issue.message}
+                />
               ))}
-            </Space>
+              {attentionChecks.map((check) => (
+                <QualityIssueRow
+                  key={check.key}
+                  level={
+                    check.status === 'fail'
+                      ? 'fail'
+                      : check.status === 'running'
+                        ? 'running'
+                        : 'warning'
+                  }
+                  label={check.label}
+                  message={check.message}
+                />
+              ))}
+            </div>
           )}
-          <Space size={[0, 6]} wrap>
-            {metrics.llm_repaired_question_count > 0 && (
-              <Tag color="cyan">LLM 修复 {metrics.llm_repaired_question_count} 题</Tag>
-            )}
-            {metrics.recovered_option_count > 0 && (
-              <Tag color="blue">原文恢复选项 {metrics.recovered_option_count} 个</Tag>
-            )}
-            {metrics.ai_generated_option_count > 0 && (
-              <Tag color="gold">AI 生成选项 {metrics.ai_generated_option_count} 个</Tag>
-            )}
-            {metrics.initial_issue_count > 0 && (
-              <Tag>问题数 {metrics.initial_issue_count} → {metrics.final_issue_count}</Tag>
-            )}
-          </Space>
-        </Space>
+        </div>
       )}
     />
+  )
+}
+
+function QualityIssueRow({
+  level,
+  label,
+  message: issueMessage,
+}: {
+  level: 'fail' | 'warning' | 'running'
+  label: string
+  message: string
+}) {
+  const levelConfig = {
+    fail: { color: 'red', text: '阻断' },
+    warning: { color: 'gold', text: '待核验' },
+    running: { color: 'blue', text: '进行中' },
+  }[level]
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: 8,
+        padding: '7px 0',
+        borderTop: '1px solid rgba(5, 5, 5, 0.08)',
+      }}
+    >
+      <Tag
+        color={levelConfig.color}
+        style={{ minWidth: 52, marginInlineEnd: 0, textAlign: 'center' }}
+      >
+        {levelConfig.text}
+      </Tag>
+      <div style={{ minWidth: 0, lineHeight: '22px' }}>
+        <Text strong style={{ marginRight: 8 }}>{label}</Text>
+        <Text>{issueMessage}</Text>
+      </div>
+    </div>
   )
 }
 
@@ -356,6 +413,7 @@ const ContentOverview = ({
     },
     {
       title: '考点', dataIndex: 'primary_chapter_name', key: 'primary_chapter_name', width: 160,
+      align: 'center' as const,
       onCell: () => ({ style: { overflow: 'hidden' } }),
       render: (v: string | null, row: ContentOverviewQuestion) =>
         v

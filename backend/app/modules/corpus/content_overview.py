@@ -18,7 +18,8 @@ from app.models.mysql_models import (
 class CorpusContentOverviewService:
     """Load extracted entities and evaluate whether the ingestion needs attention."""
 
-    POLICY_VERSION = "2026-07-v1"
+    POLICY_VERSION = "2026-07-v2"
+    EXPECTED_OPTION_LABELS = ("A", "B", "C", "D")
 
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -213,44 +214,145 @@ class CorpusContentOverviewService:
     ) -> Dict[str, Any]:
         """Build a deterministic quality report from persisted, queryable facts."""
         question_issue_ids = set()
+        issues: List[Dict[str, Any]] = []
         llm_repaired_question_count = 0
         recovered_option_count = 0
         ai_generated_option_count = 0
         missing_question_no_count = 0
         original_issue_question_count = 0
         numbered_questions: List[str] = []
+        questions_by_number: Dict[str, List[Question]] = {}
 
         for question in questions:
             options = question.options or []
             meta = question.extraction_meta or {}
             if question.question_no:
-                numbered_questions.append(str(question.question_no).strip())
+                number = str(question.question_no).strip()
+                numbered_questions.append(number)
+                questions_by_number.setdefault(number, []).append(question)
             else:
                 missing_question_no_count += 1
+                cls._add_issue(
+                    issues,
+                    key=f"question-number-missing:{question.id}",
+                    check_key="question_numbering",
+                    severity="warning",
+                    entity_type="question",
+                    entity_id=question.id,
+                    entity_label=cls._question_label(question),
+                    message="未识别出题号，需要核对题干开头或手动补充题号",
+                )
             if meta.get("missing_question_no"):
                 missing_question_no_count += int(bool(question.question_no))
+                if question.question_no:
+                    cls._add_issue(
+                        issues,
+                        key=f"question-number-recovered:{question.id}",
+                        check_key="question_numbering",
+                        severity="warning",
+                        entity_type="question",
+                        entity_id=question.id,
+                        entity_label=cls._question_label(question),
+                        message="抽取时曾缺失题号，当前题号需要对照原卷核验",
+                    )
 
             has_option_issue = (
                 question.type == "choice" and len(options) < 4
             ) or bool(meta.get("suspected_truncated_options"))
             if has_option_issue:
                 question_issue_ids.add(question.id)
+                cls._add_issue(
+                    issues,
+                    key=f"question-structure:{question.id}",
+                    check_key="question_integrity",
+                    severity="fail",
+                    entity_type="question",
+                    entity_id=question.id,
+                    entity_label=cls._question_label(question),
+                    message=cls._question_integrity_message(
+                        question=question,
+                        options=options,
+                        meta=meta,
+                    ),
+                )
             if meta.get("fixed_by_llm") or meta.get("llm_fix_actions"):
                 llm_repaired_question_count += 1
             if meta.get("original_issues"):
                 original_issue_question_count += 1
 
+            ai_generated_labels = []
             for option in options:
                 if option.get("source") == "extracted":
                     recovered_option_count += 1
                 elif option.get("source") == "ai_generated":
                     ai_generated_option_count += 1
+                    label = (
+                        option.get("key")
+                        or option.get("label")
+                        or option.get("option_label")
+                    )
+                    if label:
+                        ai_generated_labels.append(str(label).strip().upper())
+
+            if ai_generated_labels:
+                cls._add_issue(
+                    issues,
+                    key=f"ai-generated-option:{question.id}",
+                    check_key="ai_generated_content",
+                    severity="warning",
+                    entity_type="question",
+                    entity_id=question.id,
+                    entity_label=cls._question_label(question),
+                    message=(
+                        f"选项 {cls._join_labels(ai_generated_labels)} 由 AI 生成，"
+                        "需要对照原卷核验"
+                    ),
+                )
+
+            if cls._is_question_unassigned(question):
+                cls._add_issue(
+                    issues,
+                    key=f"question-unassigned:{question.id}",
+                    check_key="chapter_assignment",
+                    severity="warning",
+                    entity_type="question",
+                    entity_id=question.id,
+                    entity_label=cls._question_label(question),
+                    message="尚未完成科目或章节归属",
+                )
+
+        for knowledge_point in knowledge_points:
+            if knowledge_point.primary_chapter_id:
+                continue
+            cls._add_issue(
+                issues,
+                key=f"knowledge-unassigned:{knowledge_point.id}",
+                check_key="chapter_assignment",
+                severity="warning",
+                entity_type="knowledge_point",
+                entity_id=knowledge_point.id,
+                entity_label=knowledge_point.title or "未命名知识点",
+                message="尚未归属标准考点",
+            )
 
         duplicate_question_no_count = sum(
             count - 1
             for count in Counter(numbered_questions).values()
             if count > 1
         )
+        for number, duplicate_questions in questions_by_number.items():
+            if len(duplicate_questions) < 2:
+                continue
+            cls._add_issue(
+                issues,
+                key=f"question-number-duplicate:{number}",
+                check_key="question_numbering",
+                severity="warning",
+                entity_type="question",
+                entity_id=duplicate_questions[0].id,
+                entity_label=f"第{number}题",
+                message=f"该题号共出现 {len(duplicate_questions)} 次，需要确认是否错误拆题",
+            )
         run_result = (
             latest_run.result_json
             if latest_run and isinstance(latest_run.result_json, dict)
@@ -278,10 +380,46 @@ class CorpusContentOverviewService:
         final_critical_issue_count = cls._as_non_negative_int(
             validation.get("final_critical_issue_count")
         )
+        unsaved_samples = (
+            diagnostic.get("unsaved_samples")
+            if isinstance(diagnostic.get("unsaved_samples"), list)
+            else []
+        )
+        for index, sample in enumerate(unsaved_samples):
+            if not isinstance(sample, dict):
+                continue
+            cls._add_issue(
+                issues,
+                key=f"question-unsaved:{index}",
+                check_key="save_integrity",
+                severity="fail",
+                entity_type="extraction_result",
+                entity_id=None,
+                entity_label=cls._unsaved_question_label(sample),
+                message=cls._unsaved_question_message(sample),
+            )
         unresolved_question_count = max(
             len(question_issue_ids),
             final_critical_issue_count,
         )
+        unlocated_critical_count = max(
+            0,
+            final_critical_issue_count - len(question_issue_ids),
+        )
+        if unlocated_critical_count:
+            cls._add_issue(
+                issues,
+                key="question-structure-unlocated",
+                check_key="question_integrity",
+                severity="fail",
+                entity_type="extraction_result",
+                entity_id=None,
+                entity_label="抽取诊断",
+                message=(
+                    f"另有 {unlocated_critical_count} 个关键结构问题未能映射到"
+                    "已入库题目，建议重新抽取后核对"
+                ),
+            )
 
         metrics = {
             **summary,
@@ -428,6 +566,13 @@ class CorpusContentOverviewService:
         warning_count = sum(
             1 for check in checks if check["status"] == "warning"
         )
+        issues.sort(
+            key=lambda issue: (
+                issue["severity"] != "fail",
+                issue["entity_label"],
+                issue["key"],
+            )
+        )
 
         return {
             "policy_version": cls.POLICY_VERSION,
@@ -438,8 +583,105 @@ class CorpusContentOverviewService:
             "manual_review_required": status in {"blocked", "failed", "warning"},
             "metrics": metrics,
             "checks": checks,
+            "issues": issues,
             "latest_run": cls._serialize_latest_run(latest_run),
         }
+
+    @classmethod
+    def _question_integrity_message(
+        cls,
+        *,
+        question: Question,
+        options: Sequence[Dict[str, Any]],
+        meta: Dict[str, Any],
+    ) -> str:
+        reasons = []
+        if question.type == "choice" and len(options) < 4:
+            labels = {
+                str(
+                    option.get("key")
+                    or option.get("label")
+                    or option.get("option_label")
+                    or ""
+                ).strip().upper()[:1]
+                for option in options
+            }
+            labels.discard("")
+            missing_labels = [
+                label
+                for label in cls.EXPECTED_OPTION_LABELS
+                if label not in labels
+            ]
+            if labels and missing_labels:
+                reasons.append(
+                    f"仅识别到选项 {cls._join_labels(sorted(labels))}，"
+                    f"缺少 {cls._join_labels(missing_labels)}"
+                )
+            else:
+                reasons.append(
+                    f"选择题仅识别到 {len(options)} 个选项，选项结构不完整"
+                )
+        if meta.get("suspected_truncated_options"):
+            reasons.append("存在疑似被截断的选项文本")
+        return "；".join(reasons) or "题目存在未解决的关键结构问题"
+
+    @staticmethod
+    def _question_label(question: Question) -> str:
+        number = str(getattr(question, "question_no", "") or "").strip()
+        if number:
+            return f"第{number}题"
+        content = str(getattr(question, "content", "") or "").strip()
+        excerpt = content[:18] + ("..." if len(content) > 18 else "")
+        return f"无题号题目：{excerpt}" if excerpt else "无题号题目"
+
+    @staticmethod
+    def _join_labels(labels: Sequence[str]) -> str:
+        return "、".join(dict.fromkeys(label for label in labels if label))
+
+    @staticmethod
+    def _unsaved_question_label(sample: Dict[str, Any]) -> str:
+        number = sample.get("question_no")
+        if number is not None:
+            return f"第{number}题"
+        page_no = sample.get("page_no")
+        return f"第{page_no}页题目" if page_no is not None else "未落库题目"
+
+    @staticmethod
+    def _unsaved_question_message(sample: Dict[str, Any]) -> str:
+        reason_text = {
+            "save_failed": "数据库保存失败",
+            "missing_subject": "缺少科目归属",
+            "missing_chapter": "缺少章节归属",
+        }.get(sample.get("reason"), sample.get("reason") or "未知原因")
+        excerpt = str(sample.get("text_excerpt") or "").strip()
+        if excerpt:
+            excerpt = excerpt[:60] + ("..." if len(excerpt) > 60 else "")
+            return f"未成功入库：{reason_text}；题干：{excerpt}"
+        return f"未成功入库：{reason_text}"
+
+    @staticmethod
+    def _add_issue(
+        issues: List[Dict[str, Any]],
+        *,
+        key: str,
+        check_key: str,
+        severity: str,
+        entity_type: str,
+        entity_id: Optional[str],
+        entity_label: str,
+        message: str,
+    ) -> None:
+        issues.append(
+            {
+                "key": key,
+                "check_key": check_key,
+                "severity": severity,
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+                "entity_label": entity_label,
+                "message": message,
+            }
+        )
 
     @staticmethod
     def _content_yield_check(
