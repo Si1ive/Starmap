@@ -86,7 +86,8 @@ podman ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 
 - `pdf-parser-service` 默认构建 `docling + mineru`
 - `MinerU` 模型缓存持久化，避免容器重建后重复下载
-- `backend` 启动前自动执行 `alembic upgrade head`
+- 全新 MySQL 数据卷会按顺序初始化通用基础表和 408 基础表
+- `backend` 启动前自动执行 `alembic upgrade head`；应用自身只校验版本，不在多实例启动期执行 DDL
 - PDF 解析请求超时可在后台“系统配置 -> PDF解析器”调整，`MinerU` 窗口大小也可在同处调整
 - PDF 题目结构修复的 LLM 兜底在后台“系统配置 -> PDF结构LLM”单独配置；API Key 可留空并使用后端 `OPENAI_API_KEY`
 - Scrapy 并发、限速、超时、重试、网络策略和代理可在后台“爬虫管理 -> 爬虫配置”调整；每个任务会记录实际运行配置快照
@@ -98,6 +99,8 @@ export MINERU_PACKAGE_SPEC='mineru[all]>=3.3,<4'
 ```
 
 ### 4. 初始化数据库
+
+全新 Podman 数据卷会自动执行本节脚本；已有数据库或纯本地运行时可手动执行：
 
 ```bash
 # 执行 408 平台建表 + 种子数据
@@ -114,6 +117,7 @@ cd backend
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
+alembic -c alembic.ini upgrade head
 
 # 安装系统依赖（macOS，用于 PDF 渲染）
 brew install poppler

@@ -20,6 +20,10 @@ from app.db.redis import redis_client
 from app.db.mysql import mysql_client
 from app.modules.catalog import router as catalog_router
 from app.modules.content import router as content_router
+from app.modules.operations.schema_guard import (
+    DatabaseSchemaError,
+    verify_database_schema,
+)
 from app.middleware.error_handler import (
     ErrorHandlerMiddleware,
     api_exception_handler,
@@ -46,14 +50,20 @@ async def lifespan(app: FastAPI):
     try:
         await mysql_client.connect()
         logger.info("MySQL连接成功")
-        try:
-            from app.tasks.migrate import run_migrations
-            await run_migrations()
-            logger.info("数据库迁移完成")
-        except Exception as e:
-            logger.warning("数据库迁移失败", error=str(e))
     except Exception as e:
         logger.warning("MySQL连接失败，服务将在降级模式下运行", error=str(e))
+    else:
+        try:
+            async with mysql_client.session() as session:
+                revisions = await verify_database_schema(session)
+            logger.info(
+                "数据库结构版本校验通过",
+                revisions=sorted(revisions),
+            )
+        except DatabaseSchemaError as e:
+            logger.critical("数据库结构版本校验失败", error=str(e))
+            await mysql_client.close()
+            raise
 
     try:
         from app.tasks.scheduler import init_scheduler

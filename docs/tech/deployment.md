@@ -28,7 +28,9 @@ podman-compose -f docker-compose.podman.yml up -d
 
 - `pdf-parser-service` 默认以 `PARSER_FLAVOR=both` 构建，同时提供 `docling` / `mineru`
 - `pdf-parser-service` 挂载持久化 `mineru_cache` 卷，避免模型重复下载
+- 全新 MySQL 数据卷会先初始化通用基础表和 408 基础表
 - `backend` 启动前自动执行 `alembic upgrade head`，用于补齐 `document_pages` 等解析链路表
+- FastAPI 进程只校验当前数据库是否位于 Alembic head，不在应用启动期执行迁移
 - `MinerU` 默认窗口大小为 `1`，也可在后台“系统配置 -> PDF解析器”里调整 `processing_window_size`
 
 ### 2.1 启动本地 PDF 解析服务
@@ -71,8 +73,13 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 export PDF_PARSER_LOCAL_ENDPOINT=http://localhost:8090
+alembic -c alembic.ini upgrade head
 python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
+
+生产环境应由发布任务或单独 migration job 执行
+`alembic upgrade head`，完成后再滚动启动 API 实例。数据库可连接但版本落后时，
+API 会拒绝启动并输出当前版本与期望版本，避免旧结构下继续写入数据。
 
 ### 5. 启动管理端
 
