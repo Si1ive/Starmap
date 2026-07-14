@@ -70,6 +70,26 @@ function ReviewTag({ status }: { status: string }) {
   return <Tag color={cfg.color}>{cfg.text}</Tag>
 }
 
+function ChapterNameTag({ name }: { name: string }) {
+  return (
+    <Tooltip title={name} placement="topLeft">
+      <Tag
+        color="blue"
+        style={{
+          display: 'block',
+          maxWidth: '100%',
+          marginInlineEnd: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {name}
+      </Tag>
+    </Tooltip>
+  )
+}
+
 function ReextractionTag({ run }: { run?: EntityExtractionRun | null }) {
   if (!run) return null
   if (run.status === 'running') {
@@ -336,9 +356,10 @@ const ContentOverview = ({
     },
     {
       title: '考点', dataIndex: 'primary_chapter_name', key: 'primary_chapter_name', width: 160,
+      onCell: () => ({ style: { overflow: 'hidden' } }),
       render: (v: string | null, row: ContentOverviewQuestion) =>
         v
-          ? <Tag color="blue">{v}</Tag>
+          ? <ChapterNameTag name={v} />
           : row.is_unassigned
             ? <Tag color="volcano" title="组题成功但未挂到大纲考点，待人工指认">未归属</Tag>
             : <Text type="secondary">未挂考点</Text>,
