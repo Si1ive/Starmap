@@ -1,7 +1,7 @@
 """
 检索模块的 Segment 构建服务
 
-从当前可用的知识点和题目构建检索单元（RetrievalSegment），
+从当前可用的知识点、题目和标准章节构建检索单元（RetrievalSegment），
 生成 embedding 并写入 Qdrant。
 
 支持：
@@ -10,34 +10,27 @@
 - 重建（删除旧 segment 后重新生成）
 """
 
-import uuid
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from qdrant_client.models import PointStruct
 
 from app.core.logging import get_logger
 from app.db.qdrant import qdrant_manager
 from app.models.mysql_models import (
-    KnowledgePoint, Question, RetrievalSegment,
-    KnowledgePointChapterLink, QuestionChapterLink,
-    EntitySourceLink, Document
+    CanonicalChapter,
+    KnowledgePoint,
+    KnowledgePointChapterLink,
+    Question,
+    QuestionChapterLink,
 )
 from app.infrastructure.ai.embedding_service import (
     get_embedding_service_from_settings,
 )
+from app.modules.retrieval.segment_factory import SegmentFactory
 from app.modules.retrieval.segment_store import SegmentStore
 
 logger = get_logger(__name__)
-
-
-def _gen_id() -> str:
-    return uuid.uuid4().hex[:32]
-
-
-def _gen_qdrant_id() -> str:
-    return str(uuid.uuid4())
 
 
 class SegmentService:
@@ -47,6 +40,7 @@ class SegmentService:
         self.db = db
         self.embedding = None  # 惰性加载：首次用时从系统设置读 embedding 配置
         self.qdrant = qdrant_manager
+        self.segment_factory = SegmentFactory()
         self.segment_store = SegmentStore(db, self.qdrant)
 
     async def _ensure_embedding(self):
@@ -98,128 +92,32 @@ class SegmentService:
             return {"segments_count": 0, "message": "没有可用的知识点"}
 
         # 2. 获取章节关联
-        chapter_map = await self._get_chapter_links("knowledge_point", [kp.id for kp in kps])
+        chapter_map = await self._get_chapter_links(
+            "knowledge_point",
+            [kp.id for kp in kps],
+        )
 
-        # 3. 构建 segments 并收集待 embedding 文本
-        segments_to_create: List[Dict[str, Any]] = []
-        texts_to_embed: List[str] = []
-
-        for kp in kps:
-            chapter_ids = chapter_map.get(kp.id, [])
-            # 结构化富化字段
-            kp_meta = {
-                "difficulty": kp.difficulty,
-                "tags": kp.tags or [],
-                "aliases": kp.aliases or [],
-                "exam_frequency": kp.exam_frequency,
-            }
-
-            # title segment
-            title_text = kp.title
-            if kp.topic_terms:
-                title_text += " " + " ".join(kp.topic_terms)
-            # 别名也并入 title segment，提升召回
-            if kp.aliases:
-                title_text += " " + " ".join(kp.aliases)
-
-            segments_to_create.append({
-                "entity_type": "knowledge_point",
-                "entity_id": kp.id,
-                "document_id": kp.source_document_id,
-                "segment_type": "title",
-                "content_text": title_text,
-                "content_md": f"# {kp.title}",
-                "sparse_text": title_text,
-                "subject_id": kp.subject_id,
-                "chapter_ids": chapter_ids,
-                "topic_terms": kp.topic_terms,
-                "meta": kp_meta,
-            })
-            texts_to_embed.append(title_text)
-
-            # content segment（内容不为空时生成）
-            if kp.content:
-                # 富化后的 summary 拼进语义载体，提升召回
-                summary_prefix = f"{kp.summary}\n\n" if getattr(kp, "summary", None) else ""
-                context_text = f"{kp.title}\n\n{summary_prefix}{kp.content}"
-                segments_to_create.append({
-                    "entity_type": "knowledge_point",
-                    "entity_id": kp.id,
-                    "document_id": kp.source_document_id,
-                    "segment_type": "content",
-                    "content_text": kp.content,
-                    "content_md": kp.content,
-                    "sparse_text": self._build_sparse_text(kp.title, kp.content, kp.topic_terms),
-                    "context_text": context_text,
-                    "subject_id": kp.subject_id,
-                    "chapter_ids": chapter_ids,
-                    "topic_terms": kp.topic_terms,
-                    "meta": kp_meta,
-                })
-                texts_to_embed.append(context_text)
+        # 3. 构建草稿并收集待 embedding 文本
+        drafts = self.segment_factory.build_knowledge_drafts(kps, chapter_map)
+        texts_to_embed = [draft.embedding_text for draft in drafts]
 
         # 4. 批量生成 embeddings
         logger.info("开始生成 embeddings", count=len(texts_to_embed))
         await self._ensure_embedding()
         embeddings = await self.embedding.embed_batch(texts_to_embed)
-        if len(embeddings) != len(segments_to_create):
-            raise RuntimeError(
-                f"知识点 embedding 数量不匹配: expected={len(segments_to_create)}, "
-                f"actual={len(embeddings)}"
-            )
-
-        # 5. 写入 MySQL + Qdrant
-        created = 0
-        new_segments: List[RetrievalSegment] = []
-        qdrant_points: List[PointStruct] = []
-
-        for seg_data, vector in zip(segments_to_create, embeddings):
-            seg_id = _gen_id()
-            qdrant_point_id = _gen_qdrant_id()
-
-            # MySQL
-            segment = RetrievalSegment(
-                id=seg_id,
-                entity_type=seg_data["entity_type"],
-                entity_id=seg_data["entity_id"],
-                document_id=seg_data.get("document_id"),
-                segment_type=seg_data["segment_type"],
-                content_text=seg_data["content_text"],
-                content_md=seg_data.get("content_md"),
-                sparse_text=seg_data.get("sparse_text"),
-                context_text=seg_data.get("context_text"),
-                subject_id=seg_data.get("subject_id"),
-                chapter_ids=seg_data.get("chapter_ids"),
-                topic_terms=seg_data.get("topic_terms"),
-                metadata_json=seg_data.get("meta"),
-                qdrant_point_id=qdrant_point_id,
-            )
-            new_segments.append(segment)
-
-            # Qdrant payload
-            collection = qdrant_manager.COLLECTION_KNOWLEDGE_SEGMENTS
-            payload = {
-                "segment_id": seg_id,
-                "entity_id": seg_data["entity_id"],
-                "segment_type": seg_data["segment_type"],
-                "subject_id": seg_data.get("subject_id"),
-                "chapter_ids": seg_data.get("chapter_ids", []),
-                "topic_terms": seg_data.get("topic_terms", []),
-                "content_preview": seg_data["content_text"][:200],
-                **(seg_data.get("meta") or {}),
-            }
-
-            qdrant_points.append(
-                PointStruct(id=qdrant_point_id, vector=vector, payload=payload)
-            )
-            created += 1
+        artifacts = self.segment_factory.materialize(
+            drafts,
+            embeddings,
+            entity_label="知识点",
+        )
+        created = len(artifacts.segments)
 
         cleanup_warning = await self.segment_store.store_segments(
             entity_type="knowledge_point",
             entity_ids=[kp.id for kp in kps],
             collection=qdrant_manager.COLLECTION_KNOWLEDGE_SEGMENTS,
-            segments=new_segments,
-            qdrant_points=qdrant_points,
+            segments=artifacts.segments,
+            qdrant_points=artifacts.qdrant_points,
             rebuild=rebuild,
         )
 
@@ -254,8 +152,6 @@ class SegmentService:
         Returns:
             构建统计
         """
-        from app.models.mysql_models import CanonicalChapter
-
         # 1. 查询大纲章节
         query = select(CanonicalChapter).where(CanonicalChapter.status == "active")
         if subject_id:
@@ -269,116 +165,28 @@ class SegmentService:
         if not chapters:
             return {"segments_count": 0, "message": "没有可用的大纲章节"}
 
-        # 2. 构建 segments 并收集待 embedding 文本
-        segments_to_create: List[Dict[str, Any]] = []
-        texts_to_embed: List[str] = []
-
-        for chapter in chapters:
-            # 结构化元数据
-            chapter_meta = {
-                "level": chapter.level,
-                "outline_code": chapter.outline_code,
-                "aliases": chapter.aliases or [],
-            }
-
-            # title segment: 标题 + keywords（提升精确匹配）
-            title_text = chapter.name
-            if chapter.keywords:
-                title_text += " " + " ".join(chapter.keywords)
-            if chapter.aliases:
-                title_text += " " + " ".join(chapter.aliases)
-
-            segments_to_create.append({
-                "entity_type": "canonical_chapter",
-                "entity_id": chapter.id,
-                "segment_type": "title",
-                "content_text": title_text,
-                "content_md": f"# {chapter.name}",
-                "sparse_text": title_text,
-                "subject_id": chapter.subject_id,
-                "chapter_ids": [chapter.id],  # 大纲章节自己作为 chapter_id
-                "meta": chapter_meta,
-            })
-            texts_to_embed.append(title_text)
-
-            # content segment: enhanced_description + description（提升语义匹配）
-            if chapter.enhanced_description or chapter.description:
-                content_parts = []
-                if chapter.enhanced_description:
-                    content_parts.append(chapter.enhanced_description)
-                if chapter.description:
-                    content_parts.append(chapter.description)
-
-                content_text = "\n\n".join(content_parts)
-                context_text = f"{chapter.name}\n\n{content_text}"
-
-                segments_to_create.append({
-                    "entity_type": "canonical_chapter",
-                    "entity_id": chapter.id,
-                    "segment_type": "content",
-                    "content_text": content_text,
-                    "content_md": content_text,
-                    "sparse_text": f"{chapter.name} {content_text}",
-                    "context_text": context_text,
-                    "subject_id": chapter.subject_id,
-                    "chapter_ids": [chapter.id],
-                    "meta": chapter_meta,
-                })
-                texts_to_embed.append(context_text)
+        # 2. 构建草稿并收集待 embedding 文本
+        drafts = self.segment_factory.build_chapter_drafts(chapters)
+        texts_to_embed = [draft.embedding_text for draft in drafts]
 
         # 3. 批量生成 embeddings
         logger.info("开始生成大纲章节 embeddings", count=len(texts_to_embed))
         await self._ensure_embedding()
         embeddings = await self.embedding.embed_batch(texts_to_embed)
 
-        # 4. 写入 MySQL + Qdrant
-        created = 0
-        new_segments: List[RetrievalSegment] = []
-        qdrant_points: List[PointStruct] = []
-
-        for seg_data, vector in zip(segments_to_create, embeddings):
-            seg_id = _gen_id()
-            qdrant_point_id = _gen_qdrant_id()
-
-            # MySQL
-            segment = RetrievalSegment(
-                id=seg_id,
-                entity_type=seg_data["entity_type"],
-                entity_id=seg_data["entity_id"],
-                segment_type=seg_data["segment_type"],
-                content_text=seg_data["content_text"],
-                content_md=seg_data.get("content_md"),
-                sparse_text=seg_data.get("sparse_text"),
-                context_text=seg_data.get("context_text"),
-                subject_id=seg_data.get("subject_id"),
-                chapter_ids=seg_data.get("chapter_ids"),
-                metadata_json=seg_data.get("meta"),
-                qdrant_point_id=qdrant_point_id,
-            )
-            new_segments.append(segment)
-
-            # Qdrant payload
-            collection = qdrant_manager.COLLECTION_KNOWLEDGE_SEGMENTS  # 大纲章节用知识库 collection
-            payload = {
-                "segment_id": seg_id,
-                "entity_id": seg_data["entity_id"],
-                "entity_type": "canonical_chapter",
-                "segment_type": seg_data["segment_type"],
-                "subject_id": seg_data.get("subject_id"),
-                "chapter_ids": seg_data.get("chapter_ids") or [],
-            }
-
-            qdrant_points.append(
-                PointStruct(id=qdrant_point_id, vector=vector, payload=payload)
-            )
-            created += 1
+        artifacts = self.segment_factory.materialize(
+            drafts,
+            embeddings,
+            entity_label="大纲章节",
+        )
+        created = len(artifacts.segments)
 
         cleanup_warning = await self.segment_store.store_segments(
             entity_type="canonical_chapter",
             entity_ids=[chapter.id for chapter in chapters],
             collection=qdrant_manager.COLLECTION_KNOWLEDGE_SEGMENTS,
-            segments=new_segments,
-            qdrant_points=qdrant_points,
+            segments=artifacts.segments,
+            qdrant_points=artifacts.qdrant_points,
             rebuild=rebuild,
         )
 
@@ -419,152 +227,34 @@ class SegmentService:
         if not questions:
             return {"segments_count": 0, "message": "没有可用的题目"}
 
-        chapter_map = await self._get_chapter_links("question", [q.id for q in questions])
+        chapter_map = await self._get_chapter_links(
+            "question",
+            [q.id for q in questions],
+        )
 
-        segments_to_create: List[Dict[str, Any]] = []
-        texts_to_embed: List[str] = []
-
-        for q in questions:
-            chapter_ids = chapter_map.get(q.id, [])
-            # 结构化富化字段：随每个 segment 落到 metadata_json + Qdrant payload，供结构化过滤
-            q_meta = {
-                "exam_year": q.exam_year or 0,
-                "exam_scope": q.exam_scope,
-                "source": q.source,
-                "paper_name": q.paper_name,
-                "difficulty": q.difficulty,
-                "question_type": q.type,
-                "tags": q.tags or [],
-                "answer_source": q.answer_source,
-                "knowledge_point_ids": q.knowledge_point_ids or [],
-            }
-
-            # title segment（题干）
-            title_text = q.content or ""
-            if q.question_no:
-                title_text = f"[{q.question_no}] {title_text}"
-
-            segments_to_create.append({
-                "entity_type": "question",
-                "entity_id": q.id,
-                "document_id": q.source_document_id,
-                "segment_type": "title",
-                "content_text": title_text,
-                "sparse_text": title_text,
-                "subject_id": q.subject_id,
-                "chapter_ids": chapter_ids,
-                "topic_terms": q.topic_terms,
-                "meta": q_meta,
-            })
-            texts_to_embed.append(title_text)
-
-            # explanation segment
-            if q.explanation:
-                context_text = f"{title_text}\n\n解析：{q.explanation}"
-                segments_to_create.append({
-                    "entity_type": "question",
-                    "entity_id": q.id,
-                    "document_id": q.source_document_id,
-                    "segment_type": "explanation",
-                    "content_text": q.explanation,
-                    "context_text": context_text,
-                    "sparse_text": self._build_sparse_text(title_text, q.explanation, q.topic_terms),
-                    "subject_id": q.subject_id,
-                    "chapter_ids": chapter_ids,
-                    "topic_terms": q.topic_terms,
-                    "meta": q_meta,
-                })
-                texts_to_embed.append(context_text)
-
-            # option segment（选择题）
-            if q.options and q.type in ("choice", "single_choice", "multi_choice", "multiple_choice"):
-                option_text = "\n".join(
-                    f"{opt.get('key') or opt.get('label') or opt.get('option_label') or ''}. {opt.get('text', '')}"
-                    for opt in q.options
-                    if isinstance(opt, dict)
-                )
-                if option_text:
-                    segments_to_create.append({
-                        "entity_type": "question",
-                        "entity_id": q.id,
-                        "document_id": q.source_document_id,
-                        "segment_type": "option",
-                        "content_text": option_text,
-                        "sparse_text": option_text,
-                        "subject_id": q.subject_id,
-                        "chapter_ids": chapter_ids,
-                        "topic_terms": q.topic_terms,
-                        "meta": q_meta,
-                    })
-                    texts_to_embed.append(option_text)
+        drafts = self.segment_factory.build_question_drafts(
+            questions,
+            chapter_map,
+        )
+        texts_to_embed = [draft.embedding_text for draft in drafts]
 
         # 批量 embedding
         logger.info("开始生成题目 embeddings", count=len(texts_to_embed))
         await self._ensure_embedding()
         embeddings = await self.embedding.embed_batch(texts_to_embed)
-        if len(embeddings) != len(segments_to_create):
-            raise RuntimeError(
-                f"题目 embedding 数量不匹配: expected={len(segments_to_create)}, "
-                f"actual={len(embeddings)}"
-            )
-
-        # 写入
-        created = 0
-        new_segments: List[RetrievalSegment] = []
-        qdrant_points: List[PointStruct] = []
-
-        for seg_data, vector in zip(segments_to_create, embeddings):
-            seg_id = _gen_id()
-            qdrant_point_id = _gen_qdrant_id()
-
-            seg_meta = seg_data.get("meta") or {}
-            segment = RetrievalSegment(
-                id=seg_id,
-                entity_type=seg_data["entity_type"],
-                entity_id=seg_data["entity_id"],
-                document_id=seg_data.get("document_id"),
-                segment_type=seg_data["segment_type"],
-                content_text=seg_data["content_text"],
-                content_md=seg_data.get("content_md"),
-                sparse_text=seg_data.get("sparse_text"),
-                context_text=seg_data.get("context_text"),
-                subject_id=seg_data.get("subject_id"),
-                chapter_ids=seg_data.get("chapter_ids"),
-                topic_terms=seg_data.get("topic_terms"),
-                metadata_json=seg_meta or None,
-                qdrant_point_id=qdrant_point_id,
-            )
-            new_segments.append(segment)
-
-            collection = qdrant_manager.COLLECTION_QUESTION_SEGMENTS
-            payload = {
-                "segment_id": seg_id,
-                "entity_id": seg_data["entity_id"],
-                "segment_type": seg_data["segment_type"],
-                "subject_id": seg_data.get("subject_id"),
-                "chapter_ids": seg_data.get("chapter_ids", []),
-                "topic_terms": seg_data.get("topic_terms", []),
-                "content_preview": seg_data["content_text"][:200],
-                # 结构化富化字段，供 Qdrant payload 过滤
-                "exam_year": seg_meta.get("exam_year", 0),
-                "exam_scope": seg_meta.get("exam_scope"),
-                "difficulty": seg_meta.get("difficulty"),
-                "question_type": seg_meta.get("question_type"),
-                "tags": seg_meta.get("tags", []),
-                "answer_source": seg_meta.get("answer_source"),
-            }
-
-            qdrant_points.append(
-                PointStruct(id=qdrant_point_id, vector=vector, payload=payload)
-            )
-            created += 1
+        artifacts = self.segment_factory.materialize(
+            drafts,
+            embeddings,
+            entity_label="题目",
+        )
+        created = len(artifacts.segments)
 
         cleanup_warning = await self.segment_store.store_segments(
             entity_type="question",
             entity_ids=[q.id for q in questions],
             collection=qdrant_manager.COLLECTION_QUESTION_SEGMENTS,
-            segments=new_segments,
-            qdrant_points=qdrant_points,
+            segments=artifacts.segments,
+            qdrant_points=artifacts.qdrant_points,
             rebuild=rebuild,
         )
 
@@ -713,13 +403,3 @@ class SegmentService:
                     link.canonical_chapter_id
                 )
             return chapter_map
-
-    @staticmethod
-    def _build_sparse_text(title: str, content: str, topic_terms: Optional[List[str]]) -> str:
-        """构建稀疏检索文本：标题 + 主题术语 + 内容前 500 字"""
-        parts = [title]
-        if topic_terms:
-            parts.extend(topic_terms)
-        if content:
-            parts.append(content[:500])
-        return " ".join(parts)

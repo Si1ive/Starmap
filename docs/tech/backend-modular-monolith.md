@@ -179,8 +179,10 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
   `app/modules/retrieval/relation_expansion.py`；`RetrievalService` 仅保留主检索和
   关系扩展结果编排
 - Segment 生成与重建编排已迁移到
-  `app/modules/retrieval/segment_service.py`；MySQL/Qdrant 双写、回滚和提交后旧向量
-  清理已进一步拆分到 `app/modules/retrieval/segment_store.py`，
+  `app/modules/retrieval/segment_service.py`；知识点、题目和标准章节的检索文本、
+  结构化元数据及 Qdrant payload 构造已拆分到
+  `app/modules/retrieval/segment_factory.py`，MySQL/Qdrant 双写、回滚和提交后旧向量
+  清理则由 `app/modules/retrieval/segment_store.py` 负责，
   `app/services/segment_service.py` 已删除
 - 知识点、题目和标准章节已统一通过 `SegmentStore` 写入，重建时不再提前删除
   标准章节旧向量，避免新索引写入失败后丢失可用检索数据
