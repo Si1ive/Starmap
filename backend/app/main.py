@@ -13,7 +13,6 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import admin
 from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
 from app.db.redis import redis_client
@@ -248,11 +247,6 @@ app.add_middleware(
 app.include_router(chat_router, prefix="/api/v1")
 app.include_router(operations_router, prefix="/api/v1")
 admin_dependencies = [Depends(require_current_admin)]
-app.include_router(
-    admin.router,
-    prefix="/api/v1",
-    dependencies=admin_dependencies,
-)
 app.include_router(
     chat_admin_router,
     prefix="/api/v1",

@@ -473,3 +473,14 @@ def test_application_has_no_duplicate_method_path_pairs():
             seen.add(key)
 
     assert duplicates == []
+
+
+def test_application_has_no_legacy_admin_route_owners():
+    legacy_routes = [
+        route.path
+        for route in app.routes
+        if hasattr(route, "endpoint")
+        and route.endpoint.__module__ == "app.api.admin"
+    ]
+
+    assert legacy_routes == []

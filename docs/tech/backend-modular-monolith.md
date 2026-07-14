@@ -3,9 +3,8 @@
 ## 结论
 
 项目已经使用 FastAPI、SQLAlchemy 2.x、Pydantic、Alembic、Redis 和 Qdrant，
-并不是缺少开发框架。当前主要问题是模块边界退化：
+并不是缺少开发框架。当前需要继续处理的主要问题是：
 
-- `app/api/admin.py` 同时承载大量不相关业务域和接口模型
 - 部分 Service 同时负责流程编排、解析规则、数据库写入和外部服务调用
 - ORM 模型集中在单个大文件，变更影响范围不直观
 - 自动化测试数量不足，且存在与当前 408 业务不一致的旧测试
@@ -54,7 +53,7 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - Service 可以依赖 ORM、基础设施适配器和其他模块公开的应用接口
 - 纯业务规则不能依赖 FastAPI、数据库连接或外部 API
 - 模块之间禁止导入对方的 Router
-- 新接口不得继续添加到巨型 `admin.py`
+- 后台业务路由必须直接归属对应模块，不再设置集中式 `admin.py`
 - 原 URL 在迁移期保持不变，避免前端和第三方调用方同时迁移
 
 ## 分阶段迁移
@@ -266,6 +265,8 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - 仍通过 `CrawlTask(source=pdf)` 和 Scrapy Bridge 执行的旧版 PDF 入库接口已迁移到
   `app/modules/crawler/pdf_ingest_router.py`；保留 `/api/v1/admin/knowledge/ingest*`
   兼容路径，并确保任务发布异常时 Bridge 连接仍会关闭
+- 原 `app/api/admin.py` 中的后台接口已全部按业务域迁移，空的兼容路由及
+  `main.py` 注册已删除；`app/api` 仅保留跨模块通用 HTTP Schema
 
 每个阶段都必须满足：
 
