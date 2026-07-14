@@ -371,7 +371,7 @@
 |------|--------|------|----------|----------|------|
 | `POST /api/v1/admin/corpus/files/scan` | Backend | `corpus_files` | `root_path` `file_types` `doc_type` | `registered_count` `skipped_count` | 可扫描并注册 |
 | `GET /api/v1/admin/corpus/files` | Backend | `corpus_files` | `status` `doc_type` `keyword` | 分页 `CorpusFile` | 可筛选 |
-| `POST /api/v1/admin/corpus/files/{file_id}/parse` | Backend | `parse_runs` | `parser` `fallback_enabled` | `parse_run_id` `status` | 可触发解析 |
+| `POST /api/v1/admin/corpus/files/{file_id}/parse` | Backend | `parse_runs` | `parser_name=mineru` `parse_mode` | `parse_run_id` `status` | 可触发解析 |
 | `GET /api/v1/admin/corpus/parse-runs` | Backend | `parse_runs` | `status` `corpus_file_id` | 分页 `ParseRun` | 可查看执行状态 |
 | `GET /api/v1/admin/corpus/documents/{document_id}` | Backend | `documents` | `document_id` | 文档详情 | 可回显基本信息 |
 | `GET /api/v1/admin/corpus/documents/{document_id}/blocks` | Backend | `document_blocks` | `page_no` `block_type` `review_status` | block 列表 | 可过滤 |

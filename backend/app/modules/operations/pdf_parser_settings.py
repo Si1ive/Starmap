@@ -116,7 +116,7 @@ def prepare_pdf_parser_update(
     notes = (switch_notes or "").strip()
     if is_switching and not notes:
         raise ValueError(
-            "切换 PDF 解析器或部署位置必须填写切换备注，说明原因、部署步骤和回滚方案"
+            "修改 MinerU 部署位置或运行参数必须填写变更备注，说明原因、步骤和回滚方案"
         )
 
     if target == "remote":

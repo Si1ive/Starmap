@@ -66,7 +66,7 @@ class DocumentParseService:
 
         1. 读取 corpus_file 记录
         2. 创建 parse_run 记录
-        3. 选择解析器并输出标准化结构
+        3. 调用 MinerU 并输出标准化结构
         4. 创建/更新 Document 记录
         5. 落库 pages、blocks、assets
         6. 更新 parse_run 状态和指标
@@ -213,8 +213,8 @@ class DocumentParseService:
         except ParserUnavailableError as e:
             elapsed = time.time() - start_time
             error_msg = (
-                f"当前激活解析器 {parser.name} 不可用：{str(e)}。"
-                " 请在系统设置 -> PDF解析器完成停旧启新后重试。"
+                f"MinerU 解析服务不可用：{str(e)}。"
+                " 请在系统设置 -> PDF解析器检查部署位置、服务地址和运行状态后重试。"
             )[:500]
             parse_run.status = "failed"
             parse_run.error_detail = error_msg

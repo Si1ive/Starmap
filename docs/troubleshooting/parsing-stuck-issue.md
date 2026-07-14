@@ -232,9 +232,10 @@ def calculate_timeout(file_size_mb):
 - 将44页PDF拆分为多个小文件
 - 分别解析后合并
 
-**选项 C：使用更快的解析器**
-- 尝试切换到 docling 解析器
-- 或优化 mineru 配置
+**选项 C：调整 MinerU 运行方式**
+- 降低 `processing_window_size`，优先保证内存稳定
+- 将同协议 MinerU 服务迁移到资源更充足的远程 Linux 主机
+- 保留失败记录并重试，不自动切换到其他解析器
 
 ### 日常操作
 

@@ -372,7 +372,7 @@ const Settings = () => {
                   style={{ marginBottom: 16 }}
                   type={activeRuntimeStatus.health_status === 'ready' ? 'success' : 'error'}
                   showIcon
-                  message={`当前激活解析器运行状态：${activeRuntimeStatus.parser_name} / ${activeRuntimeStatus.deployment_target || parserSettings?.deployment_target}`}
+                  message={`MinerU 运行状态：${activeRuntimeStatus.deployment_target || parserSettings?.deployment_target}`}
                   description={
                     activeRuntimeStatus.error_detail
                       ? `${activeRuntimeStatus.error_detail}（服务地址：${activeRuntimeStatus.service_endpoint || '-'}，最近检查：${formatCheckTime(activeRuntimeStatus.checked_at)}）`
@@ -458,7 +458,7 @@ const Settings = () => {
                 rowKey="id"
                 pagination={false}
                 size="small"
-                locale={{ emptyText: '暂无切换记录' }}
+                locale={{ emptyText: '暂无配置变更记录' }}
               >
                 <Table.Column
                   title="时间"

@@ -89,7 +89,7 @@ async def get_pdf_parser_history(
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
 ):
-    """获取 PDF 解析器切换历史"""
+    """获取 MinerU 运行配置变更历史。"""
     from app.models.mysql_models import AuditLog
 
     query = (
@@ -366,7 +366,7 @@ async def update_settings(
     """
     更新系统配置
 
-    所有顶级 section 统一落库；PDF 解析器切换额外记录审计日志。
+    所有顶级 section 统一落库；MinerU 运行配置变更额外记录审计日志。
     """
     from app.modules.operations.settings_service import (
         SystemSettingsService,

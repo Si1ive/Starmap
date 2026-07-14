@@ -20,8 +20,7 @@ requests==2.31.0
 beautifulsoup4==4.12.0
 lxml==5.3.0
 
-# Document Parsing
-docling>=2.0.0
+# Document Processing
 pdf2image>=1.16.3
 pillow>=10.0.0
 

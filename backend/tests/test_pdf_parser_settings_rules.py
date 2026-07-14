@@ -39,7 +39,7 @@ def test_prepare_pdf_parser_update_detects_unchanged_default_config():
 def test_prepare_pdf_parser_update_requires_notes_for_changes():
     current = default_system_settings()["pdf_parser"]
 
-    with pytest.raises(ValueError, match="必须填写切换备注"):
+    with pytest.raises(ValueError, match="必须填写变更备注"):
         prepare_pdf_parser_update(
             current,
             parser_name="mineru",

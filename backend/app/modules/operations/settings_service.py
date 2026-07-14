@@ -176,8 +176,8 @@ class SystemSettingsService:
             parser_health = inspect_mineru_health(plan.next_config)
             if parser_health.get("health_status") != "ready":
                 raise ValueError(
-                    f"目标解析器 mineru 当前不可用：{parser_health.get('error_detail') or '未知错误'}。"
-                    " 请先完成旧服务下线、新服务启动和依赖校验，再切换系统配置。"
+                    f"目标 MinerU 服务当前不可用：{parser_health.get('error_detail') or '未知错误'}。"
+                    " 请先完成服务启动和依赖校验，再更新系统配置。"
                 )
 
         current["pdf_parser"] = plan.next_config

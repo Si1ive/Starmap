@@ -87,7 +87,7 @@ podman ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 
 当前编排已内置：
 
-- `pdf-parser-service` 默认构建 `docling + mineru`
+- `pdf-parser-service` 只构建并运行 `MinerU`
 - `MinerU` 模型缓存持久化，避免容器重建后重复下载
 - 全新 MySQL 数据卷会按顺序初始化通用基础表和 408 基础表
 - `backend` 启动前自动执行 `alembic upgrade head`；应用自身只校验版本，不在多实例启动期执行 DDL
