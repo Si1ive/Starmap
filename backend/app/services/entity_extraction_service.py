@@ -8,7 +8,6 @@ import re
 import uuid
 import asyncio
 import json
-from collections import Counter
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Dict, Any, List, Optional, Tuple
@@ -18,6 +17,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.modules.corpus.extraction_diagnostics import (
+    build_question_extraction_diagnostic,
+    extract_fix_history,
+    question_numbering_summary,
+    question_text_excerpt,
+)
 from app.modules.corpus.question_llm_repair import LLMFallbackFixer
 from app.modules.corpus.question_layout import (
     BlockTag,
@@ -161,6 +166,13 @@ def clean_blocks_punctuation(blocks):
 
 class EntityExtractionService:
     """实体抽取服务"""
+
+    _build_question_extraction_diagnostic = staticmethod(
+        build_question_extraction_diagnostic
+    )
+    _question_numbering_summary = staticmethod(question_numbering_summary)
+    _question_text_excerpt = staticmethod(question_text_excerpt)
+    _extract_fix_history = staticmethod(extract_fix_history)
 
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -1293,105 +1305,6 @@ class EntityExtractionService:
             logger.error(f"保存题目失败: {e}")
             return False, "save_failed"
 
-    def _build_question_extraction_diagnostic(
-        self,
-        raw_questions: List[Dict[str, Any]],
-        final_questions: List[Dict[str, Any]],
-        validation_report: Dict[str, Any],
-        final_report: Dict[str, Any],
-        saved_results: List[Dict[str, Any]],
-    ) -> Dict[str, Any]:
-        """构建可直接返回给前端的题目抽取诊断摘要。"""
-        save_reasons = Counter(item.get("reason") or "unknown" for item in saved_results)
-        saved_question_count = sum(
-            1 for item in saved_results if item.get("saved")
-        )
-        raw_by_page = Counter(q.get("page_no") for q in raw_questions if q.get("page_no") is not None)
-        final_by_page = Counter(q.get("page_no") for q in final_questions if q.get("page_no") is not None)
-        saved_by_page = Counter(
-            item.get("page_no")
-            for item in saved_results
-            if item.get("saved") and item.get("page_no") is not None
-        )
-        skipped_by_page = Counter(
-            item.get("page_no")
-            for item in saved_results
-            if not item.get("saved") and item.get("page_no") is not None
-        )
-        page_numbers = sorted(set(raw_by_page) | set(final_by_page) | set(saved_by_page) | set(skipped_by_page))
-
-        return {
-            "raw_question_count": len(raw_questions),
-            "final_question_count": len(final_questions),
-            "saved_question_count": saved_question_count,
-            "skipped_question_count": len(saved_results) - saved_question_count,
-            "save_reasons": dict(save_reasons),
-            "by_page": [
-                {
-                    "page_no": page_no,
-                    "raw_question_count": raw_by_page.get(page_no, 0),
-                    "final_question_count": final_by_page.get(page_no, 0),
-                    "saved_question_count": saved_by_page.get(page_no, 0),
-                    "skipped_question_count": skipped_by_page.get(page_no, 0),
-                }
-                for page_no in page_numbers
-            ],
-            "numbering": self._question_numbering_summary(final_questions, final_report),
-            "validation": {
-                "initial_issue_count": validation_report.get("summary", {}).get("total_issues", 0),
-                "final_issue_count": final_report.get("summary", {}).get("total_issues", 0),
-                "initial_critical_issue_count": len(
-                    validation_report.get("summary", {}).get("critical_issues", [])
-                ),
-                "final_critical_issue_count": len(
-                    final_report.get("summary", {}).get("critical_issues", [])
-                ),
-            },
-            "unsaved_samples": [
-                item for item in saved_results
-                if not item.get("saved")
-            ][:20],
-        }
-
-    def _question_numbering_summary(
-        self,
-        questions: List[Dict[str, Any]],
-        final_report: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        numbers = [
-            number for number in (_extract_question_number_simple(question) for question in questions)
-            if number is not None
-        ]
-        duplicate_numbers = [
-            number for number, count in Counter(numbers).items()
-            if count > 1
-        ]
-        max_number = max(numbers, default=0)
-        number_set = set(numbers)
-        missing_numbers = (
-            [number for number in range(min(numbers), max_number + 1) if number not in number_set]
-            if numbers
-            else []
-        )
-
-        continuity = final_report.get("number_continuity", {})
-        return {
-            "numbered_question_count": len(numbers),
-            "unnumbered_question_count": len(questions) - len(numbers),
-            "min_number": min(numbers) if numbers else None,
-            "max_number": max_number or None,
-            "missing_numbers": missing_numbers,
-            "duplicate_numbers": sorted(duplicate_numbers),
-            "segment_count": len(continuity.get("segments", [])),
-        }
-
-    def _question_text_excerpt(self, question_dict: Dict[str, Any], limit: int = 120) -> str:
-        text = " ".join(
-            (question_dict.get("stem") or question_dict.get("content") or question_dict.get("raw_text") or "")
-            .split()
-        )
-        return text if len(text) <= limit else f"{text[:limit]}..."
-
     async def _extract_and_link_answers(
         self, document_id: str, blocks: List[DocumentBlock]
     ) -> int:
@@ -1463,40 +1376,6 @@ class EntityExtractionService:
             await self.db.flush()
             logger.info("PDF 答案区回连完成", document_id=document_id, linked=linked)
         return linked
-
-    def _extract_fix_history(self, questions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """提取修复历史"""
-        history = []
-        for i, q in enumerate(questions):
-            if q.get('fixed_by_rule'):
-                history.append({
-                    'question_index': i,
-                    'question_id': q.get('id'),
-                    'fix_type': 'rule',
-                    'fix_action': q.get('fixed_by_rule'),
-                    'details': {
-                        'source_index': q.get('fixed_source_index'),
-                        'inferred_number': q.get('inferred_number'),
-                    }
-                })
-            if q.get('fixed_by_llm'):
-                llm_actions = (
-                    (q.get("extraction_meta") or {}).get("llm_fix_actions")
-                    or q.get("llm_fix_actions")
-                    or []
-                )
-                history.append({
-                    'question_index': i,
-                    'question_id': q.get('id'),
-                    'fix_type': 'llm',
-                    'fix_action': (
-                        llm_actions[-1].get("action")
-                        if llm_actions and isinstance(llm_actions[-1], dict)
-                        else 'llm_fix'
-                    ),
-                    'details': llm_actions,
-                })
-        return history
 
     async def _save_diagnostic_report(self, document_id: str, report: Dict[str, Any]) -> None:
         """保存诊断报告到document的metadata"""
