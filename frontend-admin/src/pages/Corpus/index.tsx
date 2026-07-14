@@ -22,7 +22,6 @@ import {
   SyncOutlined,
   FileTextOutlined,
   EyeOutlined,
-  PlayCircleOutlined,
   PlusOutlined,
   SearchOutlined,
   LoadingOutlined,
@@ -67,12 +66,6 @@ const PIPELINE_STEPS = [
   { key: 'register', title: '注册文件' },
   { key: 'parse', title: '文档解析' },
 ]
-
-const getProcessDisabledReason = (record: CorpusFile) => {
-  if (record.status === 'parsed') return '该文件已经成功解析，可直接查看详情'
-  if (record.status === 'parsing') return '该文件正在解析中，请稍后刷新'
-  return undefined
-}
 
 const formatFileSize = (size?: number) => {
   if (!size) return '-'
@@ -361,7 +354,7 @@ const CorpusPage = () => {
     {
       title: '操作',
       key: 'actions',
-      width: 240,
+      width: 180,
       render: (_: unknown, record: CorpusFile) => (
         <Space>
           {record.document_id && (
@@ -369,7 +362,7 @@ const CorpusPage = () => {
               详情
             </Button>
           )}
-          {record.status === 'failed' || record.status === 'pending' ? (
+          {(record.status === 'failed' || record.status === 'pending') && (
             <Tooltip title="重新执行解析流程">
               <Button
                 type="link"
@@ -378,18 +371,6 @@ const CorpusPage = () => {
                 onClick={() => runPipeline(record.id, record.document_id)}
               >
                 重试
-              </Button>
-            </Tooltip>
-          ) : (
-            <Tooltip title={getProcessDisabledReason(record) || '解析文档（提取版面文字/图片/表格）。抽取知识点/题目请在文档详情页手动触发'}>
-              <Button
-                type="link"
-                size="small"
-                icon={<PlayCircleOutlined />}
-                disabled={record.status === 'parsed' || record.status === 'parsing'}
-                onClick={() => runPipeline(record.id, record.document_id)}
-              >
-                处理
               </Button>
             </Tooltip>
           )}
