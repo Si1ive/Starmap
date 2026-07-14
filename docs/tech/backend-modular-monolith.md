@@ -279,7 +279,9 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
   `app/services/system_settings_service.py` 已删除；爬虫默认值、运行参数校验、代理地址
   规则和审计脱敏进一步拆分到 `app/modules/operations/crawler_settings.py`，系统配置
   默认值、递归合并、增量输入清洗和持久化描述拆分到
-  `app/modules/operations/system_settings_rules.py`
+  `app/modules/operations/system_settings_rules.py`；MinerU 部署参数归一化、变更判断、
+  远程地址校验和审计快照拆分到
+  `app/modules/operations/pdf_parser_settings.py`
 - `/api/v1/admin/settings*` 配置查询、保存、MinerU 配置历史及 LLM 连通性测试
   接口已迁移到 `app/modules/operations/settings_router.py`；原 URL、管理员鉴权、
   API Key 脱敏和响应行为保持不变

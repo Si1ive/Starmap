@@ -12,9 +12,7 @@
 
 from __future__ import annotations
 
-import copy
 from typing import Any, Dict, Optional
-from urllib.parse import urlparse
 
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
@@ -26,6 +24,10 @@ from app.modules.corpus.parser_runtime import inspect_parser_health
 from app.modules.operations.crawler_settings import (
     normalize_crawler_settings,
     redact_crawler_runtime_config,
+)
+from app.modules.operations.pdf_parser_settings import (
+    build_pdf_parser_runtime_config,
+    prepare_pdf_parser_update,
 )
 from app.modules.operations.system_settings_rules import (
     deep_merge_dicts,
@@ -98,13 +100,7 @@ class SystemSettingsService:
 
     async def get_pdf_parser_runtime_config(self) -> Dict[str, Any]:
         data = await self.load()
-        parser_config = data.get("pdf_parser", {})
-        defaults = self._default_settings()["pdf_parser"]
-        merged = copy.deepcopy(defaults)
-        merged.update(parser_config if isinstance(parser_config, dict) else {})
-        merged["active_parser"] = "mineru"
-        merged["service_mode"] = "mineru_only"
-        return merged
+        return build_pdf_parser_runtime_config(data.get("pdf_parser", {}))
 
     async def get_crawler_runtime_config(self) -> Dict[str, Any]:
         """Return the validated crawler settings used for the next task run."""
@@ -163,131 +159,41 @@ class SystemSettingsService:
         user_agent: Optional[str] = None,
     ) -> Dict[str, Any]:
         """更新 MinerU 解析服务配置，并记录审计日志。"""
-        normalized = str(parser_name).strip().lower()
-        if normalized != "mineru":
-            raise ValueError("PDF 解析器已固定为 mineru")
-        target = str(deployment_target or "local").strip().lower()
-        if target not in {"local", "remote"}:
-            raise ValueError("pdf_parser.deployment_target 仅支持 local 或 remote")
-
         current = await self.load()
         current_parser_config = current.get("pdf_parser", {})
-        old_parser = current_parser_config.get("active_parser", "")
-        old_target = current_parser_config.get("deployment_target", "local")
-        old_local_endpoint = current_parser_config.get(
-            "local_service_endpoint",
-            self._default_settings()["pdf_parser"]["local_service_endpoint"],
+        plan = prepare_pdf_parser_update(
+            current_parser_config,
+            parser_name=parser_name,
+            deployment_target=deployment_target,
+            local_service_endpoint=local_service_endpoint,
+            remote_service_endpoint=remote_service_endpoint,
+            request_timeout_seconds=request_timeout_seconds,
+            processing_window_size=processing_window_size,
+            switch_notes=switch_notes,
         )
-        old_remote_endpoint = current_parser_config.get("remote_service_endpoint", "")
-        old_timeout = int(
-            current_parser_config.get(
-                "request_timeout_seconds",
-                self._default_settings()["pdf_parser"]["request_timeout_seconds"],
-            )
-        )
-        old_processing_window_size = int(
-            current_parser_config.get(
-                "processing_window_size",
-                self._default_settings()["pdf_parser"]["processing_window_size"],
-            )
-        )
-        next_local_endpoint = (
-            str(local_service_endpoint).strip()
-            if local_service_endpoint is not None
-            else str(old_local_endpoint or self._default_settings()["pdf_parser"]["local_service_endpoint"]).strip()
-        )
-        next_remote_endpoint = (
-            str(remote_service_endpoint).strip()
-            if remote_service_endpoint is not None
-            else str(old_remote_endpoint or "").strip()
-        )
-        next_timeout = int(request_timeout_seconds or old_timeout or 600)
-        if next_timeout < 5 or next_timeout > 600:
-            raise ValueError("pdf_parser.request_timeout_seconds 仅支持 5-600 秒")
-        next_processing_window_size = int(
-            processing_window_size
-            or current_parser_config.get(
-                "processing_window_size",
-                self._default_settings()["pdf_parser"]["processing_window_size"],
-            )
-            or self._default_settings()["pdf_parser"]["processing_window_size"]
-        )
-        if next_processing_window_size < 1 or next_processing_window_size > 64:
-            raise ValueError("pdf_parser.processing_window_size 仅支持 1-64")
 
-        is_switching = (
-            normalized != old_parser
-            or target != old_target
-            or next_local_endpoint != str(old_local_endpoint or "")
-            or next_remote_endpoint != str(old_remote_endpoint or "")
-            or next_timeout != old_timeout
-            or next_processing_window_size != old_processing_window_size
-        )
-        notes = (switch_notes or "").strip()
-
-        if is_switching and not notes:
-            raise ValueError("切换 PDF 解析器或部署位置必须填写切换备注，说明原因、部署步骤和回滚方案")
-
-        if target == "remote":
-            if not next_remote_endpoint:
-                raise ValueError("远程解析服务模式必须填写 remote_service_endpoint")
-            parsed = urlparse(next_remote_endpoint)
-            if not (parsed.scheme and parsed.netloc):
-                raise ValueError("remote_service_endpoint 地址格式不合法，需包含协议和主机")
-
-        if is_switching and target == "local":
+        if plan.requires_local_health_check:
             parser_health = inspect_parser_health(
-                normalized,
-                {
-                    "active_parser": normalized,
-                    "deployment_target": target,
-                    "local_service_endpoint": next_local_endpoint,
-                    "remote_service_endpoint": next_remote_endpoint,
-                    "request_timeout_seconds": next_timeout,
-                    "processing_window_size": next_processing_window_size,
-                },
+                "mineru",
+                plan.next_config,
             )
             if parser_health.get("health_status") != "ready":
                 raise ValueError(
-                    f"目标解析器 {normalized} 当前不可用：{parser_health.get('error_detail') or '未知错误'}。"
+                    f"目标解析器 mineru 当前不可用：{parser_health.get('error_detail') or '未知错误'}。"
                     " 请先完成旧服务下线、新服务启动和依赖校验，再切换系统配置。"
                 )
 
-        current["pdf_parser"] = {
-            "active_parser": "mineru",
-            "service_mode": "mineru_only",
-            "service_switch_notes": notes,
-            "deployment_target": target,
-            "local_service_endpoint": next_local_endpoint,
-            "remote_service_endpoint": next_remote_endpoint,
-            "request_timeout_seconds": next_timeout,
-            "processing_window_size": next_processing_window_size,
-        }
+        current["pdf_parser"] = plan.next_config
         saved = await self.save(current)
 
-        if is_switching or notes:
+        if plan.should_audit:
             audit = AuditLog(
                 user_id=user_id,
                 action="pdf_parser_switch",
                 resource_type="system_config",
                 resource_id="pdf_parser",
-                old_values={
-                    "active_parser": old_parser,
-                    "deployment_target": old_target,
-                    "local_service_endpoint": old_local_endpoint,
-                    "remote_service_endpoint": old_remote_endpoint,
-                    "request_timeout_seconds": old_timeout,
-                    "processing_window_size": old_processing_window_size,
-                },
-                new_values={
-                    "active_parser": normalized,
-                    "deployment_target": target,
-                    "local_service_endpoint": next_local_endpoint,
-                    "remote_service_endpoint": next_remote_endpoint,
-                    "request_timeout_seconds": next_timeout,
-                    "processing_window_size": next_processing_window_size,
-                    "switch_notes": notes,
-                },
+                old_values=plan.old_audit_values,
+                new_values=plan.new_audit_values,
                 ip_address=ip_address,
                 user_agent=user_agent,
             )
