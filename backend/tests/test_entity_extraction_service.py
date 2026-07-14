@@ -22,6 +22,7 @@ from app.modules.corpus.question_builder import (
     detect_stem_year,
 )
 from app.modules.corpus.question_pipeline import QuestionExtractionPipeline
+from app.modules.corpus.knowledge_pipeline import KnowledgeExtractionPipeline
 from app.models.mysql_models import CorpusFile, Document, EntityExtractionRun
 
 
@@ -321,6 +322,77 @@ def test_build_knowledge_content_prefers_markdown_and_skips_empty_blocks():
     ]
 
     assert build_knowledge_content(blocks) == "第一段 **正文**\n\n第二段正文"
+
+
+@pytest.mark.asyncio
+async def test_knowledge_pipeline_groups_by_title_and_resolves_mapping(
+    monkeypatch,
+):
+    pipeline = KnowledgeExtractionPipeline(None)
+    saved_groups = []
+
+    async def fake_save_knowledge_point(**kwargs):
+        saved_groups.append(kwargs)
+        return True
+
+    monkeypatch.setattr(
+        pipeline.persistence,
+        "save_knowledge_point",
+        fake_save_knowledge_point,
+    )
+    blocks = [
+        SimpleNamespace(
+            id="title-1",
+            page_no=1,
+            block_type="heading",
+            content_text="知识点一",
+        ),
+        SimpleNamespace(
+            id="content-1",
+            page_no=1,
+            block_type="paragraph",
+            content_text="正文一",
+        ),
+        SimpleNamespace(
+            id="content-2",
+            page_no=2,
+            block_type="list",
+            content_text="正文二",
+        ),
+        SimpleNamespace(
+            id="title-2",
+            page_no=3,
+            block_type="title",
+            content_text="知识点二",
+        ),
+        SimpleNamespace(
+            id="content-3",
+            page_no=3,
+            block_type="paragraph",
+            content_text="正文三",
+        ),
+    ]
+    mappings = {
+        1: {"chapter_id": "chapter-1"},
+        3: {"chapter_id": "chapter-3"},
+    }
+
+    saved_count = await pipeline.extract(
+        document_id="doc-1",
+        fallback_subject_id="subject-1",
+        blocks=blocks,
+        section_mappings=mappings,
+    )
+
+    assert saved_count == 2
+    assert [
+        group["mapping_info"]["chapter_id"]
+        for group in saved_groups
+    ] == ["chapter-1", "chapter-3"]
+    assert [
+        block.id
+        for block in saved_groups[0]["content_blocks"]
+    ] == ["content-1", "content-2"]
 
 
 def test_document_chapter_mapping_resolves_nearest_page():

@@ -16,7 +16,6 @@ from app.modules.corpus.document_mapping import (
     DocumentChapterMappingResolver,
 )
 from app.modules.corpus.entity_persistence import (
-    KnowledgePointPersistence,
     QuestionPersistence,
     cleanup_document_entities,
     extract_topic_terms,
@@ -29,6 +28,7 @@ from app.modules.corpus.extraction_diagnostics import (
     question_numbering_summary,
     question_text_excerpt,
 )
+from app.modules.corpus.knowledge_pipeline import KnowledgeExtractionPipeline
 from app.modules.corpus.question_builder import (
     QuestionBuilder,
     build_extraction_meta,
@@ -110,7 +110,7 @@ class EntityExtractionService:
     def __init__(self, db: AsyncSession):
         self.db = db
         self._chapter_mapping = DocumentChapterMappingResolver(db)
-        self._knowledge_persistence = KnowledgePointPersistence(db)
+        self._knowledge_pipeline = KnowledgeExtractionPipeline(db)
         self._question_persistence = QuestionPersistence(db)
         self._question_builder = QuestionBuilder(db)
         self._question_pipeline = QuestionExtractionPipeline(db)
@@ -367,40 +367,13 @@ class EntityExtractionService:
         blocks: List[DocumentBlock],
         section_mappings: Dict[int, Dict[str, Optional[str]]],
     ) -> int:
-        """抽取知识点"""
-        knowledge_count = 0
-
-        # 简单策略：将连续的 paragraph + title blocks 组合为知识点
-        current_title = None
-        current_content_blocks = []
-
-        for block in blocks:
-            # 如果是标题类型，保存前一个知识点并开始新的
-            if block.block_type in ('title', 'heading'):
-                # 保存前一个知识点
-                if current_title and current_content_blocks:
-                    created = await self._save_knowledge_point(
-                        document_id, fallback_subject_id, current_title,
-                        current_content_blocks, section_mappings
-                    )
-                    if created:
-                        knowledge_count += 1
-                    current_content_blocks = []
-
-                current_title = block
-            elif block.block_type in ('paragraph', 'list'):
-                current_content_blocks.append(block)
-
-        # 保存最后一个知识点
-        if current_title and current_content_blocks:
-            created = await self._save_knowledge_point(
-                document_id, fallback_subject_id, current_title,
-                current_content_blocks, section_mappings
-            )
-            if created:
-                knowledge_count += 1
-
-        return knowledge_count
+        """兼容入口：委托知识点抽取流水线。"""
+        return await self._knowledge_pipeline.extract(
+            document_id=document_id,
+            fallback_subject_id=fallback_subject_id,
+            blocks=blocks,
+            section_mappings=section_mappings,
+        )
 
     async def _save_knowledge_point(
         self,
@@ -410,14 +383,13 @@ class EntityExtractionService:
         content_blocks: List[DocumentBlock],
         section_mappings: Dict[int, Dict[str, Optional[str]]],
     ) -> bool:
-        """兼容入口：解析页映射后委托知识点持久化组件。"""
-        mapping_info = self._resolve_mapping_for_page(title_block.page_no, section_mappings)
-        return await self._knowledge_persistence.save_knowledge_point(
+        """兼容入口：委托知识点流水线保存单个分组。"""
+        return await self._knowledge_pipeline.save_group(
             document_id=document_id,
             fallback_subject_id=fallback_subject_id,
             title_block=title_block,
             content_blocks=content_blocks,
-            mapping_info=mapping_info,
+            section_mappings=section_mappings,
         )
 
     async def _extract_questions(
