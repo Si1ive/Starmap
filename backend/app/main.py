@@ -10,7 +10,7 @@ FastAPI应用入口，负责：
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import chat, admin
@@ -21,6 +21,11 @@ from app.db.mysql import mysql_client
 from app.modules.catalog import router as catalog_router
 from app.modules.content import router as content_router
 from app.modules.corpus import router as corpus_router
+from app.modules.operations import router as operations_router
+from app.modules.operations.security import (
+    require_current_admin,
+    validate_admin_security_config,
+)
 from app.modules.operations.schema_guard import (
     DatabaseSchemaError,
     verify_database_schema,
@@ -40,6 +45,7 @@ logger = get_logger(__name__)
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     configure_logging()
+    validate_admin_security_config()
     logger.info("408考研学习平台 API 启动中...")
 
     try:
@@ -203,10 +209,28 @@ app.add_middleware(
 
 # 注册路由
 app.include_router(chat.router, prefix="/api/v1")
-app.include_router(admin.router, prefix="/api/v1")
-app.include_router(catalog_router, prefix="/api/v1")
-app.include_router(content_router, prefix="/api/v1")
-app.include_router(corpus_router, prefix="/api/v1")
+app.include_router(operations_router, prefix="/api/v1")
+admin_dependencies = [Depends(require_current_admin)]
+app.include_router(
+    admin.router,
+    prefix="/api/v1",
+    dependencies=admin_dependencies,
+)
+app.include_router(
+    catalog_router,
+    prefix="/api/v1",
+    dependencies=admin_dependencies,
+)
+app.include_router(
+    content_router,
+    prefix="/api/v1",
+    dependencies=admin_dependencies,
+)
+app.include_router(
+    corpus_router,
+    prefix="/api/v1",
+    dependencies=admin_dependencies,
+)
 
 
 @app.get("/health")

@@ -73,6 +73,9 @@
 已迁移模块：
 
 - `backend/app/modules/catalog/router.py`：学科与章节目录
+- `backend/app/modules/content`：题目、知识点及审核元数据
+- `backend/app/modules/corpus`：语料文件、解析任务和文档抽取工作流
+- `backend/app/modules/operations`：数据库管理员认证、JWT、用户与部署校验
 
 ### 对话接口
 

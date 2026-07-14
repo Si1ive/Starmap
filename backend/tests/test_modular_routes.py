@@ -21,6 +21,19 @@ def test_catalog_routes_keep_existing_paths_and_methods():
     assert "GET" in chapters.methods
 
 
+def test_auth_and_user_routes_are_owned_by_operations_module():
+    routes = _routes_by_path()
+
+    for path in (
+        "/api/v1/admin/auth/login",
+        "/api/v1/admin/auth/logout",
+        "/api/v1/admin/auth/me",
+        "/api/v1/admin/users",
+        "/api/v1/admin/users/{user_id}",
+    ):
+        assert routes[path].endpoint.__module__ == "app.modules.operations.router"
+
+
 def test_catalog_routes_are_owned_by_catalog_module():
     routes = _routes_by_path()
 

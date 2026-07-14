@@ -9,6 +9,18 @@ class Settings(BaseSettings):
     ENV: str = os.getenv("ENV", "development")
     DEBUG: bool = ENV == "development"
 
+    # Admin authentication
+    ADMIN_JWT_SECRET: str = os.getenv(
+        "ADMIN_JWT_SECRET",
+        "development-only-admin-jwt-secret-change-me",
+    )
+    ADMIN_JWT_ALGORITHM: str = os.getenv("ADMIN_JWT_ALGORITHM", "HS256")
+    ADMIN_JWT_EXPIRE_MINUTES: int = int(
+        os.getenv("ADMIN_JWT_EXPIRE_MINUTES", "480")
+    )
+    ADMIN_JWT_ISSUER: str = os.getenv("ADMIN_JWT_ISSUER", "starmap-admin")
+    ADMIN_JWT_AUDIENCE: str = os.getenv("ADMIN_JWT_AUDIENCE", "starmap-admin")
+
     # CORS
     ALLOWED_ORIGINS: List[str] = [
         "http://localhost:5173",

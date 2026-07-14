@@ -1,20 +1,18 @@
 """
 后台管理 API 路由。
 
-当前提供认证、看板、爬虫、对话、监控、系统设置等后台接口。
+当前提供看板、爬虫、对话、监控、系统设置等后台接口。
 """
 
 import json
 import os
 import asyncio
 import uuid
-import hashlib
-import base64
 from pathlib import Path
 from typing import Optional, List, Any, Dict
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, WebSocket, WebSocketDisconnect, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, UploadFile, File, Form
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, Response, FileResponse
 from pydantic import BaseModel, Field
@@ -25,6 +23,7 @@ from app.api.schemas import ApiResponse, BatchIdsRequest
 from app.core.logging import get_logger
 from app.core.websocket import log_websocket_manager
 from app.db import get_db, get_optional_db
+from app.modules.operations.security import get_request_admin_id
 from app.services.source_service import CrawlerSourceService
 from app.services.stats_service import CrawlerStatsService
 from app.services.schedule_service import CrawlerScheduleService
@@ -38,136 +37,6 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/admin", tags=["后台管理"])
 
 SECRET_KEEP_MASK = "__KEEP_EXISTING__"
-
-
-# ========== 认证相关 ==========
-
-class LoginRequest(BaseModel):
-    """登录请求"""
-    username: str = Field(..., min_length=1, max_length=50, description="用户名")
-    password: str = Field(..., min_length=1, max_length=100, description="密码")
-
-
-class AdminUserResponse(BaseModel):
-    """管理员用户信息"""
-    id: str
-    username: str
-    nickname: str
-    avatar: Optional[str] = None
-    role: str
-    permissions: List[str]
-
-
-class LoginResponse(BaseModel):
-    """登录响应"""
-    token: str
-    user: AdminUserResponse
-
-
-# 模拟管理员数据（开发调试用）
-MOCK_ADMIN_USERS = {
-    "admin": {
-        "id": "admin_001",
-        "username": "admin",
-        "nickname": "超级管理员",
-        "avatar": None,
-        "role": "super",
-        "permissions": [
-            "person:view", "person:edit", "person:delete",
-            "work:view", "work:edit",
-            "crawler:view", "crawler:control", "crawler:manage",
-            "conversation:view",
-            "monitor:view",
-            "settings:manage",
-            "user:manage"
-        ],
-        "password": "admin123"
-    },
-    "operator": {
-        "id": "admin_002",
-        "username": "operator",
-        "nickname": "运营人员",
-        "avatar": None,
-        "role": "operator",
-        "permissions": [
-            "person:view",
-            "work:view",
-            "crawler:view",
-            "conversation:view",
-            "monitor:view"
-        ],
-        "password": "operator123"
-    }
-}
-
-
-@router.post("/auth/login", response_model=ApiResponse)
-async def login(request: LoginRequest):
-    """
-    管理员登录
-    
-    验证用户名密码，返回 JWT Token 和用户信息。
-    """
-    user = MOCK_ADMIN_USERS.get(request.username)
-    
-    if not user or user["password"] != request.password:
-        return ApiResponse(
-            code=401,
-            message="用户名或密码错误",
-            data=None
-        )
-    
-    # 生成模拟 Token
-    token = f"mock_jwt_token_{user['id']}"
-    
-    return ApiResponse(
-        code=200,
-        message="登录成功",
-        data={
-            "token": token,
-            "user": {
-                "id": user["id"],
-                "username": user["username"],
-                "nickname": user["nickname"],
-                "avatar": user["avatar"],
-                "role": user["role"],
-                "permissions": user["permissions"]
-            }
-        }
-    )
-
-
-@router.post("/auth/logout", response_model=ApiResponse)
-async def logout():
-    """
-    管理员登出
-    
-    清除当前用户的登录状态。
-    """
-    return ApiResponse(code=200, message="登出成功")
-
-
-@router.get("/auth/me", response_model=ApiResponse)
-async def get_current_user():
-    """
-    获取当前管理员信息
-    
-    根据请求头中的 Token 返回当前登录用户信息。
-    """
-    # 返回默认管理员信息（开发调试）
-    user = MOCK_ADMIN_USERS["admin"]
-    return ApiResponse(
-        code=200,
-        message="success",
-        data={
-            "id": user["id"],
-            "username": user["username"],
-            "nickname": user["nickname"],
-            "avatar": user["avatar"],
-            "role": user["role"],
-            "permissions": user["permissions"]
-        }
-    )
 
 
 # ========== 看板相关 ==========
@@ -305,15 +174,10 @@ async def update_crawler_config(
     """更新爬虫运行配置，并记录操作审计。"""
     from app.services.system_settings_service import SystemSettingsService
 
-    auth_header = request.headers.get("Authorization", "")
-    user_id: Optional[str] = None
-    if auth_header.startswith("Bearer mock_jwt_token_"):
-        user_id = auth_header.replace("Bearer mock_jwt_token_", "", 1)
-
     try:
         config = await SystemSettingsService(db).update_crawler_settings(
             data,
-            user_id=user_id,
+            user_id=get_request_admin_id(request),
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("User-Agent"),
         )
@@ -1745,11 +1609,6 @@ async def update_settings(
     from app.services.system_settings_service import SystemSettingsService, LLM_CONFIG_KEYS
 
     runtime_service = SystemSettingsService(db)
-    auth_header = request.headers.get("Authorization", "")
-    user_id: Optional[str] = None
-    if auth_header.startswith("Bearer mock_jwt_token_"):
-        user_id = auth_header.replace("Bearer mock_jwt_token_", "", 1)
-
     ip_address = request.client.host if request.client else None
     user_agent = request.headers.get("User-Agent")
     current_settings = await runtime_service.load()
@@ -1790,7 +1649,7 @@ async def update_settings(
                     current_settings["pdf_parser"]["processing_window_size"],
                 ),
                 switch_notes=parser_section.get("service_switch_notes", ""),
-                user_id=user_id,
+                user_id=get_request_admin_id(request),
                 ip_address=ip_address,
                 user_agent=user_agent,
             )
@@ -1873,205 +1732,6 @@ async def delete_conversation(
     if not result.rowcount:
         raise HTTPException(status_code=404, detail="会话不存在")
     return ApiResponse(data={"deleted": int(result.rowcount or 0)})
-
-# ========== P1: 用户管理相关 ==========
-
-
-
-class CreateUserRequest(BaseModel):
-    username: str = Field(..., min_length=2, max_length=50)
-    email: str = Field(..., max_length=100)
-    password: str = Field(..., min_length=6)
-    role: str = Field(default="operator")
-    permissions: List[str] = Field(default_factory=list)
-    is_active: bool = Field(default=True)
-
-
-class UpdateUserRequest(BaseModel):
-    email: Optional[str] = None
-    role: Optional[str] = None
-    permissions: Optional[List[str]] = None
-    is_active: Optional[bool] = None
-
-
-@router.get("/users", response_model=ApiResponse)
-async def get_users(db: AsyncSession = Depends(get_db)):
-    """获取用户列表"""
-    from app.models.mysql_models import AdminUser
-
-    result = await db.execute(select(AdminUser).order_by(AdminUser.created_at.desc()))
-    users = result.scalars().all()
-
-    return ApiResponse(
-        code=200,
-        message="success",
-        data={"users": [_admin_user_to_dict(user) for user in users]}
-    )
-
-
-@router.post("/users", response_model=ApiResponse)
-async def create_user(
-    req: CreateUserRequest,
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-):
-    """创建用户"""
-    from app.models.mysql_models import AdminUser
-
-    existing = await db.scalar(
-        select(AdminUser).where(
-            or_(AdminUser.username == req.username, AdminUser.email == req.email)
-        )
-    )
-    if existing:
-        raise HTTPException(status_code=400, detail="用户名或邮箱已存在")
-
-    user = AdminUser(
-        id=uuid.uuid4().hex[:32],
-        username=req.username,
-        email=req.email,
-        password_hash=_hash_admin_password(req.password),
-        role=req.role,
-        permissions=req.permissions,
-        is_active=req.is_active,
-    )
-    db.add(user)
-    await _add_admin_audit_log(
-        db,
-        request,
-        action="admin_user_create",
-        resource_id=user.id,
-        new_values=_admin_user_to_dict(user),
-    )
-    await db.commit()
-
-    return ApiResponse(code=200, message="创建成功", data={"user": _admin_user_to_dict(user)})
-
-
-@router.put("/users/{user_id}", response_model=ApiResponse)
-async def update_user(
-    user_id: str,
-    req: UpdateUserRequest,
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-):
-    """更新用户"""
-    from app.models.mysql_models import AdminUser
-
-    user = await db.get(AdminUser, user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="用户不存在")
-
-    old_values = _admin_user_to_dict(user)
-
-    if req.email is not None and req.email != user.email:
-        existing = await db.scalar(
-            select(AdminUser).where(AdminUser.email == req.email, AdminUser.id != user_id)
-        )
-        if existing:
-            raise HTTPException(status_code=400, detail="邮箱已存在")
-        user.email = req.email
-    if req.role is not None:
-        user.role = req.role
-    if req.permissions is not None:
-        user.permissions = req.permissions
-    if req.is_active is not None:
-        user.is_active = req.is_active
-
-    await _add_admin_audit_log(
-        db,
-        request,
-        action="admin_user_update",
-        resource_id=user.id,
-        old_values=old_values,
-        new_values=_admin_user_to_dict(user),
-    )
-    await db.commit()
-    await db.refresh(user)
-
-    return ApiResponse(code=200, message="更新成功", data={"user": _admin_user_to_dict(user)})
-
-
-@router.delete("/users/{user_id}", response_model=ApiResponse)
-async def delete_user(
-    user_id: str,
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-):
-    """删除用户"""
-    from app.models.mysql_models import AdminUser
-
-    user = await db.get(AdminUser, user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="用户不存在")
-    if user.username == "admin":
-        raise HTTPException(status_code=400, detail="默认管理员不能删除")
-
-    old_values = _admin_user_to_dict(user)
-    await db.delete(user)
-    await _add_admin_audit_log(
-        db,
-        request,
-        action="admin_user_delete",
-        resource_id=user_id,
-        old_values=old_values,
-    )
-    await db.commit()
-
-    return ApiResponse(code=200, message="删除成功")
-
-
-def _admin_user_to_dict(user) -> dict:
-    return {
-        "id": user.id,
-        "username": user.username,
-        "email": user.email,
-        "role": user.role,
-        "permissions": user.permissions or [],
-        "is_active": bool(user.is_active),
-        "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
-        "created_at": user.created_at.isoformat() if user.created_at else None,
-    }
-
-
-async def _add_admin_audit_log(
-    db: AsyncSession,
-    request: Request,
-    action: str,
-    resource_id: str,
-    old_values: Optional[dict] = None,
-    new_values: Optional[dict] = None,
-) -> None:
-    from app.models.mysql_models import AuditLog
-
-    auth_header = request.headers.get("Authorization", "")
-    user_id: Optional[str] = None
-    if auth_header.startswith("Bearer mock_jwt_token_"):
-        user_id = auth_header.replace("Bearer mock_jwt_token_", "", 1)
-
-    db.add(AuditLog(
-        user_id=user_id,
-        action=action,
-        resource_type="admin_user",
-        resource_id=resource_id,
-        old_values=old_values,
-        new_values=new_values,
-        ip_address=request.client.host if request.client else None,
-        user_agent=request.headers.get("User-Agent"),
-    ))
-
-
-def _hash_admin_password(password: str) -> str:
-    """生成稳定的管理员密码哈希；当前用户管理不改变现有 mock 登录链路。"""
-    iterations = 260_000
-    salt = os.urandom(16)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
-    return "pbkdf2_sha256${}${}${}".format(
-        iterations,
-        base64.b64encode(salt).decode("ascii"),
-        base64.b64encode(digest).decode("ascii"),
-    )
-
 
 # ========== PDF入库 ==========
 

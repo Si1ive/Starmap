@@ -297,10 +297,10 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     INDEX idx_created_at (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='审计日志表';
 
--- 插入默认管理员账号（密码需要在应用层哈希后更新）
+-- 插入默认管理员账号
 -- 默认密码: admin123，请在首次登录后修改
 INSERT IGNORE INTO admin_users (id, username, email, password_hash, role, permissions) VALUES 
-('admin_001', 'admin', 'admin@starmap.com', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewKyNiAYMyzJ/I1K', 'super_admin', '["*"]');
+('admin_001', 'admin', 'admin@starmap.com', 'pbkdf2_sha256$260000$c3Rhcm1hcC1hZG1pbi12MQ==$C8noSgD3Ai6cTZy7F4rBuD/NQ3wGosCO8KNy/2unhKM=', 'super_admin', '["*"]');
 
 -- 创建统计视图
 CREATE OR REPLACE VIEW v_crawl_summary AS

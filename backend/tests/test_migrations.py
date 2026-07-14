@@ -25,4 +25,4 @@ def test_migration_graph_has_single_head():
     config.set_main_option("script_location", str(backend_dir / "alembic"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_heads() == ["20260714_api_latency_histogram"]
+    assert scripts.get_heads() == ["20260714_admin_auth"]

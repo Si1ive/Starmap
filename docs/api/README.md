@@ -50,11 +50,22 @@
 
 ### 认证
 
+除登录外，所有 `/api/v1/admin/*` HTTP 接口都要求请求头：
+
+```text
+Authorization: Bearer <token>
+```
+
+管理员登录从 `admin_users` 表校验账号状态和密码，令牌过期或账号停用后返回
+HTTP `401`。实时日志 WebSocket 使用同一令牌，可通过 `Authorization` 请求头或
+`?token=<token>` 传入。
+
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | POST | `/api/v1/admin/auth/login` | 登录 |
 | POST | `/api/v1/admin/auth/logout` | 登出 |
 | GET | `/api/v1/admin/auth/me` | 当前用户 |
+| GET/POST/PUT/DELETE | `/api/v1/admin/users*` | 管理员账号管理（需 `user:manage` 或超级管理员） |
 
 ### 看板
 

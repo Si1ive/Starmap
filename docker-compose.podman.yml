@@ -158,6 +158,8 @@ services:
       - CORPUS_UPLOAD_MAX_BYTES=${CORPUS_UPLOAD_MAX_BYTES:-209715200}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4}
+      - ADMIN_JWT_SECRET=${ADMIN_JWT_SECRET:-development-only-admin-jwt-secret-change-me}
+      - ADMIN_JWT_EXPIRE_MINUTES=${ADMIN_JWT_EXPIRE_MINUTES:-480}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - ENV=development
     depends_on:

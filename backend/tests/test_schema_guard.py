@@ -52,5 +52,5 @@ async def test_schema_guard_reports_missing_version_table():
 
 def test_schema_guard_reads_the_project_migration_heads():
     assert get_expected_revisions() == frozenset(
-        {"20260714_api_latency_histogram"}
+        {"20260714_admin_auth"}
     )
