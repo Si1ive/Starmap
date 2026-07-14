@@ -118,7 +118,8 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
   `app/modules/corpus/section_heading.py`，旧 Service 文件已删除
 - 文档解析编排已迁移到 `app/modules/corpus/document_parse_service.py`，
   页面、块、资产持久化和文档详情查询位于
-  `app/modules/corpus/document_store.py`，旧 Service 文件已删除
+  `app/modules/corpus/document_store.py`；嵌入式 MinerU 日志进度提取、限流写入和
+  处理器挂载生命周期位于 `app/modules/corpus/parse_progress.py`，旧 Service 文件已删除
 - 文档解析公共契约位于 `app/modules/corpus/parser_types.py`，嵌入式 MinerU
   适配位于 `mineru_parser.py`，HTTP 服务客户端位于 `parser_service_client.py`，
   运行时选择与探活位于 `parser_runtime.py`

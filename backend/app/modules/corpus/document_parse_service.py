@@ -5,8 +5,6 @@ pages/blocks/assets, and track parse run state.
 """
 
 import asyncio
-import logging
-import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -27,89 +25,14 @@ from app.modules.corpus.document_store import (
 from app.modules.corpus.entity_persistence import cleanup_document_entities
 from app.modules.corpus.parser_runtime import choose_parser
 from app.modules.corpus.parser_types import ParserUnavailableError
+from app.modules.corpus.parse_progress import (
+    MinerUProgressHandler,
+    attach_mineru_progress_handler,
+    detach_mineru_progress_handler,
+)
 from app.modules.operations.settings_service import SystemSettingsService
 
 logger = get_logger(__name__)
-
-
-class MinerUProgressHandler(logging.Handler):
-    """
-    拦截 MinerU 日志，提取逐页进度并更新 ParseRun（embedded 模式用）。
-
-    真实 MinerU 日志关键行（loguru INFO）：
-    - "Pipeline processing window batch 2/11: 2/11 pages, batch_pages=1, ..."
-    - "... multi-file run. doc_count=1, total_pages=11, window_size=1, total_batches=11"
-    """
-
-    def __init__(self, run_id: str, db_session: AsyncSession, loop: asyncio.AbstractEventLoop):
-        super().__init__()
-        self.run_id = run_id
-        self.db = db_session
-        self.loop = loop
-        self.last_update_time = 0
-        self.update_interval = 2.0  # 最多每 2 秒更新一次 DB，避免过于频繁
-        self.total_pages: Optional[int] = None
-
-        self.patterns = [
-            re.compile(r'batch\s+(\d+)\s*/\s*(\d+)', re.IGNORECASE),   # "batch 2/11" —— 最可靠
-            re.compile(r'(\d+)\s*/\s*(\d+)\s*pages', re.IGNORECASE),   # "2/11 pages"
-            re.compile(r'page[^\d]{0,6}(\d+)\s*/\s*(\d+)', re.IGNORECASE),
-        ]
-        self.total_pages_pattern = re.compile(r'total_pages[=:\s]+(\d+)', re.IGNORECASE)
-
-    def emit(self, record):
-        """处理日志记录，提取页码并更新进度"""
-        try:
-            message = record.getMessage()
-            lower = message.lower()
-            if "page" not in lower and "batch" not in lower:
-                return
-
-            # 先抓总页数
-            tm = self.total_pages_pattern.search(message)
-            if tm:
-                self.total_pages = int(tm.group(1))
-
-            current_page = None
-            total_pages = self.total_pages
-            for pattern in self.patterns:
-                match = pattern.search(message)
-                if match:
-                    current_page = int(match.group(1))
-                    if len(match.groups()) > 1:
-                        total_pages = int(match.group(2))
-                    break
-
-            if current_page is None:
-                return
-
-            # 限流：避免过于频繁的 DB 写入
-            now = time.time()
-            if now - self.last_update_time < self.update_interval:
-                return
-            self.last_update_time = now
-
-            asyncio.run_coroutine_threadsafe(
-                self._update_progress(current_page, total_pages),
-                self.loop
-            )
-        except Exception as e:
-            logger.warning(f"MinerU progress handler error: {e}")
-
-    async def _update_progress(self, current_page: int, total_pages: Optional[int]):
-        """异步更新 ParseRun 的进度字段"""
-        try:
-            run = await self.db.get(ParseRun, self.run_id)
-            if run:
-                run.current_page = current_page
-                if total_pages:
-                    run.total_pages = total_pages
-                    run.stage_detail = f"正在解析第 {current_page}/{total_pages} 页..."
-                else:
-                    run.stage_detail = f"正在解析第 {current_page} 页..."
-                await self.db.commit()
-        except Exception as e:
-            logger.warning(f"Failed to update parse progress: {e}")
 
 
 class DocumentParseService:
@@ -415,11 +338,11 @@ class DocumentParseService:
                 # embedded 模式：挂载日志拦截器
                 try:
                     loop = asyncio.get_running_loop()
-                    progress_handler = MinerUProgressHandler(run_id, self.db, loop)
-                    progress_handler.setLevel(logging.DEBUG)
-                    # 兼容新旧 MinerU：同时挂到 root / mineru / magic_pdf
-                    for logger_name in ("", "mineru", "magic_pdf"):
-                        logging.getLogger(logger_name).addHandler(progress_handler)
+                    progress_handler = attach_mineru_progress_handler(
+                        run_id,
+                        self.db,
+                        loop,
+                    )
                     logger.info("MinerU 日志拦截器已挂载(embedded)", run_id=run_id)
                 except Exception as e:
                     logger.warning(f"无法挂载 MinerU 进度拦截器: {e}")
@@ -449,8 +372,7 @@ class DocumentParseService:
                 # 卸载 embedded 日志拦截器
                 if progress_handler:
                     try:
-                        for logger_name in ("", "mineru", "magic_pdf"):
-                            logging.getLogger(logger_name).removeHandler(progress_handler)
+                        detach_mineru_progress_handler(progress_handler)
                     except Exception as e:
                         logger.warning(f"卸载 MinerU 进度拦截器失败: {e}")
 
