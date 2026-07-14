@@ -6,6 +6,7 @@
 - [数据模型](./data-model.md) - 数据结构与检索模型
 - [架构设计](./architecture.md) - 系统架构
 - [后端模块化单体演进方案](./backend-modular-monolith.md) - 后端边界、依赖规则与分阶段重构路线
+- [用户端 Agent 技术架构](./user-agent-client-architecture.md) - Web-first 客户端、Agent Runtime、能力适配与安全边界
 - [多模态入库与检索设计](./multimodal-ingestion-retrieval-design.md) - 语料入库与检索方案
 - [MinerU 解析运行时设计](./pdf-parser-runtime-design.md) - 解析契约、模块边界和部署目标
 - [MinerU 解析服务部署](./pdf-parser-deployment.md) - Podman / 远程服务部署说明
@@ -18,6 +19,7 @@
 
 | 层级 | 技术 | 说明 |
 |------|------|------|
+| 用户端 | React 18 + TypeScript + Vite | Web-first 学习 Agent 工作台，按需扩展 Tauri 或浏览器能力 |
 | 管理端 | React 18 + TypeScript + Vite + Ant Design | 后台管理界面 |
 | 后端 | FastAPI + SQLAlchemy | API、任务编排、RAG 服务 |
 | 主数据库 | MySQL 8 | 学科、章节、知识点、题目、语料元数据 |
@@ -63,13 +65,15 @@ VITE_API_BASE_URL=http://localhost:8000
 
 | 路径 | 说明 |
 |------|------|
-| `backend/app/api/admin.py` | 管理端 API |
-| `backend/app/api/chat.py` | 问答 API |
+| `backend/app/modules` | 按领域组织的后端模块 |
+| `backend/app/modules/chat` | 当前 RAG 问答服务，后续作为 Agent 讲解工具演进 |
+| `backend/app/modules/content` | 题目与知识点管理 |
+| `backend/app/modules/corpus` | MinerU 语料解析与实体抽取 |
+| `backend/app/modules/retrieval` | 检索、关系扩展与 segment 管理 |
 | `backend/app/db/qdrant.py` | Qdrant 连接与 collection 管理 |
-| `backend/app/services/retrieval_service.py` | 检索服务 |
-| `backend/app/modules/chat/service.py` | RAG 对话服务 |
 | `backend/app/models/mysql_models.py` | MySQL ORM 模型 |
 | `backend/scrapy_service/starmap_scrapy/spiders/knowledge_spider.py` | 408 PDF 采集与解析 spider |
+| `frontend/src` | 用户端 React 应用 |
 | `frontend-admin/src/router/index.tsx` | 管理端路由 |
 
 ### 文档维护原则

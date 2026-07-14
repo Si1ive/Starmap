@@ -25,6 +25,9 @@
 
 ## 核心设计文档
 
+- [408 学习 Agent 文字原型](./docs/product/408-agent-product-prototype.md) - 用户端产品定位、信息架构、核心流程和可信交互基线
+- [用户端 Agent 技术架构](./docs/tech/user-agent-client-architecture.md) - Web/桌面选型、Agent Runtime、客户端能力适配和安全边界
+- [用户端实施路线](./docs/roadmap/user-agent-delivery-plan.md) - 从提问验证到练习、计划、资料和可选桌面能力的纵向交付顺序
 - [多模态入库与检索实施设计](./docs/tech/multimodal-ingestion-retrieval-design.md) - 工程执行基线，覆盖语料入库、数据结构、Qdrant 检索、题目/知识点分流、阶段开发路线
 - [多模态执行清单](./docs/roadmap/multimodal-execution-checklist.md) - 面向 PM、前后端、数据和 QA 的逐项开发与联调清单
 

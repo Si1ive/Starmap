@@ -55,15 +55,16 @@
 **影响**：
 - `docs/api/README.md` 成为爬虫接口和数据体的真相源
 - `backend/scrapy_service` 成为实际抓取服务
-- `backend/app/services/scrapy_bridge.py` 负责 FastAPI 与 Scrapy Service 的通信
-- 旧版 `backend/crawler` 仅作为兼容或本地调试能力，新增能力优先接入 Scrapy Service
+- `backend/app/modules/crawler/scrapy_task_bridge.py` 负责请求级任务发布
+- `backend/app/modules/crawler/scrapy_event_listener.py` 负责应用级进度和日志事件
+- FastAPI 只编排任务，实际抓取能力统一由 Scrapy Service 承担
 
 **负责人**：PM + Backend + Data
 
 **相关文档**：
-- [爬虫优先交付计划](./roadmap/crawler-first-delivery-plan.md)
 - [API 契约](./api/README.md)
 - [架构设计](./tech/architecture.md)
+- [后端模块化单体演进方案](./tech/backend-modular-monolith.md)
 
 ### 2026-06-02：技术选型
 
@@ -171,8 +172,6 @@
 
 ---
 
----
-
 ### 2026-06-03：引入 MySQL 作为主存储
 
 **背景**：
@@ -203,12 +202,45 @@
 
 ---
 
+### 2026-07-15：用户端采用 Web-first Agent 工作台
+
+**背景**：
+- 后端语料、检索和管理能力已形成主体，研发重心开始转向学习用户端
+- 产品目标不是传统知识库网站，而是围绕 408 场景提供规划、讲解、练习、批改和复盘闭环的 Agent
+- 希望学习和实现前沿 Agent 技术，但不希望过早投入桌面安装、签名、更新和跨平台兼容
+
+**选项**：
+- 选项A：传统响应式 Web 页面
+- 选项B：桌面端优先
+- 选项C：Web-first Agent 工作台，按需增加 Tauri 或浏览器扩展能力
+
+**决策**：选择选项C
+
+**原因**：
+- 408 Agent 的核心能力依赖服务端工作流、工具、记忆、审批和学习数据，不依赖桌面容器
+- 现有 React 用户端可复用，能够先验证学习闭环
+- 通过客户端能力接口可以在不分叉业务代码的前提下扩展本地目录、文件监听和浏览器上下文
+- 桌面能力以真实工作流触发，不提前承担安装和跨平台成本
+
+**影响**：
+- 用户端第一屏改为“今日学习工作台”，不建设营销首页
+- 新增公共用户 API、学习用户身份、Agent Runtime 和学习域
+- 第一阶段使用 SSE 提供可恢复 Agent 运行事件
+- PWA、Tauri 和浏览器扩展均改为按证据启用
+- 现有用户端对 `/admin/*` 的依赖需要移除
+
+**相关文档**：
+- [408 学习 Agent 文字原型](./product/408-agent-product-prototype.md)
+- [用户端 Agent 技术架构](./tech/user-agent-client-architecture.md)
+- [用户端实施路线](./roadmap/user-agent-delivery-plan.md)
+
+---
+
 ## 待决策事项
 
 | 日期 | 决策 | 选项 | 建议决策人 | 截止时间 |
 |------|------|------|-----------|---------|
 | Week 2 | 缓存策略 | TTL vs 主动失效 | Backend | Week 2 Day 3 |
-| Week 3 | 是否添加PWA | 是 vs 否 | Frontend | Week 3 Day 5 |
 | Week 3 | 是否开源 | 是 vs 否 | PM | Week 4 Day 3 |
 
 ---
