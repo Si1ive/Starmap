@@ -20,7 +20,6 @@ from app.modules.corpus.entity_persistence import (
     QuestionPersistence,
     cleanup_document_entities,
     extract_topic_terms,
-    generate_id,
     normalize_options,
     strip_leading_option_marker,
 )
@@ -67,10 +66,11 @@ from app.modules.corpus.question_validation import (
     extract_question_number as _extract_question_number_simple,
 )
 from app.models.mysql_models import (
-    CorpusFile, Document, DocumentBlock, Question, QuestionChapterLink,
-    EntitySourceLink, EntityExtractionRun
+    CorpusFile,
+    Document,
+    DocumentBlock,
+    EntityExtractionRun,
 )
-from app.services.chapter_compat_service import resolve_legacy_chapter_id
 from app.services.system_settings_service import SystemSettingsService
 from app.services.text_cleaning import clean_block_text
 from app.services.llm_client import PDFStructureLLMClient
@@ -700,163 +700,6 @@ class EntityExtractionService:
                           f"fixes={len(report['fix_history'])}")
         except Exception as e:
             logger.error(f"保存诊断报告失败: {e}")
-
-    async def _extract_questions_legacy(
-        self,
-        document_id: str,
-        fallback_subject_id: str,
-        blocks: List[DocumentBlock],
-        section_mappings: Dict[int, Dict[str, Optional[str]]],
-    ) -> int:
-        """
-        旧版题目提取逻辑（保留备用）
-        直接保存到数据库，不经过校验和修复
-        """
-        question_count = 0
-
-        # 简单策略：查找包含题目标记的 blocks
-        question_markers = ['第', '题', '（', '(', 'A.', 'B.', 'C.', 'D.']
-
-        current_question_blocks = []
-        in_question = False
-
-        for block in blocks:
-            text = (block.content_text or "").strip()
-
-            # 检测题目开始
-            is_question_start = False
-            if block.block_type in ('paragraph', 'heading'):
-                # 检查是否是题号
-                for marker in question_markers:
-                    if text.startswith(marker):
-                        is_question_start = True
-                        break
-
-            if is_question_start:
-                # 保存前一个题目
-                if in_question and current_question_blocks:
-                    created = await self._save_question_legacy(
-                        document_id, fallback_subject_id, current_question_blocks, section_mappings
-                    )
-                    if created:
-                        question_count += 1
-                    current_question_blocks = []
-
-                in_question = True
-                current_question_blocks.append(block)
-            elif in_question:
-                # 如果遇到新的标题，结束当前题目
-                if block.block_type in ('title', 'heading'):
-                    if current_question_blocks:
-                        created = await self._save_question_legacy(
-                            document_id, fallback_subject_id, current_question_blocks, section_mappings
-                        )
-                        if created:
-                            question_count += 1
-                        current_question_blocks = []
-                    in_question = False
-                else:
-                    current_question_blocks.append(block)
-
-        # 保存最后一个题目
-        if in_question and current_question_blocks:
-            created = await self._save_question_legacy(
-                document_id, fallback_subject_id, current_question_blocks, section_mappings
-            )
-            if created:
-                question_count += 1
-
-        return question_count
-
-    async def _save_question_legacy(
-        self,
-        document_id: str,
-        fallback_subject_id: str,
-        blocks: List[DocumentBlock],
-        section_mappings: Dict[int, Dict[str, Optional[str]]],
-    ) -> bool:
-        """保存单个题目（旧版逻辑）"""
-        if not blocks:
-            return False
-
-        first_block = blocks[0]
-        mapping_info = self._resolve_mapping_for_page(first_block.page_no, section_mappings)
-        primary_chapter_id = mapping_info["chapter_id"] if mapping_info else None
-        subject_id = mapping_info["subject_id"] if mapping_info else fallback_subject_id
-        legacy_chapter_id = mapping_info["legacy_chapter_id"] if mapping_info else None
-        source_section_path = mapping_info.get("source_section_path") if mapping_info else None
-        if not legacy_chapter_id:
-            legacy_chapter_id = await resolve_legacy_chapter_id(self.db, subject_id=subject_id)
-
-        # 组合题目内容
-        content_parts = []
-        for block in blocks:
-            text = block.content_md or block.content_text or ""
-            if text.strip():
-                content_parts.append(text.strip())
-        content = "\n".join(content_parts)
-
-        if not content:
-            return False
-        if not subject_id or not legacy_chapter_id:
-            logger.warning(
-                "题目缺少有效章节归属，跳过入库",
-                document_id=document_id,
-                block_id=first_block.id,
-            )
-            return False
-
-        # 简单判断题型
-        question_type = "short_answer"  # 默认简答
-        if any(kw in content for kw in ['A.', 'B.', 'C.', 'D.', 'A、', 'B、', 'C、', 'D、']):
-            question_type = "choice"
-        elif '判断' in content[:50]:
-            question_type = "judge"
-        elif '填空' in content[:50]:
-            question_type = "fill"
-
-        # 创建题目
-        q_id = generate_id()
-        question = Question(
-            id=q_id,
-            subject_id=subject_id,
-            chapter_id=legacy_chapter_id,
-            primary_chapter_id=primary_chapter_id,
-            source_document_id=document_id,
-            source_section_path=source_section_path,
-            type=question_type,
-            content=content,
-            answer="",  # 需要后续从 blocks 中提取或人工补充
-            review_status="pending",
-            status="active",
-        )
-        self.db.add(question)
-
-        # 创建章节关联
-        if primary_chapter_id:
-            link = QuestionChapterLink(
-                question_id=q_id,
-                canonical_chapter_id=primary_chapter_id,
-                is_primary=True,
-                source="document_mapping" if mapping_info else "manual",
-                created_by="system",
-            )
-            self.db.add(link)
-
-        # 创建来源引用
-        source_link = EntitySourceLink(
-            entity_type="question",
-            entity_id=q_id,
-            document_id=document_id,
-            page_start=first_block.page_no,
-            page_end=blocks[-1].page_no,
-            block_ids=[b.id for b in blocks],
-            excerpt_text=content[:500],
-        )
-        self.db.add(source_link)
-
-        await self.db.flush()
-        return True
 
     async def get_entity_source_links(
         self,

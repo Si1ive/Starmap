@@ -114,9 +114,10 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
   `app/modules/corpus/document_mapping.py`
 - 题目来源/年份/标签元数据、分组字典构建及 LLM 粘连切分已迁移到
   `app/modules/corpus/question_builder.py`
+- 无调用方且绕过统一校验/修复/持久化的旧版题目提取备用路径已移除
 - `app.modules.corpus` 包初始化不再隐式加载 Router，避免领域规则反向触发接口层和
   抽取任务加载
-- 后续继续拆分实体抽取流水线编排，并移除无调用方的旧版提取备用路径
+- 后续继续拆分实体抽取流水线编排
 
 ### 阶段 4：检索与关系
 
