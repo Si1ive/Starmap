@@ -225,6 +225,49 @@ export interface ContentOverviewQuestion {
   extraction_meta?: QuestionExtractionMeta | null
 }
 
+export interface ContentQualityCheck {
+  key: string
+  label: string
+  status: 'pass' | 'warning' | 'fail' | 'pending' | 'running'
+  message: string
+}
+
+export interface ContentQualityGate {
+  policy_version: string
+  status: 'passed' | 'warning' | 'blocked' | 'running' | 'failed' | 'not_run'
+  label: string
+  score: number
+  summary: string
+  manual_review_required: boolean
+  metrics: {
+    knowledge_count: number
+    question_count: number
+    chapter_count: number
+    ungrouped_count: number
+    unassigned_question_count: number
+    unresolved_question_count: number
+    missing_question_no_count: number
+    duplicate_question_no_count: number
+    skipped_question_count: number
+    initial_issue_count: number
+    final_issue_count: number
+    llm_repaired_question_count: number
+    original_issue_question_count: number
+    recovered_option_count: number
+    ai_generated_option_count: number
+  }
+  checks: ContentQualityCheck[]
+  latest_run?: {
+    id: string
+    status: 'running' | 'success' | 'failed'
+    knowledge_count: number
+    question_count: number
+    error_detail?: string | null
+    started_at?: string | null
+    completed_at?: string | null
+  } | null
+}
+
 export interface ContentOverview {
   document_id: string
   title: string
@@ -232,6 +275,7 @@ export interface ContentOverview {
   knowledge_chapters: ContentOverviewChapter[]
   ungrouped_knowledge_points: ContentOverviewKPBrief[]
   questions: ContentOverviewQuestion[]
+  quality_gate: ContentQualityGate
   summary: {
     knowledge_count: number
     question_count: number

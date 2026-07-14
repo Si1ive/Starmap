@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.models.mysql_models import CorpusFile, DocumentBlock
+from app.modules.corpus.content_overview import CorpusContentOverviewService
 from app.modules.corpus.errors import (
     DocumentNotFoundError,
     DocumentPageNotFoundError,
@@ -215,9 +216,7 @@ class CorpusDocumentService:
         self,
         document_id: str,
     ) -> Dict[str, Any]:
-        result = await DocumentParseService(self.db).get_content_overview(
-            document_id
-        )
+        result = await CorpusContentOverviewService(self.db).get(document_id)
         if not result:
             raise DocumentNotFoundError("文档不存在")
         return result

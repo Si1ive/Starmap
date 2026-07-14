@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
-import { Collapse, Tag, Space, Empty, Spin, Row, Col, Card, Statistic, Table, Typography } from 'antd'
+import { Alert, Collapse, Tag, Space, Empty, Spin, Row, Col, Card, Statistic, Table, Typography } from 'antd'
 import { getDocumentContentOverview } from '@/api'
-import type { ContentOverviewKPBrief, ContentOverviewQuestion } from '@/api/corpus'
+import type { ContentOverviewKPBrief, ContentOverviewQuestion, ContentQualityGate } from '@/api/corpus'
 
 const { Paragraph, Text } = Typography
 
@@ -26,6 +26,18 @@ const originalIssueText: Record<string, string> = {
   missing_middle: '原问题：中间选项缺失',
   missing_end: '原问题：末尾选项缺失',
   too_few: '原问题：选项不足',
+}
+
+const qualityStatusConfig: Record<ContentQualityGate['status'], {
+  alertType: 'success' | 'warning' | 'error' | 'info'
+  color: string
+}> = {
+  passed: { alertType: 'success', color: 'green' },
+  warning: { alertType: 'warning', color: 'gold' },
+  blocked: { alertType: 'error', color: 'red' },
+  running: { alertType: 'info', color: 'blue' },
+  failed: { alertType: 'error', color: 'red' },
+  not_run: { alertType: 'info', color: 'default' },
 }
 
 function ReviewTag({ status }: { status: string }) {
@@ -73,6 +85,61 @@ function QualityBadges({ meta }: { meta?: Record<string, any> | null }) {
         <Tag key={i} color={b.color} title={b.title}>{b.text}</Tag>
       ))}
     </Space>
+  )
+}
+
+function QualityGateSummary({ gate }: { gate: ContentQualityGate }) {
+  const config = qualityStatusConfig[gate.status]
+  const attentionChecks = gate.checks.filter((check) => (
+    check.status !== 'pass' && check.status !== 'pending'
+  ))
+  const metrics = gate.metrics
+
+  return (
+    <Alert
+      type={config.alertType}
+      showIcon
+      style={{ marginBottom: 16 }}
+      message={(
+        <Space wrap>
+          <Text strong>入库质量门禁</Text>
+          <Tag color={config.color}>{gate.label}</Tag>
+          <Text>{gate.score} 分</Text>
+        </Space>
+      )}
+      description={(
+        <Space direction="vertical" size={8}>
+          <Text>{gate.summary}</Text>
+          {attentionChecks.length > 0 && (
+            <Space size={[0, 6]} wrap>
+              {attentionChecks.map((check) => (
+                <Tag
+                  key={check.key}
+                  color={check.status === 'fail' ? 'red' : check.status === 'running' ? 'blue' : 'gold'}
+                  title={check.message}
+                >
+                  {check.label}：{check.message}
+                </Tag>
+              ))}
+            </Space>
+          )}
+          <Space size={[0, 6]} wrap>
+            {metrics.llm_repaired_question_count > 0 && (
+              <Tag color="cyan">LLM 修复 {metrics.llm_repaired_question_count} 题</Tag>
+            )}
+            {metrics.recovered_option_count > 0 && (
+              <Tag color="blue">原文恢复选项 {metrics.recovered_option_count} 个</Tag>
+            )}
+            {metrics.ai_generated_option_count > 0 && (
+              <Tag color="gold">AI 生成选项 {metrics.ai_generated_option_count} 个</Tag>
+            )}
+            {metrics.initial_issue_count > 0 && (
+              <Tag>问题数 {metrics.initial_issue_count} → {metrics.final_issue_count}</Tag>
+            )}
+          </Space>
+        </Space>
+      )}
+    />
   )
 }
 
@@ -125,7 +192,7 @@ const ContentOverview = ({ documentId }: { documentId: string }) => {
     return <Empty description="尚未抽取 — 内容总览展示的是抽取产物，请先点击上方「抽取知识点/题目」" />
   }
 
-  const { knowledge_chapters, ungrouped_knowledge_points, questions, summary } = overview
+  const { knowledge_chapters, ungrouped_knowledge_points, questions, summary, quality_gate } = overview
 
   const questionColumns = [
     {
@@ -165,6 +232,8 @@ const ContentOverview = ({ documentId }: { documentId: string }) => {
 
   return (
     <div>
+      <QualityGateSummary gate={quality_gate} />
+
       <Row gutter={16} style={{ marginBottom: 16 }}>
         <Col span={5}><Card size="small"><Statistic title="知识点" value={summary.knowledge_count} /></Card></Col>
         <Col span={5}><Card size="small"><Statistic title="题目" value={summary.question_count} /></Card></Col>

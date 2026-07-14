@@ -193,6 +193,27 @@ def test_normalize_options_preserves_llm_option_source():
     assert normalized[0]["source"] == "ai_generated"
 
 
+def test_question_diagnostic_counts_unassigned_question_as_saved():
+    service = EntityExtractionService(None)
+
+    diagnostic = service._build_question_extraction_diagnostic(
+        raw_questions=[{"id": "q1", "page_no": 1}],
+        final_questions=[{"id": "q1", "page_no": 1}],
+        validation_report={},
+        final_report={},
+        saved_results=[{
+            "question_id": "q1",
+            "page_no": 1,
+            "saved": True,
+            "reason": "saved_unassigned",
+        }],
+    )
+
+    assert diagnostic["saved_question_count"] == 1
+    assert diagnostic["skipped_question_count"] == 0
+    assert diagnostic["save_reasons"] == {"saved_unassigned": 1}
+
+
 class _RunSession:
     def __init__(self, run, document=None, corpus_file=None):
         self.run = run

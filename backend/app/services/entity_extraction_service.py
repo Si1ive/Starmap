@@ -3150,6 +3150,9 @@ class EntityExtractionService:
     ) -> Dict[str, Any]:
         """构建可直接返回给前端的题目抽取诊断摘要。"""
         save_reasons = Counter(item.get("reason") or "unknown" for item in saved_results)
+        saved_question_count = sum(
+            1 for item in saved_results if item.get("saved")
+        )
         raw_by_page = Counter(q.get("page_no") for q in raw_questions if q.get("page_no") is not None)
         final_by_page = Counter(q.get("page_no") for q in final_questions if q.get("page_no") is not None)
         saved_by_page = Counter(
@@ -3167,8 +3170,8 @@ class EntityExtractionService:
         return {
             "raw_question_count": len(raw_questions),
             "final_question_count": len(final_questions),
-            "saved_question_count": save_reasons.get("saved", 0),
-            "skipped_question_count": len(saved_results) - save_reasons.get("saved", 0),
+            "saved_question_count": saved_question_count,
+            "skipped_question_count": len(saved_results) - saved_question_count,
             "save_reasons": dict(save_reasons),
             "by_page": [
                 {
