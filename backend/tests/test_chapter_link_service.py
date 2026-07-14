@@ -65,3 +65,39 @@ async def test_chapter_link_service_preserves_matcher_delegate_methods():
         topic_terms=[],
         include_content=True,
     )
+
+
+@pytest.mark.asyncio
+async def test_chapter_link_service_delegates_matched_results_to_store():
+    chapter = SimpleNamespace(id="chapter-1", status="active")
+    db = SimpleNamespace(get=AsyncMock(return_value=chapter))
+    service = ChapterLinkService(db)
+    expected = {
+        "linked_count": 1,
+        "primary_chapter": {"id": "chapter-1"},
+        "related_chapters": [],
+        "strategy_used": "existing",
+    }
+    service.link_store.save_links = AsyncMock(return_value=expected)
+    entity = SimpleNamespace(
+        id="question-1",
+        primary_chapter_id="chapter-1",
+        source_document_id=None,
+    )
+
+    result = await service._link_entity_to_chapters(entity, "question")
+
+    assert result == expected
+    service.link_store.save_links.assert_awaited_once_with(
+        entity,
+        "question",
+        [
+            {
+                "chapter_id": "chapter-1",
+                "relevance": 1.0,
+                "source": "existing",
+                "is_primary": True,
+            }
+        ],
+        "existing",
+    )

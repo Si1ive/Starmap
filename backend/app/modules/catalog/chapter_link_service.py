@@ -23,9 +23,9 @@ from app.modules.catalog.chapter_matcher import (
     ChapterMatcher,
 )
 from app.modules.catalog.chapter_compat import resolve_legacy_chapter_id
+from app.modules.catalog.chapter_link_store import ChapterLinkStore
 from app.models.mysql_models import (
     KnowledgePoint, Question, CanonicalChapter,
-    KnowledgePointChapterLink, QuestionChapterLink,
     EntitySourceLink, DocumentBlock, DocumentSection, DocumentSectionMapping
 )
 
@@ -38,6 +38,7 @@ class ChapterLinkService:
     def __init__(self, db: AsyncSession):
         self.db = db
         self.matcher = ChapterMatcher(db)
+        self.link_store = ChapterLinkStore(db)
 
     # ========== 公共接口 ==========
 
@@ -298,7 +299,12 @@ class ChapterLinkService:
             }
 
         # 写入关联表
-        return await self._save_links(entity, entity_type, results, strategy_used)
+        return await self.link_store.save_links(
+            entity,
+            entity_type,
+            results,
+            strategy_used,
+        )
 
     # ========== 策略 2: 文档映射 ==========
 
@@ -458,96 +464,3 @@ class ChapterLinkService:
     ) -> List[Dict[str, Any]]:
         """Compatibility delegate for the vector search core."""
         return await self.matcher.vector_search_core(entity, entity_type)
-
-    # ========== 保存关联 ==========
-
-    async def _save_links(
-        self, entity, entity_type: str, results: List[Dict[str, Any]], strategy_used: str
-    ) -> Dict[str, Any]:
-        """
-        写入关联表并返回结果
-
-        处理去重: 如果关联已存在，更新 relevance/source
-        """
-        primary = None
-        related = []
-
-        for res in results:
-            chapter_id = res["chapter_id"]
-
-            # 检查章节是否存在
-            chapter = await self.db.get(CanonicalChapter, chapter_id)
-            if not chapter or chapter.status != "active":
-                continue
-
-            # 检查是否已有关联
-            if entity_type == "knowledge_point":
-                existing_link = (await self.db.execute(
-                    select(KnowledgePointChapterLink).where(
-                        KnowledgePointChapterLink.knowledge_point_id == entity.id,
-                        KnowledgePointChapterLink.canonical_chapter_id == chapter_id
-                    )
-                )).scalar_one_or_none()
-
-                if existing_link:
-                    # 更新已有关联
-                    existing_link.relevance = res["relevance"]
-                    existing_link.source = res["source"]
-                    existing_link.is_primary = res.get("is_primary", False)
-                else:
-                    # 创建新关联
-                    link = KnowledgePointChapterLink(
-                        knowledge_point_id=entity.id,
-                        canonical_chapter_id=chapter_id,
-                        is_primary=res.get("is_primary", False),
-                        relevance=res["relevance"],
-                        source=res["source"],
-                        created_by="system"
-                    )
-                    self.db.add(link)
-            else:  # question
-                existing_link = (await self.db.execute(
-                    select(QuestionChapterLink).where(
-                        QuestionChapterLink.question_id == entity.id,
-                        QuestionChapterLink.canonical_chapter_id == chapter_id
-                    )
-                )).scalar_one_or_none()
-
-                if existing_link:
-                    existing_link.relevance = res["relevance"]
-                    existing_link.source = res["source"]
-                    existing_link.is_primary = res.get("is_primary", False)
-                else:
-                    link = QuestionChapterLink(
-                        question_id=entity.id,
-                        canonical_chapter_id=chapter_id,
-                        is_primary=res.get("is_primary", False),
-                        relevance=res["relevance"],
-                        source=res["source"],
-                        created_by="system"
-                    )
-                    self.db.add(link)
-
-            # 构造返回信息
-            chapter_info = {
-                "id": chapter.id,
-                "name": chapter.name,
-                "outline_code": chapter.outline_code,
-                "level": chapter.level,
-                "relevance": res["relevance"],
-                "source": res["source"]
-            }
-
-            if res.get("is_primary"):
-                primary = chapter_info
-            else:
-                related.append(chapter_info)
-
-        await self.db.commit()
-
-        return {
-            "linked_count": len(results),
-            "primary_chapter": primary,
-            "related_chapters": related,
-            "strategy_used": strategy_used
-        }
