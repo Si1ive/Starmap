@@ -97,6 +97,9 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - 上传改为安全文件名、分块写入、可配置大小限制，并清理重复或失败的临时副本
 - 阶段 3B 已完成：文档块、标题树、页对比、章节映射、内容总览和实体抽取端点
   已迁移到 `app/modules/corpus`
+- 文档原生标题树提取和查询已迁移到
+  `app/modules/corpus/document_section_service.py`，标题识别与题目误判过滤规则位于
+  `app/modules/corpus/section_heading.py`，旧 Service 路径仅保留兼容导出
 - 实体抽取任务使用文档行锁避免并发重复创建，运行记录先落库再派发后台任务
 - PDF 页渲染移入线程池，避免同步转换阻塞 FastAPI 事件循环
 - 阶段 3C 进行中：题目选项完整性、题号连续性、综合诊断和确定性规则修复已迁移到
