@@ -8,6 +8,10 @@ from app.services.entity_extraction_service import (
     EntityExtractionService,
     LLMFallbackFixer,
 )
+from app.modules.corpus.entity_persistence import (
+    QuestionPersistence,
+    extract_answers_from_blocks,
+)
 from app.models.mysql_models import CorpusFile, Document, EntityExtractionRun
 
 
@@ -191,6 +195,77 @@ def test_normalize_options_preserves_llm_option_source():
     ])
 
     assert normalized[0]["source"] == "ai_generated"
+
+
+def test_extract_answers_from_blocks_reads_only_answer_zone():
+    blocks = [
+        SimpleNamespace(content_text="1. A 题干内容", content_md=None),
+        SimpleNamespace(content_text="参考答案 1.B 2、CD", content_md=None),
+        SimpleNamespace(content_text="3：对 4) 错", content_md=None),
+    ]
+
+    assert extract_answers_from_blocks(blocks) == {
+        "1": "B",
+        "2": "CD",
+        "3": "对",
+        "4": "错",
+    }
+
+
+def test_extract_answers_from_blocks_requires_answer_header():
+    blocks = [
+        SimpleNamespace(content_text="1.B 2.C", content_md=None),
+    ]
+
+    assert extract_answers_from_blocks(blocks) == {}
+
+
+@pytest.mark.asyncio
+async def test_link_extracted_answers_only_fills_empty_answers():
+    empty_answer = SimpleNamespace(
+        question_no="1",
+        answer="",
+        answer_source="none",
+    )
+    existing_answer = SimpleNamespace(
+        question_no="2",
+        answer="A",
+        answer_source="manual",
+    )
+
+    class _ScalarResult:
+        def scalars(self):
+            return self
+
+        def all(self):
+            return [empty_answer, existing_answer]
+
+    class _AnswerSession:
+        flush_count = 0
+
+        async def execute(self, _query):
+            return _ScalarResult()
+
+        async def flush(self):
+            self.flush_count += 1
+
+    session = _AnswerSession()
+    linked = await QuestionPersistence(session).link_extracted_answers(
+        "doc-1",
+        [
+            SimpleNamespace(
+                content_text="参考答案 1.B 2.C",
+                content_md=None,
+            )
+        ],
+    )
+
+    assert linked == 1
+    assert empty_answer.answer == "B"
+    assert empty_answer.answer_source == "extracted"
+    assert existing_answer.answer == "A"
+    assert existing_answer.answer_source == "manual"
+    assert session.flush_count == 1
 
 
 def test_question_diagnostic_counts_unassigned_question_as_saved():

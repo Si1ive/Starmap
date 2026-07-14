@@ -17,6 +17,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.modules.corpus.entity_persistence import (
+    QuestionPersistence,
+    extract_topic_terms,
+    normalize_options,
+    strip_leading_option_marker,
+)
 from app.modules.corpus.extraction_diagnostics import (
     build_question_extraction_diagnostic,
     extract_fix_history,
@@ -52,7 +58,6 @@ from app.modules.corpus.question_validation import (
     RuleBasedFixer,
     comprehensive_validation,
     extract_question_number as _extract_question_number_simple,
-    get_option_label as _get_option_label,
 )
 from app.models.mysql_models import (
     CorpusFile, Document, DocumentBlock, DocumentSection, DocumentSectionMapping,
@@ -173,9 +178,13 @@ class EntityExtractionService:
     _question_numbering_summary = staticmethod(question_numbering_summary)
     _question_text_excerpt = staticmethod(question_text_excerpt)
     _extract_fix_history = staticmethod(extract_fix_history)
+    _strip_leading_option_marker = staticmethod(strip_leading_option_marker)
+    _normalize_options = staticmethod(normalize_options)
+    _extract_topic_terms = staticmethod(extract_topic_terms)
 
     def __init__(self, db: AsyncSession):
         self.db = db
+        self._question_persistence = QuestionPersistence(db)
 
     async def extract_entities_with_run_id(self, run_id: str) -> Dict[str, Any]:
         """执行已创建的抽取任务，并将最终状态持久化到运行记录。"""
@@ -1157,225 +1166,18 @@ class EntityExtractionService:
             "group_label_reason": group_label_reason,
         }
 
-    def _strip_leading_option_marker(self, text: str, expected_label: Optional[str] = None) -> str:
-        """清理选项文本中重复出现的选项标记。"""
-        cleaned = (text or "").strip()
-        if expected_label:
-            cleaned = re.sub(
-                rf'^\s*{re.escape(expected_label.upper())}\s*(?:[.．、:：。]|<sub>\s*[.．、:：。]\s*</sub>)\s*',
-                '',
-                cleaned,
-            ).strip()
-        malformed_sub = re.match(r'^\s*<sub>\s*[.．、:：。]\s*', cleaned)
-        if malformed_sub:
-            cleaned = cleaned[malformed_sub.end():]
-            cleaned = re.sub(r'^([^<]{0,60})</sub>', r'\1', cleaned, count=1).strip()
-        return re.sub(r'^\s*[.．、:：。]\s*', '', cleaned).strip()
-
-    def _normalize_options(self, options: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
-        """统一选择题选项结构，兼容前端 key/text 和校验器 label/text。"""
-        normalized: List[Dict[str, Any]] = []
-        seen_labels = set()
-        for option in options or []:
-            label = _get_option_label(option)
-            text = str(option.get("text") or option.get("content") or "").strip()
-            text = self._strip_leading_option_marker(text, expected_label=label)
-            if not label or not text or label in seen_labels:
-                continue
-            normalized_option = {
-                "key": label,
-                "label": label,
-                "option_label": label,
-                "text": text,
-            }
-            if option.get("source") in {"extracted", "ai_generated"}:
-                normalized_option["source"] = option["source"]
-            normalized.append(normalized_option)
-            seen_labels.add(label)
-        return normalized
-
     async def _save_question_from_dict(self, question_dict: Dict[str, Any]) -> Tuple[bool, str]:
-        """从字典保存题目到数据库"""
-        subject_id = question_dict.get('subject_id')
-        legacy_chapter_id = question_dict.get('chapter_id')
-        primary_chapter_id = question_dict.get('primary_chapter_id')
-
-        if not legacy_chapter_id:
-            legacy_chapter_id = await resolve_legacy_chapter_id(
-                self.db,
-                canonical_chapter_id=primary_chapter_id,
-                subject_id=subject_id,
-            )
-            question_dict['chapter_id'] = legacy_chapter_id
-
-        # 归属缺失不再丢弃：组题成功的题目一律入库，缺归属者标记待指认，
-        # 让前端能区分"组题失败"（题目根本没出现）与"归属失败"（题目在但未挂章节）。
-        unassigned = not subject_id or not legacy_chapter_id
-        if unassigned:
-            logger.info(
-                "题目归属缺失，以待指认状态入库",
-                document_id=question_dict.get('document_id'),
-                question_id=question_dict.get('id'),
-                page_no=question_dict.get('page_no'),
-                subject_id=subject_id,
-                chapter_id=legacy_chapter_id,
-            )
-
-        try:
-            async with self.db.begin_nested():
-                options = self._normalize_options(question_dict.get('options'))
-                question_content = (question_dict.get('stem') or question_dict.get('content') or "").strip()
-
-                # 关键词标签：题型/真题/年份结构化标签 + 主题术语
-                tags = question_dict.get('tags') or None
-                topic_terms = self._extract_topic_terms(question_content, question_content) or None
-
-                # 创建题目记录
-                question = Question(
-                    id=question_dict['id'],
-                    subject_id=subject_id,
-                    chapter_id=legacy_chapter_id,
-                    primary_chapter_id=primary_chapter_id,
-                    source_document_id=question_dict['document_id'],
-                    source_section_path=(question_dict.get('source_section_path') or None),
-                    type=question_dict['question_type'],
-                    content=question_content,
-                    options=options or None,
-                    answer="",
-                    source=(question_dict.get('source') or None),
-                    exam_year=int(question_dict.get('exam_year') or 0),
-                    exam_scope=(question_dict.get('exam_scope') or None),
-                    paper_name=(question_dict.get('paper_name') or None),
-                    tags=tags,
-                    topic_terms=topic_terms,
-                    question_no=str(_extract_question_number_simple(question_dict) or "") or None,
-                    review_status="pending",
-                    status="active",
-                    # 归属状态只记在 extraction_meta.unassigned，供前端区分与指认；
-                    # 是否可用与人工审核状态独立。
-                    extraction_meta={
-                        **(question_dict.get('extraction_meta') or {}),
-                        "unassigned": unassigned,
-                    },
-                )
-                self.db.add(question)
-
-                # 创建章节关联
-                if primary_chapter_id:
-                    link = QuestionChapterLink(
-                        question_id=question_dict['id'],
-                        canonical_chapter_id=primary_chapter_id,
-                        is_primary=True,
-                        source=question_dict.get('chapter_link_source') or "manual",
-                        created_by="system",
-                    )
-                    self.db.add(link)
-
-                # 创建来源引用
-                blocks = question_dict.get('blocks', [])
-                if blocks:
-                    source_link = EntitySourceLink(
-                        entity_type="question",
-                        entity_id=question_dict['id'],
-                        document_id=question_dict['document_id'],
-                        page_start=blocks[0].page_no,
-                        page_end=blocks[-1].page_no,
-                        block_ids=question_dict.get('block_ids', []),
-                        excerpt_text=question_dict['content'][:500],
-                    )
-                    self.db.add(source_link)
-
-                await self.db.flush()
-
-                # 关联资产：按 block 精确绑定，只绑题目真正包含的图/表/公式
-                block_ids = question_dict.get('block_ids') or [b.id for b in blocks]
-                if block_ids:
-                    try:
-                        from app.services.entity_asset_service import link_entity_assets_by_blocks
-                        await link_entity_assets_by_blocks(
-                            self.db,
-                            entity_type="question",
-                            entity_id=question_dict['id'],
-                            block_ids=block_ids,
-                        )
-                    except Exception as e:
-                        logger.warning("题目资产关联失败", question_id=question_dict['id'], error=str(e))
-            return True, ("saved_unassigned" if unassigned else "saved")
-        except Exception as e:
-            logger.error(f"保存题目失败: {e}")
-            return False, "save_failed"
+        """兼容入口：委托题目持久化组件。"""
+        return await self._question_persistence.save_question(question_dict)
 
     async def _extract_and_link_answers(
         self, document_id: str, blocks: List[DocumentBlock]
     ) -> int:
-        """
-        PDF 自带答案区回连：扫描"参考答案/答案"段，按题号把答案写回已入库题目。
-
-        策略：
-        1. 定位答案区起点——出现"参考答案/答案/答案与解析/答案速查"等标题的 block 之后的内容。
-        2. 在答案区文本里用正则抓 `题号 + 答案` 形式：
-           - 客观题：`1. B` / `1、B` / `1．BCD` / `(1) B`
-           - 兼容一行多题：`1.B 2.C 3.D`
-        3. 按 question_no 匹配本文档已入库的 Question，写 answer + answer_source="extracted"。
-           已有 extracted 答案的不覆盖；LLM 答案此处也不覆盖（extracted 优先级最高，仅在为空时写）。
-
-        返回成功回连的题目数。
-        """
-        # 收集本文档题目：question_no -> Question
-        rows = (await self.db.execute(
-            select(Question).where(Question.source_document_id == document_id)
-        )).scalars().all()
-        by_no: Dict[str, Question] = {}
-        for q in rows:
-            if q.question_no:
-                by_no[str(q.question_no).strip()] = q
-        if not by_no:
-            return 0
-
-        # 定位答案区：找到含答案标题的 block，从其后开始拼接文本
-        answer_header_re = re.compile(r'(参考答案|答案与解析|答案速查|答案及解析|^\s*答案\s*$)')
-        text_parts: List[str] = []
-        in_answer_zone = False
-        for b in blocks:
-            t = (b.content_text or b.content_md or "").strip()
-            if not t:
-                continue
-            if not in_answer_zone and answer_header_re.search(t):
-                in_answer_zone = True
-                # 标题行后面可能紧跟答案，去掉标题词本身
-                tail = answer_header_re.sub(" ", t).strip()
-                if tail:
-                    text_parts.append(tail)
-                continue
-            if in_answer_zone:
-                text_parts.append(t)
-        if not in_answer_zone:
-            return 0
-
-        answer_text = "\n".join(text_parts)
-        # 抓 `题号<分隔> 答案`，答案为 A-D 字母（含多选 ABCD）或"对/错/√/×/正确/错误"
-        pair_re = re.compile(
-            r'(?<!\d)(\d{1,3})\s*[.．、:：)）]\s*'
-            r'([A-Da-d]{1,4}|对|错|正确|错误|√|×|T|F|是|否)'
+        """兼容入口：委托答案回连组件。"""
+        return await self._question_persistence.link_extracted_answers(
+            document_id,
+            blocks,
         )
-        linked = 0
-        for m in pair_re.finditer(answer_text):
-            no = m.group(1).strip()
-            ans = m.group(2).strip().upper()
-            q = by_no.get(no)
-            if not q:
-                continue
-            # extracted 永不被覆盖；仅当当前答案为空时写入
-            if (q.answer or "").strip():
-                continue
-            q.answer = ans
-            q.answer_source = "extracted"
-            linked += 1
-
-        if linked:
-            await self.db.flush()
-            logger.info("PDF 答案区回连完成", document_id=document_id, linked=linked)
-        return linked
 
     async def _save_diagnostic_report(self, document_id: str, report: Dict[str, Any]) -> None:
         """保存诊断报告到document的metadata"""
@@ -1552,61 +1354,13 @@ class EntityExtractionService:
         await self.db.flush()
         return True
 
-    def _extract_topic_terms(self, title: str, content: str) -> List[str]:
-        """提取主题术语（简单实现）"""
-        terms = set()
-
-        # 从标题提取
-        if title:
-            # 去除常见前缀
-            clean_title = title.strip()
-            for prefix in ['第', '章', '节', '、', '。', '：', ':', ' ']:
-                clean_title = clean_title.replace(prefix, ' ')
-            words = clean_title.split()
-            for word in words:
-                if len(word) >= 2:
-                    terms.add(word)
-
-        # 从内容提取高频词（简单实现）
-        # 实际应该使用 NLP 工具提取关键词
-        if content:
-            # 提取引号中的术语
-            import re
-            quoted = re.findall(r'[「「""]([^」」""]+)[」」""]', content)
-            for q in quoted:
-                if 2 <= len(q) <= 20:
-                    terms.add(q)
-
-        return list(terms)[:20]  # 限制数量
-
     async def get_entity_source_links(
         self,
         entity_type: str,
         entity_id: str
     ) -> List[Dict[str, Any]]:
-        """获取实体的来源引用"""
-        result = await self.db.execute(
-            select(EntitySourceLink)
-            .where(
-                and_(
-                    EntitySourceLink.entity_type == entity_type,
-                    EntitySourceLink.entity_id == entity_id,
-                )
-            )
+        """兼容入口：委托来源引用查询组件。"""
+        return await self._question_persistence.get_source_links(
+            entity_type,
+            entity_id,
         )
-        links = result.scalars().all()
-
-        return [
-            {
-                "id": link.id,
-                "entity_type": link.entity_type,
-                "entity_id": link.entity_id,
-                "document_id": link.document_id,
-                "page_start": link.page_start,
-                "page_end": link.page_end,
-                "block_ids": link.block_ids,
-                "excerpt_text": link.excerpt_text,
-                "created_at": link.created_at.isoformat() if link.created_at else None,
-            }
-            for link in links
-        ]
