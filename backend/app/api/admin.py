@@ -2828,7 +2828,7 @@ class OutlineFromLLMRequest(BaseModel):
 @router.get("/outlines", response_model=ApiResponse)
 async def list_outlines_endpoint(db: AsyncSession = Depends(get_db)):
     """列出所有大纲"""
-    from app.services.outline_import_service import list_outlines
+    from app.modules.catalog.outline_import_service import list_outlines
     return ApiResponse(data=await list_outlines(db))
 
 
@@ -2839,21 +2839,21 @@ async def get_outline_chapters_endpoint(
     db: AsyncSession = Depends(get_db),
 ):
     """获取大纲下章节树（含原文考点 description + 复习指导 exam_guidance，可按 subject_id 过滤）"""
-    from app.services.outline_import_service import get_outline_chapters
+    from app.modules.catalog.outline_import_service import get_outline_chapters
     return ApiResponse(data=await get_outline_chapters(db, outline_id, subject_id=subject_id))
 
 
 @router.get("/outlines/{outline_id}/subjects", response_model=ApiResponse)
 async def get_outline_subjects_endpoint(outline_id: str, db: AsyncSession = Depends(get_db)):
     """获取大纲下各门课的考察目标 + 复习指导生成状态"""
-    from app.services.outline_import_service import get_outline_subjects
+    from app.modules.catalog.outline_import_service import get_outline_subjects
     return ApiResponse(data=await get_outline_subjects(db, outline_id))
 
 
 @router.post("/outlines/preview", response_model=ApiResponse)
 async def preview_outline_import(request: OutlinePreviewRequest, db: AsyncSession = Depends(get_db)):
     """解析大纲文本但不入库（用于前端预览）"""
-    from app.services.outline_import_service import OutlineImportService
+    from app.modules.catalog.outline_import_service import OutlineImportService
     service = OutlineImportService(db)
     try:
         return ApiResponse(data=await service.preview(content=request.content, filename=request.filename or ""))
@@ -2864,7 +2864,7 @@ async def preview_outline_import(request: OutlinePreviewRequest, db: AsyncSessio
 @router.post("/outlines/import", response_model=ApiResponse)
 async def import_outline_endpoint(request: OutlineImportRequest, db: AsyncSession = Depends(get_db)):
     """导入大纲（创建 exam_outlines + canonical_chapters 树）"""
-    from app.services.outline_import_service import OutlineImportService
+    from app.modules.catalog.outline_import_service import OutlineImportService
     service = OutlineImportService(db)
     try:
         return ApiResponse(data=await service.import_outline(
@@ -2887,7 +2887,7 @@ async def import_outline_from_document(
     db: AsyncSession = Depends(get_db),
 ):
     """从已解析文档的 document_sections 转换为大纲"""
-    from app.services.outline_import_service import OutlineImportService
+    from app.modules.catalog.outline_import_service import OutlineImportService
     service = OutlineImportService(db)
     try:
         return ApiResponse(data=await service.import_from_document_sections(
@@ -2905,7 +2905,7 @@ async def import_outline_from_document(
 @router.get("/outlines/document/{document_id}/preview", response_model=ApiResponse)
 async def preview_outline_from_document(document_id: str, db: AsyncSession = Depends(get_db)):
     """预览某文档标题树转成的大纲章节树（不入库）。"""
-    from app.services.outline_import_service import OutlineImportService
+    from app.modules.catalog.outline_import_service import OutlineImportService
     service = OutlineImportService(db)
     try:
         return ApiResponse(data=await service.preview_from_document_sections(document_id))
@@ -2921,7 +2921,7 @@ async def import_outline_from_llm(request: OutlineFromLLMRequest, db: AsyncSessi
     改进：支持部分成功，如果某些科目失败但其他成功，仍然入库成功的部分。
     返回 partial=true 标识部分成功。
     """
-    from app.services.outline_import_service import OutlineImportService
+    from app.modules.catalog.outline_import_service import OutlineImportService
     service = OutlineImportService(db)
     try:
         result = await service.import_from_llm_result(
@@ -2996,7 +2996,7 @@ async def generate_outline_guidance(
     outline_id: str, subject_id: str, db: AsyncSession = Depends(get_db)
 ):
     """为某门课的所有章节批量生成复习指导（结合考察目标，写回 exam_guidance）。"""
-    from app.services.outline_import_service import OutlineImportService
+    from app.modules.catalog.outline_import_service import OutlineImportService
     service = OutlineImportService(db)
     try:
         return ApiResponse(data=await service.generate_guidance_for_subject(outline_id, subject_id))
@@ -3067,7 +3067,7 @@ async def upload_parse_outline(
     ):
         from app.db.mysql import mysql_client
         from app.modules.corpus.document_parse_service import DocumentParseService
-        from app.services.outline_llm_service import OutlineLLMService
+        from app.modules.catalog.outline_llm_service import OutlineLLMService
         from app.models.mysql_models import DocumentBlock
 
         async with mysql_client.session() as bg_session:

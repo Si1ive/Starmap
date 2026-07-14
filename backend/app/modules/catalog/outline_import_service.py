@@ -1,5 +1,5 @@
 """
-大纲（考试大纲 / 知识体系大纲）导入服务
+目录大纲（考试大纲 / 知识体系大纲）导入服务
 
 支持的输入格式：
 1. JSON：直接结构化的章节树
@@ -685,7 +685,7 @@ class OutlineImportService:
         结合该门课的考察目标，按 batch_size 分组调 LLM，逐节点写回 CanonicalChapter。
         单组失败不影响其他组；全部失败才标记 failed。
         """
-        from app.services.outline_llm_service import OutlineLLMService
+        from app.modules.catalog.outline_llm_service import OutlineLLMService
 
         link = (await self.db.execute(
             select(ExamOutlineSubject).where(
@@ -728,7 +728,7 @@ class OutlineImportService:
             ]
             prompt = self._build_guidance_prompt(objective, items)
             try:
-                from app.services.outline_llm_service import _extract_json
+                from app.modules.catalog.outline_llm_service import _extract_json
                 text = await client.chat(prompt, purpose="大纲章节复习指导生成")
                 data = _extract_json(text)
                 guidance_map = data.get("guidance") if isinstance(data, dict) else data

@@ -137,11 +137,11 @@ const { data: run } = useQuery({
 2. **`backend/app/models/mysql_models.py`** (新增模型)
    - `OutlineIngestionRun`: 大纲入库任务表
 
-3. **`backend/app/services/outline_llm_service.py`** (修改核心逻辑)
+3. **`backend/app/modules/catalog/outline_llm_service.py`** (修改核心逻辑)
    - `split_outline()`: 每个科目失败不影响其他科目，捕获异常并标记 `error` 字段
    - 返回格式扩展: `subjects` 列表中失败的科目带 `error` 字段
 
-4. **`backend/app/services/outline_import_service.py`** (修改核心逻辑)
+4. **`backend/app/modules/catalog/outline_import_service.py`** (修改核心逻辑)
    - `import_from_llm_result()`: 
      - 过滤出有效科目（有 chapters 且无 error）
      - 只入库成功的科目，失败的记录到 `result_summary`
