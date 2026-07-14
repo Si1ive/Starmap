@@ -3,16 +3,14 @@
 
 实现设计文档 outline-retrieval-cross-chapter-association-design.md 中定义的核心函数：
 
-Phase 2: expand_chapter_scope()      - 沿考点树向上扩展
-Phase 2: retrieve_by_chapters()      - 从考点出发的结构化展开
-Phase 2: retrieve_by_question()      - 从题出发（题→考点→委托 retrieve_by_chapters）
 Phase 2: fallback_chapter_similarity()  - embedding 兜底（离线构建器用）
 Phase 2: expand_related_chapters()      - 在线读取器：scope 在线算 + semantic 读 ChapterRelation 已审核行
 
 Phase 0 查询扩展已迁移到 outline_query_expansion.py。
+章节范围召回已迁移到 chapter_scope_retrieval.py。
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,225 +21,13 @@ from app.db.qdrant import qdrant_manager
 from app.models.mysql_models import (
     CanonicalChapter,
     ChapterRelation,
-    KnowledgePoint,
-    KnowledgePointChapterLink,
-    Question,
-    QuestionChapterLink,
 )
 from app.infrastructure.ai.embedding_service import (
     get_embedding_service_from_settings,
 )
+from app.modules.retrieval.chapter_scope_retrieval import expand_chapter_scope
 
 logger = get_logger(__name__)
-
-
-# ========== Phase 2: 考点树展开 ==========
-
-
-async def expand_chapter_scope(
-    db: AsyncSession,
-    chapter_ids: List[str],
-    upward_levels: int = 1,
-) -> List[str]:
-    """
-    沿考点树向上扩展，返回范围内所有考点 ID。
-
-    1. 收集起点章节的兄弟节点（同 parent_id）
-    2. 逐级向上爬：每爬一级，把当前父节点和它的所有子节点加入结果
-    """
-    result = set(chapter_ids)
-
-    chapters = (await db.execute(
-        select(CanonicalChapter).where(
-            CanonicalChapter.id.in_(chapter_ids),
-            CanonicalChapter.status == "active",
-        )
-    )).scalars().all()
-
-    if not chapters:
-        return list(result)
-
-    # 收集各起点的 parent_id，批量查兄弟
-    parent_ids = {ch.parent_id for ch in chapters if ch.parent_id}
-    if parent_ids:
-        siblings = (await db.execute(
-            select(CanonicalChapter.id).where(
-                CanonicalChapter.parent_id.in_(parent_ids),
-                CanonicalChapter.status == "active",
-            )
-        )).scalars().all()
-        result.update(siblings)
-        result.update(parent_ids)
-
-    if upward_levels <= 0:
-        return list(result)
-
-    # 逐级向上爬
-    current_parents = parent_ids
-    visited_parents = set(current_parents)
-
-    for _ in range(upward_levels):
-        if not current_parents:
-            break
-
-        parents = (await db.execute(
-            select(CanonicalChapter).where(
-                CanonicalChapter.id.in_(list(current_parents)),
-                CanonicalChapter.status == "active",
-            )
-        )).scalars().all()
-
-        next_parent_ids = set()
-        for parent in parents:
-            result.add(parent.id)
-            if parent.parent_id and parent.parent_id not in visited_parents:
-                next_parent_ids.add(parent.parent_id)
-                visited_parents.add(parent.parent_id)
-
-        if next_parent_ids:
-            cousins = (await db.execute(
-                select(CanonicalChapter.id).where(
-                    CanonicalChapter.parent_id.in_(list(next_parent_ids)),
-                    CanonicalChapter.status == "active",
-                )
-            )).scalars().all()
-            result.update(cousins)
-
-        current_parents = next_parent_ids
-
-    return list(result)
-
-
-# ========== Phase 2: 题 → 考点 → 相关知识 结构化检索 ==========
-
-
-async def retrieve_by_chapters(
-    db: AsyncSession,
-    chapter_ids: List[str],
-    expand_to_siblings: bool = True,
-    expand_upward_levels: int = 1,
-    exclude_question_id: Optional[str] = None,
-) -> Dict[str, Any]:
-    """
-    从一组考点出发，展开该范围内的题目和知识点（结构化检索，纯 link 表 JOIN）。
-
-    chapter_ids 为「主考点」，可选地沿考点树展开到兄弟/父考点。
-
-    返回:
-    {
-        "primary_chapters": [...],   # 传入的主考点
-        "all_chapters": [...],       # 展开后的全部考点
-        "questions_by_chapter": {...},
-        "knowledge_points_by_chapter": {...},
-    }
-    """
-    primary_ids = list(chapter_ids)
-
-    # Step 1: 扩展考点范围
-    all_chapter_ids = set(primary_ids)
-    if expand_to_siblings and primary_ids:
-        expanded = await expand_chapter_scope(db, primary_ids, expand_upward_levels)
-        all_chapter_ids.update(expanded)
-
-    chapter_id_list = list(all_chapter_ids)
-
-    # Step 2: 批量收集范围内的题目和知识点
-    questions = []
-    if chapter_id_list:
-        conds = [
-            QuestionChapterLink.canonical_chapter_id.in_(chapter_id_list),
-            Question.status == "active",
-        ]
-        if exclude_question_id:
-            conds.append(Question.id != exclude_question_id)
-        questions = (await db.execute(
-            select(Question).join(QuestionChapterLink).where(*conds)
-        )).scalars().all()
-
-    knowledge_points = []
-    if chapter_id_list:
-        knowledge_points = (await db.execute(
-            select(KnowledgePoint).join(KnowledgePointChapterLink).where(
-                KnowledgePointChapterLink.canonical_chapter_id.in_(chapter_id_list),
-                KnowledgePoint.status == "active",
-            )
-        )).scalars().all()
-
-    # Step 3: 加载章节信息
-    chapters = []
-    if chapter_id_list:
-        chapters = (await db.execute(
-            select(CanonicalChapter).where(
-                CanonicalChapter.id.in_(chapter_id_list),
-                CanonicalChapter.status == "active",
-            )
-        )).scalars().all()
-
-    # 按考点分组
-    questions_by_chapter: Dict[str, List[Dict[str, Any]]] = {}
-    for q in questions:
-        for link in q.chapter_links:
-            cid = link.canonical_chapter_id
-            if cid not in questions_by_chapter:
-                questions_by_chapter[cid] = []
-            questions_by_chapter[cid].append({
-                "id": q.id,
-                "content": (q.content or "")[:200],
-                "question_no": getattr(q, "question_no", None),
-                "exam_year": getattr(q, "exam_year", None),
-            })
-
-    kp_by_chapter: Dict[str, List[Dict[str, Any]]] = {}
-    for kp in knowledge_points:
-        for link in kp.chapter_links:
-            cid = link.canonical_chapter_id
-            if cid not in kp_by_chapter:
-                kp_by_chapter[cid] = []
-            kp_by_chapter[cid].append({
-                "id": kp.id,
-                "title": kp.title,
-                "summary": getattr(kp, "summary", None),
-            })
-
-    return {
-        "primary_chapters": [
-            {"id": ch.id, "name": ch.name, "level": ch.level}
-            for ch in chapters if ch.id in primary_ids
-        ],
-        "all_chapters": [
-            {"id": ch.id, "name": ch.name, "level": ch.level, "outline_code": ch.outline_code}
-            for ch in chapters
-        ],
-        "questions_by_chapter": questions_by_chapter,
-        "knowledge_points_by_chapter": kp_by_chapter,
-    }
-
-
-async def retrieve_by_question(
-    db: AsyncSession,
-    question_id: str,
-    expand_to_siblings: bool = True,
-    expand_upward_levels: int = 1,
-) -> Dict[str, Any]:
-    """
-    从一道题出发：题 → 考点（QuestionChapterLink）→ 委托 retrieve_by_chapters 展开。
-
-    返回结构同 retrieve_by_chapters，主考点为该题直接关联的考点。
-    """
-    chapter_links = (await db.execute(
-        select(QuestionChapterLink).where(
-            QuestionChapterLink.question_id == question_id
-        )
-    )).scalars().all()
-    chapter_ids = [link.canonical_chapter_id for link in chapter_links]
-
-    return await retrieve_by_chapters(
-        db,
-        chapter_ids=chapter_ids,
-        expand_to_siblings=expand_to_siblings,
-        expand_upward_levels=expand_upward_levels,
-        exclude_question_id=question_id,
-    )
 
 
 # ========== Phase 2: 跨章关联 ==========

@@ -187,8 +187,10 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - 知识点、题目和标准章节已统一通过 `SegmentStore` 写入，重建时不再提前删除
   标准章节旧向量，避免新索引写入失败后丢失可用检索数据
 - 大纲 Query 向量扩展与结构化过滤条件提取已拆分到
-  `app/modules/retrieval/outline_query_expansion.py`；章节范围召回、题目到章节展开和
-  交叉引用校验保留在 `app/modules/retrieval/outline_service.py`，
+  `app/modules/retrieval/outline_query_expansion.py`；章节树范围扩展、题目到章节
+  展开及关联题目/知识点召回已拆分到
+  `app/modules/retrieval/chapter_scope_retrieval.py`，跨章相似召回和交叉引用校验保留在
+  `app/modules/retrieval/outline_service.py`，
   `app/services/outline_retrieval_service.py` 已删除
 - 知识点关系构建、语义相似边、关系查询和审核已迁移到
   `app/modules/retrieval/relation_service.py`，

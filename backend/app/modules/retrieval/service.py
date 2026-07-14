@@ -13,10 +13,10 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.qdrant import qdrant_manager
+from app.modules.retrieval.chapter_scope_retrieval import retrieve_by_chapters
 from app.modules.retrieval.outline_query_expansion import (
     expand_query_with_outline,
 )
-from app.modules.retrieval.outline_service import retrieve_by_chapters
 from app.modules.retrieval.relation_expansion import RetrievalRelationExpander
 from app.modules.retrieval.search_engine import (
     RetrievalResult,
