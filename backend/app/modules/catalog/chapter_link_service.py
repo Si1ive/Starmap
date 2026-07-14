@@ -10,13 +10,18 @@
 4. LLM 推理: 低分候选让 LLM 选择（可选）
 """
 
-import uuid
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
 
-from sqlalchemy import select, and_
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
+from app.modules.catalog.chapter_matcher import (
+    HIGH_CONFIDENCE_KEYWORD_THRESHOLD,
+    SUBJECT_FALLBACK_MARGIN,
+    VECTOR_MATCH_THRESHOLD,
+    ChapterMatcher,
+)
 from app.models.mysql_models import (
     KnowledgePoint, Question, CanonicalChapter,
     KnowledgePointChapterLink, QuestionChapterLink,
@@ -26,20 +31,13 @@ from app.services.chapter_compat_service import resolve_legacy_chapter_id
 
 logger = get_logger(__name__)
 
-HIGH_CONFIDENCE_KEYWORD_THRESHOLD = 0.85
-VECTOR_MATCH_THRESHOLD = 0.55
-SUBJECT_FALLBACK_MARGIN = 0.05
-
-
-def _gen_id() -> str:
-    return uuid.uuid4().hex[:32]
-
 
 class ChapterLinkService:
     """语料 ↔ 大纲章节关联服务"""
 
     def __init__(self, db: AsyncSession):
         self.db = db
+        self.matcher = ChapterMatcher(db)
 
     # ========== 公共接口 ==========
 
@@ -434,254 +432,32 @@ class ChapterLinkService:
         topic_terms: List[str],
         include_content: bool = True,
     ) -> Optional[Dict[str, Any]]:
-        """
-        在 CanonicalChapter 表里按 name / aliases / keywords / outline_code 做关键词匹配。
-
-        打分（取最高）：
-          - 标题或 topic_term 精确等于 chapter.name → 1.0
-          - 等于某个 alias → 0.9
-          - 等于某个 keyword → 0.88
-          - 标题/topic_term 包含 keyword 或反之 → 0.78
-          - 标题包含 chapter.name 或反之 → 0.75
-
-        返回 confidence ≥ 0.75 的最佳匹配，否则 None。
-        """
-        if not (title or content or topic_terms):
-            return None
-
-        query = select(CanonicalChapter).where(CanonicalChapter.status == "active")
-        if subject_id:
-            query = query.where(CanonicalChapter.subject_id == subject_id)
-        chapters = (await self.db.execute(query)).scalars().all()
-        if not chapters:
-            return None
-
-        title_norm = (title or "").strip().lower()
-        terms_norm = [t.strip().lower() for t in (topic_terms or []) if t and t.strip()]
-        # 待匹配的"短文本"候选：标题 + topic_terms，用来对齐 chapter name/alias/keyword（路径 A）
-        probes = [p for p in [title_norm, *terms_norm] if p]
-        # 题干/正文全文，用于关键词频次匹配（路径 B）。题目调用会关闭，避免选项术语误挂。
-        content_l = (content or "").strip().lower() if include_content else ""
-        if not probes and not content_l:
-            return None
-
-        best: Optional[Tuple[float, CanonicalChapter]] = None
-        for ch in chapters:
-            name_l = (ch.name or "").strip().lower()
-            aliases_l = [(a or "").strip().lower() for a in (ch.aliases or []) if a]
-            keywords_l = [(k or "").strip().lower() for k in (ch.keywords or []) if k]
-
-            score = 0.0
-
-            # 路径 A：干净 probe（KP 标题 / topic_terms）做精确匹配。
-            # 只用相等，不做"长文本包含短词"——否则长题干会把任意短 keyword 吞成子串。
-            for p in probes:
-                if len(p) < 2:
-                    continue
-                if name_l and p == name_l:
-                    score = max(score, 1.0)
-                elif p in aliases_l:
-                    score = max(score, 0.9)
-                elif p in keywords_l:
-                    score = max(score, 0.88)
-                # probe 是 name 的子串（probe 更短，如别名片段），方向受限：只允许 probe⊆name
-                elif name_l and len(p) >= 3 and p in name_l:
-                    score = max(score, 0.8)
-
-            # 路径 B：题干内容做关键词频次匹配（题目无干净标题时的主力）。
-            # 只数长度 ≥3 的 specific 关键词，排除"图/序/锁"这类通用短词，避免噪声。
-            specific_kw = {k for k in keywords_l if len(k) >= 3}
-            if name_l and len(name_l) >= 4:
-                specific_kw.add(name_l)
-            for a in aliases_l:
-                if len(a) >= 3:
-                    specific_kw.add(a)
-            hits = {k for k in specific_kw if k in content_l}
-            if hits:
-                strong_hits = {k for k in hits if len(k) >= 4}
-                if len(hits) >= 2:
-                    score = max(score, min(0.78 + 0.04 * len(hits), 0.9))
-                elif strong_hits:
-                    # 单个长度 ≥4 的强特征词（如 RISC / SPOOLing / 段页式）
-                    score = max(score, 0.78)
-
-            if best is None or score > best[0]:
-                best = (score, ch)
-
-        if not best or best[0] < 0.75:
-            return None
-
-        score, ch = best
-        return {
-            "chapter_id": ch.id,
-            "subject_id": ch.subject_id,
-            "confidence": round(score, 4),
-            "source": "keyword_match",
-        }
+        """Compatibility delegate for keyword chapter matching."""
+        return await self.matcher.match_by_keyword(
+            title=title,
+            content=content,
+            subject_id=subject_id,
+            topic_terms=topic_terms,
+            include_content=include_content,
+        )
 
     # ========== 策略 3: 向量检索 ==========
 
     async def _match_by_vector_search(
         self, entity, entity_type: str
     ) -> List[Dict[str, Any]]:
-        """用实体内容在 canonical_chapter segments 中检索，返回最多 top-3 相关章节。
-
-        包装层：负责向量召回日志记录（side-effect，失败不影响召回）。
-        核心检索逻辑在 _vector_search_core。
-        """
-        from app.services.vector_recall_recorder import VectorRecallRecorder
-
-        # 构造入参文本（与 core 内一致的口径，用于日志展示）
-        if entity_type == "knowledge_point":
-            query_text = f"{getattr(entity, 'title', '') or ''}\n{(getattr(entity, 'content', '') or '')[:500]}"
-        else:
-            query_text = (getattr(entity, "content", "") or "")[:300]
-
-        rec = VectorRecallRecorder(
-            called_by=entity_type,
-            purpose="章节归属向量召回",
-            query_text=query_text,
-            query_entity_id=getattr(entity, "id", None),
-            subject_id=getattr(entity, "subject_id", None),
-        ).start()
-
-        try:
-            candidates = await self._vector_search_core(entity, entity_type)
-        except Exception as e:
-            rec.record_error(e)
-            await rec.persist()
-            raise
-
-        # 补充 chapter 名称，便于日志可读
-        name_map: Dict[str, str] = {}
-        try:
-            for c in candidates:
-                cid = c.get("chapter_id")
-                if cid and cid not in name_map:
-                    ch = await self.db.get(CanonicalChapter, cid)
-                    if ch:
-                        name_map[cid] = ch.name
-        except Exception:
-            name_map = {}
-
-        rec.record_results(candidates, threshold=VECTOR_MATCH_THRESHOLD, chapter_name_map=name_map)
-        await rec.persist()
-        return candidates
+        """Compatibility delegate for vector chapter matching."""
+        return await self.matcher.match_by_vector_search(
+            entity,
+            entity_type,
+            search_core=self._vector_search_core,
+        )
 
     async def _vector_search_core(
         self, entity, entity_type: str
     ) -> List[Dict[str, Any]]:
-        """
-        用实体内容在 canonical_chapter segments 中检索
-
-        返回: 最多 top-3 相关章节
-        """
-        from app.services.embedding_service import get_embedding_service_from_settings
-        from app.db.qdrant import qdrant_manager
-        from qdrant_client.models import Filter, FieldCondition, MatchValue
-
-        # 1. 构造查询文本
-        if entity_type == "knowledge_point":
-            query_texts = [f"{entity.title}\n{(entity.content or '')[:500]}"]
-        else:  # question
-            options_text = "\n".join([
-                f"{opt.get('key', '')}. {opt.get('text', '')}"
-                for opt in (entity.options or [])[:4]
-            ])
-            stem_text = entity.content[:300]
-            query_texts = [stem_text]
-            if options_text.strip():
-                query_texts.append(f"{stem_text}\n{options_text[:200]}")
-
-        query_texts = [text for text in query_texts if text.strip()]
-        if not query_texts:
-            return []
-
-        # 2. 生成 embedding
-        try:
-            embedding_service = await get_embedding_service_from_settings(self.db)
-            if len(query_texts) == 1:
-                query_vectors = [await embedding_service.embed_text(query_texts[0])]
-            else:
-                query_vectors = await embedding_service.embed_batch(query_texts)
-        except Exception as e:
-            logger.error("生成 embedding 失败", error=str(e))
-            return []
-
-        def _build_filter(subject_id: Optional[str] = None) -> Filter:
-            must = [
-                FieldCondition(key="entity_type", match=MatchValue(value="canonical_chapter")),
-            ]
-            if subject_id:
-                must.append(FieldCondition(key="subject_id", match=MatchValue(value=subject_id)))
-            return Filter(must=must)
-
-        def _aggregate(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-            chapter_scores: Dict[str, Dict[str, Any]] = {}
-            for hit in results:
-                payload = hit.get("payload") or {}
-                chapter_id = payload.get("entity_id")
-                if not chapter_id:
-                    continue
-                score = hit.get("score", 0)
-                current = chapter_scores.get(chapter_id)
-                if not current or score > current["score"]:
-                    chapter_scores[chapter_id] = {
-                        "score": score,
-                        "subject_id": payload.get("subject_id"),
-                    }
-
-            candidates = []
-            for i, (cid, data) in enumerate(
-                sorted(chapter_scores.items(), key=lambda x: -x[1]["score"])
-            ):
-                score = data["score"]
-                if score < VECTOR_MATCH_THRESHOLD:
-                    continue
-                candidates.append({
-                    "chapter_id": cid,
-                    "subject_id": data.get("subject_id"),
-                    "relevance": score,
-                    "source": "vector_search",
-                    "is_primary": i == 0,
-                })
-            return candidates[:3]
-
-        def _search_with_filter(query_filter: Filter) -> List[Dict[str, Any]]:
-            results: List[Dict[str, Any]] = []
-            for query_vector in query_vectors:
-                results.extend(qdrant_manager.search(
-                    collection_name=qdrant_manager.COLLECTION_KNOWLEDGE_SEGMENTS,
-                    query_vector=query_vector,
-                    query_filter=query_filter,
-                    limit=10,
-                ))
-            return results
-
-        # 3. Qdrant 检索：同时看当前 subject 与全学科。
-        # 当全学科 top 明显更高时，认为抽取阶段 subject_id 可能错误，允许纠正。
-        try:
-            if getattr(entity, "subject_id", None):
-                subject_candidates = _aggregate(
-                    _search_with_filter(_build_filter(getattr(entity, "subject_id", None)))
-                )
-                all_candidates = _aggregate(_search_with_filter(_build_filter()))
-                if not subject_candidates:
-                    return all_candidates
-                if (
-                    all_candidates
-                    and all_candidates[0]["chapter_id"] != subject_candidates[0]["chapter_id"]
-                    and all_candidates[0]["relevance"] >= subject_candidates[0]["relevance"] + SUBJECT_FALLBACK_MARGIN
-                ):
-                    return all_candidates
-                return subject_candidates
-
-            return _aggregate(_search_with_filter(_build_filter()))
-        except Exception as e:
-            logger.error("Qdrant 检索失败", error=str(e))
-            return []
-
-        return []
+        """Compatibility delegate for the vector search core."""
+        return await self.matcher.vector_search_core(entity, entity_type)
 
     # ========== 保存关联 ==========
 
