@@ -10,19 +10,14 @@
 
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.logging import get_logger
 from app.db.qdrant import qdrant_manager
-from app.models.mysql_models import (
-    RetrievalSegment, KnowledgePoint, Question,
-    KnowledgeRelation,
-)
 from app.modules.retrieval.outline_service import (
     expand_query_with_outline,
     retrieve_by_chapters,
 )
+from app.modules.retrieval.relation_expansion import RetrievalRelationExpander
 from app.modules.retrieval.search_engine import (
     RetrievalResult,
     RetrievalSearchEngine,
@@ -30,9 +25,6 @@ from app.modules.retrieval.search_engine import (
 from app.infrastructure.ai.embedding_service import (
     get_embedding_service_from_settings,
 )
-
-logger = get_logger(__name__)
-
 
 class RetrievalService:
     """检索服务"""
@@ -42,6 +34,7 @@ class RetrievalService:
         self.embedding = None  # 惰性加载：首次用时从系统设置读 embedding 配置
         self.qdrant = qdrant_manager
         self.search_engine = RetrievalSearchEngine(db)
+        self.relation_expander = RetrievalRelationExpander(db)
 
     async def _ensure_embedding(self):
         if self.embedding is None:
@@ -327,148 +320,12 @@ class RetrievalService:
         if not primary:
             return {"primary_results": [], "related_results": [], "relations": []}
 
-        # Step 2: 查询关系
-        primary_ids = list({r.entity_id for r in primary})
-        relations = await self._get_relations(primary_ids)
-
-        # Step 3: 关系扩展
-        related_ids = set()
-        relation_details = []
-        for rel in relations:
-            related_ids.add(rel["related_knowledge_id"])
-            relation_details.append(rel)
-
-        # 排除已有的
-        related_ids -= set(primary_ids)
-
-        # 查询关联知识点的 segments
-        related_results: List[RetrievalResult] = []
-        if related_ids:
-            result = await self.db.execute(
-                select(RetrievalSegment).where(
-                    and_(
-                        RetrievalSegment.entity_type == "knowledge_point",
-                        RetrievalSegment.entity_id.in_(list(related_ids)),
-                        RetrievalSegment.segment_type == "content",
-                    )
-                )
-            )
-            segments = result.scalars().all()
-
-            for seg in segments:
-                related_results.append(RetrievalResult(
-                    segment_id=seg.id,
-                    entity_type="knowledge_point",
-                    entity_id=seg.entity_id,
-                    segment_type=seg.segment_type,
-                    content_text=seg.content_text,
-                    context_text=seg.context_text,
-                    score=0.3,  # 关系扩展的默认分数
-                    subject_id=seg.subject_id,
-                    chapter_ids=seg.chapter_ids or [],
-                    source_document_id=seg.document_id,
-                ))
-
-        # Step 4: 双向扩展——查到的知识点带出关联题目（QuestionKnowledgeLink）
-        linked_questions: List[Dict[str, Any]] = []
-        try:
-            linked_questions = await self._get_linked_questions(primary_ids, limit=limit)
-        except Exception as e:
-            logger.warning("知识点关联题目扩展失败，跳过", error=str(e))
-
+        primary_ids = list(dict.fromkeys(result.entity_id for result in primary))
+        expansion = await self.relation_expander.expand(primary_ids, limit)
         return {
-            "primary_results": [r.to_dict() for r in primary],
-            "related_results": [r.to_dict() for r in related_results[:limit]],
-            "relations": relation_details[:10],
-            "linked_questions": linked_questions,
+            "primary_results": [result.to_dict() for result in primary],
+            **expansion,
         }
-
-    async def _get_linked_questions(
-        self, knowledge_point_ids: List[str], limit: int = 5
-    ) -> List[Dict[str, Any]]:
-        """根据知识点反查关联题目（QuestionKnowledgeLink），按 relevance 降序。"""
-        if not knowledge_point_ids:
-            return []
-        from app.models.mysql_models import QuestionKnowledgeLink
-        rows = (await self.db.execute(
-            select(QuestionKnowledgeLink, Question)
-            .join(Question, QuestionKnowledgeLink.question_id == Question.id)
-            .where(
-                QuestionKnowledgeLink.knowledge_point_id.in_(knowledge_point_ids),
-                Question.status != "deleted",
-            )
-            .order_by(QuestionKnowledgeLink.relevance.desc())
-            .limit(limit * 3)
-        )).all()
-        seen: set = set()
-        out: List[Dict[str, Any]] = []
-        for link, q in rows:
-            if q.id in seen:
-                continue
-            seen.add(q.id)
-            out.append({
-                "question_id": q.id,
-                "content": (q.content or "")[:200],
-                "question_no": q.question_no,
-                "exam_year": q.exam_year,
-                "source": q.source,
-                "relevance": float(link.relevance or 0),
-                "via_knowledge_point_id": link.knowledge_point_id,
-            })
-            if len(out) >= limit:
-                break
-        return out
-
-    async def _get_relations(
-        self, knowledge_point_ids: List[str]
-    ) -> List[Dict[str, Any]]:
-        """查询知识点的关系边"""
-        from sqlalchemy import or_
-
-        result = await self.db.execute(
-            select(KnowledgeRelation, KnowledgePoint)
-            .join(
-                KnowledgePoint,
-                or_(
-                    and_(
-                        KnowledgeRelation.target_knowledge_id == KnowledgePoint.id,
-                        KnowledgeRelation.source_knowledge_id.in_(knowledge_point_ids),
-                    ),
-                    and_(
-                        KnowledgeRelation.source_knowledge_id == KnowledgePoint.id,
-                        KnowledgeRelation.target_knowledge_id.in_(knowledge_point_ids),
-                    ),
-                ),
-            )
-            .where(
-                KnowledgeRelation.review_status == "approved",
-                or_(
-                    KnowledgeRelation.source_knowledge_id.in_(knowledge_point_ids),
-                    KnowledgeRelation.target_knowledge_id.in_(knowledge_point_ids),
-                ),
-            )
-        )
-        rows = result.all()
-
-        relations = []
-        for rel, kp in rows:
-            if rel.source_knowledge_id in knowledge_point_ids:
-                direction = "outgoing"
-                related_id = rel.target_knowledge_id
-            else:
-                direction = "incoming"
-                related_id = rel.source_knowledge_id
-
-            relations.append({
-                "relation_id": rel.id,
-                "relation_type": rel.relation_type,
-                "direction": direction,
-                "related_knowledge_id": related_id,
-                "related_knowledge_title": kp.title,
-                "evidence_text": rel.evidence_text,
-            })
-
-        return relations
 
 
 # 依赖注入
