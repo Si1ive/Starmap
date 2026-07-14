@@ -145,7 +145,9 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - 抽取数量、页级保存结果、题号连续性和规则/LLM 修复历史摘要已迁移到
   `app/modules/corpus/extraction_diagnostics.py`
 - 题目入库、选项标准化、原卷答案回连和实体来源查询已迁移到
-  `app/modules/corpus/entity_persistence.py`
+  `app/modules/corpus/entity_persistence.py`；选项标记清洗与标准化、知识点主题词和正文
+  组装、答案区识别与题号答案解析进一步拆分到
+  `app/modules/corpus/entity_content_rules.py`
 - 知识点入库、实体级联清理及抽取实体 ID 生成也已收敛到该持久化模块
 - 已审核 section 映射加载及跨页最近章节回退已迁移到
   `app/modules/corpus/document_mapping.py`

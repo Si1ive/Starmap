@@ -1,6 +1,5 @@
 """Persistence helpers for entities produced by the corpus extraction pipeline."""
 
-import re
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -21,10 +20,14 @@ from app.modules.content.entity_assets import (
     cleanup_entity_links,
     link_entity_assets_by_blocks,
 )
-from app.modules.corpus.question_validation import (
-    extract_question_number,
-    get_option_label,
+from app.modules.corpus.entity_content_rules import (
+    build_knowledge_content,
+    extract_answers_from_blocks,
+    extract_topic_terms,
+    normalize_options,
+    strip_leading_option_marker,
 )
+from app.modules.corpus.question_validation import extract_question_number
 
 logger = get_logger(__name__)
 
@@ -81,123 +84,6 @@ async def cleanup_document_entities(
         )
         await db.execute(delete(model).where(model.id.in_(entity_ids)))
     return removed
-
-
-def strip_leading_option_marker(
-    text: str,
-    expected_label: Optional[str] = None,
-) -> str:
-    """Remove duplicated or malformed markers from extracted option text."""
-    cleaned = (text or "").strip()
-    if expected_label:
-        cleaned = re.sub(
-            rf"^\s*{re.escape(expected_label.upper())}\s*"
-            r"(?:[.．、:：。]|<sub>\s*[.．、:：。]\s*</sub>)\s*",
-            "",
-            cleaned,
-        ).strip()
-    malformed_sub = re.match(r"^\s*<sub>\s*[.．、:：。]\s*", cleaned)
-    if malformed_sub:
-        cleaned = cleaned[malformed_sub.end():]
-        cleaned = re.sub(r"^([^<]{0,60})</sub>", r"\1", cleaned, count=1).strip()
-    return re.sub(r"^\s*[.．、:：。]\s*", "", cleaned).strip()
-
-
-def normalize_options(
-    options: Optional[List[Dict[str, Any]]],
-) -> List[Dict[str, Any]]:
-    """Normalize option keys while preserving their extraction provenance."""
-    normalized: List[Dict[str, Any]] = []
-    seen_labels = set()
-    for option in options or []:
-        label = get_option_label(option)
-        text = str(option.get("text") or option.get("content") or "").strip()
-        text = strip_leading_option_marker(text, expected_label=label)
-        if not label or not text or label in seen_labels:
-            continue
-        normalized_option = {
-            "key": label,
-            "label": label,
-            "option_label": label,
-            "text": text,
-        }
-        if option.get("source") in {"extracted", "ai_generated"}:
-            normalized_option["source"] = option["source"]
-        normalized.append(normalized_option)
-        seen_labels.add(label)
-    return normalized
-
-
-def extract_topic_terms(title: str, content: str) -> List[str]:
-    """Extract the lightweight topic terms used by the legacy pipeline."""
-    terms = set()
-
-    if title:
-        clean_title = title.strip()
-        for prefix in ["第", "章", "节", "、", "。", "：", ":", " "]:
-            clean_title = clean_title.replace(prefix, " ")
-        for word in clean_title.split():
-            if len(word) >= 2:
-                terms.add(word)
-
-    if content:
-        quoted = re.findall(r'[「「""]([^」」""]+)[」」""]', content)
-        for quoted_term in quoted:
-            if 2 <= len(quoted_term) <= 20:
-                terms.add(quoted_term)
-
-    return list(terms)[:20]
-
-
-def build_knowledge_content(content_blocks: List[Any]) -> str:
-    """Join non-empty knowledge point blocks using Markdown paragraph spacing."""
-    content_parts = []
-    for block in content_blocks:
-        text = (
-            getattr(block, "content_md", None)
-            or getattr(block, "content_text", None)
-            or ""
-        )
-        if text.strip():
-            content_parts.append(text.strip())
-    return "\n\n".join(content_parts)
-
-
-def extract_answers_from_blocks(blocks: List[Any]) -> Dict[str, str]:
-    """Parse numbered answers from the answer section of a source document."""
-    answer_header_re = re.compile(
-        r"(参考答案|答案与解析|答案速查|答案及解析|^\s*答案\s*$)"
-    )
-    text_parts: List[str] = []
-    in_answer_zone = False
-    for block in blocks:
-        text = (
-            getattr(block, "content_text", None)
-            or getattr(block, "content_md", None)
-            or ""
-        ).strip()
-        if not text:
-            continue
-        if not in_answer_zone and answer_header_re.search(text):
-            in_answer_zone = True
-            tail = answer_header_re.sub(" ", text).strip()
-            if tail:
-                text_parts.append(tail)
-            continue
-        if in_answer_zone:
-            text_parts.append(text)
-    if not in_answer_zone:
-        return {}
-
-    answer_text = "\n".join(text_parts)
-    pair_re = re.compile(
-        r"(?<!\d)(\d{1,3})\s*[.．、:：)）]\s*"
-        r"([A-Da-d]{1,4}|对|错|正确|错误|√|×|T|F|是|否)"
-    )
-    return {
-        match.group(1).strip(): match.group(2).strip().upper()
-        for match in pair_re.finditer(answer_text)
-    }
 
 
 class KnowledgePointPersistence:
