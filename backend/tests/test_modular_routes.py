@@ -156,6 +156,30 @@ def test_content_routes_are_owned_by_content_module():
         assert routes[path].endpoint.__module__ == "app.modules.content.router"
 
 
+def test_relation_review_routes_are_owned_by_content_module():
+    routes = _routes_by_path()
+
+    for path in (
+        "/api/v1/admin/review/relations",
+        "/api/v1/admin/review/relations/{relation_id}",
+        "/api/v1/admin/review/relations/batch-delete",
+        "/api/v1/admin/review/stats",
+    ):
+        assert (
+            routes[path].endpoint.__module__
+            == "app.modules.content.relation_review_router"
+        )
+
+    post_paths = [
+        route.path
+        for route in app.routes
+        if hasattr(route, "methods") and "POST" in route.methods
+    ]
+    assert post_paths.index(
+        "/api/v1/admin/review/relations/batch-delete"
+    ) < post_paths.index("/api/v1/admin/review/relations/{relation_id}")
+
+
 def test_corpus_file_and_parse_routes_are_owned_by_corpus_module():
     routes = _routes_by_path()
 

@@ -25,6 +25,9 @@ from app.modules.catalog.section_review_router import (
 from app.modules.chat.admin_router import router as chat_admin_router
 from app.modules.chat.router import router as chat_router
 from app.modules.content import router as content_router
+from app.modules.content.relation_review_router import (
+    router as relation_review_router,
+)
 from app.modules.corpus.router import router as corpus_router
 from app.modules.crawler.file_router import router as crawler_file_router
 from app.modules.crawler.pdf_ingest_router import router as pdf_ingest_router
@@ -269,6 +272,11 @@ app.include_router(
 )
 app.include_router(
     content_router,
+    prefix="/api/v1",
+    dependencies=admin_dependencies,
+)
+app.include_router(
+    relation_review_router,
     prefix="/api/v1",
     dependencies=admin_dependencies,
 )
