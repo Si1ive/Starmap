@@ -36,6 +36,7 @@ from app.modules.content.relation_review_router import (
     router as relation_review_router,
 )
 from app.modules.corpus.router import router as corpus_router
+from app.modules.crawler.config_router import router as crawler_config_router
 from app.modules.crawler.file_router import router as crawler_file_router
 from app.modules.crawler.pdf_ingest_router import router as pdf_ingest_router
 from app.modules.crawler.router import router as crawler_router
@@ -313,6 +314,11 @@ app.include_router(
 )
 app.include_router(
     crawler_router,
+    prefix="/api/v1",
+    dependencies=admin_dependencies,
+)
+app.include_router(
+    crawler_config_router,
     prefix="/api/v1",
     dependencies=admin_dependencies,
 )

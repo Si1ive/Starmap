@@ -331,7 +331,6 @@ def test_crawler_routes_are_owned_by_crawler_module():
     routes = _routes_by_path()
 
     for path in (
-        "/api/v1/admin/crawler/config",
         "/api/v1/admin/crawler/logs",
         "/api/v1/admin/crawler/logs/export",
         "/api/v1/admin/crawler/file-logs",
@@ -341,6 +340,15 @@ def test_crawler_routes_are_owned_by_crawler_module():
         "/api/v1/admin/crawler/logs/stream",
     ):
         assert routes[path].endpoint.__module__ == "app.modules.crawler.router"
+
+
+def test_crawler_config_routes_are_owned_by_config_router():
+    routes = _routes_by_path()
+
+    assert (
+        routes["/api/v1/admin/crawler/config"].endpoint.__module__
+        == "app.modules.crawler.config_router"
+    )
 
 
 def test_crawler_schedule_routes_are_owned_by_schedule_router():
