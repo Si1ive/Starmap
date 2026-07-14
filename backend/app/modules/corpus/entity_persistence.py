@@ -70,7 +70,7 @@ async def cleanup_document_entities(
         except Exception:
             pass
 
-        from app.services.segment_service import SegmentService
+        from app.modules.retrieval.segment_service import SegmentService
 
         await SegmentService(db).delete_entity_segments(
             current_type,

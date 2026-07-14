@@ -3,7 +3,12 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from app.services.segment_service import SegmentService
+from app.modules.retrieval.segment_service import SegmentService
+from app.services.segment_service import SegmentService as LegacySegmentService
+
+
+def test_legacy_segment_service_exports_retrieval_implementation():
+    assert LegacySegmentService is SegmentService
 
 
 @pytest.mark.asyncio

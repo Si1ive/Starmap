@@ -15,7 +15,7 @@ from app.modules.retrieval.schemas import (
 )
 from app.modules.retrieval.service import RetrievalService
 from app.services.outline_retrieval_service import expand_related_chapters
-from app.services.segment_service import SegmentService
+from app.modules.retrieval.segment_service import SegmentService
 
 router = APIRouter(prefix="/admin", tags=["检索"])
 

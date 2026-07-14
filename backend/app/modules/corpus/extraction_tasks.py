@@ -99,7 +99,7 @@ class EntityExtractionRunExecutor:
         include_questions: bool,
     ) -> Dict[str, Any]:
         """Build searchable segments immediately after extraction."""
-        from app.services.segment_service import SegmentService
+        from app.modules.retrieval.segment_service import SegmentService
 
         return await SegmentService(self.db).build_document_segments(
             document_id=document_id,

@@ -140,6 +140,9 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - 原 `/api/v1/admin/segments/*` 和 `/api/v1/admin/search*` URL 保持不变
 - 检索编排实现已迁移到 `app/modules/retrieval/service.py`，
   `app/services/retrieval_service.py` 仅保留兼容导出
+- Segment 构建、重建、删除和 MySQL/Qdrant 一致性事务已迁移到
+  `app/modules/retrieval/segment_service.py`，
+  `app/services/segment_service.py` 仅保留兼容导出
 - sparse/hybrid 的 MySQL 关键词召回已与 dense 的 Qdrant payload 过滤保持一致，
   学科、章节、年份、考试范围、难度、题型、答案来源和标签均在截断候选前过滤
 
