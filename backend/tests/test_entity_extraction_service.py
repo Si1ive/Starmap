@@ -21,6 +21,7 @@ from app.modules.corpus.question_builder import (
     build_question_tags,
     detect_stem_year,
 )
+from app.modules.corpus.question_pipeline import QuestionExtractionPipeline
 from app.models.mysql_models import CorpusFile, Document, EntityExtractionRun
 
 
@@ -118,6 +119,63 @@ def _choice(no: int, labels: str, *, raw_text: str = ""):
         "options": [{"key": label, "text": f"{label}选项"} for label in labels],
         "extraction_meta": {"few_options": len(labels) < 4},
     }
+
+
+@pytest.mark.asyncio
+async def test_question_pipeline_saves_and_reports_consumed_blocks(
+    monkeypatch,
+):
+    pipeline = QuestionExtractionPipeline(None)
+    question = _choice(1, "ABCD")
+    question["block_ids"] = ["block-1", "block-2"]
+    reports = []
+
+    async def fake_extract_raw_questions(**_kwargs):
+        return [question]
+
+    async def fake_get_llm_client():
+        return None
+
+    async def fake_save_question(saved_question):
+        assert saved_question["id"] == "q1"
+        return True, "saved"
+
+    async def fake_save_diagnostic(document_id, report):
+        reports.append((document_id, report))
+
+    monkeypatch.setattr(
+        pipeline,
+        "extract_raw_questions",
+        fake_extract_raw_questions,
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "get_llm_client",
+        fake_get_llm_client,
+    )
+    monkeypatch.setattr(
+        pipeline.persistence,
+        "save_question",
+        fake_save_question,
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "save_diagnostic_report",
+        fake_save_diagnostic,
+    )
+
+    result = await pipeline.extract(
+        document_id="doc-1",
+        fallback_subject_id="subject-1",
+        blocks=[],
+        section_mappings={},
+    )
+
+    assert result["saved_count"] == 1
+    assert result["unassigned"] == []
+    assert result["consumed_block_ids"] == {"block-1", "block-2"}
+    assert result["diagnostic"]["saved_question_count"] == 1
+    assert reports[0][0] == "doc-1"
 
 
 async def test_llm_fallback_uses_only_previous_target_next_questions():
