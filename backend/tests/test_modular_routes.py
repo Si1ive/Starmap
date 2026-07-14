@@ -170,6 +170,44 @@ def test_chapter_relation_routes_are_owned_by_catalog_module():
     ]
 
 
+def test_outline_routes_are_owned_by_catalog_module():
+    routes = _routes_by_path()
+
+    for path in (
+        "/api/v1/admin/outlines",
+        "/api/v1/admin/outlines/{outline_id}/chapters",
+        "/api/v1/admin/outlines/{outline_id}/subjects",
+        "/api/v1/admin/outlines/preview",
+        "/api/v1/admin/outlines/import",
+        "/api/v1/admin/outlines/import-from-document",
+        "/api/v1/admin/outlines/document/{document_id}/preview",
+        "/api/v1/admin/outlines/import-from-llm",
+        "/api/v1/admin/outlines/{outline_id}",
+        "/api/v1/admin/outlines/{outline_id}/subjects/{subject_id}/generate-guidance",
+        "/api/v1/admin/outlines/upload-parse",
+        "/api/v1/admin/outlines/runs/{run_id}",
+        "/api/v1/admin/outlines/runs",
+        "/api/v1/admin/outlines/runs/batch-delete",
+    ):
+        assert (
+            routes[path].endpoint.__module__
+            == "app.modules.catalog.outline_router"
+        )
+
+    methods = _methods_by_path()
+    assert {"GET"} <= methods["/api/v1/admin/outlines"]
+    assert {"POST"} <= methods["/api/v1/admin/outlines/upload-parse"]
+    assert {"GET", "DELETE"} <= methods[
+        "/api/v1/admin/outlines/runs/{run_id}"
+    ]
+    assert {"POST"} <= methods[
+        "/api/v1/admin/outlines/runs/batch-delete"
+    ]
+    assert {"DELETE"} <= methods[
+        "/api/v1/admin/outlines/{outline_id}"
+    ]
+
+
 def test_content_routes_are_owned_by_content_module():
     routes = _routes_by_path()
 
