@@ -223,7 +223,9 @@ function KnowledgePointList({
                   && pendingKey !== `knowledge_point:${kp.id}`
                 }
                 onClick={() => onReextract(kp)}
-              />
+              >
+                重新提取
+              </Button>
             </Tooltip>
           </div>
           {kp.summary && (
@@ -359,7 +361,7 @@ const ContentOverview = ({
       ),
     },
     {
-      title: '操作', key: 'actions', width: 72, fixed: 'right' as const,
+      title: '操作', key: 'actions', width: 116, fixed: 'right' as const,
       render: (_: unknown, row: ContentOverviewQuestion) => {
         const key = `question:${row.id}`
         const isRunning = row.reextraction?.status === 'running'
@@ -376,7 +378,9 @@ const ContentOverview = ({
                 row.id,
                 row.question_no ? `第 ${row.question_no} 题` : row.content_preview.slice(0, 24),
               )}
-            />
+            >
+              重新提取
+            </Button>
           </Tooltip>
         )
       },
@@ -462,6 +466,7 @@ const ContentOverview = ({
             columns={questionColumns}
             rowKey="id"
             size="small"
+            scroll={{ x: 1100 }}
             pagination={{ pageSize: 50, showSizeChanger: true }}
             expandable={{
               expandedRowRender: (q: ContentOverviewQuestion) => (
