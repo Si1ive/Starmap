@@ -185,6 +185,8 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
   section 映射与审核位于 `chapter_mapping_service.py`，
   页级、块级和 section 级章节归属诊断位于 `chapter_diagnostics_service.py`，
   `app/services/chapter_mapping_service.py` 已删除
+- 标准章节初始化和树形/平铺查询接口已迁移到 `app/modules/catalog/router.py`，
+  原 `/api/v1/admin/canonical-chapters*` 路径和响应保持不变
 - 标准章节到旧章节 ID 的兼容解析已迁移到
   `app/modules/catalog/chapter_compat.py`，旧 Service 文件已删除
 - 考试大纲导入、章节树入库、复习指导生成和大纲 LLM 结构化拆分已迁移到

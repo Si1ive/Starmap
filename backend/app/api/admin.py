@@ -278,45 +278,6 @@ async def preview_downloaded_file(
     )
 
 
-# ========== 标准章节管理 ==========
-
-
-@router.post("/canonical-chapters/init", response_model=ApiResponse)
-async def init_canonical_chapters(
-    subject_id: str = Query(..., description="学科ID"),
-    chapters: List[dict] = [],
-    db: AsyncSession = Depends(get_db),
-):
-    """初始化学科的标准章节体系"""
-    from app.modules.catalog.canonical_chapter_service import CanonicalChapterService
-
-    service = CanonicalChapterService(db)
-    try:
-        result = await service.init_chapters(subject_id, chapters)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    return ApiResponse(data=result)
-
-
-@router.get("/canonical-chapters", response_model=ApiResponse)
-async def get_canonical_chapters(
-    subject_id: str = Query(..., description="学科ID"),
-    tree: bool = Query(False, description="是否返回树形结构"),
-    db: AsyncSession = Depends(get_db),
-):
-    """获取学科的标准章节"""
-    from app.modules.catalog.canonical_chapter_service import CanonicalChapterService
-
-    service = CanonicalChapterService(db)
-    if tree:
-        result = await service.get_chapters(subject_id)
-    else:
-        result = await service.get_chapters_flat(subject_id)
-
-    return ApiResponse(data=result)
-
-
 # ========== 审核相关 ==========
 
 

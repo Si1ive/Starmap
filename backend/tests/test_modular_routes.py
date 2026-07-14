@@ -25,9 +25,11 @@ def test_catalog_routes_keep_existing_paths_and_methods():
 
     subjects = routes["/api/v1/admin/subjects"]
     chapters = routes["/api/v1/admin/subjects/{subject_id}/chapters"]
+    canonical_chapters = routes["/api/v1/admin/canonical-chapters"]
 
     assert "GET" in subjects.methods
     assert "GET" in chapters.methods
+    assert "GET" in canonical_chapters.methods
 
 
 def test_auth_and_user_routes_are_owned_by_operations_module():
@@ -104,6 +106,14 @@ def test_catalog_routes_are_owned_by_catalog_module():
     )
     assert (
         routes["/api/v1/admin/subjects/{subject_id}/chapters"].endpoint.__module__
+        == "app.modules.catalog.router"
+    )
+    assert (
+        routes["/api/v1/admin/canonical-chapters"].endpoint.__module__
+        == "app.modules.catalog.router"
+    )
+    assert (
+        routes["/api/v1/admin/canonical-chapters/init"].endpoint.__module__
         == "app.modules.catalog.router"
     )
 
