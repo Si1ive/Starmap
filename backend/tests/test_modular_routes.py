@@ -141,6 +141,35 @@ def test_section_review_routes_are_owned_by_catalog_module():
     ) < post_paths.index("/api/v1/admin/review/sections/{mapping_id}")
 
 
+def test_chapter_relation_routes_are_owned_by_catalog_module():
+    routes = _routes_by_path()
+
+    for path in (
+        "/api/v1/admin/chapter-relations/build",
+        "/api/v1/admin/chapter-relations",
+        "/api/v1/admin/chapter-relations/{relation_id}/review",
+        "/api/v1/admin/chapter-relations/{relation_id}",
+        "/api/v1/admin/chapter-relations/batch-delete",
+    ):
+        assert (
+            routes[path].endpoint.__module__
+            == "app.modules.catalog.chapter_relation_router"
+        )
+
+    methods = _methods_by_path()
+    assert {"POST"} <= methods["/api/v1/admin/chapter-relations/build"]
+    assert {"GET"} <= methods["/api/v1/admin/chapter-relations"]
+    assert {"POST"} <= methods[
+        "/api/v1/admin/chapter-relations/{relation_id}/review"
+    ]
+    assert {"DELETE"} <= methods[
+        "/api/v1/admin/chapter-relations/{relation_id}"
+    ]
+    assert {"POST"} <= methods[
+        "/api/v1/admin/chapter-relations/batch-delete"
+    ]
+
+
 def test_content_routes_are_owned_by_content_module():
     routes = _routes_by_path()
 
