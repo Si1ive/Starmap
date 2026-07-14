@@ -117,6 +117,9 @@ export interface EntityExtractionRun {
   id: string
   document_id: string
   status: 'running' | 'success' | 'failed'
+  scope: 'document' | 'entity'
+  target_entity_type?: ReextractEntityType | null
+  target_entity_id?: string | null
   extract_knowledge: boolean
   extract_questions: boolean
   subject_id?: string | null
@@ -136,6 +139,8 @@ export interface EntityExtractionRun {
   updated_at?: string | null
 }
 
+export type ReextractEntityType = 'knowledge_point' | 'question'
+
 export const extractDocumentEntities = (
   id: string,
   subjectId?: string
@@ -151,6 +156,26 @@ export const getDocumentEntityExtractionStatus = (
   return adminClient.get(`/corpus/documents/${id}/extraction-status`)
 }
 
+export const reextractDocumentEntity = (
+  documentId: string,
+  entityType: ReextractEntityType,
+  entityId: string
+): Promise<ApiResponse<EntityExtractionRun>> => {
+  return adminClient.post(
+    `/corpus/documents/${documentId}/entities/${entityType}/${entityId}/reextract`
+  )
+}
+
+export const getDocumentEntityReextractionStatus = (
+  documentId: string,
+  entityType: ReextractEntityType,
+  entityId: string
+): Promise<ApiResponse<EntityExtractionRun | null>> => {
+  return adminClient.get(
+    `/corpus/documents/${documentId}/entities/${entityType}/${entityId}/reextraction-status`
+  )
+}
+
 export interface ContentOverviewKPBrief {
   id: string
   title: string
@@ -160,6 +185,7 @@ export interface ContentOverviewKPBrief {
   review_status: string
   status: string
   source_section_path?: string | null
+  reextraction?: EntityExtractionRun | null
 }
 
 export interface ContentOverviewChapter {
@@ -223,6 +249,7 @@ export interface ContentOverviewQuestion {
   source_section_path?: string | null
   is_unassigned: boolean
   extraction_meta?: QuestionExtractionMeta | null
+  reextraction?: EntityExtractionRun | null
 }
 
 export interface ContentQualityCheck {

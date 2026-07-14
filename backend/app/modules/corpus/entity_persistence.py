@@ -2,6 +2,7 @@
 
 import re
 import uuid
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import and_, delete, select
@@ -203,6 +204,49 @@ class KnowledgePointPersistence:
     def __init__(self, db: AsyncSession):
         self.db = db
 
+    async def replace_knowledge_point(
+        self,
+        knowledge_point: KnowledgePoint,
+        *,
+        title_block: Any,
+        content_blocks: List[Any],
+    ) -> bool:
+        """Replace extracted text in place while preserving entity references."""
+        content = build_knowledge_content(content_blocks)
+        if not content:
+            return False
+
+        title = (
+            getattr(title_block, "content_text", None)
+            or getattr(title_block, "content_md", None)
+            or knowledge_point.title
+        ).strip()
+        block_ids = [
+            block.id
+            for block in [title_block, *content_blocks]
+            if getattr(block, "id", None)
+        ]
+        knowledge_point.title = title or knowledge_point.title
+        knowledge_point.canonical_title = title or knowledge_point.canonical_title
+        knowledge_point.content = content
+        knowledge_point.topic_terms = extract_topic_terms(title, content)
+        knowledge_point.summary = None
+        knowledge_point.enrich_status = "pending"
+        knowledge_point.review_status = "pending"
+        knowledge_point.reviewed_by = None
+        knowledge_point.reviewed_at = None
+
+        await self._replace_source_and_assets(
+            entity_type="knowledge_point",
+            entity_id=knowledge_point.id,
+            document_id=knowledge_point.source_document_id,
+            blocks=[title_block, *content_blocks],
+            block_ids=block_ids,
+            excerpt_text=content[:500],
+        )
+        await self.db.flush()
+        return True
+
     async def save_knowledge_point(
         self,
         document_id: str,
@@ -334,12 +378,90 @@ class KnowledgePointPersistence:
             )
         return True
 
+    async def _replace_source_and_assets(
+        self,
+        *,
+        entity_type: str,
+        entity_id: str,
+        document_id: str,
+        blocks: List[Any],
+        block_ids: List[str],
+        excerpt_text: Optional[str],
+    ) -> None:
+        await replace_entity_source_and_assets(
+            self.db,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            document_id=document_id,
+            blocks=blocks,
+            block_ids=block_ids,
+            excerpt_text=excerpt_text,
+        )
+
 
 class QuestionPersistence:
     """Persist extracted questions and reconnect answers to stored records."""
 
     def __init__(self, db: AsyncSession):
         self.db = db
+
+    async def replace_question(
+        self,
+        question: Question,
+        question_dict: Dict[str, Any],
+    ) -> None:
+        """Replace one question's extracted structure without changing its ID."""
+        options = normalize_options(question_dict.get("options"))
+        content = (
+            question_dict.get("stem")
+            or question_dict.get("content")
+            or ""
+        ).strip()
+        question_type = (
+            question_dict.get("question_type")
+            or question_dict.get("type")
+            or "short_answer"
+        )
+        question.type = question_type
+        question.content = content
+        question.options = options or None
+        question.question_no = str(
+            extract_question_number(question_dict) or ""
+        ) or None
+        question.topic_terms = extract_topic_terms(content, content) or None
+        question.tags = question_dict.get("tags") or question.tags
+        question.extraction_meta = {
+            **(question_dict.get("extraction_meta") or {}),
+            "reextracted": True,
+            "reextracted_at": datetime.utcnow().isoformat(),
+        }
+        question.enrich_status = "pending"
+        question.review_status = "pending"
+        question.reviewed_by = None
+        question.reviewed_at = None
+
+        blocks = list(question_dict.get("blocks") or [])
+        block_ids = list(question_dict.get("block_ids") or [])
+        if not block_ids:
+            block_ids = [
+                block.id
+                for block in blocks
+                if getattr(block, "id", None)
+            ]
+        await replace_entity_source_and_assets(
+            self.db,
+            entity_type="question",
+            entity_id=question.id,
+            document_id=question.source_document_id,
+            blocks=blocks,
+            block_ids=block_ids,
+            excerpt_text=(
+                question_dict.get("raw_text")
+                or question_dict.get("content")
+                or content
+            )[:500],
+        )
+        await self.db.flush()
 
     async def save_question(
         self,
@@ -534,3 +656,65 @@ class QuestionPersistence:
             }
             for link in links
         ]
+
+
+async def replace_entity_source_and_assets(
+    db: AsyncSession,
+    *,
+    entity_type: str,
+    entity_id: str,
+    document_id: str,
+    blocks: List[Any],
+    block_ids: List[str],
+    excerpt_text: Optional[str],
+) -> None:
+    """Replace source lineage and exact asset links for one stable entity ID."""
+    await db.execute(
+        delete(EntitySourceLink).where(
+            and_(
+                EntitySourceLink.entity_type == entity_type,
+                EntitySourceLink.entity_id == entity_id,
+            )
+        )
+    )
+    page_numbers = [
+        int(block.page_no)
+        for block in blocks
+        if getattr(block, "page_no", None) is not None
+    ]
+    db.add(
+        EntitySourceLink(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            document_id=document_id,
+            page_start=min(page_numbers) if page_numbers else None,
+            page_end=max(page_numbers) if page_numbers else None,
+            block_ids=block_ids,
+            excerpt_text=excerpt_text,
+        )
+    )
+
+    try:
+        from app.services.entity_asset_service import (
+            cleanup_entity_links,
+            link_entity_assets_by_blocks,
+        )
+
+        await cleanup_entity_links(
+            db,
+            entity_type=entity_type,
+            entity_ids=[entity_id],
+        )
+        await link_entity_assets_by_blocks(
+            db,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            block_ids=block_ids,
+        )
+    except Exception as exc:
+        logger.warning(
+            "单实体重提取资产关联失败",
+            entity_type=entity_type,
+            entity_id=entity_id,
+            error=str(exc),
+        )

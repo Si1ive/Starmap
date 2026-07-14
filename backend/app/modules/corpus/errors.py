@@ -27,3 +27,15 @@ class DocumentPageNotFoundError(LookupError):
 
 class PageRenderError(RuntimeError):
     """Raised when rendering a document page fails."""
+
+
+class EntityNotFoundError(LookupError):
+    """Raised when a requested extracted entity does not exist."""
+
+
+class EntitySourceUnavailableError(ValueError):
+    """Raised when an entity has no traceable source blocks."""
+
+
+class EntityExtractionConflictError(RuntimeError):
+    """Raised when another extraction task is already running."""

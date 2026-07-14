@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -20,6 +21,7 @@ from app.modules.corpus.entity_extraction_pipeline import (
     find_uncovered_pages,
     select_knowledge_blocks,
 )
+from app.modules.corpus.entity_reextraction import EntityReextractionService
 from app.modules.corpus.extraction_tasks import EntityExtractionRunExecutor
 from app.modules.corpus.question_builder import (
     build_extraction_meta,
@@ -800,6 +802,119 @@ async def test_extraction_run_fails_when_indexing_fails(monkeypatch):
     assert corpus_file.error_detail == "Qdrant unavailable"
     assert session.rollback_count == 1
     assert session.commit_count == 2
+
+
+@pytest.mark.asyncio
+async def test_entity_reextraction_run_updates_only_target_task(monkeypatch):
+    run = SimpleNamespace(
+        id="run-entity-1",
+        document_id="doc-1",
+        scope="entity",
+        target_entity_type="question",
+        target_entity_id="question-43",
+        extract_knowledge=False,
+        extract_questions=True,
+        subject_id="subject-1",
+        status="running",
+        knowledge_count=0,
+        question_count=0,
+        result_json=None,
+        error_detail=None,
+        completed_at=None,
+    )
+    document = SimpleNamespace(id="doc-1", corpus_file_id="file-1")
+    corpus_file = SimpleNamespace(
+        id="file-1",
+        status="indexed",
+        error_detail=None,
+    )
+    session = _RunSession(run, document, corpus_file)
+
+    async def fake_reextract(**kwargs):
+        assert kwargs == {
+            "document_id": "doc-1",
+            "entity_type": "question",
+            "entity_id": "question-43",
+        }
+        return {
+            "document_id": "doc-1",
+            "entity_type": "question",
+            "entity_id": "question-43",
+            "knowledge_count": 0,
+            "question_count": 1,
+        }
+
+    async def fake_index_entity(**kwargs):
+        assert kwargs == {
+            "entity_type": "question",
+            "entity_id": "question-43",
+        }
+        return {"segments_count": 1}
+
+    executor = EntityExtractionRunExecutor(
+        session,
+        entity_reextraction=SimpleNamespace(reextract=fake_reextract),
+    )
+    monkeypatch.setattr(executor, "index_entity", fake_index_entity)
+    set_status = AsyncMock()
+    monkeypatch.setattr(executor, "set_corpus_file_status", set_status)
+
+    result = await executor.execute(run.id)
+
+    assert result["question_count"] == 1
+    assert result["indexing"] == {"segments_count": 1}
+    assert run.status == "success"
+    assert run.question_count == 1
+    assert corpus_file.status == "indexed"
+    set_status.assert_not_awaited()
+
+
+def test_reextraction_selects_question_by_number_then_source_overlap():
+    target_blocks = {"target-1", "target-2"}
+    candidates = [
+        {
+            "id": "new-42",
+            "question_no": "42",
+            "block_ids": ["previous"],
+        },
+        {
+            "id": "new-43",
+            "question_no": "43",
+            "block_ids": ["target-1"],
+        },
+        {
+            "id": "new-44",
+            "question_no": "44",
+            "block_ids": ["target-2", "next"],
+        },
+    ]
+
+    selected = EntityReextractionService.select_question_candidate(
+        candidates,
+        target_question_no="43",
+        target_block_ids=target_blocks,
+    )
+
+    assert selected["id"] == "new-43"
+
+
+def test_reextraction_falls_back_to_highest_source_overlap():
+    candidates = [
+        {"id": "weak", "question_no": None, "block_ids": ["target-1"]},
+        {
+            "id": "strong",
+            "question_no": None,
+            "block_ids": ["target-1", "target-2"],
+        },
+    ]
+
+    selected = EntityReextractionService.select_question_candidate(
+        candidates,
+        target_question_no=None,
+        target_block_ids={"target-1", "target-2"},
+    )
+
+    assert selected["id"] == "strong"
 
 
 class _CleanupResult:

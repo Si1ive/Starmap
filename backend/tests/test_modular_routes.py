@@ -92,6 +92,8 @@ def test_corpus_document_workflow_routes_are_owned_by_corpus_module():
         "/api/v1/admin/corpus/documents/{document_id}/content-overview",
         "/api/v1/admin/corpus/documents/{document_id}/extract-entities",
         "/api/v1/admin/corpus/documents/{document_id}/extraction-status",
+        "/api/v1/admin/corpus/documents/{document_id}/entities/{entity_type}/{entity_id}/reextract",
+        "/api/v1/admin/corpus/documents/{document_id}/entities/{entity_type}/{entity_id}/reextraction-status",
     ):
         assert routes[path].endpoint.__module__ == "app.modules.corpus.router"
 

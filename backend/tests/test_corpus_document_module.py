@@ -3,7 +3,8 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from app.models.mysql_models import CorpusFile, Document
+from app.models.mysql_models import CorpusFile, Document, Question
+from app.modules.corpus.errors import EntityExtractionConflictError
 from app.modules.corpus.document_service import CorpusDocumentService
 from app.modules.corpus.document_parse_service import DocumentParseService
 from app.modules.corpus.extraction_tasks import EntityExtractionTaskService
@@ -163,3 +164,114 @@ async def test_extraction_task_reuses_running_run(monkeypatch):
     db.add.assert_not_called()
     db.commit.assert_not_awaited()
     dispatch.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_entity_reextraction_task_persists_target_before_dispatch(
+    monkeypatch,
+):
+    events = []
+    db = AsyncMock()
+    db.add = Mock()
+    db.get.return_value = SimpleNamespace(id="doc-1")
+    service = EntityExtractionTaskService(db)
+    monkeypatch.setattr(
+        service,
+        "_get_entity",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                id="question-1",
+                source_document_id="doc-1",
+                subject_id="subject-1",
+                status="active",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "_ensure_entity_source",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        service,
+        "_get_running_run",
+        AsyncMock(return_value=None),
+    )
+
+    async def commit():
+        events.append("commit")
+
+    db.commit.side_effect = commit
+    dispatch = Mock(side_effect=lambda _run_id: events.append("dispatch"))
+    monkeypatch.setattr(service, "_schedule", dispatch)
+
+    run, created = await service.start_entity(
+        "doc-1",
+        entity_type="question",
+        entity_id="question-1",
+    )
+
+    service._get_entity.assert_awaited_once_with(
+        "question",
+        "question-1",
+        "doc-1",
+    )
+    service._ensure_entity_source.assert_awaited_once_with(
+        "question",
+        "question-1",
+        "doc-1",
+    )
+    assert db.add.call_args.args[0] is run
+    assert events == ["commit", "dispatch"]
+    assert created is True
+    assert run.scope == "entity"
+    assert run.target_entity_type == "question"
+    assert run.target_entity_id == "question-1"
+    assert run.extract_knowledge is False
+    assert run.extract_questions is True
+    assert run.subject_id == "subject-1"
+
+
+@pytest.mark.asyncio
+async def test_entity_reextraction_rejects_other_running_task(monkeypatch):
+    db = AsyncMock()
+    db.get.return_value = SimpleNamespace(id="doc-1")
+    service = EntityExtractionTaskService(db)
+    monkeypatch.setattr(
+        service,
+        "_get_entity",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                id="question-1",
+                source_document_id="doc-1",
+                subject_id=None,
+                status="active",
+            )
+        ),
+    )
+    monkeypatch.setattr(service, "_ensure_entity_source", AsyncMock())
+    monkeypatch.setattr(
+        service,
+        "_get_running_run",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                id="run-existing",
+                scope="entity",
+                target_entity_type="knowledge_point",
+                target_entity_id="knowledge-1",
+            )
+        ),
+    )
+
+    with pytest.raises(
+        EntityExtractionConflictError,
+        match="已有其他抽取任务正在执行",
+    ):
+        await service.start_entity(
+            "doc-1",
+            entity_type="question",
+            entity_id="question-1",
+        )
+
+    db.add.assert_not_called()
+    db.commit.assert_not_awaited()

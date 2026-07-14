@@ -153,3 +153,35 @@ def test_quality_gate_blocks_exam_without_questions():
     )
     assert content_check["status"] == "fail"
     assert gate["score"] == 60
+
+
+def test_content_overview_keeps_latest_run_per_entity_target():
+    newest = SimpleNamespace(
+        id="run-new",
+        status="success",
+        scope="entity",
+        target_entity_type="question",
+        target_entity_id="question-1",
+        error_detail=None,
+        result_json={"question_count": 1},
+        started_at=datetime(2026, 7, 14, 11, 0, 0),
+        completed_at=datetime(2026, 7, 14, 11, 1, 0),
+    )
+    older = SimpleNamespace(
+        id="run-old",
+        status="failed",
+        scope="entity",
+        target_entity_type="question",
+        target_entity_id="question-1",
+        error_detail="old failure",
+        result_json=None,
+        started_at=datetime(2026, 7, 14, 10, 0, 0),
+        completed_at=datetime(2026, 7, 14, 10, 1, 0),
+    )
+
+    result = CorpusContentOverviewService.build_latest_entity_run_map(
+        [newest, older]
+    )
+
+    assert result[("question", "question-1")]["id"] == "run-new"
+    assert result[("question", "question-1")]["status"] == "success"

@@ -12,6 +12,9 @@ from app.modules.corpus.errors import (
     CorpusFileNotFoundError,
     DocumentNotFoundError,
     DocumentPageNotFoundError,
+    EntityExtractionConflictError,
+    EntityNotFoundError,
+    EntitySourceUnavailableError,
     PageRenderError,
     ParseConflictError,
     ParseRunNotFoundError,
@@ -461,4 +464,65 @@ async def get_document_entity_extraction_status(
         run = await service.get_latest(document_id)
     except DocumentNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ApiResponse(data=service.serialize(run) if run else None)
+
+
+@router.post(
+    "/corpus/documents/{document_id}/entities/{entity_type}/{entity_id}/reextract",
+    response_model=ApiResponse,
+)
+async def reextract_document_entity(
+    document_id: str,
+    entity_type: str,
+    entity_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    service = EntityExtractionTaskService(db)
+    try:
+        run, created = await service.start_entity(
+            document_id,
+            entity_type=entity_type,
+            entity_id=entity_id,
+        )
+    except (DocumentNotFoundError, EntityNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (
+        EntitySourceUnavailableError,
+        EntityExtractionConflictError,
+    ) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"创建单项重提取任务失败: {str(exc)[:200]}",
+        ) from exc
+    return ApiResponse(
+        message="单项重提取任务已启动" if created else "该实体正在重新提取",
+        data=service.serialize(run),
+    )
+
+
+@router.get(
+    "/corpus/documents/{document_id}/entities/{entity_type}/{entity_id}/reextraction-status",
+    response_model=ApiResponse,
+)
+async def get_document_entity_reextraction_status(
+    document_id: str,
+    entity_type: str,
+    entity_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    service = EntityExtractionTaskService(db)
+    try:
+        run = await service.get_latest_entity(
+            document_id,
+            entity_type=entity_type,
+            entity_id=entity_id,
+        )
+    except (DocumentNotFoundError, EntityNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ApiResponse(data=service.serialize(run) if run else None)

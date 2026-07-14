@@ -1,7 +1,32 @@
-import { useQuery } from '@tanstack/react-query'
-import { Alert, Collapse, Tag, Space, Empty, Spin, Row, Col, Card, Statistic, Table, Typography } from 'antd'
-import { getDocumentContentOverview } from '@/api'
-import type { ContentOverviewKPBrief, ContentOverviewQuestion, ContentQualityGate } from '@/api/corpus'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  Alert,
+  Button,
+  Card,
+  Col,
+  Collapse,
+  Empty,
+  message,
+  Modal,
+  Row,
+  Space,
+  Spin,
+  Statistic,
+  Table,
+  Tag,
+  Tooltip,
+  Typography,
+} from 'antd'
+import { ReloadOutlined } from '@ant-design/icons'
+import { getDocumentContentOverview, reextractDocumentEntity } from '@/api'
+import type {
+  ContentOverview,
+  ContentOverviewKPBrief,
+  ContentOverviewQuestion,
+  ContentQualityGate,
+  EntityExtractionRun,
+  ReextractEntityType,
+} from '@/api/corpus'
 
 const { Paragraph, Text } = Typography
 
@@ -43,6 +68,28 @@ const qualityStatusConfig: Record<ContentQualityGate['status'], {
 function ReviewTag({ status }: { status: string }) {
   const cfg = reviewStatusConfig[status] || { color: 'default', text: status }
   return <Tag color={cfg.color}>{cfg.text}</Tag>
+}
+
+function ReextractionTag({ run }: { run?: EntityExtractionRun | null }) {
+  if (!run) return null
+  if (run.status === 'running') {
+    return <Tag color="processing">重新提取中</Tag>
+  }
+  if (run.status === 'success') {
+    return <Tag color="green">已重新提取</Tag>
+  }
+  return <Tag color="red" title={run.error_detail || '重新提取失败'}>重提取失败</Tag>
+}
+
+function collectEntityRuns(overview?: ContentOverview): EntityExtractionRun[] {
+  if (!overview) return []
+  return [
+    ...overview.knowledge_chapters.flatMap((chapter) => (
+      chapter.knowledge_points.map((item) => item.reextraction)
+    )),
+    ...overview.ungrouped_knowledge_points.map((item) => item.reextraction),
+    ...overview.questions.map((item) => item.reextraction),
+  ].filter((run): run is EntityExtractionRun => !!run)
 }
 
 // 把 extraction_meta 翻译成人能看懂的质量警示标签。无警示时返回"正常"绿标。
@@ -143,15 +190,42 @@ function QualityGateSummary({ gate }: { gate: ContentQualityGate }) {
   )
 }
 
-function KnowledgePointList({ items }: { items: ContentOverviewKPBrief[] }) {
+function KnowledgePointList({
+  items,
+  taskBusy,
+  pendingKey,
+  onReextract,
+}: {
+  items: ContentOverviewKPBrief[]
+  taskBusy: boolean
+  pendingKey: string | null
+  onReextract: (item: ContentOverviewKPBrief) => void
+}) {
   return (
     <div>
       {items.map((kp) => (
         <div key={kp.id} style={{ padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}>
-          <Space>
-            <Text strong>{kp.title}</Text>
-            <ReviewTag status={kp.review_status} />
-          </Space>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+            <Space size={[4, 4]} wrap>
+              <Text strong>{kp.title}</Text>
+              <ReviewTag status={kp.review_status} />
+              <ReextractionTag run={kp.reextraction} />
+            </Space>
+            <Tooltip title="仅使用该知识点的来源内容重新提取">
+              <Button
+                aria-label={`重新提取知识点：${kp.title}`}
+                icon={<ReloadOutlined />}
+                size="small"
+                loading={kp.reextraction?.status === 'running' || pendingKey === `knowledge_point:${kp.id}`}
+                disabled={
+                  taskBusy
+                  && kp.reextraction?.status !== 'running'
+                  && pendingKey !== `knowledge_point:${kp.id}`
+                }
+                onClick={() => onReextract(kp)}
+              />
+            </Tooltip>
+          </div>
           {kp.summary && (
             <Paragraph type="secondary" style={{ margin: '4px 0 0' }}>{kp.summary}</Paragraph>
           )}
@@ -176,23 +250,74 @@ function KnowledgePointList({ items }: { items: ContentOverviewKPBrief[] }) {
   )
 }
 
-const ContentOverview = ({ documentId }: { documentId: string }) => {
+const ContentOverview = ({
+  documentId,
+  documentExtracting = false,
+}: {
+  documentId: string
+  documentExtracting?: boolean
+}) => {
+  const queryClient = useQueryClient()
   const { data, isLoading } = useQuery({
     queryKey: ['contentOverview', documentId],
     queryFn: () => getDocumentContentOverview(documentId),
     enabled: !!documentId,
+    refetchInterval: (response) => (
+      collectEntityRuns(response?.data).some((run) => run.status === 'running')
+        ? 2000
+        : false
+    ),
   })
+
+  const reextractMutation = useMutation({
+    mutationFn: ({
+      entityType,
+      entityId,
+    }: {
+      entityType: ReextractEntityType
+      entityId: string
+      label: string
+    }) => reextractDocumentEntity(documentId, entityType, entityId),
+    onSuccess: (response) => {
+      message.success(response.message || '单项重新提取任务已启动')
+      queryClient.invalidateQueries({ queryKey: ['contentOverview', documentId] })
+    },
+    onError: (error: any) => {
+      const detail = error?.response?.data?.detail
+      message.error(typeof detail === 'string' ? detail : '单项重新提取失败')
+      queryClient.invalidateQueries({ queryKey: ['contentOverview', documentId] })
+    },
+  })
+
+  const overview = data?.data
+  const entityRuns = collectEntityRuns(overview)
+  const hasRunningEntityTask = entityRuns.some((run) => run.status === 'running')
+  const pendingKey = reextractMutation.isPending
+    ? `${reextractMutation.variables?.entityType}:${reextractMutation.variables?.entityId}`
+    : null
+  const taskBusy = documentExtracting || hasRunningEntityTask || reextractMutation.isPending
 
   if (isLoading) {
     return <div style={{ textAlign: 'center', padding: 60 }}><Spin /></div>
   }
 
-  const overview = data?.data
   if (!overview) {
     return <Empty description="尚未抽取 — 内容总览展示的是抽取产物，请先点击上方「抽取知识点/题目」" />
   }
 
   const { knowledge_chapters, ungrouped_knowledge_points, questions, summary, quality_gate } = overview
+  const requestReextraction = (
+    entityType: ReextractEntityType,
+    entityId: string,
+    label: string,
+  ) => {
+    Modal.confirm({
+      title: `确认重新提取${entityType === 'question' ? '题目' : '知识点'}`,
+      content: `只会重新读取“${label}”的来源内容并覆盖该项抽取结构，不会重跑整份文档。`,
+      okText: '重新提取',
+      onOk: () => reextractMutation.mutate({ entityType, entityId, label }),
+    })
+  }
 
   const questionColumns = [
     {
@@ -226,7 +351,35 @@ const ContentOverview = ({ documentId }: { documentId: string }) => {
     },
     {
       title: '状态', dataIndex: 'review_status', key: 'review_status', width: 90,
-      render: (s: string) => <ReviewTag status={s} />,
+      render: (s: string, row: ContentOverviewQuestion) => (
+        <Space size={[0, 4]} wrap>
+          <ReviewTag status={s} />
+          <ReextractionTag run={row.reextraction} />
+        </Space>
+      ),
+    },
+    {
+      title: '操作', key: 'actions', width: 72, fixed: 'right' as const,
+      render: (_: unknown, row: ContentOverviewQuestion) => {
+        const key = `question:${row.id}`
+        const isRunning = row.reextraction?.status === 'running'
+        return (
+          <Tooltip title="仅使用本题及相邻两题的来源内容重新提取">
+            <Button
+              aria-label={`重新提取题目：${row.question_no || row.id}`}
+              icon={<ReloadOutlined />}
+              size="small"
+              loading={isRunning || pendingKey === key}
+              disabled={taskBusy && !isRunning && pendingKey !== key}
+              onClick={() => requestReextraction(
+                'question',
+                row.id,
+                row.question_no ? `第 ${row.question_no} 题` : row.content_preview.slice(0, 24),
+              )}
+            />
+          </Tooltip>
+        )
+      },
     },
   ]
 
@@ -271,7 +424,12 @@ const ContentOverview = ({ documentId }: { documentId: string }) => {
                         复习指导：{ch.exam_guidance}
                       </Paragraph>
                     )}
-                    <KnowledgePointList items={ch.knowledge_points} />
+                    <KnowledgePointList
+                      items={ch.knowledge_points}
+                      taskBusy={taskBusy}
+                      pendingKey={pendingKey}
+                      onReextract={(item) => requestReextraction('knowledge_point', item.id, item.title)}
+                    />
                   </>
                 ),
               })),
@@ -283,7 +441,14 @@ const ContentOverview = ({ documentId }: { documentId: string }) => {
                     <Text type="secondary">({ungrouped_knowledge_points.length})</Text>
                   </Space>
                 ),
-                children: <KnowledgePointList items={ungrouped_knowledge_points} />,
+                children: (
+                  <KnowledgePointList
+                    items={ungrouped_knowledge_points}
+                    taskBusy={taskBusy}
+                    pendingKey={pendingKey}
+                    onReextract={(item) => requestReextraction('knowledge_point', item.id, item.title)}
+                  />
+                ),
               }] : []),
             ]}
           />

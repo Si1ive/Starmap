@@ -815,6 +815,17 @@ class EntityExtractionRun(Base):
         Enum("running", "success", "failed"),
         default="running", comment="执行状态"
     )
+    scope: Mapped[str] = mapped_column(
+        Enum("document", "entity"),
+        default="document", comment="抽取范围：整文档或单个实体"
+    )
+    target_entity_type: Mapped[Optional[str]] = mapped_column(
+        Enum("knowledge_point", "question"),
+        comment="单项重提取的实体类型"
+    )
+    target_entity_id: Mapped[Optional[str]] = mapped_column(
+        String(32), comment="单项重提取的实体ID"
+    )
     extract_knowledge: Mapped[bool] = mapped_column(
         Boolean, default=True, comment="是否抽取知识点"
     )
@@ -839,6 +850,13 @@ class EntityExtractionRun(Base):
         Index("idx_entity_extraction_runs_document_id", "document_id"),
         Index("idx_entity_extraction_runs_status", "status"),
         Index("idx_entity_extraction_runs_created_at", "created_at"),
+        Index(
+            "idx_entity_extraction_runs_target",
+            "document_id",
+            "scope",
+            "target_entity_type",
+            "target_entity_id",
+        ),
         {"comment": "文档实体抽取执行记录"}
     )
 

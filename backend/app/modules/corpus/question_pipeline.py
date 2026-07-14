@@ -66,7 +66,7 @@ class QuestionExtractionPipeline:
         doc_type: str = "other",
     ) -> Dict[str, Any]:
         """Extract, repair, validate, and persist questions."""
-        raw_questions = await self.extract_raw_questions(
+        prepared = await self.prepare_questions(
             document_id=document_id,
             fallback_subject_id=fallback_subject_id,
             blocks=blocks,
@@ -74,8 +74,8 @@ class QuestionExtractionPipeline:
             doc_meta=doc_meta,
             doc_type=doc_type,
         )
-        logger.info("初步提取 (bbox)", question_count=len(raw_questions))
-
+        raw_questions = prepared["raw_questions"]
+        questions = prepared["questions"]
         if not raw_questions:
             diagnostic = build_question_extraction_diagnostic(
                 raw_questions=[],
@@ -91,48 +91,9 @@ class QuestionExtractionPipeline:
                 "consumed_block_ids": set(),
             }
 
-        validation_report = comprehensive_validation(raw_questions)
-        logger.info(
-            "题目初次校验完成",
-            issue_count=validation_report["summary"]["total_issues"],
-        )
-
-        fixer = RuleBasedFixer()
-        questions = fixer.fix_option_issues(
-            raw_questions,
-            validation_report["option_issues"],
-        )
-        rule_fixed_count = sum(
-            1 for question in questions if question.get("fixed_by_rule")
-        )
-        logger.info("题目规则修复完成", fixed_count=rule_fixed_count)
-
-        validation_report_v2 = comprehensive_validation(questions)
-        if validation_report_v2["summary"]["critical_issues"]:
-            llm_client = await self.get_llm_client()
-            if llm_client and llm_client.is_available:
-                questions = await LLMFallbackFixer(
-                    llm_client
-                ).fix_remaining_issues(
-                    questions,
-                    validation_report_v2,
-                )
-            elif llm_client and llm_client.enabled:
-                logger.warning(
-                    "PDF结构解析LLM已启用但配置不完整，跳过LLM兜底",
-                    provider=llm_client.provider,
-                    model=llm_client.model,
-                    has_api_key=bool(llm_client.api_key),
-                )
-
-        final_report = comprehensive_validation(questions)
-        logger.info(
-            "题目最终校验完成",
-            question_count=len(questions),
-            issue_count=final_report["summary"]["total_issues"],
-        )
-
-        self._refresh_extraction_metadata(questions)
+        validation_report = prepared["initial_report"]
+        validation_report_v2 = prepared["after_rule_fix"]
+        final_report = prepared["final_report"]
         diagnostic_report = {
             "initial_report": validation_report,
             "after_rule_fix": validation_report_v2,
@@ -197,6 +158,82 @@ class QuestionExtractionPipeline:
             "diagnostic": diagnostic,
             "unassigned": unassigned,
             "consumed_block_ids": consumed_block_ids,
+        }
+
+    async def prepare_questions(
+        self,
+        document_id: str,
+        fallback_subject_id: str,
+        blocks: List[DocumentBlock],
+        section_mappings: PageMappingIndex,
+        doc_meta: Optional[Dict[str, Any]] = None,
+        doc_type: str = "other",
+    ) -> Dict[str, Any]:
+        """Extract and repair question candidates without persisting them."""
+        raw_questions = await self.extract_raw_questions(
+            document_id=document_id,
+            fallback_subject_id=fallback_subject_id,
+            blocks=blocks,
+            section_mappings=section_mappings,
+            doc_meta=doc_meta,
+            doc_type=doc_type,
+        )
+        logger.info("初步提取 (bbox)", question_count=len(raw_questions))
+        if not raw_questions:
+            return {
+                "raw_questions": [],
+                "questions": [],
+                "initial_report": {},
+                "after_rule_fix": {},
+                "final_report": {},
+            }
+
+        validation_report = comprehensive_validation(raw_questions)
+        logger.info(
+            "题目初次校验完成",
+            issue_count=validation_report["summary"]["total_issues"],
+        )
+
+        questions = RuleBasedFixer().fix_option_issues(
+            raw_questions,
+            validation_report["option_issues"],
+        )
+        rule_fixed_count = sum(
+            1 for question in questions if question.get("fixed_by_rule")
+        )
+        logger.info("题目规则修复完成", fixed_count=rule_fixed_count)
+
+        validation_report_v2 = comprehensive_validation(questions)
+        if validation_report_v2["summary"]["critical_issues"]:
+            llm_client = await self.get_llm_client()
+            if llm_client and llm_client.is_available:
+                questions = await LLMFallbackFixer(
+                    llm_client
+                ).fix_remaining_issues(
+                    questions,
+                    validation_report_v2,
+                )
+            elif llm_client and llm_client.enabled:
+                logger.warning(
+                    "PDF结构解析LLM已启用但配置不完整，跳过LLM兜底",
+                    provider=llm_client.provider,
+                    model=llm_client.model,
+                    has_api_key=bool(llm_client.api_key),
+                )
+
+        final_report = comprehensive_validation(questions)
+        logger.info(
+            "题目最终校验完成",
+            question_count=len(questions),
+            issue_count=final_report["summary"]["total_issues"],
+        )
+        self._refresh_extraction_metadata(questions)
+        return {
+            "raw_questions": raw_questions,
+            "questions": questions,
+            "initial_report": validation_report,
+            "after_rule_fix": validation_report_v2,
+            "final_report": final_report,
         }
 
     async def extract_raw_questions(

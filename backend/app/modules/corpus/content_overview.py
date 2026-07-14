@@ -53,11 +53,25 @@ class CorpusContentOverviewService:
         latest_run = (
             await self.db.execute(
                 select(EntityExtractionRun)
-                .where(EntityExtractionRun.document_id == document_id)
+                .where(
+                    EntityExtractionRun.document_id == document_id,
+                    EntityExtractionRun.scope == "document",
+                )
                 .order_by(EntityExtractionRun.created_at.desc())
                 .limit(1)
             )
         ).scalar_one_or_none()
+        entity_runs = (
+            await self.db.execute(
+                select(EntityExtractionRun)
+                .where(
+                    EntityExtractionRun.document_id == document_id,
+                    EntityExtractionRun.scope == "entity",
+                )
+                .order_by(EntityExtractionRun.created_at.desc())
+            )
+        ).scalars().all()
+        latest_entity_run_map = self.build_latest_entity_run_map(entity_runs)
 
         chapter_ids = {
             item.primary_chapter_id
@@ -87,6 +101,9 @@ class CorpusContentOverviewService:
                 "review_status": knowledge_point.review_status,
                 "status": knowledge_point.status,
                 "source_section_path": knowledge_point.source_section_path,
+                "reextraction": latest_entity_run_map.get(
+                    ("knowledge_point", knowledge_point.id)
+                ),
             }
             chapter_id = knowledge_point.primary_chapter_id
             if chapter_id and chapter_id in chapter_map:
@@ -126,6 +143,9 @@ class CorpusContentOverviewService:
                 "source_section_path": question.source_section_path,
                 "is_unassigned": self._is_question_unassigned(question),
                 "extraction_meta": question.extraction_meta or None,
+                "reextraction": latest_entity_run_map.get(
+                    ("question", question.id)
+                ),
             }
             for question in questions_sorted
         ]
@@ -166,6 +186,20 @@ class CorpusContentOverviewService:
     @staticmethod
     def _is_question_unassigned(question: Question) -> bool:
         return not question.subject_id or not question.chapter_id
+
+    @classmethod
+    def build_latest_entity_run_map(
+        cls,
+        runs: Sequence[EntityExtractionRun],
+    ) -> Dict[tuple, Dict[str, Any]]:
+        """Keep the newest durable task state for each entity target."""
+        result: Dict[tuple, Dict[str, Any]] = {}
+        for run in runs:
+            key = (run.target_entity_type, run.target_entity_id)
+            if not all(key) or key in result:
+                continue
+            result[key] = cls._serialize_entity_run(run)
+        return result
 
     @classmethod
     def build_quality_gate(
@@ -541,6 +575,26 @@ class CorpusContentOverviewService:
                 latest_run.completed_at.isoformat()
                 if latest_run.completed_at
                 else None
+            ),
+        }
+
+    @staticmethod
+    def _serialize_entity_run(
+        run: EntityExtractionRun,
+    ) -> Dict[str, Any]:
+        return {
+            "id": run.id,
+            "status": run.status,
+            "scope": run.scope,
+            "target_entity_type": run.target_entity_type,
+            "target_entity_id": run.target_entity_id,
+            "error_detail": run.error_detail,
+            "result": run.result_json,
+            "started_at": (
+                run.started_at.isoformat() if run.started_at else None
+            ),
+            "completed_at": (
+                run.completed_at.isoformat() if run.completed_at else None
             ),
         }
 

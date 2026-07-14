@@ -14,12 +14,21 @@ from app.db.mysql import mysql_client
 from app.models.mysql_models import (
     CorpusFile,
     Document,
+    EntitySourceLink,
     EntityExtractionRun,
+    KnowledgePoint,
+    Question,
 )
-from app.modules.corpus.errors import DocumentNotFoundError
+from app.modules.corpus.errors import (
+    DocumentNotFoundError,
+    EntityExtractionConflictError,
+    EntityNotFoundError,
+    EntitySourceUnavailableError,
+)
 from app.modules.corpus.entity_extraction_pipeline import (
     DocumentEntityExtractionPipeline,
 )
+from app.modules.corpus.entity_reextraction import EntityReextractionService
 
 logger = get_logger(__name__)
 
@@ -33,9 +42,13 @@ class EntityExtractionRunExecutor:
         self,
         db: AsyncSession,
         pipeline: Optional[DocumentEntityExtractionPipeline] = None,
+        entity_reextraction: Optional[EntityReextractionService] = None,
     ):
         self.db = db
         self.pipeline = pipeline or DocumentEntityExtractionPipeline(db)
+        self.entity_reextraction = (
+            entity_reextraction or EntityReextractionService(db)
+        )
 
     async def execute(self, run_id: str) -> Dict[str, Any]:
         """Run extraction and indexing for an existing run record."""
@@ -43,24 +56,36 @@ class EntityExtractionRunExecutor:
         if not run:
             raise ValueError(f"抽取任务不存在: {run_id}")
 
+        is_entity_run = getattr(run, "scope", "document") == "entity"
         try:
-            await self.set_corpus_file_status(
-                run.document_id,
-                "extracting",
-            )
-            await self.db.commit()
+            if is_entity_run:
+                result = await self.entity_reextraction.reextract(
+                    document_id=run.document_id,
+                    entity_type=run.target_entity_type,
+                    entity_id=run.target_entity_id,
+                )
+                indexing_result = await self.index_entity(
+                    entity_type=run.target_entity_type,
+                    entity_id=run.target_entity_id,
+                )
+            else:
+                await self.set_corpus_file_status(
+                    run.document_id,
+                    "extracting",
+                )
+                await self.db.commit()
 
-            result = await self.pipeline.extract(
-                document_id=run.document_id,
-                extract_knowledge=run.extract_knowledge,
-                extract_questions=run.extract_questions,
-                fallback_subject_id=run.subject_id,
-            )
-            indexing_result = await self.index_document_entities(
-                document_id=run.document_id,
-                include_knowledge=run.extract_knowledge,
-                include_questions=run.extract_questions,
-            )
+                result = await self.pipeline.extract(
+                    document_id=run.document_id,
+                    extract_knowledge=run.extract_knowledge,
+                    extract_questions=run.extract_questions,
+                    fallback_subject_id=run.subject_id,
+                )
+                indexing_result = await self.index_document_entities(
+                    document_id=run.document_id,
+                    include_knowledge=run.extract_knowledge,
+                    include_questions=run.extract_questions,
+                )
             result = {**result, "indexing": indexing_result}
 
             run.status = "success"
@@ -71,10 +96,11 @@ class EntityExtractionRunExecutor:
             )
             run.error_detail = None
             run.completed_at = self._utcnow()
-            await self.set_corpus_file_status(
-                run.document_id,
-                "indexed",
-            )
+            if not is_entity_run:
+                await self.set_corpus_file_status(
+                    run.document_id,
+                    "indexed",
+                )
             await self.db.commit()
             return result
         except Exception as exc:
@@ -84,11 +110,12 @@ class EntityExtractionRunExecutor:
                 failed_run.status = "failed"
                 failed_run.error_detail = str(exc)[:4000]
                 failed_run.completed_at = self._utcnow()
-                await self.set_corpus_file_status(
-                    failed_run.document_id,
-                    "failed",
-                    error_detail=str(exc)[:4000],
-                )
+                if not is_entity_run:
+                    await self.set_corpus_file_status(
+                        failed_run.document_id,
+                        "failed",
+                        error_detail=str(exc)[:4000],
+                    )
                 await self.db.commit()
             raise
 
@@ -106,6 +133,20 @@ class EntityExtractionRunExecutor:
             include_knowledge=include_knowledge,
             include_questions=include_questions,
             rebuild=True,
+        )
+
+    async def index_entity(
+        self,
+        *,
+        entity_type: str,
+        entity_id: str,
+    ) -> Dict[str, Any]:
+        """Rebuild searchable segments only for the replaced entity."""
+        from app.modules.retrieval.segment_service import SegmentService
+
+        return await SegmentService(self.db).rebuild_entity_segments(
+            entity_type=entity_type,
+            entity_id=entity_id,
         )
 
     async def set_corpus_file_status(
@@ -163,6 +204,7 @@ class EntityExtractionTaskService:
             id=uuid.uuid4().hex[:32],
             document_id=document_id,
             status="running",
+            scope="document",
             extract_knowledge=extract_knowledge,
             extract_questions=extract_questions,
             subject_id=subject_id,
@@ -185,6 +227,72 @@ class EntityExtractionTaskService:
 
         return run, True
 
+    async def start_entity(
+        self,
+        document_id: str,
+        *,
+        entity_type: str,
+        entity_id: str,
+    ) -> Tuple[EntityExtractionRun, bool]:
+        """Create a durable task for one traceable extracted entity."""
+        document = await self.db.get(
+            Document,
+            document_id,
+            with_for_update=True,
+        )
+        if not document:
+            raise DocumentNotFoundError("文档不存在")
+
+        entity = await self._get_entity(
+            entity_type,
+            entity_id,
+            document_id,
+        )
+        await self._ensure_entity_source(
+            entity_type,
+            entity_id,
+            document_id,
+        )
+        running_run = await self._get_running_run(document_id)
+        if running_run:
+            if (
+                getattr(running_run, "scope", "document") == "entity"
+                and running_run.target_entity_type == entity_type
+                and running_run.target_entity_id == entity_id
+            ):
+                return running_run, False
+            raise EntityExtractionConflictError(
+                "当前文档已有其他抽取任务正在执行，请等待完成后重试"
+            )
+
+        run = EntityExtractionRun(
+            id=uuid.uuid4().hex[:32],
+            document_id=document_id,
+            status="running",
+            scope="entity",
+            target_entity_type=entity_type,
+            target_entity_id=entity_id,
+            extract_knowledge=entity_type == "knowledge_point",
+            extract_questions=entity_type == "question",
+            subject_id=getattr(entity, "subject_id", None),
+        )
+        self.db.add(run)
+        try:
+            await self.db.commit()
+        except Exception:
+            await self.db.rollback()
+            raise
+
+        try:
+            self._schedule(run.id)
+        except Exception as exc:
+            run.status = "failed"
+            run.error_detail = f"单项重提取任务派发失败: {str(exc)[:400]}"
+            run.completed_at = self._utcnow()
+            await self.db.commit()
+            raise
+        return run, True
+
     async def get_latest(
         self,
         document_id: str,
@@ -196,7 +304,32 @@ class EntityExtractionTaskService:
         return (
             await self.db.execute(
                 select(EntityExtractionRun)
-                .where(EntityExtractionRun.document_id == document_id)
+                .where(
+                    EntityExtractionRun.document_id == document_id,
+                    EntityExtractionRun.scope == "document",
+                )
+                .order_by(EntityExtractionRun.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+    async def get_latest_entity(
+        self,
+        document_id: str,
+        *,
+        entity_type: str,
+        entity_id: str,
+    ) -> Optional[EntityExtractionRun]:
+        await self._get_entity(entity_type, entity_id, document_id)
+        return (
+            await self.db.execute(
+                select(EntityExtractionRun)
+                .where(
+                    EntityExtractionRun.document_id == document_id,
+                    EntityExtractionRun.scope == "entity",
+                    EntityExtractionRun.target_entity_type == entity_type,
+                    EntityExtractionRun.target_entity_id == entity_id,
+                )
                 .order_by(EntityExtractionRun.created_at.desc())
                 .limit(1)
             )
@@ -217,6 +350,50 @@ class EntityExtractionTaskService:
                 .limit(1)
             )
         ).scalar_one_or_none()
+
+    async def _get_entity(
+        self,
+        entity_type: str,
+        entity_id: str,
+        document_id: str,
+    ) -> Any:
+        model = {
+            "knowledge_point": KnowledgePoint,
+            "question": Question,
+        }.get(entity_type)
+        if not model:
+            raise ValueError(f"不支持的实体类型: {entity_type}")
+        entity = await self.db.get(model, entity_id)
+        if (
+            not entity
+            or entity.source_document_id != document_id
+            or entity.status == "deleted"
+        ):
+            raise EntityNotFoundError("目标实体不存在或不属于当前文档")
+        return entity
+
+    async def _ensure_entity_source(
+        self,
+        entity_type: str,
+        entity_id: str,
+        document_id: str,
+    ) -> None:
+        source = (
+            await self.db.execute(
+                select(EntitySourceLink)
+                .where(
+                    EntitySourceLink.entity_type == entity_type,
+                    EntitySourceLink.entity_id == entity_id,
+                    EntitySourceLink.document_id == document_id,
+                )
+                .order_by(EntitySourceLink.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if not source or not source.block_ids:
+            raise EntitySourceUnavailableError(
+                "目标实体没有可追溯的来源 block，无法单独重新提取"
+            )
 
     def _schedule(self, run_id: str) -> None:
         task = asyncio.create_task(
@@ -244,6 +421,13 @@ class EntityExtractionTaskService:
             "id": run.id,
             "document_id": run.document_id,
             "status": run.status,
+            "scope": getattr(run, "scope", "document"),
+            "target_entity_type": getattr(
+                run,
+                "target_entity_type",
+                None,
+            ),
+            "target_entity_id": getattr(run, "target_entity_id", None),
             "extract_knowledge": run.extract_knowledge,
             "extract_questions": run.extract_questions,
             "subject_id": run.subject_id,

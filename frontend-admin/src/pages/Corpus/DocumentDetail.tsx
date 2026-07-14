@@ -197,7 +197,12 @@ const DocumentDetailPage = () => {
             {
               key: 'content-overview',
               label: '内容总览（抽取产物）',
-              children: <ContentOverview documentId={documentId} />,
+              children: (
+                <ContentOverview
+                  documentId={documentId}
+                  documentExtracting={isExtracting}
+                />
+              ),
             },
             {
               key: 'page-analysis',
