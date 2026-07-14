@@ -5,19 +5,21 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.logging import get_logger
+from app.modules.corpus.question_option_rules import (
+    CHOICE_BLANK_RE,
+    OPTION_BLOCK_RE,
+    OPTION_MARKER_RE,
+    OPTION_SEPARATOR_RE,
+    find_inline_option_start,
+    find_recoverable_inline_option,
+    has_inline_options,
+    parse_options_from_text,
+)
 from app.modules.corpus.question_type import is_subjective_question_text
 
 logger = get_logger(__name__)
 
 
-OPTION_SEPARATOR_RE = re.compile(
-    r'(?:\s*(?:[.．、:：。]|<sub>\s*[.．、:：。]\s*</sub>)\s*|\s+)(?=\S)'
-)
-# 选项标记限定 A-D：408 单选恒为四选项，放宽到 A-H 会把题干里的
-# 数学符号（图 G、访问位 R、修改位 M 等）误当选项标记切分。
-OPTION_MARKER_RE = re.compile(r'([A-D])(?:\s*(?:[.．、:：。]|<sub>\s*[.．、:：。]\s*</sub>)\s*|\s+)(?=\S)')
-OPTION_BLOCK_RE = re.compile(r'^\s*([A-D])(?:\s*(?:[.．、:：。]|<sub>\s*[.．、:：。]\s*</sub>)\s*|\s+)(?=\S)')
-CHOICE_BLANK_RE = re.compile(r'[（(]\s*(?:\)|）|_|　|\.{2,}|…{1,2})?\s*[）)]')
 QUESTION_NUMERIC_RE = re.compile(r'^\s*(\d{1,3})(?:\s*[.、．。]\s*|\s+)(?=\S)')
 EMBEDDED_QUESTION_NUMERIC_RE = re.compile(r'(?<!\d)(\d{1,3})(?:\s*[.、．。]\s*|\s+)(?=\S)')
 QUESTION_TITLE_RE = re.compile(r'^\s*第\s*([一二三四五六七八九十百千\d]+)\s*题')
@@ -40,13 +42,6 @@ GAP_RATIO_CONTINUATION = 1.5
 # 中间有明显空隙。COLUMN_GAP_MIN 为两带间的最小空隙，低于此视为单栏。
 COLUMN_GAP_MIN = 120        # 左右栏 x0 聚集带之间的最小间隔
 COLUMN_MIN_BLOCKS_PER_COL = 3   # 每栏至少的文本块数，避免个别偏移块误判成栏
-
-
-def _strip_option_marker_simple(text: str) -> str:
-    """去掉选项文本开头可能残留的选项标记，如 '. ' 或 '. Ⅰ' 等。"""
-    t = (text or "").strip()
-    t = re.sub(r'^\s*[.．、:：。]\s*', '', t)
-    return t.strip()
 
 
 @dataclass
@@ -384,20 +379,13 @@ class QuestionLayoutGrouper:
 
     @staticmethod
     def _has_inline_options(text: str) -> bool:
-        """判断文本内是否内联了选项序列（题干与选项同一 block）。
-
-        要求含选项 A 且至少 2 个不同选项标记，避免把题干中孤立的 "A。" 误判为选项。
-        """
-        labels = {m.group(1).upper() for m in OPTION_MARKER_RE.finditer(text or "")}
-        return "A" in labels and len(labels) >= 2
+        """Compatibility delegate for inline option detection."""
+        return has_inline_options(text)
 
     @staticmethod
     def _find_inline_option_start(text: str) -> int:
-        """返回选项 A 标记在文本中的起始下标；找不到返回 -1。"""
-        for m in OPTION_MARKER_RE.finditer(text or ""):
-            if m.group(1).upper() == "A":
-                return m.start()
-        return -1
+        """Compatibility delegate for locating inline option A."""
+        return find_inline_option_start(text)
 
     def _extract_stem(self, group: QuestionGroup) -> str:
         if is_subjective_question_text(self._group_text(group)):
@@ -551,43 +539,8 @@ class QuestionLayoutGrouper:
 
     @staticmethod
     def _find_recoverable_inline_option(group: QuestionGroup) -> Optional[Tuple[int, int]]:
-        """识别“A 粘在题干末尾、后续 B/C/D 分块”的 MinerU 常见输出。"""
-        first_option_block_idx: Optional[int] = None
-        first_option_label = ""
-        for block_idx, block in enumerate(group.blocks):
-            text = (
-                getattr(block, "content_text", None)
-                or getattr(block, "content_md", None)
-                or ""
-            ).strip()
-            match = OPTION_BLOCK_RE.match(text)
-            if match:
-                first_option_block_idx = block_idx
-                first_option_label = match.group(1).upper()
-                break
-
-        if first_option_block_idx is None or first_option_label != "B":
-            return None
-
-        for block_idx in range(first_option_block_idx - 1, -1, -1):
-            block = group.blocks[block_idx]
-            text = (
-                getattr(block, "content_text", None)
-                or getattr(block, "content_md", None)
-                or ""
-            ).strip()
-            matches = [
-                match
-                for match in OPTION_MARKER_RE.finditer(text)
-                if match.group(1).upper() == "A"
-            ]
-            if matches:
-                start = matches[-1].start(1)
-                if start > 0 and text[matches[-1].end():].strip():
-                    return block_idx, start
-            if QUESTION_NUMERIC_RE.match(text):
-                break
-        return None
+        """Compatibility delegate for recovering inline option A."""
+        return find_recoverable_inline_option(group.blocks)
 
     def _should_append_to_last_option(self, option_block: Any, continuation_block: Any) -> bool:
         text = (
@@ -626,45 +579,8 @@ class QuestionLayoutGrouper:
         return True
 
     def _parse_options_from_text(self, text: str) -> List[Dict[str, str]]:
-        """从选项文本中提取各个选项"""
-        if not text:
-            return []
-        matches = list(OPTION_MARKER_RE.finditer(text))
-        if not matches:
-            return []
-
-        # 选项标记必然严格升序 A<B<C<D。遇到非升序标记（MinerU 常把右栏末题的
-        # 末选项重复输出成残块，或选项文本尾部粘连下一标记字母）即视为选项区结束，
-        # 用它的位置作为最后一个有效选项的截断点，丢弃其后的重复残块。
-        valid: List[Any] = []
-        last_ord = ord("A") - 1
-        cutoff = len(text)
-        for m in matches:
-            if ord(m.group(1).upper()) > last_ord:
-                valid.append(m)
-                last_ord = ord(m.group(1).upper())
-            else:
-                cutoff = m.start(1)
-                break
-
-        options: List[Dict[str, str]] = []
-        for idx, match in enumerate(valid):
-            label = match.group(1).upper()
-            text_start = match.end()
-            text_end = valid[idx + 1].start(1) if idx + 1 < len(valid) else cutoff
-            option_text = text[text_start:text_end].strip()
-            # 去掉选项文本开头可能残留的选项标记
-            option_text = _strip_option_marker_simple(option_text)
-            if not option_text:
-                continue
-            options.append({
-                "key": label,
-                "label": label,
-                "option_label": label,
-                "text": option_text,
-            })
-
-        return options if len(options) >= 2 else []
+        """Compatibility delegate for option text parsing."""
+        return parse_options_from_text(text)
 
     def _extract_figures(self, group: QuestionGroup) -> List[str]:
         figure_ids: List[str] = []
