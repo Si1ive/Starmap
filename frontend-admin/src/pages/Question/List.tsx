@@ -44,6 +44,7 @@ const QuestionList = () => {
   const [params, setParams] = useState<QuestionListParams>(() => ({
     page: 1,
     page_size: 20,
+    question_id: searchParams.get('question_id')?.trim() || undefined,
     review_status: parseReviewStatus(searchParams.get('review_status')),
   }))
 
@@ -142,6 +143,14 @@ const QuestionList = () => {
     } else {
       nextSearchParams.delete('review_status')
     }
+    setSearchParams(nextSearchParams, { replace: true })
+  }
+
+  const clearQuestionFocus = () => {
+    setParams((prev) => ({ ...prev, page: 1, question_id: undefined }))
+    setSelectedRowKeys([])
+    const nextSearchParams = new URLSearchParams(searchParams)
+    nextSearchParams.delete('question_id')
     setSearchParams(nextSearchParams, { replace: true })
   }
 
@@ -260,6 +269,18 @@ const QuestionList = () => {
 
       <Card>
         <Space wrap style={{ marginBottom: 16 }}>
+          {params.question_id && (
+            <Tag
+              color="blue"
+              closable
+              title={params.question_id}
+              onClose={clearQuestionFocus}
+            >
+              {questions[0]?.question_no
+                ? `已定位第 ${questions[0].question_no} 题`
+                : `已定位题目 ${params.question_id.slice(0, 8)}`}
+            </Tag>
+          )}
           <Input.Search
             placeholder="搜索题干"
             style={{ width: 220 }}

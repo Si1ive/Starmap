@@ -191,6 +191,7 @@ class ContentService:
         *,
         page: int,
         page_size: int,
+        question_id: Optional[str] = None,
         subject_id: Optional[str] = None,
         chapter_id: Optional[str] = None,
         question_type: Optional[str] = None,
@@ -202,6 +203,8 @@ class ContentService:
         item_status: Optional[str] = None,
     ) -> Dict[str, Any]:
         query = select(Question).where(Question.status != "deleted")
+        if question_id:
+            query = query.where(Question.id == question_id)
         if subject_id:
             query = query.where(Question.subject_id == subject_id)
         if chapter_id:

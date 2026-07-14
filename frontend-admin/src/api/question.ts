@@ -13,6 +13,7 @@ import type {
 export interface QuestionListParams {
   page?: number
   page_size?: number
+  question_id?: string
   subject_id?: string
   chapter_id?: string
   type?: string

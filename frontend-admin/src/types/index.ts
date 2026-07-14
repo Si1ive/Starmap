@@ -220,6 +220,7 @@ export interface Question {
   exam_year?: number
   exam_scope?: string
   paper_name?: string
+  question_no?: string
   knowledge_point_ids?: string[]
   knowledge_points?: { id: string; title: string; relevance: number }[]
   tags?: string[]

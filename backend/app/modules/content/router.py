@@ -87,6 +87,7 @@ async def batch_delete_knowledge_points(
 async def get_questions(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    question_id: Optional[str] = None,
     subject_id: Optional[str] = None,
     chapter_id: Optional[str] = None,
     type: Optional[str] = None,
@@ -101,6 +102,7 @@ async def get_questions(
     result = await ContentService(db).list_questions(
         page=page,
         page_size=page_size,
+        question_id=question_id,
         subject_id=subject_id,
         chapter_id=chapter_id,
         question_type=type,

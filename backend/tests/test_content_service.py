@@ -103,6 +103,33 @@ async def test_question_update_commits_before_rebuilding_index(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_question_list_can_filter_exact_question_id():
+    db = AsyncMock()
+    db.scalar.return_value = 0
+    db.execute.return_value = SimpleNamespace(
+        scalars=lambda: SimpleNamespace(all=lambda: [])
+    )
+
+    result = await ContentService(db).list_questions(
+        page=1,
+        page_size=20,
+        question_id="question-focus",
+    )
+
+    count_query = db.scalar.await_args.args[0]
+    compiled_query = str(
+        count_query.compile(compile_kwargs={"literal_binds": True})
+    )
+    assert "questions.id = 'question-focus'" in compiled_query
+    assert result == {
+        "items": [],
+        "total": 0,
+        "page": 1,
+        "page_size": 20,
+    }
+
+
+@pytest.mark.asyncio
 async def test_disabling_content_commits_with_segment_removal(monkeypatch):
     point = SimpleNamespace(
         id="knowledge-1",

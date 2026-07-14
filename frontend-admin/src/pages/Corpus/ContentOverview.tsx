@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 import {
   Alert,
   Button,
@@ -17,7 +18,7 @@ import {
   Tooltip,
   Typography,
 } from 'antd'
-import { ReloadOutlined } from '@ant-design/icons'
+import { FormOutlined, ReloadOutlined } from '@ant-design/icons'
 import { getDocumentContentOverview, reextractDocumentEntity } from '@/api'
 import type {
   ContentOverview,
@@ -336,6 +337,7 @@ const ContentOverview = ({
   documentId: string
   documentExtracting?: boolean
 }) => {
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const { data, isLoading } = useQuery({
     queryKey: ['contentOverview', documentId],
@@ -440,27 +442,41 @@ const ContentOverview = ({
       ),
     },
     {
-      title: '操作', key: 'actions', width: 116, fixed: 'right' as const,
+      title: '操作', key: 'actions', width: 196, fixed: 'right' as const,
       render: (_: unknown, row: ContentOverviewQuestion) => {
         const key = `question:${row.id}`
         const isRunning = row.reextraction?.status === 'running'
         return (
-          <Tooltip title="仅使用本题及相邻两题的来源内容重新提取">
-            <Button
-              aria-label={`重新提取题目：${row.question_no || row.id}`}
-              icon={<ReloadOutlined />}
-              size="small"
-              loading={isRunning || pendingKey === key}
-              disabled={taskBusy && !isRunning && pendingKey !== key}
-              onClick={() => requestReextraction(
-                'question',
-                row.id,
-                row.question_no ? `第 ${row.question_no} 题` : row.content_preview.slice(0, 24),
-              )}
-            >
-              重新提取
-            </Button>
-          </Tooltip>
+          <Space size={6}>
+            <Tooltip title="在题目管理中定位并人工处理">
+              <Button
+                aria-label={`管理题目：${row.question_no || row.id}`}
+                icon={<FormOutlined />}
+                size="small"
+                onClick={() => navigate(
+                  `/admin/questions?question_id=${encodeURIComponent(row.id)}`
+                )}
+              >
+                管理
+              </Button>
+            </Tooltip>
+            <Tooltip title="仅使用本题及相邻两题的来源内容重新提取">
+              <Button
+                aria-label={`重新提取题目：${row.question_no || row.id}`}
+                icon={<ReloadOutlined />}
+                size="small"
+                loading={isRunning || pendingKey === key}
+                disabled={taskBusy && !isRunning && pendingKey !== key}
+                onClick={() => requestReextraction(
+                  'question',
+                  row.id,
+                  row.question_no ? `第 ${row.question_no} 题` : row.content_preview.slice(0, 24),
+                )}
+              >
+                重新提取
+              </Button>
+            </Tooltip>
+          </Space>
         )
       },
     },
