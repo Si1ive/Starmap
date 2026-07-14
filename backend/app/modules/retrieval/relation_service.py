@@ -169,7 +169,9 @@ class RelationService:
         if len(kp_list) < 2:
             return 0
 
-        from app.services.embedding_service import get_embedding_service_from_settings
+        from app.infrastructure.ai.embedding_service import (
+            get_embedding_service_from_settings,
+        )
 
         embedding = await get_embedding_service_from_settings(self.db)
         # 富化后优先用 summary，没有则退回 title + topic_terms

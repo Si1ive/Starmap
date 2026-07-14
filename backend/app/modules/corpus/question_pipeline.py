@@ -27,7 +27,7 @@ from app.modules.corpus.question_validation import (
     comprehensive_validation,
     extract_question_number,
 )
-from app.services.llm_client import PDFStructureLLMClient
+from app.infrastructure.ai.llm_client import PDFStructureLLMClient
 from app.modules.operations.settings_service import SystemSettingsService
 
 logger = get_logger(__name__)

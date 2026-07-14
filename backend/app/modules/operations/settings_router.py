@@ -155,7 +155,7 @@ async def get_pdf_parser_history(
 
 def _build_llm_client(kind: str, config: dict):
     """按配置块 kind 构造对应客户端。embedding 返回 EmbeddingService，其余返回 BaseLLMClient 子类。"""
-    from app.services.llm_client import (
+    from app.infrastructure.ai.llm_client import (
         ChatLLMClient,
         PDFStructureLLMClient,
         OutlineLLMClient,
@@ -174,7 +174,7 @@ def _build_llm_client(kind: str, config: dict):
     if kind == "enrich_llm":
         return EnrichLLMClient(config)
     if kind == "embedding":
-        from app.services.embedding_service import EmbeddingService
+        from app.infrastructure.ai.embedding_service import EmbeddingService
 
         return EmbeddingService(config)
     raise HTTPException(status_code=400, detail=f"未知的 LLM 配置块: {kind}")
@@ -195,7 +195,7 @@ async def get_llm_status(kind: str, db: AsyncSession = Depends(get_db)):
     config = runtime_settings.get(kind, {}) or {}
 
     if kind == "embedding":
-        from app.services.embedding_service import EmbeddingService
+        from app.infrastructure.ai.embedding_service import EmbeddingService
 
         svc = EmbeddingService(config)
         is_local = svc.provider == "local_bge_m3"
@@ -277,7 +277,7 @@ async def test_llm(
     merged_config.update(payload)
 
     if kind == "embedding":
-        from app.services.embedding_service import EmbeddingService
+        from app.infrastructure.ai.embedding_service import EmbeddingService
 
         svc = EmbeddingService(merged_config)
         is_local = svc.provider == "local_bge_m3"

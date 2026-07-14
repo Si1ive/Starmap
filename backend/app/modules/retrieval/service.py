@@ -26,7 +26,9 @@ from app.modules.retrieval.outline_service import (
     expand_query_with_outline,
     retrieve_by_chapters,
 )
-from app.services.embedding_service import get_embedding_service_from_settings
+from app.infrastructure.ai.embedding_service import (
+    get_embedding_service_from_settings,
+)
 
 logger = get_logger(__name__)
 

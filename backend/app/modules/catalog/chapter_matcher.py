@@ -163,7 +163,9 @@ class ChapterMatcher:
     ) -> List[Dict[str, Any]]:
         """Search canonical chapter segments and return at most three matches."""
         from app.db.qdrant import qdrant_manager
-        from app.services.embedding_service import get_embedding_service_from_settings
+        from app.infrastructure.ai.embedding_service import (
+            get_embedding_service_from_settings,
+        )
         from qdrant_client.models import FieldCondition, Filter, MatchValue
 
         if entity_type == "knowledge_point":

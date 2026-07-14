@@ -424,7 +424,7 @@ class ChatService:
             logger.warning("检索服务异常，降级为直接回答", error=str(e))
 
         # 构造问答 LLM 客户端（不可用时各生成方法回退 env 直连）
-        from app.services.llm_client import ChatLLMClient
+        from app.infrastructure.ai.llm_client import ChatLLMClient
         chat_client = ChatLLMClient(llm_config)
 
         # 生成回答

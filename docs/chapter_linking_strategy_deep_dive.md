@@ -163,7 +163,7 @@ async def _match_by_vector_search(entity, entity_type):
     返回:
     - 最多 top-3 章节
     """
-    from app.services.embedding_service import get_embedding_service_from_settings
+    from app.infrastructure.ai.embedding_service import get_embedding_service_from_settings
     from app.db.qdrant import qdrant_manager, COLLECTION_KNOWLEDGE_SEGMENTS
     from qdrant_client.models import Filter, FieldCondition, MatchValue
     

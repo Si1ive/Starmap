@@ -26,7 +26,7 @@ from app.core.logging import get_logger
 from app.models.mysql_models import (
     Question, KnowledgePoint, QuestionKnowledgeLink,
 )
-from app.services.llm_client import EnrichLLMClient, extract_json_block
+from app.infrastructure.ai.llm_client import EnrichLLMClient, extract_json_block
 from app.modules.operations.settings_service import SystemSettingsService
 
 logger = get_logger(__name__)

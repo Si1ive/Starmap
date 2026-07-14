@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.models.mysql_models import Document, DocumentBlock
-from app.services.llm_client import DocMetaLLMClient, extract_json_block
+from app.infrastructure.ai.llm_client import DocMetaLLMClient, extract_json_block
 from app.modules.operations.settings_service import SystemSettingsService
 
 logger = get_logger(__name__)

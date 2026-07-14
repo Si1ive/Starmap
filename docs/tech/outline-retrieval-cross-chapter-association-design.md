@@ -268,7 +268,7 @@ async def expand_query_with_outline(
         ],
     }
     """
-    from app.services.embedding_service import get_embedding_service_from_settings
+    from app.infrastructure.ai.embedding_service import get_embedding_service_from_settings
     from app.db.qdrant import qdrant_manager
     from qdrant_client.models import Filter, FieldCondition, MatchValue
 
@@ -865,7 +865,7 @@ async def fallback_chapter_similarity(
 
     返回: [(target_chapter_id, cosine_score), ...]
     """
-    from app.services.embedding_service import get_embedding_service_from_settings
+    from app.infrastructure.ai.embedding_service import get_embedding_service_from_settings
     from app.db.qdrant import qdrant_manager
 
     chapter = await db.get(CanonicalChapter, chapter_id)

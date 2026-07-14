@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.models.mysql_models import Document, Subject
-from app.services.llm_client import BaseLLMClient
+from app.infrastructure.ai.llm_client import BaseLLMClient
 from app.modules.operations.settings_service import SystemSettingsService
 
 logger = get_logger(__name__)

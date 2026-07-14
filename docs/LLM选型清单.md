@@ -52,7 +52,7 @@
   - bge-m3（BAAI，中文检索口碑标杆，稠密+稀疏+多向量，8192 token，可自托管免费）
   - 通义 text-embedding-v3 / 智谱 embedding-3（API 形式，省运维）
   - OpenAI text-embedding-3-small/large（若已有 OpenAI 通道）
-- ⚠️ **代码约束**：当前写死 `text-embedding-ada-002` + `1536` 维（`backend/app/services/embedding_service.py:21-22`）。换模型前先确认维度：
+- ⚠️ **代码约束**：当前默认 `text-embedding-ada-002` + `1536` 维（`backend/app/infrastructure/ai/embedding_service.py`）。换模型前先确认维度：
   - ada-002 / text-embedding-3-small = **1536** → 可无痛替换
   - bge-m3 / 多数国产 = **1024** → 必须改 `EMBEDDING_DIMENSION` + 向量库列定义 + **重新生成全部历史向量**
 
@@ -72,7 +72,7 @@
 | `outline_llm` | 系统设置页 → 大纲拆分 LLM | `enabled=true`、`base_url`、`api_key`、`model` |
 | `pdf_structure_llm` | 系统设置页 → PDF 文档结构解析 LLM | 同上 |
 | `llm` | 系统设置页 → LLM 参数 | `model`、`temperature`、`max_tokens`（key 走全局 `OPENAI_API_KEY`） |
-| embedding | `backend/app/services/embedding_service.py` | 改模型名 + 维度（需改代码，非配置） |
+| embedding | `backend/app/infrastructure/ai/embedding_service.py` | 改模型名 + 维度（也可通过系统配置覆盖） |
 
 > 默认 `enabled=false`：`outline_llm` 和 `pdf_structure_llm` 未配置时不会静默走空，会返回明确错误（400/503）。
 

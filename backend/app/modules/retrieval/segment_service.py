@@ -30,7 +30,9 @@ from app.models.mysql_models import (
     KnowledgePointChapterLink, QuestionChapterLink,
     EntitySourceLink, Document
 )
-from app.services.embedding_service import get_embedding_service_from_settings
+from app.infrastructure.ai.embedding_service import (
+    get_embedding_service_from_settings,
+)
 
 logger = get_logger(__name__)
 

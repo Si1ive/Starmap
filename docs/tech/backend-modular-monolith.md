@@ -19,6 +19,8 @@
 app/
   api/
     schemas.py                 # 跨模块通用 HTTP Schema
+  infrastructure/
+    ai/                        # 跨业务域共享的 LLM 与 Embedding 外部适配器
   modules/
     catalog/                   # 学科、章节目录
       router.py
@@ -210,6 +212,8 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - `/api/v1/admin/settings*` 配置查询、保存、PDF 解析器切换历史及 LLM 连通性测试
   接口已迁移到 `app/modules/operations/settings_router.py`；原 URL、管理员鉴权、
   API Key 脱敏和响应行为保持不变
+- OpenAI 兼容 LLM 与 Embedding 客户端已迁移到 `app/infrastructure/ai`，由语料、
+  内容、目录、检索、聊天和运营配置模块共享；两个旧 `app/services/*.py` 文件已删除
 - LLM 调用记录、聚合统计和向量召回质量日志已迁移到
   `app/modules/monitoring`，对应管理接口保持 `/api/v1/admin/monitor/*`
   不变，`app/services/llm_call_recorder.py` 与
