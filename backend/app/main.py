@@ -19,6 +19,9 @@ from app.core.logging import configure_logging, get_logger
 from app.db.redis import redis_client
 from app.db.mysql import mysql_client
 from app.modules.catalog import router as catalog_router
+from app.modules.catalog.section_review_router import (
+    router as section_review_router,
+)
 from app.modules.chat.admin_router import router as chat_admin_router
 from app.modules.chat.router import router as chat_router
 from app.modules.content import router as content_router
@@ -256,6 +259,11 @@ app.include_router(
 )
 app.include_router(
     catalog_router,
+    prefix="/api/v1",
+    dependencies=admin_dependencies,
+)
+app.include_router(
+    section_review_router,
     prefix="/api/v1",
     dependencies=admin_dependencies,
 )

@@ -118,6 +118,29 @@ def test_catalog_routes_are_owned_by_catalog_module():
     )
 
 
+def test_section_review_routes_are_owned_by_catalog_module():
+    routes = _routes_by_path()
+
+    for path in (
+        "/api/v1/admin/review/sections",
+        "/api/v1/admin/review/sections/{mapping_id}",
+        "/api/v1/admin/review/sections/batch-delete",
+    ):
+        assert (
+            routes[path].endpoint.__module__
+            == "app.modules.catalog.section_review_router"
+        )
+
+    post_paths = [
+        route.path
+        for route in app.routes
+        if hasattr(route, "methods") and "POST" in route.methods
+    ]
+    assert post_paths.index(
+        "/api/v1/admin/review/sections/batch-delete"
+    ) < post_paths.index("/api/v1/admin/review/sections/{mapping_id}")
+
+
 def test_content_routes_are_owned_by_content_module():
     routes = _routes_by_path()
 
