@@ -86,3 +86,7 @@ def test_crawler_task_service_keeps_task_config_compatibility_methods():
     assert CrawlerTaskService._normalize_keywords("a,b") == ["a", "b"]
     assert CrawlerTaskService._normalize_source_ids("source-1") == ["source-1"]
     assert CrawlerTaskService._is_supported_source("github", "github")
+
+
+def test_crawler_task_service_does_not_expose_legacy_local_crawl_path():
+    assert not hasattr(CrawlerTaskService, "_crawl_source")

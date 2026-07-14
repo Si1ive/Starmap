@@ -2,10 +2,9 @@
 爬虫任务执行服务
 
 提供爬虫任务的创建、执行、状态管理等核心功能。
-集成 BaseCrawler 实现实际爬取逻辑。
+通过 Scrapy Bridge 发布实际爬取任务。
 """
 
-import asyncio
 import uuid
 from datetime import datetime
 from typing import Optional, Dict, Any, List
@@ -490,102 +489,3 @@ class CrawlerTaskService:
         })
 
         logger.info(f"Cleanup task completed: {task.id}, total_cleaned={total_cleaned}")
-
-    async def _crawl_source(self, task: CrawlTask, source: CrawlSource) -> None:
-        """
-        执行单个爬取源的爬取（已废弃，使用 CrawlerEngine 替代）
-        
-        Args:
-            task: 任务实例
-            source: 爬取源实例
-        """
-        logger.info(f"Crawling source: {source.name} ({source.id})")
-        
-        # 记录开始日志
-        await self.log_service.create_log({
-            "task_id": task.id,
-            "source_id": source.id,
-            "level": "INFO",
-            "stage": "fetch",
-            "status": "pending",
-            "resource_url": source.base_url,
-            "message": f"Started crawling source: {source.name}",
-        })
-        
-        try:
-            # 使用新的 CrawlerEngine 执行爬取
-            config = task.config or {}
-            keywords = config.get("keywords", [])
-            
-            if not keywords:
-                logger.warning(f"No keywords for source: {source.id}")
-                return
-            
-            # 创建爬虫
-            from crawler.spiders.person_spider import PersonSpider
-            spider = PersonSpider(
-                source=source.code or "baike",
-                keywords=keywords,
-            )
-            
-            # 创建引擎
-            from crawler.engine import CrawlerEngine, Scheduler, Downloader
-            from crawler.pipelines import (
-                DataCleaningPipeline,
-                DataValidationPipeline,
-                DatabaseStoragePipeline,
-                LogPipeline,
-            )
-            
-            engine = CrawlerEngine(
-                spider=spider,
-                scheduler=Scheduler(),
-                downloader=Downloader(
-                    concurrent_limit=source.concurrent_limit or 3,
-                    delay=source.request_interval or 1.0,
-                ),
-                pipelines=[
-                    DataCleaningPipeline(),
-                    DataValidationPipeline(),
-                    DatabaseStoragePipeline(),
-                    LogPipeline(),
-                ],
-            )
-            
-            # 执行爬取
-            stats = await engine.start()
-            
-            # 记录成功日志
-            await self.log_service.create_log({
-                "task_id": task.id,
-                "source_id": source.id,
-                "level": "INFO",
-                "stage": "fetch",
-                "status": "success",
-                "resource_url": source.base_url,
-                "message": f"Successfully crawled source: {source.name}, "
-                           f"items={stats.get('items_scraped', 0)}, "
-                           f"requests={stats.get('requests_scheduled', 0)}",
-            })
-            
-            # 更新统计
-            task.success_count = (task.success_count or 0) + stats.get("items_scraped", 0)
-            
-        except Exception as e:
-            # 记录失败日志
-            await self.log_service.create_log({
-                "task_id": task.id,
-                "source_id": source.id,
-                "level": "ERROR",
-                "stage": "fetch",
-                "status": "failed",
-                "resource_url": source.base_url,
-                "message": f"Failed to crawl source: {source.name}, error: {str(e)}",
-            })
-            
-            # 更新统计
-            task.failed_count = (task.failed_count or 0) + 1
-        
-        # 更新总请求数
-        task.total_requests = (task.total_requests or 0) + 1
-        await self.db.commit()
