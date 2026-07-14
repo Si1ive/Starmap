@@ -10,6 +10,7 @@ from app.services.entity_extraction_service import (
 )
 from app.modules.corpus.entity_persistence import (
     QuestionPersistence,
+    build_knowledge_content,
     extract_answers_from_blocks,
 )
 from app.models.mysql_models import CorpusFile, Document, EntityExtractionRun
@@ -218,6 +219,16 @@ def test_extract_answers_from_blocks_requires_answer_header():
     ]
 
     assert extract_answers_from_blocks(blocks) == {}
+
+
+def test_build_knowledge_content_prefers_markdown_and_skips_empty_blocks():
+    blocks = [
+        SimpleNamespace(content_md="  第一段 **正文**  ", content_text="第一段"),
+        SimpleNamespace(content_md=None, content_text="  第二段正文  "),
+        SimpleNamespace(content_md="", content_text="   "),
+    ]
+
+    assert build_knowledge_content(blocks) == "第一段 **正文**\n\n第二段正文"
 
 
 @pytest.mark.asyncio

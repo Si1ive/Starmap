@@ -5,21 +5,23 @@
 """
 
 import re
-import uuid
 import asyncio
 import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Dict, Any, List, Optional, Tuple
 
-from sqlalchemy import select, and_, delete
+from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.modules.corpus.entity_persistence import (
+    KnowledgePointPersistence,
     QuestionPersistence,
+    cleanup_document_entities,
     extract_topic_terms,
+    generate_id,
     normalize_options,
     strip_leading_option_marker,
 )
@@ -61,8 +63,8 @@ from app.modules.corpus.question_validation import (
 )
 from app.models.mysql_models import (
     CorpusFile, Document, DocumentBlock, DocumentSection, DocumentSectionMapping,
-    KnowledgePoint, Question, KnowledgePointChapterLink, QuestionChapterLink,
-    EntitySourceLink, CanonicalChapter, EntityExtractionRun
+    Question, QuestionChapterLink, EntitySourceLink, CanonicalChapter,
+    EntityExtractionRun
 )
 from app.services.chapter_compat_service import resolve_legacy_chapter_id
 from app.services.system_settings_service import SystemSettingsService
@@ -71,53 +73,6 @@ from app.services.llm_call_recorder import LLMCallRecorder
 from app.services.llm_client import PDFStructureLLMClient
 
 logger = get_logger(__name__)
-
-
-async def cleanup_document_entities(
-    db: AsyncSession,
-    document_id: str,
-    entity_type: Optional[str] = None,
-) -> Dict[str, int]:
-    """清理某文档已抽取的实体及其级联数据（来源链/资产链/检索段/关联）。
-
-    entity_type=None 时同时清理知识点与题目；否则只清理指定类型。
-    重解析会重建 blocks/assets，旧实体基于旧版面已失效，必须一并清掉，
-    否则新版面配旧实体，坐标桥与来源引用全部错位。
-    """
-    types = ["knowledge_point", "question"] if entity_type is None else [entity_type]
-    removed: Dict[str, int] = {}
-    for etype in types:
-        model = KnowledgePoint if etype == "knowledge_point" else Question
-        rows = await db.execute(
-            select(model.id).where(model.source_document_id == document_id)
-        )
-        entity_ids = [row[0] for row in rows.all()]
-        removed[etype] = len(entity_ids)
-        if not entity_ids:
-            continue
-
-        await db.execute(
-            delete(EntitySourceLink).where(
-                and_(
-                    EntitySourceLink.entity_type == etype,
-                    EntitySourceLink.entity_id.in_(entity_ids),
-                )
-            )
-        )
-        try:
-            from app.services.entity_asset_service import cleanup_entity_links
-            await cleanup_entity_links(db, entity_type=etype, entity_ids=entity_ids)
-        except Exception:
-            pass
-        from app.services.segment_service import SegmentService
-
-        await SegmentService(db).delete_entity_segments(etype, entity_ids)
-        await db.execute(delete(model).where(model.id.in_(entity_ids)))
-    return removed
-
-
-def generate_id() -> str:
-    return uuid.uuid4().hex[:32]
 
 
 # 题干年份/真题标记探测：匹配【2019】(2019)（2019）[2019] 2019年 等
@@ -184,6 +139,7 @@ class EntityExtractionService:
 
     def __init__(self, db: AsyncSession):
         self.db = db
+        self._knowledge_persistence = KnowledgePointPersistence(db)
         self._question_persistence = QuestionPersistence(db)
 
     async def extract_entities_with_run_id(self, run_id: str) -> Dict[str, Any]:
@@ -525,125 +481,15 @@ class EntityExtractionService:
         content_blocks: List[DocumentBlock],
         section_mappings: Dict[int, Dict[str, Optional[str]]],
     ) -> bool:
-        """保存单个知识点"""
-        # 从章节映射推断学科和章节（同一文档不同块可属于不同学科）
+        """兼容入口：解析页映射后委托知识点持久化组件。"""
         mapping_info = self._resolve_mapping_for_page(title_block.page_no, section_mappings)
-        primary_chapter_id = mapping_info["chapter_id"] if mapping_info else None
-        subject_id = mapping_info["subject_id"] if mapping_info else fallback_subject_id
-        legacy_chapter_id = mapping_info["legacy_chapter_id"] if mapping_info else None
-        source_section_path = mapping_info.get("source_section_path") if mapping_info else None
-        resolved_source: Optional[str] = None
-
-        # 组合内容
-        content_parts = []
-        for block in content_blocks:
-            text = block.content_md or block.content_text or ""
-            if text.strip():
-                content_parts.append(text.strip())
-        content = "\n\n".join(content_parts)
-
-        if not content:
-            return False
-
-        title_text = title_block.content_text or ""
-
-        # 回退：section 映射拿不到章节时，直接用 title/content 匹配大纲
-        if not primary_chapter_id:
-            from app.services.chapter_link_service import ChapterLinkService
-            topic_terms_preview = self._extract_topic_terms(title_text, content)
-            resolved = await ChapterLinkService(self.db).resolve_chapter_for_entity(
-                title=title_text,
-                content=content[:1000],
-                subject_id=subject_id,
-                topic_terms=topic_terms_preview,
-                entity_type="knowledge_point",
-            )
-            if resolved:
-                primary_chapter_id = resolved["chapter_id"]
-                subject_id = resolved.get("subject_id") or subject_id
-                resolved_source = resolved.get("source", "keyword_match")
-                logger.info(
-                    "知识点章节直接解析成功",
-                    document_id=document_id,
-                    chapter_id=primary_chapter_id,
-                    source=resolved_source,
-                    confidence=resolved.get("confidence"),
-                )
-
-        if not legacy_chapter_id:
-            legacy_chapter_id = await resolve_legacy_chapter_id(
-                self.db,
-                canonical_chapter_id=primary_chapter_id,
-                subject_id=subject_id,
-            )
-        if not subject_id or not legacy_chapter_id:
-            logger.warning(
-                "知识点缺少有效章节归属，跳过入库",
-                document_id=document_id,
-                block_id=title_block.id,
-            )
-            return False
-
-        # 生成 topic_terms（简单实现：从标题和内容中提取关键词）
-        topic_terms = self._extract_topic_terms(title_block.content_text or "", content)
-
-        # 创建知识点
-        kp_id = generate_id()
-        knowledge_point = KnowledgePoint(
-            id=kp_id,
-            chapter_id=legacy_chapter_id,
-            subject_id=subject_id,
-            primary_chapter_id=primary_chapter_id,
-            source_document_id=document_id,
-            source_section_path=source_section_path,
-            title=title_block.content_text or "未命名知识点",
-            canonical_title=title_block.content_text,
-            content=content,
-            topic_terms=topic_terms,
-            review_status="pending",
-            status="active",
-        )
-        self.db.add(knowledge_point)
-
-        # 创建章节关联
-        if primary_chapter_id:
-            link = KnowledgePointChapterLink(
-                knowledge_point_id=kp_id,
-                canonical_chapter_id=primary_chapter_id,
-                is_primary=True,
-                source=resolved_source or ("document_mapping" if mapping_info else "manual"),
-                created_by="system",
-            )
-            self.db.add(link)
-
-        # 创建来源引用
-        source_link = EntitySourceLink(
-            entity_type="knowledge_point",
-            entity_id=kp_id,
+        return await self._knowledge_persistence.save_knowledge_point(
             document_id=document_id,
-            page_start=title_block.page_no,
-            page_end=content_blocks[-1].page_no if content_blocks else title_block.page_no,
-            block_ids=[title_block.id] + [b.id for b in content_blocks],
-            excerpt_text=content[:500] if content else None,
+            fallback_subject_id=fallback_subject_id,
+            title_block=title_block,
+            content_blocks=content_blocks,
+            mapping_info=mapping_info,
         )
-        self.db.add(source_link)
-
-        await self.db.flush()
-
-        # 关联资产：按实体覆盖的 block 精确绑定（只绑这些 block 上挂着的图/表/公式）
-        try:
-            from app.services.entity_asset_service import link_entity_assets_by_blocks
-            block_ids = [title_block.id] + [b.id for b in content_blocks]
-            await link_entity_assets_by_blocks(
-                self.db,
-                entity_type="knowledge_point",
-                entity_id=kp_id,
-                block_ids=block_ids,
-            )
-        except Exception as e:
-            logger.warning("知识点资产关联失败", knowledge_point_id=kp_id, error=str(e))
-
-        return True
 
     async def _extract_questions(
         self,

@@ -109,6 +109,7 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
   `app/modules/corpus/extraction_diagnostics.py`
 - 题目入库、选项标准化、原卷答案回连和实体来源查询已迁移到
   `app/modules/corpus/entity_persistence.py`
+- 知识点入库、实体级联清理及抽取实体 ID 生成也已收敛到该持久化模块
 - `app.modules.corpus` 包初始化不再隐式加载 Router，避免领域规则反向触发接口层和
   抽取任务加载
 - 后续继续拆分实体抽取中的持久化职责和流水线编排
