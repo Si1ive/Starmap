@@ -25,7 +25,9 @@ from app.core.logging import get_logger
 from app.models.mysql_models import (
     ExamOutline, CanonicalChapter, Subject, DocumentSection, ExamOutlineSubject,
 )
-from app.modules.retrieval.outline_service import validate_cross_references
+from app.modules.retrieval.chapter_relation_retrieval import (
+    validate_cross_references,
+)
 
 logger = get_logger(__name__)
 

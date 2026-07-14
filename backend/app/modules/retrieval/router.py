@@ -13,7 +13,9 @@ from app.modules.retrieval.schemas import (
     SearchRequest,
     SearchWithOutlineRequest,
 )
-from app.modules.retrieval.outline_service import expand_related_chapters
+from app.modules.retrieval.chapter_relation_retrieval import (
+    expand_related_chapters,
+)
 from app.modules.retrieval.relation_service import RelationService
 from app.modules.retrieval.service import RetrievalService
 from app.modules.retrieval.segment_service import SegmentService

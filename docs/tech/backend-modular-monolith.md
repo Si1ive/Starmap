@@ -189,9 +189,11 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - 大纲 Query 向量扩展与结构化过滤条件提取已拆分到
   `app/modules/retrieval/outline_query_expansion.py`；章节树范围扩展、题目到章节
   展开及关联题目/知识点召回已拆分到
-  `app/modules/retrieval/chapter_scope_retrieval.py`，跨章相似召回和交叉引用校验保留在
-  `app/modules/retrieval/outline_service.py`，
-  `app/services/outline_retrieval_service.py` 已删除
+  `app/modules/retrieval/chapter_scope_retrieval.py`；跨章向量相似召回、已审核关系读取
+  和交叉引用校验已拆分到
+  `app/modules/retrieval/chapter_relation_retrieval.py`，
+  `app/modules/retrieval/outline_service.py` 和
+  `app/services/outline_retrieval_service.py` 均已删除
 - 知识点关系构建、语义相似边、关系查询和审核已迁移到
   `app/modules/retrieval/relation_service.py`，
   `app/services/relation_service.py` 已删除

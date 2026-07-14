@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.schemas import ApiResponse, BatchIdsRequest
 from app.db import get_db
 from app.models.mysql_models import CanonicalChapter, ChapterRelation
-from app.modules.retrieval.outline_service import (
+from app.modules.retrieval.chapter_relation_retrieval import (
     fallback_chapter_similarity,
     validate_cross_references,
 )
