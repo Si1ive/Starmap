@@ -7,10 +7,31 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from app.modules.crawler.cleanup_service import CrawlerCleanupService
+from app.modules.crawler import stats_router
 from app.modules.crawler.schedule_service import CrawlerScheduleService
 from app.modules.crawler.scrapy_bridge import ScrapyBridgeService
 from app.modules.crawler.task_service import CrawlerTaskService
 from app.modules.operations.settings_service import SystemSettingsService
+
+
+@pytest.mark.asyncio
+async def test_stats_router_closes_scrapy_bridge_when_status_query_fails(
+    monkeypatch,
+):
+    bridge = SimpleNamespace(
+        get_scrapy_status=AsyncMock(side_effect=RuntimeError("redis unavailable")),
+        close=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        stats_router,
+        "ScrapyBridgeService",
+        lambda _db: bridge,
+    )
+
+    with pytest.raises(RuntimeError, match="redis unavailable"):
+        await stats_router._get_scrapy_status(SimpleNamespace())
+
+    bridge.close.assert_awaited_once()
 
 
 def test_cleanup_options_normalize_aliases_and_defaults():

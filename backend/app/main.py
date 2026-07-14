@@ -40,6 +40,7 @@ from app.modules.crawler.file_router import router as crawler_file_router
 from app.modules.crawler.pdf_ingest_router import router as pdf_ingest_router
 from app.modules.crawler.router import router as crawler_router
 from app.modules.crawler.source_router import router as crawler_source_router
+from app.modules.crawler.stats_router import router as crawler_stats_router
 from app.modules.crawler.task_router import router as crawler_task_router
 from app.modules.dashboard.router import router as dashboard_router
 from app.modules.monitoring.router import router as monitoring_router
@@ -321,6 +322,11 @@ app.include_router(
 )
 app.include_router(
     crawler_source_router,
+    prefix="/api/v1",
+    dependencies=admin_dependencies,
+)
+app.include_router(
+    crawler_stats_router,
     prefix="/api/v1",
     dependencies=admin_dependencies,
 )
