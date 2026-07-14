@@ -8,9 +8,11 @@
 - 知识点关系扩展（prerequisite / similar_to 等）
 """
 
+import json
 from typing import Dict, Any, List, Optional
 
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, func, or_
+from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncSession
 from qdrant_client.models import Filter, FieldCondition, MatchValue, MatchAny
 
@@ -307,12 +309,22 @@ class RetrievalService:
                 hits = dense_hits
             elif mode == "sparse":
                 hits = await self._sparse_search(
-                    collection, sparse_q, limit * 2, qdrant_filter
+                    collection,
+                    sparse_q,
+                    limit * 2,
+                    subject_id=subject_id,
+                    chapter_ids=chapter_ids,
+                    filters=filters,
                 )
             else:
                 # hybrid: dense 用 query，sparse 用 sparse_q（原始 query）
                 sparse_hits = await self._sparse_search(
-                    collection, sparse_q, limit * 2, qdrant_filter
+                    collection,
+                    sparse_q,
+                    limit * 2,
+                    subject_id=subject_id,
+                    chapter_ids=chapter_ids,
+                    filters=filters,
                 )
                 hits = self._merge_hits(dense_hits, sparse_hits)
 
@@ -510,7 +522,9 @@ class RetrievalService:
         collection: str,
         query: str,
         limit: int,
-        qdrant_filter: Optional[Filter],
+        subject_id: Optional[str] = None,
+        chapter_ids: Optional[List[str]] = None,
+        filters: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """
         稀疏检索：从 MySQL 按关键词匹配，再映射到 Qdrant 评分
@@ -523,18 +537,18 @@ class RetrievalService:
         if not keywords:
             return []
 
-        # 在 MySQL 中做关键词匹配
-        from sqlalchemy import or_
-
         entity_type = (
             "knowledge_point"
             if collection == qdrant_manager.COLLECTION_KNOWLEDGE_SEGMENTS
             else "question"
         )
 
-        conditions = [
-            RetrievalSegment.entity_type == entity_type,
-        ]
+        conditions = self._build_sparse_conditions(
+            entity_type=entity_type,
+            subject_id=subject_id,
+            chapter_ids=chapter_ids,
+            filters=filters,
+        )
         keyword_conditions = []
         for kw in keywords[:5]:  # 最多 5 个关键词
             keyword_conditions.append(
@@ -542,10 +556,6 @@ class RetrievalService:
             )
         if keyword_conditions:
             conditions.append(or_(*keyword_conditions))
-
-        if qdrant_filter:
-            # 简化：subject_id 过滤
-            pass  # Qdrant filter 不直接映射到 SQL，此处仅做关键词匹配
 
         result = await self.db.execute(
             select(RetrievalSegment)
@@ -575,6 +585,66 @@ class RetrievalService:
                 })
 
         return hits
+
+    @staticmethod
+    def _build_sparse_conditions(
+        entity_type: str,
+        subject_id: Optional[str],
+        chapter_ids: Optional[List[str]],
+        filters: Optional[Dict[str, Any]],
+    ) -> List[ColumnElement[bool]]:
+        """Build MySQL conditions equivalent to the Qdrant payload filter."""
+        conditions: List[ColumnElement[bool]] = [
+            RetrievalSegment.entity_type == entity_type,
+        ]
+
+        if subject_id:
+            conditions.append(RetrievalSegment.subject_id == subject_id)
+
+        if chapter_ids:
+            conditions.append(
+                func.json_overlaps(
+                    RetrievalSegment.chapter_ids,
+                    json.dumps(chapter_ids),
+                )
+                == 1
+            )
+
+        structured_filters = filters or {}
+        for key in (
+            "exam_year",
+            "exam_scope",
+            "difficulty",
+            "question_type",
+            "answer_source",
+        ):
+            value = structured_filters.get(key)
+            if value is None or value == "":
+                continue
+            conditions.append(
+                func.json_unquote(
+                    func.json_extract(
+                        RetrievalSegment.metadata_json,
+                        f"$.{key}",
+                    )
+                )
+                == str(value)
+            )
+
+        tags = structured_filters.get("tags")
+        if tags:
+            conditions.append(
+                func.json_overlaps(
+                    func.json_extract(
+                        RetrievalSegment.metadata_json,
+                        "$.tags",
+                    ),
+                    json.dumps(list(tags)),
+                )
+                == 1
+            )
+
+        return conditions
 
     @staticmethod
     def _merge_hits(

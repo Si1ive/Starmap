@@ -167,6 +167,10 @@ API 延迟使用可合并的固定桶直方图统计 P50/P95/P99。迁移前的�
 | POST | `/api/v1/admin/search/dual-path` | 向量与章节双路召回 |
 | POST | `/api/v1/admin/search/chapter-expansion` | 查询章节结构与审核关系扩展 |
 
+`/admin/search`、`/admin/search/with-outline` 的结构化过滤在 dense、sparse 和
+hybrid 模式下保持一致，支持 `subject_id`、`chapter_ids`、`exam_year`、
+`exam_scope`、`difficulty`、`question_type`、`answer_source` 和 `tags`。
+
 ### 系统设置
 
 | 方法 | 路径 | 说明 |
