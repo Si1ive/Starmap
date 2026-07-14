@@ -142,3 +142,29 @@ async def test_chapter_link_service_uses_document_mapping_before_vector_search()
         [mapping],
         "document_mapping",
     )
+
+
+@pytest.mark.asyncio
+async def test_chapter_link_service_delegates_question_backfill():
+    service = ChapterLinkService(SimpleNamespace())
+    expected = {"scanned": 1, "updated": 1}
+    service.question_backfill.backfill = AsyncMock(return_value=expected)
+
+    result = await service.backfill_question_chapters(
+        review_status="rejected",
+        status="inactive",
+        subject_id="subject-1",
+        limit=20,
+        force=True,
+        dry_run=True,
+    )
+
+    assert result == expected
+    service.question_backfill.backfill.assert_awaited_once_with(
+        review_status="rejected",
+        status="inactive",
+        subject_id="subject-1",
+        limit=20,
+        force=True,
+        dry_run=True,
+    )

@@ -22,10 +22,12 @@ from app.modules.catalog.chapter_matcher import (
     VECTOR_MATCH_THRESHOLD,
     ChapterMatcher,
 )
-from app.modules.catalog.chapter_compat import resolve_legacy_chapter_id
 from app.modules.catalog.chapter_link_store import ChapterLinkStore
 from app.modules.catalog.document_chapter_resolver import (
     DocumentSectionChapterResolver,
+)
+from app.modules.catalog.question_chapter_backfill import (
+    QuestionChapterBackfillService,
 )
 from app.models.mysql_models import (
     CanonicalChapter,
@@ -44,6 +46,10 @@ class ChapterLinkService:
         self.matcher = ChapterMatcher(db)
         self.link_store = ChapterLinkStore(db)
         self.document_resolver = DocumentSectionChapterResolver(db)
+        self.question_backfill = QuestionChapterBackfillService(
+            db,
+            self.resolve_chapter_for_entity,
+        )
 
     # ========== 公共接口 ==========
 
@@ -139,109 +145,15 @@ class ChapterLinkService:
         force: bool = False,
         dry_run: bool = False,
     ) -> Dict[str, Any]:
-        """
-        批量回填题目的章节归属。
-
-        用于新章节解析策略上线后修正历史题目：
-        - 默认只处理待审核题目
-        - force=False 时跳过已有 primary_chapter_id 的题目
-        - force=True 时重新解析并覆盖 subject_id / primary_chapter_id / chapter_id
-        """
-        query = select(Question).where(Question.status != "deleted")
-        if review_status:
-            query = query.where(Question.review_status == review_status)
-        if status:
-            query = query.where(Question.status == status)
-        if subject_id:
-            query = query.where(Question.subject_id == subject_id)
-        query = query.order_by(Question.created_at.desc(), Question.id.desc()).limit(limit)
-
-        questions = (await self.db.execute(query)).scalars().all()
-        result: Dict[str, Any] = {
-            "scanned": len(questions),
-            "updated": 0,
-            "unchanged": 0,
-            "skipped_existing": 0,
-            "missed": 0,
-            "failed": 0,
-            "dry_run": dry_run,
-            "items": [],
-        }
-
-        for q in questions:
-            if q.primary_chapter_id and not force:
-                result["skipped_existing"] += 1
-                continue
-
-            try:
-                resolved = await self.resolve_chapter_for_entity(
-                    title=(q.content or "")[:200],
-                    content=q.content or "",
-                    subject_id=q.subject_id,
-                    topic_terms=q.topic_terms or [],
-                    entity_type="question",
-                    options=q.options or [],
-                )
-            except Exception as e:
-                result["failed"] += 1
-                result["items"].append({
-                    "id": q.id,
-                    "status": "failed",
-                    "error": str(e)[:300],
-                })
-                continue
-
-            if not resolved:
-                result["missed"] += 1
-                result["items"].append({
-                    "id": q.id,
-                    "status": "missed",
-                    "old_primary_chapter_id": q.primary_chapter_id,
-                })
-                continue
-
-            new_primary_chapter_id = resolved["chapter_id"]
-            new_subject_id = resolved.get("subject_id") or q.subject_id
-            legacy_chapter_id = await resolve_legacy_chapter_id(
-                self.db,
-                canonical_chapter_id=new_primary_chapter_id,
-                subject_id=new_subject_id,
-            )
-
-            changed = (
-                q.primary_chapter_id != new_primary_chapter_id
-                or q.subject_id != new_subject_id
-                or (legacy_chapter_id and q.chapter_id != legacy_chapter_id)
-            )
-
-            item = {
-                "id": q.id,
-                "status": "updated" if changed else "unchanged",
-                "old_subject_id": q.subject_id,
-                "new_subject_id": new_subject_id,
-                "old_primary_chapter_id": q.primary_chapter_id,
-                "new_primary_chapter_id": new_primary_chapter_id,
-                "old_chapter_id": q.chapter_id,
-                "new_chapter_id": legacy_chapter_id,
-                "source": resolved.get("source"),
-                "confidence": resolved.get("confidence"),
-            }
-            result["items"].append(item)
-
-            if changed:
-                result["updated"] += 1
-                if not dry_run:
-                    q.subject_id = new_subject_id
-                    q.primary_chapter_id = new_primary_chapter_id
-                    if legacy_chapter_id:
-                        q.chapter_id = legacy_chapter_id
-            else:
-                result["unchanged"] += 1
-
-        if not dry_run:
-            await self.db.commit()
-
-        return result
+        """Compatibility delegate for historical question chapter backfill."""
+        return await self.question_backfill.backfill(
+            review_status=review_status,
+            status=status,
+            subject_id=subject_id,
+            limit=limit,
+            force=force,
+            dry_run=dry_run,
+        )
 
     # ========== 核心匹配逻辑 ==========
 
