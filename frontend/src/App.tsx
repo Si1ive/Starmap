@@ -1,48 +1,48 @@
 import { lazy, Suspense } from 'react'
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { Layout, Spin } from 'antd'
-import AppHeader from './components/Layout/Header'
-import AppFooter from './components/Layout/Footer'
-import ErrorBoundary from './components/ErrorBoundary'
+import { Navigate, Route, Routes } from 'react-router-dom'
+import AppShell from './components/AppShell'
 
-const { Content } = Layout
-const queryClient = new QueryClient()
-const HomePage = lazy(() => import('./pages/Home'))
-const KnowledgePage = lazy(() => import('./pages/Knowledge'))
-const KnowledgeDetailPage = lazy(() => import('./pages/Knowledge/Detail'))
-const PracticePage = lazy(() => import('./pages/Practice'))
-const ChatPage = lazy(() => import('./pages/Chat'))
-
-const PageFallback = () => (
-  <div style={{ display: 'grid', minHeight: 320, placeItems: 'center' }}>
-    <Spin size="large" />
-  </div>
-)
+const AgentPage = lazy(() => import('./pages/AgentPage'))
+const MapPage = lazy(() => import('./pages/MapPage'))
+const MistakesPage = lazy(() => import('./pages/MistakesPage'))
+const OnboardingPage = lazy(() => import('./pages/OnboardingPage'))
+const PracticePage = lazy(() => import('./pages/PracticePage'))
+const SourcesPage = lazy(() => import('./pages/SourcesPage'))
+const StateGalleryPage = lazy(() => import('./pages/StateGalleryPage'))
+const TodayPage = lazy(() => import('./pages/TodayPage'))
 
 function App() {
   return (
-    <ErrorBoundary>
-      <QueryClientProvider client={queryClient}>
-        <Router>
-          <Layout style={{ minHeight: '100vh' }}>
-            <AppHeader />
-            <Content style={{ padding: '24px', background: '#f0f2f5' }}>
-              <Suspense fallback={<PageFallback />}>
-                <Routes>
-                  <Route path="/" element={<HomePage />} />
-                  <Route path="/knowledge" element={<KnowledgePage />} />
-                  <Route path="/knowledge/:id" element={<KnowledgeDetailPage />} />
-                  <Route path="/practice" element={<PracticePage />} />
-                  <Route path="/chat" element={<ChatPage />} />
-                </Routes>
-              </Suspense>
-            </Content>
-            <AppFooter />
-          </Layout>
-        </Router>
-      </QueryClientProvider>
-    </ErrorBoundary>
+    <Suspense
+      fallback={
+        <div className="app-loading" role="status">
+          <span />
+          <strong>正在打开学习工作台</strong>
+        </div>
+      }
+    >
+      <Routes>
+        <Route path="/onboarding" element={<OnboardingPage />} />
+        <Route element={<AppShell />}>
+          <Route path="/" element={<Navigate replace to="/today" />} />
+          <Route path="/today" element={<TodayPage />} />
+          <Route path="/agent" element={<AgentPage />} />
+          <Route path="/agent/:threadId" element={<AgentPage />} />
+          <Route path="/map" element={<MapPage />} />
+          <Route path="/practice" element={<Navigate replace to="/practice/queue-check?question=1" />} />
+          <Route path="/practice/:sessionId" element={<PracticePage />} />
+          <Route path="/practice/:sessionId/:view" element={<PracticePage />} />
+          <Route path="/mistakes" element={<MistakesPage />} />
+          <Route path="/sources" element={<SourcesPage />} />
+          <Route path="/states" element={<StateGalleryPage />} />
+
+          <Route path="/knowledge" element={<Navigate replace to="/map" />} />
+          <Route path="/knowledge/:id" element={<Navigate replace to="/map?point=queue" />} />
+          <Route path="/chat" element={<Navigate replace to="/agent" />} />
+          <Route path="*" element={<Navigate replace to="/today" />} />
+        </Route>
+      </Routes>
+    </Suspense>
   )
 }
 
