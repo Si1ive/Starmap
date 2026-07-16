@@ -7,6 +7,7 @@
 - [架构设计](./architecture.md) - 系统架构
 - [后端模块化单体演进方案](./backend-modular-monolith.md) - 后端边界、依赖规则与分阶段重构路线
 - [用户端 Agent 技术架构](./user-agent-client-architecture.md) - Web-first 客户端、Agent Runtime、能力适配与安全边界
+- [用户认证技术方案与数据模型](./authentication-architecture-options.md) - 认证方案对比、关系表、API、安全基线与迁移路线
 - [多模态入库与检索设计](./multimodal-ingestion-retrieval-design.md) - 语料入库与检索方案
 - [MinerU 解析运行时设计](./pdf-parser-runtime-design.md) - 解析契约、模块边界和部署目标
 - [MinerU 解析服务部署](./pdf-parser-deployment.md) - Podman / 远程服务部署说明

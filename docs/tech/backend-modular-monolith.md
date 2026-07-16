@@ -296,6 +296,12 @@ SQLAlchemy `AsyncSession` 已承担事务工作单元职责。简单模块可以
 - 登录改为读取 `admin_users`，所有后台接口使用签名 JWT 并在请求时重新校验账号状态
 - 当前 PBKDF2 密码格式兼容旧 bcrypt，旧哈希登录成功后自动升级
 - 非开发环境启动时强制校验 `ADMIN_JWT_SECRET`，避免默认密钥进入生产
+- 用户认证模块继续归属同一 FastAPI 模块化单体，但 `users` 与 `admin_users`、用户与
+  管理员会话、Cookie、登录入口和授权依赖保持分离；普通用户登录不能因角色字段直接
+  升级为管理员会话
+- 初期保持单后端部署；公开流量或隔离要求提高后，通过
+  `APP_PROFILE=public|admin|all` 将同一代码镜像部署为 public/admin 两个进程池，
+  在此之前先将调度器、爬虫监听和后台任务从 API 生命周期中独立出来
 - 系统运行配置、MinerU 部署配置、爬虫配置校验和配置审计已迁移到
   `app/modules/operations/settings_service.py`，各业务模块直接依赖运营配置接口，
   `app/services/system_settings_service.py` 已删除；爬虫默认值、运行参数校验、代理地址

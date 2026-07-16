@@ -6,6 +6,8 @@
 
 ## 文档索引
 
+- [用户认证与账户系统 PRD](./authentication-and-user-account-prd.md)
+  - 注册、登录、GitHub OAuth、邮箱验证、会话、用户信息、数据归属和安全验收
 - [408 学习 Agent 文字原型](./408-agent-product-prototype.md)
   - 产品定位、信息架构、页面结构、核心工作流、Agent 模式与可信交互
 - [408 学习 Agent 交互规格](./408-agent-interaction-spec.md)
@@ -18,6 +20,8 @@
   - 视觉方向、组件语言、D1-D5 可点击路径、真实样例映射和高保真交付门禁
 - [用户端 Agent 技术架构](../tech/user-agent-client-architecture.md)
   - Web/桌面选型、Agent Runtime、客户端能力适配、数据模型和安全边界
+- [用户认证技术方案与数据模型](../tech/authentication-architecture-options.md)
+  - 主流身份方案对比、推荐架构、关系表设计、API 契约和迁移路线
 - [用户端实施路线](../roadmap/user-agent-delivery-plan.md)
   - 纵向切片、阶段范围、验收标准、桌面能力启用条件
 
