@@ -25,6 +25,7 @@ npm run build
 
 | 页面 | 地址 |
 | --- | --- |
+| 登录与产品介绍 | `/login` |
 | 首次设置 | `/onboarding` |
 | 今日工作台 | `/today` |
 | Agent 新线程 | `/agent` |

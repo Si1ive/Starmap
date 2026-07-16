@@ -1,8 +1,10 @@
-import { lazy, Suspense } from 'react'
+import { lazy, ReactNode, Suspense } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
+import { hasAuthenticatedSession } from './auth'
 import AppShell from './components/AppShell'
 
 const AgentPage = lazy(() => import('./pages/AgentPage'))
+const LoginPage = lazy(() => import('./pages/LoginPage'))
 const MapPage = lazy(() => import('./pages/MapPage'))
 const MistakesPage = lazy(() => import('./pages/MistakesPage'))
 const OnboardingPage = lazy(() => import('./pages/OnboardingPage'))
@@ -10,6 +12,10 @@ const PracticePage = lazy(() => import('./pages/PracticePage'))
 const SourcesPage = lazy(() => import('./pages/SourcesPage'))
 const StateGalleryPage = lazy(() => import('./pages/StateGalleryPage'))
 const TodayPage = lazy(() => import('./pages/TodayPage'))
+
+function RequireAuth({ children }: { children: ReactNode }) {
+  return hasAuthenticatedSession() ? children : <Navigate replace to="/login" />
+}
 
 function App() {
   return (
@@ -22,8 +28,22 @@ function App() {
       }
     >
       <Routes>
-        <Route path="/onboarding" element={<OnboardingPage />} />
-        <Route element={<AppShell />}>
+        <Route path="/login" element={<LoginPage />} />
+        <Route
+          path="/onboarding"
+          element={
+            <RequireAuth>
+              <OnboardingPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          element={
+            <RequireAuth>
+              <AppShell />
+            </RequireAuth>
+          }
+        >
           <Route path="/" element={<Navigate replace to="/today" />} />
           <Route path="/today" element={<TodayPage />} />
           <Route path="/agent" element={<AgentPage />} />
