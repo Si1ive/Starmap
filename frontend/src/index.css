@@ -711,7 +711,11 @@ summary:focus-visible {
 }
 
 .sidebar__account strong {
+  display: block;
   font-size: 12px;
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .sidebar__account small {
@@ -730,6 +734,11 @@ summary:focus-visible {
   width: 6px;
 }
 
+.sidebar__logout {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
 .app-frame--compact .brand-mark strong,
 .app-frame--compact .new-thread span,
 .app-frame--compact .new-thread kbd,
@@ -738,6 +747,10 @@ summary:focus-visible {
 .app-frame--compact .sidebar-label,
 .app-frame--compact .sidebar__account > div:nth-child(2),
 .app-frame--compact .sidebar__account > svg {
+  display: none;
+}
+
+.app-frame--compact .sidebar__account .avatar {
   display: none;
 }
 
@@ -7186,6 +7199,18 @@ summary:focus-visible {
   background: #f8ebe6;
   border-left: 2px solid var(--login-red);
   color: #8f3d2b;
+  display: flex;
+  font-size: 11px;
+  gap: 7px;
+  line-height: 1.5;
+  padding: 9px 11px;
+}
+
+.auth-form__notice {
+  align-items: center;
+  background: #eaf4ef;
+  border-left: 2px solid var(--login-jade);
+  color: #246255;
   display: flex;
   font-size: 11px;
   gap: 7px;

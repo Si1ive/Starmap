@@ -26,8 +26,13 @@ import {
   UserRound,
   X,
 } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
-import { startAuthenticatedSession } from '../auth'
+import { useLocation, useNavigate } from 'react-router-dom'
+import {
+  AuthApiError,
+  postLoginPath,
+  registerWithPassword,
+} from '../auth'
+import useAuth from '../useAuth'
 
 type AuthMode = 'login' | 'register'
 type StageId = 'question' | 'evidence' | 'practice' | 'review'
@@ -212,6 +217,8 @@ function BrandContent() {
 }
 
 export default function LoginPage() {
+  const { login } = useAuth()
+  const location = useLocation()
   const navigate = useNavigate()
   const heroRef = useRef<HTMLElement>(null)
   const arrivalTimerRef = useRef<number | null>(null)
@@ -228,6 +235,7 @@ export default function LoginPage() {
   const [passwordVisible, setPasswordVisible] = useState(false)
   const [rememberLogin, setRememberLogin] = useState(true)
   const [authError, setAuthError] = useState('')
+  const [authNotice, setAuthNotice] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
   const currentStage =
@@ -290,6 +298,7 @@ export default function LoginPage() {
     setAuthMode(mode)
     setPasswordVisible(false)
     setAuthError('')
+    setAuthNotice('')
     setSubmitting(false)
     setAuthOpen(true)
   }
@@ -299,6 +308,7 @@ export default function LoginPage() {
     setAuthMode(mode)
     setPasswordVisible(false)
     setAuthError('')
+    setAuthNotice('')
     setSubmitting(false)
   }
 
@@ -332,25 +342,52 @@ export default function LoginPage() {
     heroRef.current?.style.setProperty('--pointer-y', '0px')
   }
 
-  const handleAuth = (event: FormEvent<HTMLFormElement>) => {
+  const handleAuth = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const formData = new FormData(event.currentTarget)
+    const email = String(formData.get('email') ?? '')
+    const password = String(formData.get('password') ?? '')
+    const passwordConfirmation = String(formData.get('confirmPassword') ?? '')
 
     if (
       authMode === 'register' &&
-      formData.get('password') !== formData.get('confirmPassword')
+      password !== passwordConfirmation
     ) {
       setAuthError('两次输入的密码不一致，请重新确认。')
       return
     }
 
     setAuthError('')
+    setAuthNotice('')
     setSubmitting(true)
 
-    window.setTimeout(() => {
-      startAuthenticatedSession(authMode === 'register' || rememberLogin)
-      navigate(authMode === 'register' ? '/onboarding' : '/today')
-    }, 480)
+    try {
+      if (authMode === 'login') {
+        await login({
+          email,
+          password,
+          remember_me: rememberLogin,
+        })
+        navigate(postLoginPath(location.state), { replace: true })
+        return
+      }
+
+      await registerWithPassword({
+        display_name: String(formData.get('nickname') ?? ''),
+        email,
+        password,
+        password_confirmation: passwordConfirmation,
+        accept_terms: true,
+        accept_privacy: true,
+      })
+      setAuthMode('login')
+      setPasswordVisible(false)
+      setAuthNotice('如果该邮箱可以继续注册，验证邮件已发送。完成邮箱验证后即可登录。')
+    } catch (error) {
+      setAuthError(authErrorMessage(error))
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   const chooseVariant = (index: number) => {
@@ -994,7 +1031,7 @@ export default function LoginPage() {
                     <input
                       autoComplete="nickname"
                       autoFocus
-                      maxLength={24}
+                      maxLength={64}
                       name="nickname"
                       placeholder="用于学习工作台"
                       required
@@ -1010,6 +1047,7 @@ export default function LoginPage() {
                   <input
                     autoComplete="email"
                     autoFocus={authMode === 'login'}
+                    maxLength={320}
                     name="email"
                     placeholder="name@example.com"
                     required
@@ -1023,9 +1061,10 @@ export default function LoginPage() {
                   <Lock size={18} />
                   <input
                     autoComplete={authMode === 'login' ? 'current-password' : 'new-password'}
-                    minLength={authMode === 'login' ? 6 : 8}
+                    maxLength={128}
+                    minLength={authMode === 'login' ? 1 : 15}
                     name="password"
-                    placeholder={authMode === 'login' ? '输入密码' : '至少 8 位字符'}
+                    placeholder={authMode === 'login' ? '输入密码' : '至少 15 位字符'}
                     required
                     type={passwordVisible ? 'text' : 'password'}
                   />
@@ -1046,7 +1085,8 @@ export default function LoginPage() {
                     <Lock size={18} />
                     <input
                       autoComplete="new-password"
-                      minLength={8}
+                      maxLength={128}
+                      minLength={15}
                       name="confirmPassword"
                       placeholder="再次输入密码"
                       required
@@ -1081,6 +1121,13 @@ export default function LoginPage() {
                 </p>
               ) : null}
 
+              {authNotice ? (
+                <p className="auth-form__notice" role="status">
+                  <Check size={15} />
+                  {authNotice}
+                </p>
+              ) : null}
+
               <button className="auth-form__submit" disabled={submitting} type="submit">
                 {submitting ? (
                   <>
@@ -1105,4 +1152,17 @@ export default function LoginPage() {
       ) : null}
     </main>
   )
+}
+
+function authErrorMessage(error: unknown): string {
+  if (!(error instanceof AuthApiError)) {
+    return '认证请求失败，请稍后重试。'
+  }
+  if (error.code === 'AUTH_RATE_LIMITED' && error.retryAfterSeconds) {
+    return `请求过于频繁，请在 ${error.retryAfterSeconds} 秒后重试。`
+  }
+  if (error.code === 'VALIDATION_ERROR') {
+    return '请检查填写内容后重试。'
+  }
+  return error.message
 }

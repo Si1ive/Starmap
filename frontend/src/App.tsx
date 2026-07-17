@@ -1,7 +1,13 @@
 import { lazy, ReactNode, Suspense } from 'react'
-import { Navigate, Route, Routes } from 'react-router-dom'
-import { hasAuthenticatedSession } from './auth'
+import {
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+} from 'react-router-dom'
+import { postLoginPath } from './auth'
 import AppShell from './components/AppShell'
+import useAuth from './useAuth'
 
 const AgentPage = lazy(() => import('./pages/AgentPage'))
 const LoginPage = lazy(() => import('./pages/LoginPage'))
@@ -14,7 +20,49 @@ const StateGalleryPage = lazy(() => import('./pages/StateGalleryPage'))
 const TodayPage = lazy(() => import('./pages/TodayPage'))
 
 function RequireAuth({ children }: { children: ReactNode }) {
-  return hasAuthenticatedSession() ? children : <Navigate replace to="/login" />
+  const { restore, status } = useAuth()
+  const location = useLocation()
+
+  if (status === 'loading') {
+    return <AuthenticationLoading />
+  }
+  if (status === 'unavailable') {
+    return (
+      <div className="app-loading" role="alert">
+        <strong>暂时无法确认登录状态</strong>
+        <p>认证服务没有响应，请稍后重试。</p>
+        <button className="button button--secondary" onClick={() => void restore()} type="button">
+          重新连接
+        </button>
+      </div>
+    )
+  }
+  if (status === 'anonymous') {
+    return <Navigate replace state={{ from: location }} to="/login" />
+  }
+  return children
+}
+
+function LoginRoute() {
+  const { status } = useAuth()
+  const location = useLocation()
+
+  if (status === 'loading') {
+    return <AuthenticationLoading />
+  }
+  if (status === 'authenticated') {
+    return <Navigate replace to={postLoginPath(location.state)} />
+  }
+  return <LoginPage />
+}
+
+function AuthenticationLoading() {
+  return (
+    <div className="app-loading" role="status">
+      <span />
+      <strong>正在确认登录状态</strong>
+    </div>
+  )
 }
 
 function App() {
@@ -28,7 +76,7 @@ function App() {
       }
     >
       <Routes>
-        <Route path="/login" element={<LoginPage />} />
+        <Route path="/login" element={<LoginRoute />} />
         <Route
           path="/onboarding"
           element={

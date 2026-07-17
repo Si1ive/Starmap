@@ -5,13 +5,14 @@ import {
   BookOpenCheck,
   BotMessageSquare,
   CalendarCheck2,
-  ChevronDown,
   CircleUserRound,
   Clock3,
   Command,
   Ellipsis,
   Library,
   ListChecks,
+  LoaderCircle,
+  LogOut,
   Map,
   Menu,
   MessageSquarePlus,
@@ -22,6 +23,7 @@ import {
   X,
 } from 'lucide-react'
 import { IconButton, StatusMark } from './Primitives'
+import useAuth from '../useAuth'
 
 const navItems = [
   { to: '/today', label: '今日', icon: CalendarCheck2 },
@@ -35,17 +37,35 @@ const navItems = [
 const mobileNav = navItems.slice(0, 5).filter((item) => item.label !== '学习地图')
 
 export default function AppShell() {
+  const { logout, user } = useAuth()
   const location = useLocation()
   const navigate = useNavigate()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [taskCenterOpen, setTaskCenterOpen] = useState(false)
   const [sidebarCompact, setSidebarCompact] = useState(false)
+  const [loggingOut, setLoggingOut] = useState(false)
+  const [logoutError, setLogoutError] = useState('')
   const isPractice = location.pathname.startsWith('/practice/')
+  const displayName = user?.display_name || user?.email || '学习用户'
+  const avatarLabel = Array.from(displayName.trim())[0] || '学'
 
   const currentLabel = useMemo(() => {
     const item = navItems.find((nav) => location.pathname.startsWith(nav.to.split('?')[0]))
     return item?.label ?? '408 Agent'
   }, [location.pathname])
+
+  const handleLogout = async () => {
+    setLoggingOut(true)
+    setLogoutError('')
+    try {
+      await logout()
+      navigate('/login', { replace: true })
+    } catch {
+      setLogoutError('退出失败，请重试')
+    } finally {
+      setLoggingOut(false)
+    }
+  }
 
   return (
     <div className={`app-frame ${sidebarCompact ? 'app-frame--compact' : ''} ${isPractice ? 'app-frame--practice' : ''}`}>
@@ -112,12 +132,23 @@ export default function AppShell() {
         </div>
 
         <div className="sidebar__account">
-          <div className="avatar">张</div>
+          <div className="avatar">{avatarLabel}</div>
           <div>
-            <strong>张同学</strong>
-            <small><span className="sync-dot" /> 已同步</small>
+            <strong title={displayName}>{displayName}</strong>
+            {logoutError ? (
+              <small className="text-error">{logoutError}</small>
+            ) : (
+              <small><span className="sync-dot" /> 已同步</small>
+            )}
           </div>
-          <ChevronDown size={16} />
+          <IconButton
+            className="sidebar__logout"
+            disabled={loggingOut}
+            label="退出登录"
+            onClick={() => void handleLogout()}
+          >
+            {loggingOut ? <LoaderCircle className="spin" size={17} /> : <LogOut size={17} />}
+          </IconButton>
         </div>
       </aside>
 
