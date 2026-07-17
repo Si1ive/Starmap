@@ -45,6 +45,7 @@ from app.modules.crawler.source_router import router as crawler_source_router
 from app.modules.crawler.stats_router import router as crawler_stats_router
 from app.modules.crawler.task_router import router as crawler_task_router
 from app.modules.dashboard.router import router as dashboard_router
+from app.modules.identity.security import validate_user_auth_security_config
 from app.modules.monitoring.router import router as monitoring_router
 from app.modules.operations import router as operations_router
 from app.modules.operations.settings_router import router as settings_router
@@ -73,6 +74,7 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     configure_logging()
     validate_admin_security_config()
+    validate_user_auth_security_config()
     logger.info("408考研学习平台 API 启动中...")
 
     try:

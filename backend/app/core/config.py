@@ -21,6 +21,65 @@ class Settings(BaseSettings):
     ADMIN_JWT_ISSUER: str = os.getenv("ADMIN_JWT_ISSUER", "starmap-admin")
     ADMIN_JWT_AUDIENCE: str = os.getenv("ADMIN_JWT_AUDIENCE", "starmap-admin")
 
+    # Learning-user authentication
+    AUTH_ACTION_TOKEN_SECRET: str = os.getenv(
+        "AUTH_ACTION_TOKEN_SECRET",
+        "development-only-action-token-secret-change-me",
+    )
+    AUTH_CSRF_SECRET: str = os.getenv(
+        "AUTH_CSRF_SECRET",
+        "development-only-csrf-secret-change-me",
+    )
+    AUTH_IDENTIFIER_HMAC_SECRET: str = os.getenv(
+        "AUTH_IDENTIFIER_HMAC_SECRET",
+        "development-only-identifier-secret-change-me",
+    )
+    AUTH_ACTION_TOKEN_KEY_VERSION: int = int(
+        os.getenv("AUTH_ACTION_TOKEN_KEY_VERSION", "1")
+    )
+    AUTH_SESSION_COOKIE_NAME: str = os.getenv(
+        "AUTH_SESSION_COOKIE_NAME",
+        "__Host-starmap_session" if ENV == "production" else "starmap_session",
+    )
+    AUTH_REGISTRATION_COOKIE_NAME: str = os.getenv(
+        "AUTH_REGISTRATION_COOKIE_NAME",
+        (
+            "__Host-starmap_registration"
+            if ENV == "production"
+            else "starmap_registration"
+        ),
+    )
+    AUTH_COOKIE_SECURE: bool = (
+        os.getenv(
+            "AUTH_COOKIE_SECURE",
+            "true" if ENV == "production" else "false",
+        ).lower()
+        == "true"
+    )
+    AUTH_SESSION_IDLE_HOURS: int = int(
+        os.getenv("AUTH_SESSION_IDLE_HOURS", "12")
+    )
+    AUTH_SESSION_ABSOLUTE_DAYS: int = int(
+        os.getenv("AUTH_SESSION_ABSOLUTE_DAYS", "7")
+    )
+    AUTH_REMEMBER_IDLE_DAYS: int = int(
+        os.getenv("AUTH_REMEMBER_IDLE_DAYS", "7")
+    )
+    AUTH_REMEMBER_ABSOLUTE_DAYS: int = int(
+        os.getenv("AUTH_REMEMBER_ABSOLUTE_DAYS", "30")
+    )
+    AUTH_TERMS_VERSION: str = os.getenv("AUTH_TERMS_VERSION", "2026-07-16")
+    AUTH_PRIVACY_VERSION: str = os.getenv(
+        "AUTH_PRIVACY_VERSION",
+        "2026-07-16",
+    )
+    AUTH_FRONTEND_BASE_URL: str = os.getenv(
+        "AUTH_FRONTEND_BASE_URL",
+        "http://localhost:5173",
+    ).rstrip("/")
+    AUTH_EMAIL_BACKEND: str = os.getenv("AUTH_EMAIL_BACKEND", "memory")
+    AUTH_ANTI_BOT_MODE: str = os.getenv("AUTH_ANTI_BOT_MODE", "disabled")
+
     # CORS
     ALLOWED_ORIGINS: List[str] = [
         "http://localhost:5173",
