@@ -1,9 +1,10 @@
-import { lazy, ReactNode, Suspense } from 'react'
+import { lazy, ReactNode, Suspense, useEffect } from 'react'
 import {
   Navigate,
   Route,
   Routes,
   useLocation,
+  useNavigate,
 } from 'react-router-dom'
 import { postLoginPath } from './auth'
 import AppShell from './components/AppShell'
@@ -69,6 +70,30 @@ function AuthenticationLoading() {
   )
 }
 
+function OAuthSuccessCleanup() {
+  const location = useLocation()
+  const navigate = useNavigate()
+
+  useEffect(() => {
+    const search = new URLSearchParams(location.search)
+    if (search.get('oauth') !== 'success') return
+
+    search.delete('oauth')
+    search.delete('new_user')
+    const nextSearch = search.toString()
+    navigate(
+      {
+        pathname: location.pathname,
+        search: nextSearch ? `?${nextSearch}` : '',
+        hash: location.hash,
+      },
+      { replace: true },
+    )
+  }, [location.hash, location.pathname, location.search, navigate])
+
+  return null
+}
+
 function App() {
   return (
     <Suspense
@@ -79,6 +104,7 @@ function App() {
         </div>
       }
     >
+      <OAuthSuccessCleanup />
       <Routes>
         <Route path="/login" element={<LoginRoute />} />
         <Route path="/verify-email" element={<EmailVerificationPage />} />

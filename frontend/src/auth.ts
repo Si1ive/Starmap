@@ -53,6 +53,19 @@ export interface RegistrationAccepted {
   resend_after_seconds: number
 }
 
+export interface GitHubOAuthStartDetails {
+  source: 'login' | 'register'
+  return_path: string
+  remember_me: boolean
+  accept_terms: boolean
+  accept_privacy: boolean
+}
+
+export interface GitHubOAuthAuthorization {
+  authorization_url: string
+  expires_at: string
+}
+
 export interface VerifiedEmailUser {
   id: string
   email: string
@@ -186,6 +199,15 @@ export function registerWithPassword(
   details: RegistrationDetails,
 ): Promise<RegistrationAccepted> {
   return authRequest<RegistrationAccepted>('/register', {
+    method: 'POST',
+    body: JSON.stringify(details),
+  })
+}
+
+export function startGitHubOAuth(
+  details: GitHubOAuthStartDetails,
+): Promise<GitHubOAuthAuthorization> {
+  return authRequest<GitHubOAuthAuthorization>('/github/start', {
     method: 'POST',
     body: JSON.stringify(details),
   })

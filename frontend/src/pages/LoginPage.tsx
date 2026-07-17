@@ -18,7 +18,9 @@ import {
   Eye,
   EyeOff,
   FileCheck2,
+  GitBranch,
   Lock,
+  LoaderCircle,
   Mail,
   MessageCircleMore,
   Search,
@@ -32,6 +34,7 @@ import {
   AuthApiError,
   postLoginPath,
   registerWithPassword,
+  startGitHubOAuth,
 } from '../auth'
 import useAuth from '../useAuth'
 
@@ -221,10 +224,16 @@ export default function LoginPage() {
   const { login } = useAuth()
   const location = useLocation()
   const navigate = useNavigate()
+  const oauthFailure = useMemo(
+    () => githubOAuthFailure(location.search),
+    [location.search],
+  )
   const requestedAuthMode = useMemo(() => {
     const mode = new URLSearchParams(location.search).get('auth')
-    return mode === 'register' ? 'register' : mode === 'login' ? 'login' : null
-  }, [location.search])
+    if (mode === 'register' || mode === 'login') return mode
+    if (oauthFailure?.code === 'GITHUB_CONSENT_REQUIRED') return 'register'
+    return oauthFailure ? 'login' : null
+  }, [location.search, oauthFailure])
   const registrationEmail =
     typeof (location.state as { registrationEmail?: unknown } | null)
       ?.registrationEmail === 'string'
@@ -240,12 +249,17 @@ export default function LoginPage() {
   const [activeVariant, setActiveVariant] = useState(0)
   const [selectedAnswer, setSelectedAnswer] = useState<number | null>(null)
   const [activeReviewWindow, setActiveReviewWindow] = useState(1)
-  const [authOpen, setAuthOpen] = useState(requestedAuthMode !== null)
+  const [authOpen, setAuthOpen] = useState(
+    requestedAuthMode !== null || oauthFailure !== null,
+  )
   const [authMode, setAuthMode] = useState<AuthMode>(requestedAuthMode ?? 'login')
   const [passwordVisible, setPasswordVisible] = useState(false)
   const [rememberLogin, setRememberLogin] = useState(true)
-  const [authError, setAuthError] = useState('')
+  const [acceptedLegal, setAcceptedLegal] = useState(false)
+  const [authError, setAuthError] = useState(oauthFailure?.message ?? '')
+  const [oauthReturnPath] = useState(oauthFailure?.returnPath ?? null)
   const [submitting, setSubmitting] = useState(false)
+  const [githubSubmitting, setGithubSubmitting] = useState(false)
 
   const currentStage =
     learningStages.find((stage) => stage.id === activeStage) ?? learningStages[0]
@@ -306,8 +320,10 @@ export default function LoginPage() {
   const openAuth = (mode: AuthMode) => {
     setAuthMode(mode)
     setPasswordVisible(false)
+    setAcceptedLegal(false)
     setAuthError('')
     setSubmitting(false)
+    setGithubSubmitting(false)
     setAuthOpen(true)
   }
 
@@ -315,8 +331,10 @@ export default function LoginPage() {
     if (mode === authMode) return
     setAuthMode(mode)
     setPasswordVisible(false)
+    setAcceptedLegal(false)
     setAuthError('')
     setSubmitting(false)
+    setGithubSubmitting(false)
   }
 
   useEffect(() => {
@@ -341,6 +359,20 @@ export default function LoginPage() {
     setAuthOpen(true)
   }, [requestedAuthMode])
 
+  useEffect(() => {
+    if (!oauthFailure) return
+
+    const search = new URLSearchParams(location.search)
+    search.delete('oauth_error')
+    search.delete('return_path')
+    const nextSearch = search.toString()
+    window.history.replaceState(
+      window.history.state,
+      '',
+      `${location.pathname}${nextSearch ? `?${nextSearch}` : ''}${location.hash}`,
+    )
+  }, [location.hash, location.pathname, location.search, oauthFailure])
+
   const handlePointerMove = (event: PointerEvent<HTMLElement>) => {
     const rect = event.currentTarget.getBoundingClientRect()
     const x = (event.clientX - rect.left) / rect.width
@@ -362,6 +394,11 @@ export default function LoginPage() {
     const password = String(formData.get('password') ?? '')
     const passwordConfirmation = String(formData.get('confirmPassword') ?? '')
 
+    if (authMode === 'register' && !acceptedLegal) {
+      setAuthError('创建账户前，请先同意服务条款与隐私说明。')
+      return
+    }
+
     if (
       authMode === 'register' &&
       password !== passwordConfirmation
@@ -380,7 +417,9 @@ export default function LoginPage() {
           password,
           remember_me: rememberLogin,
         })
-        navigate(postLoginPath(location.state), { replace: true })
+        navigate(oauthReturnPath ?? postLoginPath(location.state), {
+          replace: true,
+        })
         return
       }
 
@@ -403,6 +442,29 @@ export default function LoginPage() {
       setAuthError(authErrorMessage(error))
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  const handleGitHubAuth = async () => {
+    if (authMode === 'register' && !acceptedLegal) {
+      setAuthError('使用 GitHub 创建账户前，请先同意服务条款与隐私说明。')
+      return
+    }
+
+    setAuthError('')
+    setGithubSubmitting(true)
+    try {
+      const authorization = await startGitHubOAuth({
+        source: authMode,
+        return_path: oauthReturnPath ?? postLoginPath(location.state),
+        remember_me: rememberLogin,
+        accept_terms: authMode === 'login' || acceptedLegal,
+        accept_privacy: authMode === 'login' || acceptedLegal,
+      })
+      window.location.assign(authorization.authorization_url)
+    } catch (error) {
+      setAuthError(authErrorMessage(error))
+      setGithubSubmitting(false)
     }
   }
 
@@ -1040,6 +1102,59 @@ export default function LoginPage() {
 
             <form className="auth-form" key={authMode} onSubmit={handleAuth}>
               {authMode === 'register' ? (
+                <label className="auth-form__consent">
+                  <input
+                    checked={acceptedLegal}
+                    name="consent"
+                    onChange={(event) => {
+                      setAcceptedLegal(event.target.checked)
+                      setAuthError('')
+                    }}
+                    required
+                    type="checkbox"
+                  />
+                  <span>我已阅读并同意服务条款与隐私说明</span>
+                </label>
+              ) : null}
+
+              <button
+                className="auth-form__provider"
+                disabled={submitting || githubSubmitting}
+                onClick={() => void handleGitHubAuth()}
+                type="button"
+              >
+                {githubSubmitting ? (
+                  <>
+                    <LoaderCircle className="auth-provider-spinner" size={18} />
+                    正在前往 GitHub
+                  </>
+                ) : (
+                  <>
+                    <GitBranch size={18} />
+                    {authMode === 'login' ? '使用 GitHub 登录' : '使用 GitHub 注册'}
+                    <ArrowRight className="auth-form__provider-arrow" size={16} />
+                  </>
+                )}
+              </button>
+
+              {authMode === 'login' ? (
+                <p className="auth-form__provider-legal">
+                  继续即表示你同意服务条款与隐私说明
+                </p>
+              ) : null}
+
+              {authError ? (
+                <p className="auth-form__error" role="alert">
+                  <AlertCircle size={15} />
+                  {authError}
+                </p>
+              ) : null}
+
+              <div className="auth-form__divider">
+                <span>或使用邮箱</span>
+              </div>
+
+              {authMode === 'register' ? (
                 <label>
                   <span>昵称</span>
                   <div>
@@ -1134,21 +1249,13 @@ export default function LoginPage() {
                     忘记密码
                   </button>
                 </div>
-              ) : (
-                <label className="auth-form__consent">
-                  <input name="consent" required type="checkbox" />
-                  <span>我已阅读并同意服务条款与隐私说明</span>
-                </label>
-              )}
-
-              {authError ? (
-                <p className="auth-form__error" role="alert">
-                  <AlertCircle size={15} />
-                  {authError}
-                </p>
               ) : null}
 
-              <button className="auth-form__submit" disabled={submitting} type="submit">
+              <button
+                className="auth-form__submit"
+                disabled={submitting || githubSubmitting}
+                type="submit"
+              >
                 {submitting ? (
                   <>
                     <span className="auth-submit-spinner" />
@@ -1185,4 +1292,54 @@ function authErrorMessage(error: unknown): string {
     return '请检查填写内容后重试。'
   }
   return error.message
+}
+
+interface GitHubOAuthFailure {
+  code: string
+  message: string
+  returnPath: string | null
+}
+
+function githubOAuthFailure(search: string): GitHubOAuthFailure | null {
+  const params = new URLSearchParams(search)
+  const code = params.get('oauth_error')
+  if (!code) return null
+
+  const messages: Record<string, string> = {
+    GITHUB_OAUTH_CANCELLED:
+      '你已取消 GitHub 授权，可以重新发起或改用邮箱登录。',
+    GITHUB_OAUTH_STATE_INVALID:
+      'GitHub 登录请求已失效或不属于当前浏览器，请重新发起。',
+    GITHUB_OAUTH_UNAVAILABLE:
+      'GitHub 登录暂不可用，请改用邮箱登录或稍后重试。',
+    GITHUB_EMAIL_REQUIRED:
+      'GitHub 没有提供可用的已验证邮箱，请改用邮箱注册。',
+    GITHUB_CONSENT_REQUIRED:
+      '创建账户前，请先同意服务条款与隐私说明。',
+    GITHUB_ACCOUNT_LINK_REQUIRED:
+      '该 GitHub 邮箱已对应一个邮箱账户。请使用邮箱密码登录，系统不会自动合并身份。',
+    ACCOUNT_LOGIN_UNAVAILABLE:
+      '该账户当前无法登录，请使用其他登录方式或稍后重试。',
+  }
+
+  return {
+    code,
+    message:
+      messages[code] ?? 'GitHub 登录未完成，请重新发起或改用邮箱登录。',
+    returnPath: safeOAuthReturnPath(params.get('return_path')),
+  }
+}
+
+function safeOAuthReturnPath(value: string | null): string | null {
+  if (
+    !value ||
+    !value.startsWith('/') ||
+    value.startsWith('//') ||
+    value === '/login' ||
+    value.startsWith('/login?') ||
+    value.startsWith('/login#')
+  ) {
+    return null
+  }
+  return value
 }
