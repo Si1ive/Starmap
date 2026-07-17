@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     AUTH_REMEMBER_ABSOLUTE_DAYS: int = int(
         os.getenv("AUTH_REMEMBER_ABSOLUTE_DAYS", "30")
     )
+    AUTH_SESSION_TOUCH_MINUTES: int = int(
+        os.getenv("AUTH_SESSION_TOUCH_MINUTES", "5")
+    )
     AUTH_EMAIL_VERIFY_LINK_MINUTES: int = int(
         os.getenv("AUTH_EMAIL_VERIFY_LINK_MINUTES", "30")
     )

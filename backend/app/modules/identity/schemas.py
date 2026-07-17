@@ -7,6 +7,15 @@ from typing import Optional
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 
+class LoginRequest(BaseModel):
+    """Authenticate an existing email password without applying new rules."""
+
+    email: str = Field(min_length=1, max_length=320)
+    password: str = Field(min_length=1, max_length=128)
+    remember_me: bool = False
+    anti_bot_token: Optional[str] = Field(default=None, max_length=2048)
+
+
 class RegisterRequest(BaseModel):
     """Create or resume a pending email registration."""
 

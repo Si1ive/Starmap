@@ -93,7 +93,15 @@ def build_client(*, rate_limiter=None):
     app.dependency_overrides[get_auth_rate_limiter] = lambda: limiter
     app.dependency_overrides[get_anti_bot_verifier] = lambda: AllowAntiBot()
     app.dependency_overrides[get_email_sender] = lambda: sender
-    return TestClient(app), service, limiter, sender
+    return (
+        TestClient(
+            app,
+            headers={"Origin": "http://localhost:5173"},
+        ),
+        service,
+        limiter,
+        sender,
+    )
 
 
 def registration_body():

@@ -59,6 +59,9 @@ def test_learning_user_registration_routes_are_owned_by_identity_module():
     routes = _routes_by_path()
 
     for path in (
+        "/api/v1/auth/login",
+        "/api/v1/auth/me",
+        "/api/v1/auth/logout",
         "/api/v1/auth/register",
         "/api/v1/auth/email-verification/resend",
         "/api/v1/auth/email-verification/confirm",

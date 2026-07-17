@@ -15,6 +15,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.db.types import new_uuid7
+from app.modules.identity.context import AuthRequestContext
 from app.modules.identity.models import (
     AuthActionToken,
     AuthEvent,
@@ -59,15 +60,6 @@ class RegistrationFlowError(ValueError):
         self.code = code
         self.status_code = status_code
         super().__init__(message)
-
-
-@dataclass(frozen=True)
-class AuthRequestContext:
-    """Bounded request metadata persisted for authentication auditing."""
-
-    remote_ip: Optional[str]
-    user_agent: Optional[str]
-    request_id: Optional[str]
 
 
 @dataclass(frozen=True)

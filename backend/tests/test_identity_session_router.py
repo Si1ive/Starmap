@@ -1,0 +1,252 @@
+"""HTTP contract tests for password login and current-session endpoints."""
+
+import uuid
+from datetime import datetime, timedelta
+from types import SimpleNamespace
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from app.core.config import settings
+from app.middleware.error_handler import APIException, api_exception_handler
+from app.modules.identity.dependencies import get_session_service
+from app.modules.identity.rate_limit import get_auth_rate_limiter
+from app.modules.identity.router import get_login_service, router
+from app.modules.identity.security import csrf_token_digest
+from app.modules.identity.session import (
+    AuthenticatedSession,
+    LoginFlowError,
+    LoginOutcome,
+)
+
+TRUSTED_ORIGIN = "http://localhost:5173"
+NOW = datetime(2026, 7, 17, 10, 0, 0)
+SESSION_TOKEN = "browser-session-token-with-enough-entropy"
+CSRF_TOKEN = "browser-csrf-token-with-enough-entropy"
+
+
+class StubLoginService:
+    def __init__(self, current):
+        self.current = current
+        self.calls = []
+
+    async def login(self, payload, context, previous_session_token):
+        self.calls.append((payload, context, previous_session_token))
+        if payload.email == "denied@example.com":
+            raise LoginFlowError(
+                "AUTH_INVALID_CREDENTIALS",
+                "邮箱或密码错误",
+                status_code=401,
+            )
+        return LoginOutcome(
+            user=self.current.user,
+            profile=self.current.profile,
+            session=self.current.session,
+            session_token=SESSION_TOKEN,
+            csrf_token=CSRF_TOKEN,
+            cookie_max_age=(30 * 24 * 60 * 60 if payload.remember_me else None),
+        )
+
+
+class StubSessionService:
+    def __init__(self, current):
+        self.current = current
+        self.authenticate_calls = []
+        self.logout_calls = []
+
+    async def authenticate(self, raw_token, context):
+        self.authenticate_calls.append((raw_token, context))
+        if raw_token != SESSION_TOKEN:
+            return None
+        return self.current
+
+    async def logout(self, current, context):
+        self.logout_calls.append((current, context))
+
+
+class RecordingRateLimiter:
+    def __init__(self):
+        self.calls = []
+
+    async def enforce(self, action, buckets):
+        self.calls.append((action, list(buckets)))
+
+
+def current_session():
+    user = SimpleNamespace(
+        id=uuid.UUID("01981b38-2700-7000-8000-000000000021"),
+        email_display="Learner@example.com",
+        email_normalized="learner@example.com",
+        email_verified_at=NOW,
+    )
+    profile = SimpleNamespace(
+        display_name="测试学习者",
+        locale="zh-CN",
+        timezone="Asia/Shanghai",
+    )
+    session = SimpleNamespace(
+        id=uuid.UUID("01981b38-2700-7000-8000-000000000022"),
+        auth_method="password",
+        device_label="Chrome on macOS",
+        created_at=NOW,
+        idle_expires_at=NOW + timedelta(hours=12),
+        absolute_expires_at=NOW + timedelta(days=7),
+        csrf_secret_hash=csrf_token_digest(CSRF_TOKEN),
+    )
+    return AuthenticatedSession(
+        user=user,
+        profile=profile,
+        session=session,
+        csrf_token=CSRF_TOKEN,
+    )
+
+
+def build_client():
+    app = FastAPI()
+    app.add_exception_handler(APIException, api_exception_handler)
+    app.include_router(router, prefix="/api/v1")
+    current = current_session()
+    login_service = StubLoginService(current)
+    session_service = StubSessionService(current)
+    limiter = RecordingRateLimiter()
+    app.dependency_overrides[get_login_service] = lambda: login_service
+    app.dependency_overrides[get_session_service] = lambda: session_service
+    app.dependency_overrides[get_auth_rate_limiter] = lambda: limiter
+    client = TestClient(app, headers={"Origin": TRUSTED_ORIGIN})
+    return client, login_service, session_service, limiter
+
+
+def login_body(**overrides):
+    body = {
+        "email": "Learner@Example.com",
+        "password": "correct horse battery staple",
+        "remember_me": False,
+    }
+    body.update(overrides)
+    return body
+
+
+def test_login_sets_http_only_cookie_without_exposing_session_token():
+    client, login_service, _, limiter = build_client()
+
+    response = client.post("/api/v1/auth/login", json=login_body())
+
+    assert response.status_code == 200
+    assert response.json()["data"]["authenticated"] is True
+    assert response.json()["data"]["csrf_token"] == CSRF_TOKEN
+    assert response.json()["data"]["user"]["id"]
+    assert SESSION_TOKEN not in response.text
+    cookies = response.headers.get_list("set-cookie")
+    session_cookie = next(
+        value
+        for value in cookies
+        if value.startswith(f"{settings.AUTH_SESSION_COOKIE_NAME}=")
+    )
+    assert "HttpOnly" in session_cookie
+    assert "SameSite=lax" in session_cookie
+    assert "Path=/" in session_cookie
+    assert "Max-Age" not in session_cookie
+    assert response.headers["cache-control"] == "no-store"
+    assert login_service.calls[0][2] is None
+
+    action, buckets = limiter.calls[0]
+    assert action == "login"
+    assert {bucket.dimension for bucket in buckets} == {
+        "ip",
+        "identifier",
+        "device",
+    }
+
+
+def test_remembered_login_sets_persistent_cookie_and_rotates_existing_cookie():
+    client, login_service, _, _ = build_client()
+    client.cookies.set(settings.AUTH_SESSION_COOKIE_NAME, "old-session-token")
+
+    response = client.post(
+        "/api/v1/auth/login",
+        json=login_body(remember_me=True),
+    )
+
+    assert response.status_code == 200
+    session_cookie = next(
+        value
+        for value in response.headers.get_list("set-cookie")
+        if value.startswith(f"{settings.AUTH_SESSION_COOKIE_NAME}=")
+    )
+    assert f"Max-Age={30 * 24 * 60 * 60}" in session_cookie
+    assert login_service.calls[0][2] == "old-session-token"
+
+
+def test_login_failure_keeps_generic_shape_and_does_not_set_session_cookie():
+    client, _, _, _ = build_client()
+
+    response = client.post(
+        "/api/v1/auth/login",
+        json=login_body(email="denied@example.com"),
+    )
+
+    assert response.status_code == 401
+    assert response.json()["code"] == "AUTH_INVALID_CREDENTIALS"
+    assert response.json()["message"] == "邮箱或密码错误"
+    assert settings.AUTH_SESSION_COOKIE_NAME not in response.headers.get(
+        "set-cookie", ""
+    )
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_me_requires_server_session_and_returns_current_user():
+    client, _, session_service, _ = build_client()
+
+    unauthorized = client.get("/api/v1/auth/me")
+    assert unauthorized.status_code == 401
+    assert unauthorized.json()["code"] == "AUTHENTICATION_REQUIRED"
+
+    client.cookies.set(settings.AUTH_SESSION_COOKIE_NAME, SESSION_TOKEN)
+    response = client.get("/api/v1/auth/me")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["user"]["email"] == "Learner@example.com"
+    assert response.json()["data"]["csrf_token"] == CSRF_TOKEN
+    assert response.headers["cache-control"] == "no-store"
+    assert session_service.authenticate_calls[-1][0] == SESSION_TOKEN
+
+
+def test_logout_rejects_untrusted_origin_before_session_lookup():
+    client, _, session_service, _ = build_client()
+    client.cookies.set(settings.AUTH_SESSION_COOKIE_NAME, SESSION_TOKEN)
+
+    response = client.post(
+        "/api/v1/auth/logout",
+        json={},
+        headers={
+            "Origin": "https://attacker.example",
+            "X-CSRF-Token": CSRF_TOKEN,
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "AUTH_ORIGIN_INVALID"
+    assert session_service.authenticate_calls == []
+    assert session_service.logout_calls == []
+
+
+def test_logout_requires_csrf_and_revokes_the_current_session():
+    client, _, session_service, _ = build_client()
+    client.cookies.set(settings.AUTH_SESSION_COOKIE_NAME, SESSION_TOKEN)
+
+    missing_csrf = client.post("/api/v1/auth/logout", json={})
+    assert missing_csrf.status_code == 403
+    assert missing_csrf.json()["code"] == "CSRF_INVALID"
+    assert session_service.logout_calls == []
+
+    response = client.post(
+        "/api/v1/auth/logout",
+        json={},
+        headers={"X-CSRF-Token": CSRF_TOKEN},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["authenticated"] is False
+    assert len(session_service.logout_calls) == 1
+    assert "Max-Age=0" in response.headers["set-cookie"]
+    assert response.headers["cache-control"] == "no-store"
