@@ -33,6 +33,22 @@ export interface AuthenticatedSessionData {
   session: AuthenticatedSession
 }
 
+export interface ManagedSession {
+  id: string
+  auth_method: string
+  device_label: string
+  created_at: string
+  last_seen_at: string
+  idle_expires_at: string
+  absolute_expires_at: string
+  is_current: boolean
+  location_label: string | null
+}
+
+export interface ActiveSessionsData {
+  sessions: ManagedSession[]
+}
+
 export interface LoginCredentials {
   email: string
   password: string
@@ -138,6 +154,7 @@ export interface AuthContextValue {
   verifyEmail: (
     credential: EmailVerificationCredential,
   ) => Promise<EmailVerificationData>
+  revokeSession: (sessionId: string) => Promise<void>
   logout: () => Promise<void>
   restore: () => Promise<void>
 }
@@ -257,6 +274,31 @@ export async function logoutCurrentSession(csrfToken: string): Promise<void> {
     },
     body: JSON.stringify({}),
   })
+}
+
+export function fetchActiveSessions(
+  signal?: AbortSignal,
+): Promise<ActiveSessionsData> {
+  return authRequest<ActiveSessionsData>('/sessions', {
+    method: 'GET',
+    signal,
+  })
+}
+
+export async function revokeActiveSession(
+  sessionId: string,
+  csrfToken: string,
+): Promise<void> {
+  await authRequest<{ revoked: true; session_id: string }>(
+    `/sessions/${encodeURIComponent(sessionId)}/revoke`,
+    {
+      method: 'POST',
+      headers: {
+        'X-CSRF-Token': csrfToken,
+      },
+      body: JSON.stringify({}),
+    },
+  )
 }
 
 async function authRequest<T>(path: string, init: RequestInit): Promise<T> {

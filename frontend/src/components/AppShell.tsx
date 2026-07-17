@@ -50,6 +50,7 @@ export default function AppShell() {
   const avatarLabel = Array.from(displayName.trim())[0] || '学'
 
   const currentLabel = useMemo(() => {
+    if (location.pathname.startsWith('/account')) return '账户'
     const item = navItems.find((nav) => location.pathname.startsWith(nav.to.split('?')[0]))
     return item?.label ?? '408 Agent'
   }, [location.pathname])
@@ -244,7 +245,7 @@ export default function AppShell() {
                   </div>
                 ) : null}
               </div>
-              <IconButton label="设置" onClick={() => navigate('/states')}>
+              <IconButton label="账户设置" onClick={() => navigate('/account')}>
                 <Settings size={19} />
               </IconButton>
               <CircleUserRound className="topbar__avatar" size={25} />

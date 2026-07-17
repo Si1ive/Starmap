@@ -11,6 +11,7 @@ import AppShell from './components/AppShell'
 import useAuth from './useAuth'
 
 const AgentPage = lazy(() => import('./pages/AgentPage'))
+const AccountPage = lazy(() => import('./pages/AccountPage'))
 const EmailVerificationPage = lazy(
   () => import('./pages/EmailVerificationPage'),
 )
@@ -133,6 +134,7 @@ function App() {
         >
           <Route path="/" element={<Navigate replace to="/today" />} />
           <Route path="/today" element={<TodayPage />} />
+          <Route path="/account" element={<AccountPage />} />
           <Route path="/agent" element={<AgentPage />} />
           <Route path="/agent/:threadId" element={<AgentPage />} />
           <Route path="/map" element={<MapPage />} />

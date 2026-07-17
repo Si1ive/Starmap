@@ -11,6 +11,7 @@ import {
   LoginCredentials,
   loginWithPassword,
   logoutCurrentSession,
+  revokeActiveSession,
 } from './auth'
 
 interface AuthState {
@@ -112,6 +113,29 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [applySession, state.data?.csrf_token])
 
+  const revokeSession = useCallback(
+    async (sessionId: string) => {
+      const csrfToken = state.data?.csrf_token
+      if (!csrfToken) {
+        applySession(null)
+        throw new AuthApiError({
+          code: 'AUTHENTICATION_REQUIRED',
+          message: '请先登录',
+          status: 401,
+        })
+      }
+      try {
+        await revokeActiveSession(sessionId, csrfToken)
+      } catch (error) {
+        if (error instanceof AuthApiError && error.status === 401) {
+          applySession(null)
+        }
+        throw error
+      }
+    },
+    [applySession, state.data?.csrf_token],
+  )
+
   const value = useMemo<AuthContextValue>(
     () => ({
       status: state.status,
@@ -119,10 +143,11 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
       session: state.data?.session ?? null,
       login,
       verifyEmail,
+      revokeSession,
       logout,
       restore,
     }),
-    [login, logout, restore, state, verifyEmail],
+    [login, logout, restore, revokeSession, state, verifyEmail],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
