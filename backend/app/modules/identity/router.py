@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
@@ -76,7 +77,9 @@ from app.modules.identity.session import (
     LoginFlowError,
     LoginOutcome,
     LoginService,
+    SessionManagementError,
     SessionService,
+    SessionSummary,
 )
 
 logger = get_logger(__name__)
@@ -305,6 +308,58 @@ async def get_current_user(
             current.session,
             current.csrf_token,
         )
+    )
+
+
+@router.get(
+    "/sessions",
+    response_model=ApiResponse,
+)
+async def list_active_sessions(
+    response: Response,
+    current: AuthenticatedSession = Depends(require_current_session),
+    service: SessionService = Depends(get_session_service),
+) -> ApiResponse:
+    """Return redacted active-session summaries for the current user."""
+
+    sessions = await service.list_active_sessions(current)
+    _harden_auth_response(response)
+    return ApiResponse(
+        data={
+            "sessions": [_session_summary_data(item) for item in sessions],
+        }
+    )
+
+
+@router.post(
+    "/sessions/{session_id}/revoke",
+    response_model=ApiResponse,
+)
+async def revoke_other_session(
+    session_id: uuid.UUID,
+    request: Request,
+    response: Response,
+    current: AuthenticatedSession = Depends(require_csrf_session),
+    service: SessionService = Depends(get_session_service),
+) -> ApiResponse:
+    """Revoke one owned non-current session after CSRF validation."""
+
+    try:
+        await service.revoke_other_session(
+            current,
+            session_id,
+            auth_request_context(request),
+        )
+    except SessionManagementError as exc:
+        raise _session_management_api_error(exc) from exc
+
+    _harden_auth_response(response)
+    return ApiResponse(
+        message="登录会话已撤销",
+        data={
+            "revoked": True,
+            "session_id": str(session_id),
+        },
     )
 
 
@@ -821,6 +876,20 @@ def _authenticated_data(user, profile, auth_session, csrf_token: str) -> dict:
     }
 
 
+def _session_summary_data(summary: SessionSummary) -> dict:
+    return {
+        "id": str(summary.id),
+        "auth_method": summary.auth_method,
+        "device_label": summary.device_label,
+        "created_at": _utc_iso(summary.created_at),
+        "last_seen_at": _utc_iso(summary.last_seen_at),
+        "idle_expires_at": _utc_iso(summary.idle_expires_at),
+        "absolute_expires_at": _utc_iso(summary.absolute_expires_at),
+        "is_current": summary.is_current,
+        "location_label": summary.location_label,
+    }
+
+
 def _oauth_frontend_redirect(path: str, **values: str) -> str:
     """Append bounded OAuth status fields to one trusted frontend path."""
 
@@ -845,6 +914,15 @@ def _api_error(exc: RegistrationFlowError) -> APIException:
 
 
 def _password_reset_api_error(exc: PasswordResetFlowError) -> APIException:
+    return APIException(
+        message=str(exc),
+        status_code=exc.status_code,
+        code=exc.code,
+        headers=AUTH_NO_STORE_HEADERS,
+    )
+
+
+def _session_management_api_error(exc: SessionManagementError) -> APIException:
     return APIException(
         message=str(exc),
         status_code=exc.status_code,

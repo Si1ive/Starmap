@@ -30,6 +30,7 @@ from app.modules.identity.security import (
 from app.modules.identity.session import (
     LoginFlowError,
     LoginService,
+    SessionManagementError,
     SessionService,
 )
 
@@ -96,12 +97,14 @@ async def create_user(
     db_session,
     password_service,
     *,
+    email="learner@example.com",
+    display_name="测试学习者",
     status="active",
     verified=True,
 ):
     user = User(
-        email_normalized="learner@example.com",
-        email_display="Learner@example.com",
+        email_normalized=email.casefold(),
+        email_display=email,
         email_verified_at=NOW if verified else None,
         status=status,
         activated_at=NOW if verified else None,
@@ -109,7 +112,7 @@ async def create_user(
         updated_at=NOW,
     )
     user.profile = UserProfile(
-        display_name="测试学习者",
+        display_name=display_name,
         created_at=NOW,
         updated_at=NOW,
     )
@@ -122,6 +125,38 @@ async def create_user(
     db_session.add(user)
     await db_session.commit()
     return user
+
+
+async def create_session(
+    db_session,
+    user,
+    *,
+    token,
+    auth_version=None,
+    auth_method="password",
+    device_label="Firefox on Linux",
+    created_at=NOW - timedelta(hours=2),
+    last_seen_at=NOW - timedelta(hours=1),
+    idle_expires_at=NOW + timedelta(hours=10),
+    absolute_expires_at=NOW + timedelta(days=6),
+    revoked_at=None,
+):
+    auth_session = AuthSession(
+        user_id=user.id,
+        token_hash=session_token_digest(token),
+        csrf_secret_hash=csrf_token_digest(derive_csrf_token(token)),
+        auth_version=auth_version if auth_version is not None else user.auth_version,
+        auth_method=auth_method,
+        device_label=device_label,
+        created_at=created_at,
+        last_seen_at=last_seen_at,
+        idle_expires_at=idle_expires_at,
+        absolute_expires_at=absolute_expires_at,
+        revoked_at=revoked_at,
+    )
+    db_session.add(auth_session)
+    await db_session.commit()
+    return auth_session
 
 
 def login_request(*, password=PASSWORD, remember_me=False):
@@ -382,3 +417,124 @@ async def test_session_touch_logout_and_auth_version_invalidation(db_session):
     assert await session_service.authenticate(second.session_token, CONTEXT) is None
     invalidated = await db_session.get(AuthSession, second.session.id)
     assert invalidated.revoke_reason == "auth_version_changed"
+
+
+@pytest.mark.asyncio
+async def test_active_session_list_is_owned_filtered_and_redacted(db_session):
+    password_service = PasswordService()
+    user = await create_user(db_session, password_service)
+    login_service = LoginService(
+        db_session,
+        password_service,
+        RecordingRateLimiter(),
+        clock=lambda: NOW,
+    )
+    login = await login_service.login(login_request(), CONTEXT, None)
+    other = await create_session(
+        db_session,
+        user,
+        token="other-active-session-token-with-enough-entropy",
+    )
+    await create_session(
+        db_session,
+        user,
+        token="expired-session-token-with-enough-entropy",
+        idle_expires_at=NOW,
+    )
+    await create_session(
+        db_session,
+        user,
+        token="revoked-session-token-with-enough-entropy",
+        revoked_at=NOW - timedelta(minutes=1),
+    )
+    await create_session(
+        db_session,
+        user,
+        token="stale-version-session-token-with-enough-entropy",
+        auth_version=user.auth_version - 1,
+    )
+    other_user = await create_user(
+        db_session,
+        password_service,
+        email="other@example.com",
+        display_name="其他学习者",
+    )
+    await create_session(
+        db_session,
+        other_user,
+        token="cross-account-session-token-with-enough-entropy",
+    )
+    service = SessionService(db_session, clock=lambda: NOW)
+    current = await service.authenticate(login.session_token, CONTEXT)
+
+    sessions = await service.list_active_sessions(current)
+
+    assert [item.id for item in sessions] == [login.session.id, other.id]
+    assert sessions[0].is_current is True
+    assert sessions[1].is_current is False
+    assert sessions[1].device_label == "Firefox on Linux"
+    assert not hasattr(sessions[0], "token_hash")
+    assert not hasattr(sessions[0], "csrf_secret_hash")
+    assert not hasattr(sessions[0], "user_agent")
+    assert not hasattr(sessions[0], "last_ip")
+
+
+@pytest.mark.asyncio
+async def test_revoke_other_session_enforces_ownership_and_audits(db_session):
+    password_service = PasswordService()
+    user = await create_user(db_session, password_service)
+    login_service = LoginService(
+        db_session,
+        password_service,
+        RecordingRateLimiter(),
+        clock=lambda: NOW,
+    )
+    login = await login_service.login(login_request(), CONTEXT, None)
+    target = await create_session(
+        db_session,
+        user,
+        token="revocation-target-token-with-enough-entropy",
+        auth_method="github",
+    )
+    other_user = await create_user(
+        db_session,
+        password_service,
+        email="other@example.com",
+        display_name="其他学习者",
+    )
+    cross_account = await create_session(
+        db_session,
+        other_user,
+        token="cross-account-revoke-token-with-enough-entropy",
+    )
+    service = SessionService(db_session, clock=lambda: NOW)
+    current = await service.authenticate(login.session_token, CONTEXT)
+
+    with pytest.raises(SessionManagementError) as current_session_error:
+        await service.revoke_other_session(current, login.session.id, CONTEXT)
+    assert current_session_error.value.code == "CURRENT_SESSION_LOGOUT_REQUIRED"
+    assert current_session_error.value.status_code == 409
+
+    with pytest.raises(SessionManagementError) as ownership_error:
+        await service.revoke_other_session(current, cross_account.id, CONTEXT)
+    assert ownership_error.value.code == "SESSION_NOT_FOUND"
+    assert ownership_error.value.status_code == 404
+    assert (await db_session.get(AuthSession, cross_account.id)).revoked_at is None
+
+    await service.revoke_other_session(current, target.id, CONTEXT)
+
+    revoked = await db_session.get(AuthSession, target.id)
+    assert revoked.revoked_at == NOW
+    assert revoked.revoke_reason == "user_revoked_other_session"
+    event = await db_session.scalar(
+        select(AuthEvent).where(
+            AuthEvent.event_type == "session_revoked",
+            AuthEvent.session_id == target.id,
+        )
+    )
+    assert event is not None
+    assert event.user_id == user.id
+    assert event.outcome == "success"
+    assert event.provider == "github"
+    assert event.reason_code == "user_revoked_other_session"
+    assert event.request_id == CONTEXT.request_id

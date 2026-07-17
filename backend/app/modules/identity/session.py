@@ -7,6 +7,7 @@ import hmac
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from ipaddress import ip_address
 from typing import Awaitable, Callable, Optional
 
 from sqlalchemy import select
@@ -55,6 +56,21 @@ class LoginFlowError(ValueError):
         super().__init__(message)
 
 
+class SessionManagementError(ValueError):
+    """A user-safe failure while managing authenticated sessions."""
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        status_code: int,
+    ) -> None:
+        self.code = code
+        self.status_code = status_code
+        super().__init__(message)
+
+
 @dataclass(frozen=True)
 class LoginOutcome:
     """Successful login data plus the plaintext browser credentials."""
@@ -75,6 +91,21 @@ class AuthenticatedSession:
     profile: Optional[UserProfile]
     session: AuthSession
     csrf_token: str
+
+
+@dataclass(frozen=True)
+class SessionSummary:
+    """Redacted session metadata safe for account settings."""
+
+    id: uuid.UUID
+    auth_method: str
+    device_label: str
+    created_at: datetime
+    last_seen_at: datetime
+    idle_expires_at: datetime
+    absolute_expires_at: datetime
+    is_current: bool
+    location_label: Optional[str]
 
 
 class LoginService:
@@ -634,6 +665,91 @@ class SessionService:
         )
         await self.db.commit()
 
+    async def list_active_sessions(
+        self,
+        current: AuthenticatedSession,
+    ) -> list[SessionSummary]:
+        """Return only effective sessions owned by the current user."""
+
+        now = self.clock()
+        sessions = (
+            await self.db.scalars(
+                select(AuthSession)
+                .where(
+                    AuthSession.user_id == current.user.id,
+                    AuthSession.revoked_at.is_(None),
+                    AuthSession.auth_version == current.user.auth_version,
+                    AuthSession.idle_expires_at > now,
+                    AuthSession.absolute_expires_at > now,
+                )
+                .order_by(
+                    AuthSession.last_seen_at.desc(),
+                    AuthSession.created_at.desc(),
+                )
+            )
+        ).all()
+        summaries = [
+            self._session_summary(
+                auth_session,
+                is_current=auth_session.id == current.session.id,
+            )
+            for auth_session in sessions
+        ]
+        return sorted(summaries, key=lambda item: not item.is_current)
+
+    async def revoke_other_session(
+        self,
+        current: AuthenticatedSession,
+        session_id: uuid.UUID,
+        context: AuthRequestContext,
+    ) -> None:
+        """Revoke one active session after enforcing object ownership."""
+
+        if session_id == current.session.id:
+            raise SessionManagementError(
+                "CURRENT_SESSION_LOGOUT_REQUIRED",
+                "当前会话请使用退出登录",
+                status_code=409,
+            )
+
+        auth_session = await self.db.scalar(
+            select(AuthSession)
+            .where(
+                AuthSession.id == session_id,
+                AuthSession.user_id == current.user.id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        now = self.clock()
+        if (
+            auth_session is None
+            or auth_session.revoked_at is not None
+            or self._invalid_reason(auth_session, current.user, now) is not None
+        ):
+            raise SessionManagementError(
+                "SESSION_NOT_FOUND",
+                "登录会话不存在或已失效",
+                status_code=404,
+            )
+
+        auth_session.revoked_at = now
+        auth_session.revoke_reason = "user_revoked_other_session"
+        self.db.add(
+            AuthEvent(
+                user_id=current.user.id,
+                session_id=auth_session.id,
+                event_type="session_revoked",
+                outcome="success",
+                provider=auth_session.auth_method,
+                reason_code="user_revoked_other_session",
+                ip_address=pack_ip_address(context.remote_ip),
+                user_agent=sanitize_user_agent(context.user_agent),
+                request_id=(context.request_id or "")[:64] or None,
+            )
+        )
+        await self.db.commit()
+
     async def _revoke_presented_session(
         self,
         raw_token: Optional[str],
@@ -702,6 +818,40 @@ class SessionService:
         if absolute_lifetime > timedelta(days=settings.AUTH_SESSION_ABSOLUTE_DAYS):
             return timedelta(days=settings.AUTH_REMEMBER_IDLE_DAYS)
         return timedelta(hours=settings.AUTH_SESSION_IDLE_HOURS)
+
+    @staticmethod
+    def _session_summary(
+        auth_session: AuthSession,
+        *,
+        is_current: bool,
+    ) -> SessionSummary:
+        return SessionSummary(
+            id=auth_session.id,
+            auth_method=auth_session.auth_method,
+            device_label=auth_session.device_label or "未知设备",
+            created_at=auth_session.created_at,
+            last_seen_at=auth_session.last_seen_at,
+            idle_expires_at=auth_session.idle_expires_at,
+            absolute_expires_at=auth_session.absolute_expires_at,
+            is_current=is_current,
+            location_label=SessionService._location_label(
+                auth_session.last_ip or auth_session.created_ip
+            ),
+        )
+
+    @staticmethod
+    def _location_label(packed_address: Optional[bytes]) -> Optional[str]:
+        if not packed_address:
+            return None
+        try:
+            address = ip_address(packed_address)
+        except ValueError:
+            return None
+        if address.is_loopback:
+            return "本机"
+        if address.is_private or address.is_link_local:
+            return "本地网络"
+        return None
 
 
 def _is_bounded_token(raw_token: Optional[str]) -> bool:
