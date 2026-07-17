@@ -17,7 +17,12 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.core.logging import get_logger, set_request_id, clear_request_id
+from app.core.logging import (
+    clear_request_id,
+    get_logger,
+    get_request_id,
+    set_request_id,
+)
 from app.db.redis import RedisConnectionError
 
 logger = get_logger(__name__)
@@ -39,12 +44,14 @@ class APIException(Exception):
         message: str,
         status_code: int = status.HTTP_500_INTERNAL_SERVER_ERROR,
         code: str = "INTERNAL_ERROR",
-        detail: Optional[str] = None
+        detail: Optional[str] = None,
+        headers: Optional[Dict[str, str]] = None,
     ):
         self.status_code = status_code
         self.code = code
         self.message = message
         self.detail = detail
+        self.headers = headers or {}
         super().__init__(message)
 
 
@@ -131,14 +138,19 @@ class ErrorHandlerMiddleware(BaseHTTPMiddleware):
             
         except RequestValidationError as exc:
             # 请求参数验证错误
+            safe_errors = [
+                {
+                    "loc": error.get("loc", []),
+                    "msg": error.get("msg", ""),
+                    "type": error.get("type", ""),
+                }
+                for error in exc.errors()
+            ]
             validation_error = ValidationException(
                 message="请求参数验证失败",
-                detail=str(exc)
+                detail=str(safe_errors),
             )
-            logger.warning(
-                "参数验证失败",
-                errors=exc.errors()
-            )
+            logger.warning("参数验证失败", errors=safe_errors)
             return self._build_error_response(validation_error, request_id)
 
         except RedisConnectionError as exc:
@@ -189,17 +201,23 @@ class ErrorHandlerMiddleware(BaseHTTPMiddleware):
         if settings.DEBUG and exc.detail:
             content["detail"] = exc.detail
         
+        headers = {"X-Request-ID": request_id, **exc.headers}
         return JSONResponse(
             status_code=exc.status_code,
             content=content,
-            headers={"X-Request-ID": request_id}
+            headers=headers,
         )
 
 
 # 异常处理器（用于直接注册到FastAPI）
 async def api_exception_handler(request: Request, exc: APIException) -> JSONResponse:
     """API异常处理器"""
-    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+    request_id = (
+        get_request_id()
+        or request.headers.get("X-Request-ID")
+        or str(uuid.uuid4())
+    )
+    headers = {"X-Request-ID": request_id, **exc.headers}
     return JSONResponse(
         status_code=exc.status_code,
         content={
@@ -207,7 +225,7 @@ async def api_exception_handler(request: Request, exc: APIException) -> JSONResp
             "message": exc.message,
             "request_id": request_id
         },
-        headers={"X-Request-ID": request_id}
+        headers=headers,
     )
 
 
@@ -216,7 +234,11 @@ async def validation_exception_handler(
     exc: RequestValidationError
 ) -> JSONResponse:
     """验证异常处理器"""
-    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+    request_id = (
+        get_request_id()
+        or request.headers.get("X-Request-ID")
+        or str(uuid.uuid4())
+    )
     
     # 提取友好的错误信息
     errors = exc.errors()
@@ -240,7 +262,11 @@ async def validation_exception_handler(
 
 async def general_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """通用异常处理器"""
-    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+    request_id = (
+        get_request_id()
+        or request.headers.get("X-Request-ID")
+        or str(uuid.uuid4())
+    )
     
     logger.error(
         "未处理异常",

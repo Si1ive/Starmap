@@ -68,6 +68,18 @@ class Settings(BaseSettings):
     AUTH_REMEMBER_ABSOLUTE_DAYS: int = int(
         os.getenv("AUTH_REMEMBER_ABSOLUTE_DAYS", "30")
     )
+    AUTH_EMAIL_VERIFY_LINK_MINUTES: int = int(
+        os.getenv("AUTH_EMAIL_VERIFY_LINK_MINUTES", "30")
+    )
+    AUTH_EMAIL_VERIFY_CODE_MINUTES: int = int(
+        os.getenv("AUTH_EMAIL_VERIFY_CODE_MINUTES", "10")
+    )
+    AUTH_REGISTRATION_TRANSACTION_MINUTES: int = int(
+        os.getenv("AUTH_REGISTRATION_TRANSACTION_MINUTES", "30")
+    )
+    AUTH_EMAIL_VERIFY_MAX_ATTEMPTS: int = int(
+        os.getenv("AUTH_EMAIL_VERIFY_MAX_ATTEMPTS", "5")
+    )
     AUTH_TERMS_VERSION: str = os.getenv("AUTH_TERMS_VERSION", "2026-07-16")
     AUTH_PRIVACY_VERSION: str = os.getenv(
         "AUTH_PRIVACY_VERSION",

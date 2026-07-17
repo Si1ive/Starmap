@@ -55,6 +55,17 @@ def test_public_chat_routes_are_owned_by_chat_module():
         assert routes[path].endpoint.__module__ == "app.modules.chat.router"
 
 
+def test_learning_user_registration_routes_are_owned_by_identity_module():
+    routes = _routes_by_path()
+
+    for path in (
+        "/api/v1/auth/register",
+        "/api/v1/auth/email-verification/resend",
+        "/api/v1/auth/email-verification/confirm",
+    ):
+        assert routes[path].endpoint.__module__ == "app.modules.identity.router"
+
+
 def test_admin_conversation_routes_are_owned_by_chat_module():
     routes = _routes_by_path()
 

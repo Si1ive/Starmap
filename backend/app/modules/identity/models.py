@@ -37,9 +37,10 @@ UNSIGNED_SMALL_INTEGER = SmallInteger().with_variant(
     mysql.SMALLINT(unsigned=True),
     "mysql",
 )
-UNSIGNED_BIG_INTEGER = BigInteger().with_variant(
-    mysql.BIGINT(unsigned=True),
-    "mysql",
+UNSIGNED_BIG_INTEGER = (
+    BigInteger()
+    .with_variant(mysql.BIGINT(unsigned=True), "mysql")
+    .with_variant(Integer(), "sqlite")
 )
 UTC_DATETIME = DateTime(timezone=False).with_variant(
     mysql.DATETIME(fsp=6),

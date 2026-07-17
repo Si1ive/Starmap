@@ -86,3 +86,15 @@ def test_identity_timestamps_use_mysql_microsecond_precision():
     compiled = User.__table__.columns.created_at.type.compile(dialect=mysql.dialect())
 
     assert compiled == "DATETIME(6)"
+
+
+def test_identity_bigint_keys_keep_sqlite_autoincrement_compatibility():
+    auth_event_key = AuthEvent.__table__.columns.id.type.compile(
+        dialect=sqlite.dialect()
+    )
+    consent_key = UserConsent.__table__.columns.id.type.compile(
+        dialect=sqlite.dialect()
+    )
+
+    assert auth_event_key == "INTEGER"
+    assert consent_key == "INTEGER"
