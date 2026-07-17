@@ -59,6 +59,7 @@ from app.modules.identity.registration import (
 from app.modules.identity.schemas import (
     ConfirmEmailVerificationRequest,
     ForgotPasswordRequest,
+    GitHubOAuthLinkStartRequest,
     GitHubOAuthStartRequest,
     LoginRequest,
     RegisterRequest,
@@ -184,6 +185,83 @@ async def start_github_oauth(
     )
 
 
+@router.get(
+    "/github/link",
+    response_model=ApiResponse,
+)
+async def get_github_link(
+    response: Response,
+    current: AuthenticatedSession = Depends(require_current_session),
+    service: GitHubOAuthService = Depends(get_github_oauth_service),
+) -> ApiResponse:
+    """Return the current account's GitHub binding status."""
+
+    identity = await service.get_linked_identity(current.user.id)
+    _harden_auth_response(response)
+    return ApiResponse(
+        data={
+            "linked": identity.linked,
+            "username": identity.username,
+            "email": identity.email,
+            "linked_at": (
+                _utc_iso(identity.linked_at) if identity.linked_at is not None else None
+            ),
+        }
+    )
+
+
+@router.post(
+    "/github/link/start",
+    response_model=ApiResponse,
+)
+async def start_github_link(
+    payload: GitHubOAuthLinkStartRequest,
+    request: Request,
+    response: Response,
+    current: AuthenticatedSession = Depends(require_csrf_session),
+    service: GitHubOAuthService = Depends(get_github_oauth_service),
+    rate_limiter: AuthRateLimiter = Depends(get_auth_rate_limiter),
+) -> ApiResponse:
+    """Create a GitHub binding transaction for the current account."""
+
+    context = auth_request_context(request)
+    await _enforce_rate_limits(
+        rate_limiter,
+        "github-oauth-link-start",
+        [
+            RateLimitBucket("user", str(current.user.id), 10, 900),
+            RateLimitBucket("ip", context.remote_ip or "unknown", 30, 900),
+        ],
+    )
+    try:
+        outcome = await service.start_link(payload, current, context)
+    except GitHubOAuthFlowError as exc:
+        raise APIException(
+            message=str(exc),
+            status_code=exc.status_code,
+            code=exc.code,
+            headers=AUTH_NO_STORE_HEADERS,
+        ) from exc
+
+    _harden_auth_response(response)
+    response.set_cookie(
+        settings.AUTH_GITHUB_OAUTH_COOKIE_NAME,
+        outcome.verifier_cookie,
+        max_age=settings.AUTH_GITHUB_TRANSACTION_MINUTES * 60,
+        path="/",
+        secure=settings.AUTH_COOKIE_SECURE,
+        httponly=True,
+        samesite="lax",
+    )
+    return ApiResponse(
+        message="GitHub 绑定授权已准备",
+        data={
+            "authorization_url": outcome.authorization_url,
+            "expires_at": _utc_iso(outcome.expires_at),
+        },
+    )
+
+
 @router.get("/github/callback")
 async def github_oauth_callback(
     request: Request,
@@ -208,7 +286,7 @@ async def github_oauth_callback(
     except GitHubOAuthFlowError as exc:
         redirect = RedirectResponse(
             _oauth_frontend_redirect(
-                "/login",
+                exc.redirect_path,
                 oauth_error=exc.code,
                 return_path=exc.return_path,
             ),
@@ -218,16 +296,27 @@ async def github_oauth_callback(
         _harden_auth_response(redirect)
         return redirect
 
-    redirect = RedirectResponse(
-        _oauth_frontend_redirect(
-            outcome.return_path,
-            oauth="success",
-            new_user="1" if outcome.new_user else "0",
-        ),
-        status_code=status.HTTP_303_SEE_OTHER,
-    )
-    _set_session_cookie(redirect, outcome.login)
-    _clear_registration_cookie(redirect)
+    if outcome.linked:
+        redirect = RedirectResponse(
+            _oauth_frontend_redirect(
+                outcome.return_path,
+                github="linked",
+            ),
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    else:
+        redirect = RedirectResponse(
+            _oauth_frontend_redirect(
+                outcome.return_path,
+                oauth="success",
+                new_user="1" if outcome.new_user else "0",
+            ),
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+        if outcome.login is None:
+            raise RuntimeError("GitHub login outcome is missing session data")
+        _set_session_cookie(redirect, outcome.login)
+        _clear_registration_cookie(redirect)
     _clear_github_oauth_cookie(redirect)
     _harden_auth_response(redirect)
     return redirect

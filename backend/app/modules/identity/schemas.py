@@ -26,6 +26,12 @@ class GitHubOAuthStartRequest(BaseModel):
     accept_privacy: bool = False
 
 
+class GitHubOAuthLinkStartRequest(BaseModel):
+    """Start a GitHub binding transaction for the authenticated account."""
+
+    return_path: Optional[str] = Field(default="/account", max_length=1024)
+
+
 class RegisterRequest(BaseModel):
     """Create or resume a pending email registration."""
 

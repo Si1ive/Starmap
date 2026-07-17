@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Check,
   Clock3,
+  GitBranch,
   Laptop,
   LoaderCircle,
   LocateFixed,
@@ -13,14 +14,27 @@ import {
   ShieldCheck,
   Smartphone,
 } from "lucide-react";
-import { AuthApiError, fetchActiveSessions, ManagedSession } from "../auth";
+import {
+  AuthApiError,
+  fetchActiveSessions,
+  fetchGitHubLinkStatus,
+  GitHubLinkStatus,
+  ManagedSession,
+} from "../auth";
 import { Button, PageHeading, StatusMark } from "../components/Primitives";
 import useAuth from "../useAuth";
 
 type SessionLoadState = "loading" | "ready" | "error";
+type ConnectionLoadState = "loading" | "ready" | "error";
 
 export default function AccountPage() {
-  const { restore, revokeSession, session: currentSession, user } = useAuth();
+  const {
+    restore,
+    revokeSession,
+    session: currentSession,
+    startGitHubLink,
+    user,
+  } = useAuth();
   const [sessions, setSessions] = useState<ManagedSession[]>([]);
   const [loadState, setLoadState] = useState<SessionLoadState>("loading");
   const [loadError, setLoadError] = useState("");
@@ -28,6 +42,36 @@ export default function AccountPage() {
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState("");
   const [actionNotice, setActionNotice] = useState("");
+  const [githubLink, setGitHubLink] = useState<GitHubLinkStatus | null>(null);
+  const [connectionLoadState, setConnectionLoadState] =
+    useState<ConnectionLoadState>("loading");
+  const [connectionError, setConnectionError] = useState("");
+  const [githubLinking, setGitHubLinking] = useState(false);
+
+  const loadGitHubLink = useCallback(
+    async (signal?: AbortSignal) => {
+      setConnectionLoadState("loading");
+      setConnectionError("");
+      try {
+        setGitHubLink(await fetchGitHubLinkStatus(signal));
+        setConnectionLoadState("ready");
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError")
+          return;
+        if (error instanceof AuthApiError && error.status === 401) {
+          await restore();
+          return;
+        }
+        setConnectionError(
+          error instanceof AuthApiError
+            ? error.message
+            : "暂时无法读取账号绑定状态",
+        );
+        setConnectionLoadState("error");
+      }
+    },
+    [restore],
+  );
 
   const loadSessions = useCallback(
     async (signal?: AbortSignal) => {
@@ -58,8 +102,50 @@ export default function AccountPage() {
   useEffect(() => {
     const controller = new AbortController();
     void loadSessions(controller.signal);
+    void loadGitHubLink(controller.signal);
     return () => controller.abort();
-  }, [loadSessions]);
+  }, [loadGitHubLink, loadSessions]);
+
+  useEffect(() => {
+    const search = new URLSearchParams(window.location.search);
+    const linked = search.get("github") === "linked";
+    const oauthError = search.get("oauth_error");
+    if (!linked && !oauthError) return;
+
+    if (linked) {
+      setActionNotice("GitHub 账号已绑定，现在可以用于登录");
+      void loadGitHubLink();
+    } else if (oauthError) {
+      setActionError(githubLinkErrorMessage(oauthError));
+    }
+    search.delete("github");
+    search.delete("oauth_error");
+    search.delete("return_path");
+    window.history.replaceState(
+      window.history.state,
+      "",
+      `${window.location.pathname}${
+        search.toString() ? `?${search.toString()}` : ""
+      }${window.location.hash}`,
+    );
+  }, [loadGitHubLink]);
+
+  const handleGitHubLink = async () => {
+    setActionError("");
+    setActionNotice("");
+    setGitHubLinking(true);
+    try {
+      const authorization = await startGitHubLink();
+      window.location.assign(authorization.authorization_url);
+    } catch (error) {
+      setActionError(
+        error instanceof AuthApiError
+          ? error.message
+          : "GitHub 绑定请求失败，请稍后重试",
+      );
+      setGitHubLinking(false);
+    }
+  };
 
   const handleRevoke = async (managedSession: ManagedSession) => {
     setRevokingId(managedSession.id);
@@ -141,6 +227,64 @@ export default function AccountPage() {
               <strong>{authMethodLabel(currentSession?.auth_method)}</strong>
             </span>
           </span>
+        </div>
+      </section>
+
+      <section
+        className="account-connections"
+        aria-labelledby="account-connections-title"
+      >
+        <header className="account-section-heading">
+          <div>
+            <p className="eyebrow">账号绑定</p>
+            <h2 id="account-connections-title">登录方式</h2>
+            <p>绑定第三方账号后，可以使用对应方式登录同一个学习账户。</p>
+          </div>
+        </header>
+
+        <div className="account-connection-row">
+          <span className="account-connection-row__icon">
+            <GitBranch size={21} />
+          </span>
+          <div className="account-connection-row__main">
+            <strong>GitHub</strong>
+            <small>
+              {connectionLoadState === "loading"
+                ? "正在确认绑定状态"
+                : connectionLoadState === "error"
+                  ? connectionError
+                  : githubLink?.linked
+                    ? githubIdentityLabel(githubLink)
+                    : "尚未绑定"}
+            </small>
+          </div>
+          <div className="account-connection-row__status">
+            {connectionLoadState === "ready" && githubLink?.linked ? (
+              <StatusMark tone="success">已绑定</StatusMark>
+            ) : null}
+          </div>
+          <Button
+            disabled={
+              connectionLoadState !== "ready" ||
+              Boolean(githubLink?.linked) ||
+              githubLinking
+            }
+            icon={
+              githubLinking || connectionLoadState === "loading" ? (
+                <LoaderCircle className="spin" size={16} />
+              ) : (
+                <GitBranch size={16} />
+              )
+            }
+            onClick={() => void handleGitHubLink()}
+            tone="secondary"
+          >
+            {githubLinking
+              ? "正在前往 GitHub"
+              : githubLink?.linked
+                ? "已绑定"
+                : "绑定 GitHub"}
+          </Button>
         </div>
       </section>
 
@@ -399,4 +543,22 @@ function formatRelativeTime(value: string) {
   if (elapsedHours < 24) return `${elapsedHours} 小时前`;
   const elapsedDays = Math.floor(elapsedHours / 24);
   return `${elapsedDays} 天前`;
+}
+
+function githubIdentityLabel(identity: GitHubLinkStatus) {
+  if (identity.username) return `已连接 @${identity.username}`;
+  if (identity.email) return `已连接 ${identity.email}`;
+  return "已连接 GitHub 账号";
+}
+
+function githubLinkErrorMessage(code: string) {
+  const messages: Record<string, string> = {
+    GITHUB_OAUTH_CANCELLED: "你已取消 GitHub 授权，账号绑定没有变化",
+    GITHUB_OAUTH_STATE_INVALID: "GitHub 绑定请求已失效，请重新发起",
+    GITHUB_OAUTH_UNAVAILABLE: "GitHub 暂时不可用，请稍后重试",
+    GITHUB_LINK_AUTH_REQUIRED: "登录状态已变化，请重新登录后绑定 GitHub",
+    GITHUB_IDENTITY_IN_USE: "该 GitHub 账号已绑定其他学习账户",
+    GITHUB_ALREADY_LINKED: "当前学习账户已经绑定 GitHub",
+  };
+  return messages[code] || "GitHub 绑定未完成，请重新发起";
 }

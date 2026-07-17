@@ -82,6 +82,13 @@ export interface GitHubOAuthAuthorization {
   expires_at: string
 }
 
+export interface GitHubLinkStatus {
+  linked: boolean
+  username: string | null
+  email: string | null
+  linked_at: string | null
+}
+
 export interface VerifiedEmailUser {
   id: string
   email: string
@@ -154,6 +161,7 @@ export interface AuthContextValue {
   verifyEmail: (
     credential: EmailVerificationCredential,
   ) => Promise<EmailVerificationData>
+  startGitHubLink: () => Promise<GitHubOAuthAuthorization>
   revokeSession: (sessionId: string) => Promise<void>
   logout: () => Promise<void>
   restore: () => Promise<void>
@@ -227,6 +235,27 @@ export function startGitHubOAuth(
   return authRequest<GitHubOAuthAuthorization>('/github/start', {
     method: 'POST',
     body: JSON.stringify(details),
+  })
+}
+
+export function fetchGitHubLinkStatus(
+  signal?: AbortSignal,
+): Promise<GitHubLinkStatus> {
+  return authRequest<GitHubLinkStatus>('/github/link', {
+    method: 'GET',
+    signal,
+  })
+}
+
+export function startGitHubAccountLink(
+  csrfToken: string,
+): Promise<GitHubOAuthAuthorization> {
+  return authRequest<GitHubOAuthAuthorization>('/github/link/start', {
+    method: 'POST',
+    headers: {
+      'X-CSRF-Token': csrfToken,
+    },
+    body: JSON.stringify({ return_path: '/account' }),
   })
 }
 

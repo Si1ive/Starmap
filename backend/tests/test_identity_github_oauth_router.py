@@ -12,11 +12,16 @@ from app.middleware.error_handler import APIException, api_exception_handler
 from app.modules.identity.github_oauth import (
     GitHubOAuthCallbackOutcome,
     GitHubOAuthFlowError,
+    GitHubIdentitySummary,
     GitHubOAuthStartOutcome,
+)
+from app.modules.identity.dependencies import (
+    require_csrf_session,
+    require_current_session,
 )
 from app.modules.identity.rate_limit import get_auth_rate_limiter
 from app.modules.identity.router import get_github_oauth_service, router
-from app.modules.identity.session import LoginOutcome
+from app.modules.identity.session import AuthenticatedSession, LoginOutcome
 
 TRUSTED_ORIGIN = "http://localhost:5173"
 NOW = datetime(2026, 7, 17, 12, 0, 0)
@@ -28,6 +33,7 @@ VERIFIER_COOKIE = "v" * 86
 class StubGitHubOAuthService:
     def __init__(self):
         self.start_calls = []
+        self.start_link_calls = []
         self.callback_calls = []
 
     async def start(self, payload, context):
@@ -38,6 +44,22 @@ class StubGitHubOAuthService:
             verifier_cookie=VERIFIER_COOKIE,
         )
 
+    async def start_link(self, payload, current, context):
+        self.start_link_calls.append((payload, current, context))
+        return GitHubOAuthStartOutcome(
+            authorization_url="https://github.com/login/oauth/authorize?state=link",
+            expires_at=NOW + timedelta(minutes=10),
+            verifier_cookie=VERIFIER_COOKIE,
+        )
+
+    async def get_linked_identity(self, user_id):
+        return GitHubIdentitySummary(
+            linked=True,
+            username="linked-learner",
+            email="github@example.com",
+            linked_at=NOW,
+        )
+
     async def callback(self, **values):
         self.callback_calls.append(values)
         if values["code"] == "conflict":
@@ -46,6 +68,13 @@ class StubGitHubOAuthService:
                 "需要先验证现有账号",
                 status_code=409,
                 return_path="/today?view=compact",
+            )
+        if values["code"] == "linked":
+            return GitHubOAuthCallbackOutcome(
+                login=None,
+                return_path="/account",
+                new_user=False,
+                linked=True,
             )
         user = SimpleNamespace(
             id=uuid.UUID("01981b38-2700-7000-8000-000000000081"),
@@ -94,10 +123,47 @@ def build_client():
     app.include_router(router, prefix="/api/v1")
     service = StubGitHubOAuthService()
     limiter = RecordingRateLimiter()
+    user = SimpleNamespace(
+        id=uuid.UUID("01981b38-2700-7000-8000-000000000081"),
+    )
+    session = SimpleNamespace(
+        id=uuid.UUID("01981b38-2700-7000-8000-000000000082"),
+    )
+    current = AuthenticatedSession(
+        user=user,
+        profile=None,
+        session=session,
+        csrf_token=CSRF_TOKEN,
+    )
     app.dependency_overrides[get_github_oauth_service] = lambda: service
     app.dependency_overrides[get_auth_rate_limiter] = lambda: limiter
+    app.dependency_overrides[require_current_session] = lambda: current
+    app.dependency_overrides[require_csrf_session] = lambda: current
     client = TestClient(app, headers={"Origin": TRUSTED_ORIGIN})
     return client, service, limiter
+
+
+def test_account_can_read_and_start_github_binding():
+    client, service, limiter = build_client()
+
+    status_response = client.get("/api/v1/auth/github/link")
+    start_response = client.post(
+        "/api/v1/auth/github/link/start",
+        json={"return_path": "/account"},
+        headers={"X-CSRF-Token": CSRF_TOKEN},
+    )
+
+    assert status_response.status_code == 200
+    assert status_response.json()["data"] == {
+        "linked": True,
+        "username": "linked-learner",
+        "email": "github@example.com",
+        "linked_at": "2026-07-17T12:00:00.000000Z",
+    }
+    assert start_response.status_code == 200
+    assert start_response.json()["data"]["authorization_url"].endswith("state=link")
+    assert service.start_link_calls[0][0].return_path == "/account"
+    assert limiter.calls[0][0] == "github-oauth-link-start"
 
 
 def test_start_requires_trusted_json_and_sets_short_http_only_pkce_cookie():
@@ -184,3 +250,29 @@ def test_callback_failure_redirects_with_safe_code_without_session():
         "set-cookie", ""
     )
     assert response.headers["cache-control"] == "no-store"
+
+
+def test_link_callback_returns_to_account_without_rotating_session():
+    client, service, _ = build_client()
+    client.cookies.set(settings.AUTH_GITHUB_OAUTH_COOKIE_NAME, VERIFIER_COOKIE)
+    client.cookies.set(settings.AUTH_SESSION_COOKIE_NAME, SESSION_TOKEN)
+
+    response = client.get(
+        "/api/v1/auth/github/callback?state=oauth-state&code=linked",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        "http://localhost:5173/account?github=linked"
+    )
+    cookies = response.headers.get_list("set-cookie")
+    assert not any(
+        value.startswith(f"{settings.AUTH_SESSION_COOKIE_NAME}=") for value in cookies
+    )
+    assert any(
+        value.startswith(f"{settings.AUTH_GITHUB_OAUTH_COOKIE_NAME}=")
+        and "Max-Age=0" in value
+        for value in cookies
+    )
+    assert service.callback_calls[0]["previous_session_token"] == SESSION_TOKEN

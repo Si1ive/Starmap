@@ -29,7 +29,10 @@ from app.modules.identity.models import (
     UserProfile,
     utc_now,
 )
-from app.modules.identity.schemas import GitHubOAuthStartRequest
+from app.modules.identity.schemas import (
+    GitHubOAuthLinkStartRequest,
+    GitHubOAuthStartRequest,
+)
 from app.modules.identity.security import (
     action_token_digest,
     generate_opaque_token,
@@ -38,7 +41,11 @@ from app.modules.identity.security import (
     pack_ip_address,
     sanitize_user_agent,
 )
-from app.modules.identity.session import LoginOutcome, SessionService
+from app.modules.identity.session import (
+    AuthenticatedSession,
+    LoginOutcome,
+    SessionService,
+)
 
 GITHUB_PROVIDER = "github"
 GITHUB_OAUTH_PURPOSE = "github_oauth"
@@ -57,6 +64,7 @@ ALLOWED_RETURN_PATHS = (
     "/sources",
     "/states",
     "/onboarding",
+    "/account",
 )
 
 
@@ -70,10 +78,12 @@ class GitHubOAuthFlowError(ValueError):
         *,
         status_code: int,
         return_path: str = "/login",
+        redirect_path: str = "/login",
     ) -> None:
         self.code = code
         self.status_code = status_code
         self.return_path = return_path
+        self.redirect_path = redirect_path
         super().__init__(message)
 
 
@@ -102,11 +112,22 @@ class GitHubOAuthStartOutcome:
 
 @dataclass(frozen=True)
 class GitHubOAuthCallbackOutcome:
-    """Successful GitHub login and its safe frontend destination."""
+    """Successful GitHub login or account binding and its destination."""
 
-    login: LoginOutcome
+    login: Optional[LoginOutcome]
     return_path: str
     new_user: bool
+    linked: bool = False
+
+
+@dataclass(frozen=True)
+class GitHubIdentitySummary:
+    """Redacted GitHub identity details safe for account settings."""
+
+    linked: bool
+    username: Optional[str] = None
+    email: Optional[str] = None
+    linked_at: Optional[datetime] = None
 
 
 @dataclass(frozen=True)
@@ -117,6 +138,8 @@ class _OAuthTransaction:
     accept_terms: bool
     accept_privacy: bool
     source: str
+    user_id: Optional[uuid.UUID]
+    session_id: Optional[uuid.UUID]
 
 
 class GitHubOAuthClient:
@@ -287,6 +310,94 @@ class GitHubOAuthService:
             verifier_cookie=verifier,
         )
 
+    async def start_link(
+        self,
+        payload: GitHubOAuthLinkStartRequest,
+        current: AuthenticatedSession,
+        context: AuthRequestContext,
+    ) -> GitHubOAuthStartOutcome:
+        """Bind one OAuth transaction to the current user and session."""
+
+        try:
+            self.provider.ensure_configured()
+        except GitHubProviderError as exc:
+            raise GitHubOAuthFlowError(
+                "GITHUB_OAUTH_UNAVAILABLE",
+                "GitHub 绑定暂时不可用",
+                status_code=503,
+                return_path="/account",
+                redirect_path="/account",
+            ) from exc
+
+        now = self.clock()
+        state = generate_opaque_token()
+        verifier = _generate_pkce_verifier()
+        return_path = validate_return_path(
+            payload.return_path,
+            default="/account",
+        )
+        expires_at = now + timedelta(minutes=settings.AUTH_GITHUB_TRANSACTION_MINUTES)
+        metadata = {
+            "verifier_hash": action_token_digest(
+                verifier,
+                GITHUB_STATE_DIGEST_PURPOSE,
+            ).hex(),
+            "return_path": return_path,
+            "remember_me": False,
+            "accept_terms": False,
+            "accept_privacy": False,
+            "source": "link",
+            "session_id": str(current.session.id),
+        }
+        self.db.add(
+            AuthActionToken(
+                id=new_uuid7(),
+                user_id=current.user.id,
+                purpose=GITHUB_OAUTH_PURPOSE,
+                challenge_id=new_uuid7(),
+                token_kind="state",
+                token_hash=action_token_digest(
+                    state,
+                    GITHUB_STATE_DIGEST_PURPOSE,
+                ),
+                key_version=settings.AUTH_ACTION_TOKEN_KEY_VERSION,
+                request_ip=pack_ip_address(context.remote_ip),
+                metadata_json=metadata,
+                created_at=now,
+                expires_at=expires_at,
+            )
+        )
+        await self.db.commit()
+        return GitHubOAuthStartOutcome(
+            authorization_url=self.provider.authorization_url(
+                state,
+                _pkce_challenge(verifier),
+            ),
+            expires_at=expires_at,
+            verifier_cookie=verifier,
+        )
+
+    async def get_linked_identity(
+        self,
+        user_id: uuid.UUID,
+    ) -> GitHubIdentitySummary:
+        """Return the current account's GitHub binding without provider secrets."""
+
+        identity = await self.db.scalar(
+            select(AuthIdentity).where(
+                AuthIdentity.user_id == user_id,
+                AuthIdentity.provider == GITHUB_PROVIDER,
+            )
+        )
+        if identity is None:
+            return GitHubIdentitySummary(linked=False)
+        return GitHubIdentitySummary(
+            linked=True,
+            username=identity.provider_username,
+            email=identity.provider_email,
+            linked_at=identity.linked_at,
+        )
+
     async def callback(
         self,
         *,
@@ -306,6 +417,7 @@ class GitHubOAuthService:
                 "GitHub 授权未完成",
                 status_code=400,
                 return_path=transaction.return_path,
+                redirect_path=_transaction_redirect_path(transaction),
             )
 
         try:
@@ -320,8 +432,16 @@ class GitHubOAuthService:
                 "GitHub 登录暂时不可用",
                 status_code=503,
                 return_path=transaction.return_path,
+                redirect_path=_transaction_redirect_path(transaction),
             ) from exc
 
+        if transaction.source == "link":
+            return await self._link_identity(
+                profile,
+                transaction,
+                context,
+                previous_session_token,
+            )
         return await self._resolve_account(
             profile,
             transaction,
@@ -366,6 +486,7 @@ class GitHubOAuthService:
             transaction = _transaction_from_metadata(
                 token.metadata_json,
                 raw_verifier,
+                token.user_id,
             )
         except (KeyError, TypeError, ValueError):
             token.invalidated_at = now
@@ -435,6 +556,130 @@ class GitHubOAuthService:
             login=login,
             return_path="/onboarding" if new_user else transaction.return_path,
             new_user=new_user,
+        )
+
+    async def _link_identity(
+        self,
+        profile: GitHubProfile,
+        transaction: _OAuthTransaction,
+        context: AuthRequestContext,
+        session_token: Optional[str],
+    ) -> GitHubOAuthCallbackOutcome:
+        if transaction.user_id is None or transaction.session_id is None:
+            raise _invalid_state_error()
+
+        current = await SessionService(self.db, clock=self.clock).authenticate(
+            session_token,
+            context,
+        )
+        if (
+            current is None
+            or current.user.id != transaction.user_id
+            or current.session.id != transaction.session_id
+        ):
+            raise GitHubOAuthFlowError(
+                "GITHUB_LINK_AUTH_REQUIRED",
+                "登录状态已变化，请重新登录后绑定 GitHub",
+                status_code=401,
+                return_path=transaction.return_path,
+                redirect_path="/account",
+            )
+
+        now = self.clock()
+        identity = await self.db.scalar(
+            select(AuthIdentity)
+            .where(
+                AuthIdentity.provider == GITHUB_PROVIDER,
+                AuthIdentity.provider_subject == profile.subject,
+            )
+            .with_for_update()
+        )
+        if identity is not None:
+            if identity.user_id != current.user.id:
+                await self._record_failure(
+                    "identity_owned_by_another_user",
+                    context,
+                    user_id=current.user.id,
+                )
+                raise GitHubOAuthFlowError(
+                    "GITHUB_IDENTITY_IN_USE",
+                    "该 GitHub 账号已绑定其他学习账户",
+                    status_code=409,
+                    return_path=transaction.return_path,
+                    redirect_path="/account",
+                )
+            identity.provider_username = profile.username
+            identity.provider_email = profile.verified_email
+            identity.provider_email_verified = profile.verified_email is not None
+            identity.updated_at = now
+            await self.db.commit()
+            return GitHubOAuthCallbackOutcome(
+                login=None,
+                return_path=transaction.return_path,
+                new_user=False,
+                linked=True,
+            )
+
+        existing_for_user = await self.db.scalar(
+            select(AuthIdentity)
+            .where(
+                AuthIdentity.user_id == current.user.id,
+                AuthIdentity.provider == GITHUB_PROVIDER,
+            )
+            .with_for_update()
+        )
+        if existing_for_user is not None:
+            await self.db.rollback()
+            raise GitHubOAuthFlowError(
+                "GITHUB_ALREADY_LINKED",
+                "当前账户已经绑定 GitHub",
+                status_code=409,
+                return_path=transaction.return_path,
+                redirect_path="/account",
+            )
+
+        self.db.add(
+            AuthIdentity(
+                id=new_uuid7(),
+                user_id=current.user.id,
+                provider=GITHUB_PROVIDER,
+                provider_subject=profile.subject,
+                provider_username=profile.username,
+                provider_email=profile.verified_email,
+                provider_email_verified=profile.verified_email is not None,
+                linked_at=now,
+                updated_at=now,
+            )
+        )
+        self.db.add(
+            AuthEvent(
+                user_id=current.user.id,
+                session_id=current.session.id,
+                event_type="identity_link",
+                outcome="success",
+                provider=GITHUB_PROVIDER,
+                reason_code="account_settings",
+                ip_address=pack_ip_address(context.remote_ip),
+                user_agent=sanitize_user_agent(context.user_agent),
+                request_id=(context.request_id or "")[:64] or None,
+            )
+        )
+        try:
+            await self.db.commit()
+        except IntegrityError as exc:
+            await self.db.rollback()
+            raise GitHubOAuthFlowError(
+                "GITHUB_IDENTITY_IN_USE",
+                "该 GitHub 账号已绑定其他学习账户",
+                status_code=409,
+                return_path=transaction.return_path,
+                redirect_path="/account",
+            ) from exc
+        return GitHubOAuthCallbackOutcome(
+            login=None,
+            return_path=transaction.return_path,
+            new_user=False,
+            linked=True,
         )
 
     async def _create_user_for_profile(
@@ -612,9 +857,14 @@ def _pkce_challenge(verifier: str) -> str:
     return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
 
+def _transaction_redirect_path(transaction: _OAuthTransaction) -> str:
+    return "/account" if transaction.source == "link" else "/login"
+
+
 def _transaction_from_metadata(
     metadata: Optional[dict],
     raw_verifier: str,
+    user_id: Optional[uuid.UUID],
 ) -> _OAuthTransaction:
     if not isinstance(metadata, dict):
         raise TypeError("missing OAuth metadata")
@@ -630,8 +880,13 @@ def _transaction_from_metadata(
         default="/today",
     )
     source = str(metadata["source"])
-    if source not in {"login", "register"}:
+    if source not in {"login", "register", "link"}:
         raise ValueError("invalid OAuth source")
+    session_id = None
+    if source == "link":
+        if user_id is None:
+            raise ValueError("missing OAuth link user")
+        session_id = uuid.UUID(str(metadata["session_id"]))
     return _OAuthTransaction(
         verifier=raw_verifier,
         return_path=return_path,
@@ -639,6 +894,8 @@ def _transaction_from_metadata(
         accept_terms=metadata.get("accept_terms") is True,
         accept_privacy=metadata.get("accept_privacy") is True,
         source=source,
+        user_id=user_id,
+        session_id=session_id,
     )
 
 

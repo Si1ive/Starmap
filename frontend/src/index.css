@@ -12433,6 +12433,7 @@ summary:focus-visible {
   font-size: 12px;
 }
 
+.account-connections,
 .account-sessions {
   margin-top: 38px;
 }
@@ -12464,6 +12465,54 @@ summary:focus-visible {
   flex: 0 0 auto;
   font-size: 11px;
   font-weight: 700;
+}
+
+.account-connection-row {
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  border-top: 1px solid var(--line-strong);
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 42px minmax(0, 1fr) auto auto;
+  min-height: 88px;
+  padding: 16px 0;
+}
+
+.account-connection-row__icon {
+  align-items: center;
+  background: var(--ink);
+  border-radius: 6px;
+  color: #fff;
+  display: inline-flex;
+  height: 40px;
+  justify-content: center;
+  width: 40px;
+}
+
+.account-connection-row__main {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.account-connection-row__main strong {
+  font-size: 13px;
+}
+
+.account-connection-row__main small {
+  color: var(--ink-faint);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.account-connection-row__status {
+  min-width: 54px;
+}
+
+.account-connection-row > .button {
+  min-height: 36px;
+  min-width: 132px;
+  white-space: nowrap;
 }
 
 .account-action-notice,
@@ -12728,6 +12777,23 @@ summary:focus-visible {
   .account-profile__facts > span:first-child {
     border-left: 0;
     padding-left: 0;
+  }
+
+  .account-connection-row {
+    align-items: start;
+    grid-template-columns: 40px minmax(0, 1fr) auto;
+  }
+
+  .account-connection-row__status {
+    grid-column: 3;
+    grid-row: 1;
+    min-width: 0;
+  }
+
+  .account-connection-row > .button {
+    grid-column: 1 / -1;
+    min-width: 0;
+    width: 100%;
   }
 
   .account-session-row {

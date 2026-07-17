@@ -12,6 +12,7 @@ import {
   loginWithPassword,
   logoutCurrentSession,
   revokeActiveSession,
+  startGitHubAccountLink,
 } from './auth'
 
 interface AuthState {
@@ -136,6 +137,26 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
     [applySession, state.data?.csrf_token],
   )
 
+  const startGitHubLink = useCallback(async () => {
+    const csrfToken = state.data?.csrf_token
+    if (!csrfToken) {
+      applySession(null)
+      throw new AuthApiError({
+        code: 'AUTHENTICATION_REQUIRED',
+        message: '请先登录',
+        status: 401,
+      })
+    }
+    try {
+      return await startGitHubAccountLink(csrfToken)
+    } catch (error) {
+      if (error instanceof AuthApiError && error.status === 401) {
+        applySession(null)
+      }
+      throw error
+    }
+  }, [applySession, state.data?.csrf_token])
+
   const value = useMemo<AuthContextValue>(
     () => ({
       status: state.status,
@@ -143,11 +164,20 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
       session: state.data?.session ?? null,
       login,
       verifyEmail,
+      startGitHubLink,
       revokeSession,
       logout,
       restore,
     }),
-    [login, logout, restore, revokeSession, state, verifyEmail],
+    [
+      login,
+      logout,
+      restore,
+      revokeSession,
+      startGitHubLink,
+      state,
+      verifyEmail,
+    ],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

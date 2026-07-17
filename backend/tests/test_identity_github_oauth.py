@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import uuid
 from datetime import datetime
 from urllib.parse import parse_qs, urlsplit
 
@@ -32,8 +33,17 @@ from app.modules.identity.models import (
     UserConsent,
     UserProfile,
 )
-from app.modules.identity.schemas import GitHubOAuthStartRequest
-from app.modules.identity.security import action_token_digest
+from app.modules.identity.schemas import (
+    GitHubOAuthLinkStartRequest,
+    GitHubOAuthStartRequest,
+)
+from app.modules.identity.security import (
+    action_token_digest,
+    csrf_token_digest,
+    derive_csrf_token,
+    session_token_digest,
+)
+from app.modules.identity.session import AuthenticatedSession
 
 IDENTITY_TABLES = [
     User.__table__,
@@ -128,6 +138,50 @@ async def start_oauth(db_session, provider, **overrides):
     return service, outcome, state, code_challenge
 
 
+async def create_authenticated_user(
+    db_session,
+    *,
+    email: str = "account@example.com",
+    session_token: str = "current-session-token-with-enough-entropy",
+) -> AuthenticatedSession:
+    user = User(
+        email_normalized=email,
+        email_display=email,
+        email_verified_at=NOW,
+        status="active",
+        activated_at=NOW,
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    user.profile = UserProfile(
+        display_name="Password Learner",
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    csrf_token = derive_csrf_token(session_token)
+    session = AuthSession(
+        id=uuid.UUID("01981b38-2700-7000-8000-000000000090"),
+        token_hash=session_token_digest(session_token),
+        csrf_secret_hash=csrf_token_digest(csrf_token),
+        auth_version=1,
+        auth_method="password",
+        device_label="Chrome on macOS",
+        created_at=NOW,
+        last_seen_at=NOW,
+        idle_expires_at=NOW.replace(hour=23),
+        absolute_expires_at=NOW.replace(day=24),
+    )
+    user.sessions.append(session)
+    db_session.add(user)
+    await db_session.commit()
+    return AuthenticatedSession(
+        user=user,
+        profile=user.profile,
+        session=session,
+        csrf_token=csrf_token,
+    )
+
+
 @pytest.mark.asyncio
 async def test_start_persists_only_state_and_verifier_digests(db_session):
     provider = StubGitHubProvider(github_profile())
@@ -159,6 +213,103 @@ async def test_start_persists_only_state_and_verifier_digests(db_session):
         .decode("ascii")
     )
     assert code_challenge == expected_challenge
+
+
+@pytest.mark.asyncio
+async def test_authenticated_user_can_bind_github_identity(db_session):
+    session_token = "current-session-token-with-enough-entropy"
+    current = await create_authenticated_user(
+        db_session,
+        session_token=session_token,
+    )
+    provider = StubGitHubProvider(
+        github_profile(
+            subject="87654321",
+            username="linked-learner",
+            verified_email="github@example.com",
+        )
+    )
+    service = GitHubOAuthService(db_session, provider, clock=lambda: NOW)
+    start = await service.start_link(
+        GitHubOAuthLinkStartRequest(return_path="/account"),
+        current,
+        CONTEXT,
+    )
+    state, _ = provider.authorization_calls[-1]
+
+    outcome = await service.callback(
+        state=state,
+        code="github-link-code",
+        provider_error=None,
+        verifier_cookie=start.verifier_cookie,
+        context=CONTEXT,
+        previous_session_token=session_token,
+    )
+
+    identity = await db_session.scalar(select(AuthIdentity))
+    events = (await db_session.scalars(select(AuthEvent))).all()
+    assert outcome.linked is True
+    assert outcome.login is None
+    assert outcome.return_path == "/account"
+    assert identity.user_id == current.user.id
+    assert identity.provider_subject == "87654321"
+    assert identity.provider_username == "linked-learner"
+    assert events[-1].event_type == "identity_link"
+    assert events[-1].session_id == current.session.id
+
+
+@pytest.mark.asyncio
+async def test_github_link_requires_the_session_that_started_it(db_session):
+    current = await create_authenticated_user(db_session)
+    provider = StubGitHubProvider(github_profile(subject="87654321"))
+    service = GitHubOAuthService(db_session, provider, clock=lambda: NOW)
+    start = await service.start_link(
+        GitHubOAuthLinkStartRequest(),
+        current,
+        CONTEXT,
+    )
+    state, _ = provider.authorization_calls[-1]
+
+    with pytest.raises(GitHubOAuthFlowError) as raised:
+        await service.callback(
+            state=state,
+            code="github-link-code",
+            provider_error=None,
+            verifier_cookie=start.verifier_cookie,
+            context=CONTEXT,
+            previous_session_token="different-session-token-with-enough-entropy",
+        )
+
+    assert raised.value.code == "GITHUB_LINK_AUTH_REQUIRED"
+    assert raised.value.redirect_path == "/account"
+    assert await db_session.scalar(select(AuthIdentity)) is None
+
+
+@pytest.mark.asyncio
+async def test_cancelled_github_link_returns_to_account(db_session):
+    current = await create_authenticated_user(db_session)
+    provider = StubGitHubProvider(github_profile(subject="87654321"))
+    service = GitHubOAuthService(db_session, provider, clock=lambda: NOW)
+    start = await service.start_link(
+        GitHubOAuthLinkStartRequest(),
+        current,
+        CONTEXT,
+    )
+    state, _ = provider.authorization_calls[-1]
+
+    with pytest.raises(GitHubOAuthFlowError) as raised:
+        await service.callback(
+            state=state,
+            code=None,
+            provider_error="access_denied",
+            verifier_cookie=start.verifier_cookie,
+            context=CONTEXT,
+            previous_session_token="current-session-token-with-enough-entropy",
+        )
+
+    assert raised.value.code == "GITHUB_OAUTH_CANCELLED"
+    assert raised.value.redirect_path == "/account"
+    assert provider.exchange_calls == []
 
 
 @pytest.mark.asyncio
