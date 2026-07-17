@@ -231,7 +231,6 @@ export default function LoginPage() {
   const requestedAuthMode = useMemo(() => {
     const mode = new URLSearchParams(location.search).get('auth')
     if (mode === 'register' || mode === 'login') return mode
-    if (oauthFailure?.code === 'GITHUB_CONSENT_REQUIRED') return 'register'
     return oauthFailure ? 'login' : null
   }, [location.search, oauthFailure])
   const registrationEmail =
@@ -446,20 +445,15 @@ export default function LoginPage() {
   }
 
   const handleGitHubAuth = async () => {
-    if (authMode === 'register' && !acceptedLegal) {
-      setAuthError('使用 GitHub 创建账户前，请先同意服务条款与隐私说明。')
-      return
-    }
-
     setAuthError('')
     setGithubSubmitting(true)
     try {
       const authorization = await startGitHubOAuth({
-        source: authMode,
+        source: 'login',
         return_path: oauthReturnPath ?? postLoginPath(location.state),
         remember_me: rememberLogin,
-        accept_terms: authMode === 'login' || acceptedLegal,
-        accept_privacy: authMode === 'login' || acceptedLegal,
+        accept_terms: true,
+        accept_privacy: true,
       })
       window.location.assign(authorization.authorization_url)
     } catch (error) {
@@ -1117,30 +1111,31 @@ export default function LoginPage() {
                 </label>
               ) : null}
 
-              <button
-                className="auth-form__provider"
-                disabled={submitting || githubSubmitting}
-                onClick={() => void handleGitHubAuth()}
-                type="button"
-              >
-                {githubSubmitting ? (
-                  <>
-                    <LoaderCircle className="auth-provider-spinner" size={18} />
-                    正在前往 GitHub
-                  </>
-                ) : (
-                  <>
-                    <GitBranch size={18} />
-                    {authMode === 'login' ? '使用 GitHub 登录' : '使用 GitHub 注册'}
-                    <ArrowRight className="auth-form__provider-arrow" size={16} />
-                  </>
-                )}
-              </button>
-
               {authMode === 'login' ? (
-                <p className="auth-form__provider-legal">
-                  继续即表示你同意服务条款与隐私说明
-                </p>
+                <>
+                  <button
+                    className="auth-form__provider"
+                    disabled={submitting || githubSubmitting}
+                    onClick={() => void handleGitHubAuth()}
+                    type="button"
+                  >
+                    {githubSubmitting ? (
+                      <>
+                        <LoaderCircle className="auth-provider-spinner" size={18} />
+                        正在前往 GitHub
+                      </>
+                    ) : (
+                      <>
+                        <GitBranch size={18} />
+                        使用 GitHub 登录
+                        <ArrowRight className="auth-form__provider-arrow" size={16} />
+                      </>
+                    )}
+                  </button>
+                  <p className="auth-form__provider-legal">
+                    首次使用将自动创建账户，继续即表示你同意服务条款与隐私说明
+                  </p>
+                </>
               ) : null}
 
               {authError ? (
@@ -1150,9 +1145,11 @@ export default function LoginPage() {
                 </p>
               ) : null}
 
-              <div className="auth-form__divider">
-                <span>或使用邮箱</span>
-              </div>
+              {authMode === 'login' ? (
+                <div className="auth-form__divider">
+                  <span>或使用邮箱</span>
+                </div>
+              ) : null}
 
               {authMode === 'register' ? (
                 <label>
@@ -1315,7 +1312,7 @@ function githubOAuthFailure(search: string): GitHubOAuthFailure | null {
     GITHUB_EMAIL_REQUIRED:
       'GitHub 没有提供可用的已验证邮箱，请改用邮箱注册。',
     GITHUB_CONSENT_REQUIRED:
-      '创建账户前，请先同意服务条款与隐私说明。',
+      'GitHub 首次登录需要同意服务条款与隐私说明，请重新发起。',
     GITHUB_ACCOUNT_LINK_REQUIRED:
       '该 GitHub 邮箱已对应一个邮箱账户。请使用邮箱密码登录，系统不会自动合并身份。',
     ACCOUNT_LOGIN_UNAVAILABLE:

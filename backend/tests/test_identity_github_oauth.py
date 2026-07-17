@@ -111,7 +111,7 @@ def github_profile(
 
 def start_payload(**overrides) -> GitHubOAuthStartRequest:
     values = {
-        "source": "register",
+        "source": "login",
         "return_path": "/agent/thread-1?focus=question",
         "remember_me": True,
         "accept_terms": True,
@@ -140,7 +140,8 @@ async def test_start_persists_only_state_and_verifier_digests(db_session):
 
     token = await db_session.scalar(select(AuthActionToken))
     assert token.token_hash == action_token_digest(state, "github_oauth_state")
-    assert token.metadata_json["return_path"] == "/onboarding"
+    assert token.metadata_json["return_path"] == "/today"
+    assert token.metadata_json["source"] == "login"
     assert state not in str(token.metadata_json)
     assert outcome.verifier_cookie not in str(token.metadata_json)
     assert (
