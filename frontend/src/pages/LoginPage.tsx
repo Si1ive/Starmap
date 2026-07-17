@@ -3,6 +3,7 @@ import {
   PointerEvent,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react'
@@ -220,6 +221,10 @@ export default function LoginPage() {
   const { login } = useAuth()
   const location = useLocation()
   const navigate = useNavigate()
+  const requestedAuthMode = useMemo(() => {
+    const mode = new URLSearchParams(location.search).get('auth')
+    return mode === 'register' ? 'register' : mode === 'login' ? 'login' : null
+  }, [location.search])
   const heroRef = useRef<HTMLElement>(null)
   const arrivalTimerRef = useRef<number | null>(null)
   const [activeStage, setActiveStage] = useState<StageId>('question')
@@ -230,8 +235,8 @@ export default function LoginPage() {
   const [activeVariant, setActiveVariant] = useState(0)
   const [selectedAnswer, setSelectedAnswer] = useState<number | null>(null)
   const [activeReviewWindow, setActiveReviewWindow] = useState(1)
-  const [authOpen, setAuthOpen] = useState(false)
-  const [authMode, setAuthMode] = useState<AuthMode>('login')
+  const [authOpen, setAuthOpen] = useState(requestedAuthMode !== null)
+  const [authMode, setAuthMode] = useState<AuthMode>(requestedAuthMode ?? 'login')
   const [passwordVisible, setPasswordVisible] = useState(false)
   const [rememberLogin, setRememberLogin] = useState(true)
   const [authError, setAuthError] = useState('')
@@ -327,6 +332,12 @@ export default function LoginPage() {
       window.removeEventListener('keydown', onKeyDown)
     }
   }, [authOpen])
+
+  useEffect(() => {
+    if (!requestedAuthMode) return
+    setAuthMode(requestedAuthMode)
+    setAuthOpen(true)
+  }, [requestedAuthMode])
 
   const handlePointerMove = (event: PointerEvent<HTMLElement>) => {
     const rect = event.currentTarget.getBoundingClientRect()
@@ -1106,6 +1117,14 @@ export default function LoginPage() {
                     />
                     <span>保持登录</span>
                   </label>
+                  <button
+                    onClick={() =>
+                      navigate('/forgot-password', { state: location.state })
+                    }
+                    type="button"
+                  >
+                    忘记密码
+                  </button>
                 </div>
               ) : (
                 <label className="auth-form__consent">

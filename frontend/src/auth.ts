@@ -53,6 +53,15 @@ export interface RegistrationAccepted {
   resend_after_seconds: number
 }
 
+export interface ForgotPasswordAccepted {
+  accepted: true
+}
+
+export interface PasswordResetCompleted {
+  password_reset: true
+  authenticated: false
+}
+
 interface ApiEnvelope<T> {
   code: number | string
   message: string
@@ -154,6 +163,26 @@ export function registerWithPassword(
   details: RegistrationDetails,
 ): Promise<RegistrationAccepted> {
   return authRequest<RegistrationAccepted>('/register', {
+    method: 'POST',
+    body: JSON.stringify(details),
+  })
+}
+
+export function requestPasswordReset(
+  email: string,
+): Promise<ForgotPasswordAccepted> {
+  return authRequest<ForgotPasswordAccepted>('/password/forgot', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  })
+}
+
+export function resetPassword(details: {
+  token: string
+  password: string
+  password_confirmation: string
+}): Promise<PasswordResetCompleted> {
+  return authRequest<PasswordResetCompleted>('/password/reset', {
     method: 'POST',
     body: JSON.stringify(details),
   })

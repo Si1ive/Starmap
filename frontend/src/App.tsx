@@ -14,6 +14,7 @@ const LoginPage = lazy(() => import('./pages/LoginPage'))
 const MapPage = lazy(() => import('./pages/MapPage'))
 const MistakesPage = lazy(() => import('./pages/MistakesPage'))
 const OnboardingPage = lazy(() => import('./pages/OnboardingPage'))
+const PasswordRecoveryPage = lazy(() => import('./pages/PasswordRecoveryPage'))
 const PracticePage = lazy(() => import('./pages/PracticePage'))
 const SourcesPage = lazy(() => import('./pages/SourcesPage'))
 const StateGalleryPage = lazy(() => import('./pages/StateGalleryPage'))
@@ -77,6 +78,14 @@ function App() {
     >
       <Routes>
         <Route path="/login" element={<LoginRoute />} />
+        <Route
+          path="/forgot-password"
+          element={<PasswordRecoveryPage mode="forgot" />}
+        />
+        <Route
+          path="/reset-password"
+          element={<PasswordRecoveryPage mode="reset" />}
+        />
         <Route
           path="/onboarding"
           element={

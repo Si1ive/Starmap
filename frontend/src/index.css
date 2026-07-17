@@ -7175,7 +7175,7 @@ summary:focus-visible {
 .auth-form__options {
   align-items: center;
   display: flex;
-  justify-content: flex-start;
+  justify-content: space-between;
 }
 
 .auth-form__options label,
@@ -7186,6 +7186,17 @@ summary:focus-visible {
   flex-direction: row !important;
   font-size: 11px;
   gap: 7px !important;
+}
+
+.auth-form__options > button {
+  background: transparent;
+  color: var(--login-blue);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.auth-form__options > button:hover {
+  color: var(--login-blue-dark);
 }
 
 .auth-form input[type="checkbox"] {
@@ -11852,5 +11863,412 @@ summary:focus-visible {
 
   .retention-demo__focus > button {
     grid-column: 1 / -1;
+  }
+}
+
+/* Password recovery */
+
+.recovery-page {
+  --recovery-blue: #2f5bd3;
+  --recovery-blue-dark: #2247ad;
+  --recovery-ink: #17211c;
+  --recovery-muted: #5b6861;
+  --recovery-line: #cad5ce;
+  --recovery-paper: #ffffff;
+  background:
+    linear-gradient(
+      90deg,
+      rgba(47, 91, 211, 0.045) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      rgba(47, 91, 211, 0.045) 1px,
+      transparent 1px
+    ),
+    #eef3ef;
+  background-size: 42px 42px;
+  color: var(--recovery-ink);
+  min-height: 100vh;
+}
+
+.recovery-header {
+  align-items: center;
+  background: rgba(238, 243, 239, 0.96);
+  border-bottom: 1px solid var(--recovery-line);
+  display: flex;
+  height: 74px;
+  justify-content: space-between;
+  padding: 0 clamp(22px, 5vw, 76px);
+}
+
+.recovery-brand,
+.recovery-header__return {
+  align-items: center;
+  background: transparent;
+  display: inline-flex;
+}
+
+.recovery-brand {
+  gap: 11px;
+}
+
+.recovery-brand > span {
+  align-items: center;
+  background: var(--recovery-ink);
+  border-radius: 6px;
+  color: #fff;
+  display: inline-flex;
+  height: 36px;
+  justify-content: center;
+  width: 36px;
+}
+
+.recovery-brand strong {
+  font-family: var(--serif);
+  font-size: 18px;
+}
+
+.recovery-header__return {
+  color: var(--recovery-muted);
+  font-size: 12px;
+  font-weight: 800;
+  gap: 7px;
+}
+
+.recovery-header__return:hover {
+  color: var(--recovery-blue);
+}
+
+.recovery-workspace {
+  align-items: stretch;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(420px, 520px);
+  margin: 0 auto;
+  min-height: calc(100vh - 74px);
+  width: min(1180px, 100%);
+}
+
+.recovery-context {
+  align-self: center;
+  padding: 72px clamp(42px, 8vw, 118px) 72px clamp(24px, 5vw, 70px);
+}
+
+.recovery-context > p {
+  color: var(--recovery-blue);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.recovery-context > h1 {
+  font-family: var(--serif);
+  font-size: clamp(38px, 5vw, 62px);
+  line-height: 1.2;
+  margin-top: 22px;
+  max-width: 590px;
+}
+
+.recovery-context > span {
+  color: var(--recovery-muted);
+  display: block;
+  font-size: 14px;
+  line-height: 1.85;
+  margin-top: 22px;
+  max-width: 500px;
+}
+
+.recovery-context__assurances {
+  border-top: 1px solid var(--recovery-line);
+  display: grid;
+  gap: 0;
+  margin-top: 54px;
+  max-width: 500px;
+}
+
+.recovery-context__assurances > div {
+  align-items: center;
+  border-bottom: 1px solid var(--recovery-line);
+  display: grid;
+  gap: 13px;
+  grid-template-columns: 28px minmax(0, 1fr);
+  min-height: 76px;
+}
+
+.recovery-context__assurances svg {
+  color: #1a7a68;
+}
+
+.recovery-context__assurances span {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.recovery-context__assurances strong {
+  font-size: 12px;
+}
+
+.recovery-context__assurances small {
+  color: var(--recovery-muted);
+  font-size: 10px;
+}
+
+.recovery-panel {
+  align-self: center;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid var(--recovery-line);
+  border-radius: 8px;
+  box-shadow: 14px 16px 0 rgba(24, 45, 34, 0.08);
+  margin: 50px 30px 50px 0;
+  min-height: 560px;
+  padding: 46px 44px;
+}
+
+.recovery-panel__heading > p {
+  color: #b24c45;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.recovery-panel__heading h2 {
+  font-family: var(--serif);
+  font-size: 30px;
+  line-height: 1.35;
+  margin-top: 11px;
+}
+
+.recovery-panel__heading > span {
+  color: var(--recovery-muted);
+  display: block;
+  font-size: 12px;
+  line-height: 1.75;
+  margin-top: 10px;
+}
+
+.recovery-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin-top: 34px;
+}
+
+.recovery-form > label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.recovery-form > label > span {
+  color: var(--recovery-muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.recovery-form > label > div {
+  align-items: center;
+  background: var(--recovery-paper);
+  border: 1px solid var(--recovery-line);
+  border-radius: 6px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  min-height: 52px;
+  padding: 0 14px;
+}
+
+.recovery-form > label > div:focus-within {
+  border-color: var(--recovery-blue);
+  box-shadow: 0 0 0 3px rgba(47, 91, 211, 0.12);
+}
+
+.recovery-form > label > div > svg {
+  color: #748079;
+}
+
+.recovery-form input {
+  background: transparent;
+  border: 0;
+  font-size: 14px;
+  min-width: 0;
+  outline: 0;
+  width: 100%;
+}
+
+.recovery-form input::placeholder {
+  color: #98a49d;
+}
+
+.recovery-form > label > div > button {
+  align-items: center;
+  background: transparent;
+  color: #69766f;
+  display: inline-flex;
+  height: 34px;
+  justify-content: center;
+  width: 34px;
+}
+
+.recovery-form__error {
+  align-items: center;
+  background: #faeeee;
+  border-left: 2px solid #b24c45;
+  color: #8f3d37;
+  display: flex;
+  font-size: 11px;
+  gap: 8px;
+  line-height: 1.55;
+  padding: 10px 11px;
+}
+
+.recovery-form__submit {
+  align-items: center;
+  background: var(--recovery-blue);
+  border-radius: 6px;
+  color: #fff;
+  display: inline-flex;
+  font-size: 13px;
+  font-weight: 800;
+  gap: 8px;
+  height: 52px;
+  justify-content: center;
+  width: 100%;
+}
+
+.recovery-form__submit:hover:not(:disabled) {
+  background: var(--recovery-blue-dark);
+}
+
+.recovery-form__submit:disabled {
+  opacity: 0.72;
+}
+
+.recovery-form__privacy {
+  color: var(--recovery-muted);
+  font-size: 10px;
+  line-height: 1.65;
+  text-align: center;
+}
+
+.recovery-result {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  margin-top: 44px;
+  text-align: center;
+}
+
+.recovery-result__icon {
+  align-items: center;
+  background: #eaf6f2;
+  border: 1px solid #b9dacf;
+  border-radius: 50%;
+  color: #1a7a68;
+  display: inline-flex;
+  height: 64px;
+  justify-content: center;
+  width: 64px;
+}
+
+.recovery-result--warning .recovery-result__icon {
+  background: #fbf3e6;
+  border-color: #e5c994;
+  color: #9a661d;
+}
+
+.recovery-result > p {
+  color: var(--recovery-muted);
+  font-size: 12px;
+  line-height: 1.75;
+  margin: 22px 0 28px;
+  max-width: 310px;
+}
+
+.recovery-result__secondary {
+  background: transparent;
+  color: var(--recovery-blue);
+  font-size: 11px;
+  font-weight: 800;
+  margin-top: 17px;
+}
+
+.recovery-result__secondary:hover {
+  color: var(--recovery-blue-dark);
+}
+
+@media (max-width: 840px) {
+  .recovery-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .recovery-context {
+    padding: 48px 28px 20px;
+  }
+
+  .recovery-context > h1 {
+    font-size: 40px;
+  }
+
+  .recovery-context > span {
+    max-width: 620px;
+  }
+
+  .recovery-context__assurances {
+    display: none;
+  }
+
+  .recovery-panel {
+    margin: 28px 24px 52px;
+    min-height: 0;
+  }
+}
+
+@media (max-width: 520px) {
+  .recovery-header {
+    height: 66px;
+    padding: 0 16px;
+  }
+
+  .recovery-brand strong {
+    font-size: 15px;
+  }
+
+  .recovery-header__return {
+    font-size: 0;
+    height: 38px;
+    justify-content: center;
+    width: 38px;
+  }
+
+  .recovery-context {
+    padding: 38px 20px 8px;
+  }
+
+  .recovery-context > p {
+    font-size: 9px;
+  }
+
+  .recovery-context > h1 {
+    font-size: 34px;
+    margin-top: 16px;
+  }
+
+  .recovery-context > span {
+    font-size: 12px;
+    margin-top: 15px;
+  }
+
+  .recovery-panel {
+    border-left: 0;
+    border-radius: 0;
+    border-right: 0;
+    box-shadow: none;
+    margin: 24px 0 0;
+    min-height: calc(100vh - 302px);
+    padding: 34px 20px 42px;
+  }
+
+  .recovery-panel__heading h2 {
+    font-size: 26px;
   }
 }
