@@ -38,6 +38,12 @@ from app.modules.identity.rate_limit import (
     RateLimitExceeded,
     get_auth_rate_limiter,
 )
+from app.modules.identity.password_reset import (
+    PasswordResetFlowError,
+    PasswordResetOutcome,
+    PasswordResetRequestOutcome,
+    PasswordResetService,
+)
 from app.modules.identity.registration import (
     RegistrationFlowError,
     RegistrationOutcome,
@@ -45,13 +51,16 @@ from app.modules.identity.registration import (
 )
 from app.modules.identity.schemas import (
     ConfirmEmailVerificationRequest,
+    ForgotPasswordRequest,
     LoginRequest,
     RegisterRequest,
+    ResetPasswordRequest,
     ResendEmailVerificationRequest,
 )
 from app.modules.identity.security import (
     PasswordService,
     get_password_service,
+    identifier_digest,
     normalize_email,
     sanitize_user_agent,
 )
@@ -70,6 +79,7 @@ GENERIC_REGISTRATION_DATA = {
     "verification_required": True,
     "resend_after_seconds": 60,
 }
+GENERIC_PASSWORD_RESET_DATA = {"accepted": True}
 
 
 def get_registration_service(
@@ -89,6 +99,15 @@ def get_login_service(
     """Build the request-scoped password login service."""
 
     return LoginService(db, password_service, rate_limiter)
+
+
+def get_password_reset_service(
+    db: AsyncSession = Depends(get_db),
+    password_service: PasswordService = Depends(get_password_service),
+) -> PasswordResetService:
+    """Build the request-scoped password-reset service."""
+
+    return PasswordResetService(db, password_service)
 
 
 @router.post(
@@ -342,6 +361,91 @@ async def confirm_email_verification(
     )
 
 
+@router.post(
+    "/password/forgot",
+    response_model=ApiResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def forgot_password(
+    payload: ForgotPasswordRequest,
+    request: Request,
+    response: Response,
+    service: PasswordResetService = Depends(get_password_reset_service),
+    rate_limiter: AuthRateLimiter = Depends(get_auth_rate_limiter),
+    anti_bot: AntiBotVerifier = Depends(get_anti_bot_verifier),
+    email_sender: EmailSender = Depends(get_email_sender),
+) -> ApiResponse:
+    """Issue a reset email while keeping account existence private."""
+
+    validate_json_origin(request)
+    context = auth_request_context(request)
+    identifier = _password_reset_rate_limit_identifier(payload.email)
+    await _enforce_rate_limits(
+        rate_limiter,
+        "password-forgot",
+        [
+            RateLimitBucket("ip", context.remote_ip or "unknown", 10, 3600),
+            RateLimitBucket("email", identifier, 3, 3600),
+        ],
+    )
+    await _verify_anti_bot(
+        anti_bot,
+        payload.anti_bot_token,
+        action="password_forgot",
+        remote_ip=context.remote_ip,
+    )
+    outcome = await service.request_reset(payload, context)
+    _harden_auth_response(response)
+    await _enqueue_password_reset(email_sender, outcome)
+    return ApiResponse(
+        code=status.HTTP_202_ACCEPTED,
+        message="如果账号存在，我们会发送密码重置邮件",
+        data=GENERIC_PASSWORD_RESET_DATA,
+    )
+
+
+@router.post(
+    "/password/reset",
+    response_model=ApiResponse,
+)
+async def reset_password(
+    payload: ResetPasswordRequest,
+    request: Request,
+    response: Response,
+    service: PasswordResetService = Depends(get_password_reset_service),
+    rate_limiter: AuthRateLimiter = Depends(get_auth_rate_limiter),
+    email_sender: EmailSender = Depends(get_email_sender),
+) -> ApiResponse:
+    """Consume one reset token without creating a new login session."""
+
+    validate_json_origin(request)
+    context = auth_request_context(request)
+    token_dimension = identifier_digest(f"password-reset-token:{payload.token}").hex()
+    await _enforce_rate_limits(
+        rate_limiter,
+        "password-reset",
+        [
+            RateLimitBucket("ip", context.remote_ip or "unknown", 20, 3600),
+            RateLimitBucket("token", token_dimension, 5, 3600),
+        ],
+    )
+    try:
+        outcome = await service.reset_password(payload, context)
+    except PasswordResetFlowError as exc:
+        raise _password_reset_api_error(exc) from exc
+
+    _clear_session_cookie(response)
+    _harden_auth_response(response)
+    await _enqueue_password_changed(email_sender, outcome)
+    return ApiResponse(
+        message="密码已重置，请重新登录",
+        data={
+            "password_reset": True,
+            "authenticated": False,
+        },
+    )
+
+
 async def _enqueue_verification(
     email_sender: EmailSender,
     outcome: RegistrationOutcome,
@@ -374,6 +478,65 @@ async def _enqueue_verification(
         logger.error(
             "邮箱验证邮件入队出现未预期错误",
             challenge_id=str(delivery.challenge_id),
+            error_type=type(exc).__name__,
+        )
+
+
+async def _enqueue_password_reset(
+    email_sender: EmailSender,
+    outcome: PasswordResetRequestOutcome,
+) -> None:
+    delivery = outcome.delivery
+    if delivery is None:
+        return
+    reset_url = (
+        f"{settings.AUTH_FRONTEND_BASE_URL}/reset-password"
+        f"?token={quote(delivery.token, safe='')}"
+    )
+    try:
+        await email_sender.enqueue(
+            AuthEmail(
+                template_id="reset-password",
+                recipient=delivery.recipient,
+                variables={"reset_url": reset_url},
+                idempotency_key=f"reset-password:{delivery.challenge_id}",
+            )
+        )
+    except EmailDeliveryUnavailable:
+        logger.error(
+            "密码重置邮件入队失败",
+            challenge_id=str(delivery.challenge_id),
+        )
+    except Exception as exc:
+        logger.error(
+            "密码重置邮件入队出现未预期错误",
+            challenge_id=str(delivery.challenge_id),
+            error_type=type(exc).__name__,
+        )
+
+
+async def _enqueue_password_changed(
+    email_sender: EmailSender,
+    outcome: PasswordResetOutcome,
+) -> None:
+    try:
+        await email_sender.enqueue(
+            AuthEmail(
+                template_id="password-changed",
+                recipient=outcome.recipient,
+                variables={},
+                idempotency_key=f"password-changed:{outcome.challenge_id}",
+            )
+        )
+    except EmailDeliveryUnavailable:
+        logger.error(
+            "密码变更通知邮件入队失败",
+            challenge_id=str(outcome.challenge_id),
+        )
+    except Exception as exc:
+        logger.error(
+            "密码变更通知邮件入队出现未预期错误",
+            challenge_id=str(outcome.challenge_id),
             error_type=type(exc).__name__,
         )
 
@@ -483,6 +646,14 @@ def _login_rate_limit_identifier(value: str) -> str:
     return normalized
 
 
+def _password_reset_rate_limit_identifier(value: str) -> str:
+    try:
+        normalized, _ = normalize_email(value)
+    except ValueError:
+        return value.strip().casefold()[:320] or "invalid-email"
+    return normalized
+
+
 def _authenticated_data(user, profile, auth_session, csrf_token: str) -> dict:
     return {
         "authenticated": True,
@@ -511,6 +682,15 @@ def _utc_iso(value: datetime) -> str:
 
 
 def _api_error(exc: RegistrationFlowError) -> APIException:
+    return APIException(
+        message=str(exc),
+        status_code=exc.status_code,
+        code=exc.code,
+        headers=AUTH_NO_STORE_HEADERS,
+    )
+
+
+def _password_reset_api_error(exc: PasswordResetFlowError) -> APIException:
     return APIException(
         message=str(exc),
         status_code=exc.status_code,

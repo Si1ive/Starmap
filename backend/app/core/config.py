@@ -83,6 +83,9 @@ class Settings(BaseSettings):
     AUTH_EMAIL_VERIFY_MAX_ATTEMPTS: int = int(
         os.getenv("AUTH_EMAIL_VERIFY_MAX_ATTEMPTS", "5")
     )
+    AUTH_PASSWORD_RESET_MINUTES: int = int(
+        os.getenv("AUTH_PASSWORD_RESET_MINUTES", "30")
+    )
     AUTH_TERMS_VERSION: str = os.getenv("AUTH_TERMS_VERSION", "2026-07-16")
     AUTH_PRIVACY_VERSION: str = os.getenv(
         "AUTH_PRIVACY_VERSION",

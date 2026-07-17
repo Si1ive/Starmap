@@ -65,6 +65,8 @@ def test_learning_user_registration_routes_are_owned_by_identity_module():
         "/api/v1/auth/register",
         "/api/v1/auth/email-verification/resend",
         "/api/v1/auth/email-verification/confirm",
+        "/api/v1/auth/password/forgot",
+        "/api/v1/auth/password/reset",
     ):
         assert routes[path].endpoint.__module__ == "app.modules.identity.router"
 

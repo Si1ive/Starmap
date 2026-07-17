@@ -64,3 +64,24 @@ class ConfirmEmailVerificationRequest(BaseModel):
         if (self.token is None) == (self.code is None):
             raise ValueError("必须且只能提交一种邮箱验证凭据")
         return self
+
+
+class ForgotPasswordRequest(BaseModel):
+    """Request a generic password-reset response for one email."""
+
+    email: str = Field(min_length=1, max_length=320)
+    anti_bot_token: Optional[str] = Field(default=None, max_length=2048)
+
+
+class ResetPasswordRequest(BaseModel):
+    """Consume a one-time token and replace the password."""
+
+    token: str = Field(min_length=20, max_length=256)
+    password: str = Field(min_length=1, max_length=128)
+    password_confirmation: str = Field(min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def validate_password_confirmation(self) -> "ResetPasswordRequest":
+        if self.password != self.password_confirmation:
+            raise ValueError("两次输入的密码不一致")
+        return self
