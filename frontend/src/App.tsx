@@ -10,6 +10,9 @@ import AppShell from './components/AppShell'
 import useAuth from './useAuth'
 
 const AgentPage = lazy(() => import('./pages/AgentPage'))
+const EmailVerificationPage = lazy(
+  () => import('./pages/EmailVerificationPage'),
+)
 const LoginPage = lazy(() => import('./pages/LoginPage'))
 const MapPage = lazy(() => import('./pages/MapPage'))
 const MistakesPage = lazy(() => import('./pages/MistakesPage'))
@@ -78,6 +81,7 @@ function App() {
     >
       <Routes>
         <Route path="/login" element={<LoginRoute />} />
+        <Route path="/verify-email" element={<EmailVerificationPage />} />
         <Route
           path="/forgot-password"
           element={<PasswordRecoveryPage mode="forgot" />}

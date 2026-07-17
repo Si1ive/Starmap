@@ -225,6 +225,11 @@ export default function LoginPage() {
     const mode = new URLSearchParams(location.search).get('auth')
     return mode === 'register' ? 'register' : mode === 'login' ? 'login' : null
   }, [location.search])
+  const registrationEmail =
+    typeof (location.state as { registrationEmail?: unknown } | null)
+      ?.registrationEmail === 'string'
+      ? (location.state as { registrationEmail: string }).registrationEmail
+      : ''
   const heroRef = useRef<HTMLElement>(null)
   const arrivalTimerRef = useRef<number | null>(null)
   const [activeStage, setActiveStage] = useState<StageId>('question')
@@ -240,7 +245,6 @@ export default function LoginPage() {
   const [passwordVisible, setPasswordVisible] = useState(false)
   const [rememberLogin, setRememberLogin] = useState(true)
   const [authError, setAuthError] = useState('')
-  const [authNotice, setAuthNotice] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
   const currentStage =
@@ -303,7 +307,6 @@ export default function LoginPage() {
     setAuthMode(mode)
     setPasswordVisible(false)
     setAuthError('')
-    setAuthNotice('')
     setSubmitting(false)
     setAuthOpen(true)
   }
@@ -313,7 +316,6 @@ export default function LoginPage() {
     setAuthMode(mode)
     setPasswordVisible(false)
     setAuthError('')
-    setAuthNotice('')
     setSubmitting(false)
   }
 
@@ -369,7 +371,6 @@ export default function LoginPage() {
     }
 
     setAuthError('')
-    setAuthNotice('')
     setSubmitting(true)
 
     try {
@@ -383,7 +384,7 @@ export default function LoginPage() {
         return
       }
 
-      await registerWithPassword({
+      const registration = await registerWithPassword({
         display_name: String(formData.get('nickname') ?? ''),
         email,
         password,
@@ -391,9 +392,13 @@ export default function LoginPage() {
         accept_terms: true,
         accept_privacy: true,
       })
-      setAuthMode('login')
-      setPasswordVisible(false)
-      setAuthNotice('如果该邮箱可以继续注册，验证邮件已发送。完成邮箱验证后即可登录。')
+      navigate('/verify-email', {
+        state: {
+          from: (location.state as { from?: unknown } | null)?.from,
+          verificationEmail: email.trim(),
+          resendAfterSeconds: registration.resend_after_seconds,
+        },
+      })
     } catch (error) {
       setAuthError(authErrorMessage(error))
     } finally {
@@ -1058,6 +1063,9 @@ export default function LoginPage() {
                   <input
                     autoComplete="email"
                     autoFocus={authMode === 'login'}
+                    defaultValue={
+                      authMode === 'register' ? registrationEmail : ''
+                    }
                     maxLength={320}
                     name="email"
                     placeholder="name@example.com"
@@ -1137,13 +1145,6 @@ export default function LoginPage() {
                 <p className="auth-form__error" role="alert">
                   <AlertCircle size={15} />
                   {authError}
-                </p>
-              ) : null}
-
-              {authNotice ? (
-                <p className="auth-form__notice" role="status">
-                  <Check size={15} />
-                  {authNotice}
                 </p>
               ) : null}
 

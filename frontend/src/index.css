@@ -12272,3 +12272,208 @@ summary:focus-visible {
     font-size: 26px;
   }
 }
+
+/* Email verification */
+
+.verification-panel {
+  min-height: 590px;
+}
+
+.verification-page .recovery-context > h1 {
+  font-size: 50px;
+}
+
+.verification-page .recovery-context > h1 span {
+  display: inline-block;
+  white-space: nowrap;
+}
+
+.verification-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin-top: 30px;
+}
+
+.verification-email-target {
+  background: #f1f5f2;
+  border-left: 2px solid #1a7a68;
+  color: var(--recovery-muted);
+  font-size: 11px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  padding: 10px 12px;
+}
+
+.verification-email-target strong {
+  color: var(--recovery-ink);
+}
+
+.verification-code {
+  border: 0;
+  min-width: 0;
+}
+
+.verification-code legend {
+  color: var(--recovery-muted);
+  font-size: 11px;
+  font-weight: 800;
+  margin-bottom: 10px;
+}
+
+.verification-code__inputs {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.verification-code__inputs input {
+  aspect-ratio: 1;
+  background: var(--recovery-paper);
+  border: 1px solid var(--recovery-line);
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 24px;
+  font-weight: 800;
+  min-width: 0;
+  outline: 0;
+  text-align: center;
+  width: 100%;
+}
+
+.verification-code__inputs input:focus {
+  border-color: var(--recovery-blue);
+  box-shadow: 0 0 0 3px rgba(47, 91, 211, 0.12);
+}
+
+.verification-form__notice {
+  align-items: center;
+  background: #eaf4ef;
+  border-left: 2px solid #1a7a68;
+  color: #246255;
+  display: flex;
+  font-size: 11px;
+  gap: 8px;
+  line-height: 1.55;
+  padding: 10px 11px;
+}
+
+.verification-form__secondary {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  min-height: 32px;
+}
+
+.verification-form__secondary button {
+  align-items: center;
+  background: transparent;
+  color: var(--recovery-blue);
+  display: inline-flex;
+  font-size: 10px;
+  font-weight: 800;
+  gap: 6px;
+}
+
+.verification-form__secondary button:disabled {
+  color: #849089;
+}
+
+.verification-form__secondary button:hover:not(:disabled) {
+  color: var(--recovery-blue-dark);
+}
+
+.verification-progress,
+.verification-result {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  margin-top: 48px;
+  text-align: center;
+}
+
+.verification-progress__spinner {
+  animation: spin 780ms linear infinite;
+  border: 3px solid #cbd5cf;
+  border-radius: 50%;
+  border-top-color: var(--recovery-blue);
+  height: 54px;
+  width: 54px;
+}
+
+.verification-progress__icon,
+.verification-result__icon {
+  align-items: center;
+  background: #eaf6f2;
+  border: 1px solid #b9dacf;
+  border-radius: 50%;
+  color: #1a7a68;
+  display: inline-flex;
+  height: 64px;
+  justify-content: center;
+  width: 64px;
+}
+
+.verification-progress__icon.is-warning,
+.verification-result.is-warning .verification-result__icon {
+  background: #fbf3e6;
+  border-color: #e5c994;
+  color: #9a661d;
+}
+
+.verification-progress strong,
+.verification-result h3 {
+  font-family: var(--serif);
+  font-size: 22px;
+  margin-top: 22px;
+}
+
+.verification-progress p,
+.verification-result p {
+  color: var(--recovery-muted);
+  font-size: 12px;
+  line-height: 1.75;
+  margin: 13px 0 26px;
+  max-width: 330px;
+}
+
+.verification-progress .recovery-form__submit,
+.verification-result .recovery-form__submit {
+  max-width: 330px;
+}
+
+.verification-result__secondary {
+  background: transparent;
+  color: var(--recovery-blue);
+  font-size: 11px;
+  font-weight: 800;
+  margin-top: 17px;
+}
+
+.verification-result__secondary:hover {
+  color: var(--recovery-blue-dark);
+}
+
+@media (max-width: 520px) {
+  .verification-page .recovery-context > h1 {
+    font-size: 34px;
+  }
+
+  .verification-panel {
+    min-height: calc(100vh - 302px);
+  }
+
+  .verification-code__inputs {
+    gap: 6px;
+  }
+
+  .verification-code__inputs input {
+    font-size: 21px;
+  }
+
+  .verification-form__secondary {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 13px;
+  }
+}

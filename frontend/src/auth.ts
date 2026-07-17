@@ -53,6 +53,26 @@ export interface RegistrationAccepted {
   resend_after_seconds: number
 }
 
+export interface VerifiedEmailUser {
+  id: string
+  email: string
+  email_verified: true
+  display_name: string
+}
+
+export interface UnauthenticatedEmailVerificationData {
+  authenticated: false
+  user: VerifiedEmailUser
+}
+
+export type EmailVerificationData =
+  | AuthenticatedSessionData
+  | UnauthenticatedEmailVerificationData
+
+export type EmailVerificationCredential =
+  | { token: string; code?: never }
+  | { code: string; token?: never }
+
 export interface ForgotPasswordAccepted {
   accepted: true
 }
@@ -102,6 +122,9 @@ export interface AuthContextValue {
   user: AuthenticatedUser | null
   session: AuthenticatedSession | null
   login: (credentials: LoginCredentials) => Promise<AuthenticatedSessionData>
+  verifyEmail: (
+    credential: EmailVerificationCredential,
+  ) => Promise<EmailVerificationData>
   logout: () => Promise<void>
   restore: () => Promise<void>
 }
@@ -165,6 +188,22 @@ export function registerWithPassword(
   return authRequest<RegistrationAccepted>('/register', {
     method: 'POST',
     body: JSON.stringify(details),
+  })
+}
+
+export function confirmEmailVerification(
+  credential: EmailVerificationCredential,
+): Promise<EmailVerificationData> {
+  return authRequest<EmailVerificationData>('/email-verification/confirm', {
+    method: 'POST',
+    body: JSON.stringify(credential),
+  })
+}
+
+export function resendEmailVerification(): Promise<RegistrationAccepted> {
+  return authRequest<RegistrationAccepted>('/email-verification/resend', {
+    method: 'POST',
+    body: JSON.stringify({}),
   })
 }
 

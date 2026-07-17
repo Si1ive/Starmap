@@ -5,6 +5,8 @@ import {
   AuthContextValue,
   AuthenticatedSessionData,
   AuthenticationStatus,
+  confirmEmailVerification,
+  EmailVerificationCredential,
   fetchCurrentSession,
   LoginCredentials,
   loginWithPassword,
@@ -81,6 +83,17 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
     [applySession],
   )
 
+  const verifyEmail = useCallback(
+    async (credential: EmailVerificationCredential) => {
+      const data = await confirmEmailVerification(credential)
+      if (data.authenticated) {
+        applySession(data)
+      }
+      return data
+    },
+    [applySession],
+  )
+
   const logout = useCallback(async () => {
     const csrfToken = state.data?.csrf_token
     if (!csrfToken) {
@@ -105,10 +118,11 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
       user: state.data?.user ?? null,
       session: state.data?.session ?? null,
       login,
+      verifyEmail,
       logout,
       restore,
     }),
-    [login, logout, restore, state],
+    [login, logout, restore, state, verifyEmail],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
