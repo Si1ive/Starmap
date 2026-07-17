@@ -301,6 +301,10 @@ def validate_user_auth_security_config() -> None:
             "AUTH_REGISTRATION_COOKIE_NAME",
             settings.AUTH_REGISTRATION_COOKIE_NAME,
         ),
+        (
+            "AUTH_GITHUB_OAUTH_COOKIE_NAME",
+            settings.AUTH_GITHUB_OAUTH_COOKIE_NAME,
+        ),
     ):
         if not value.startswith("__Host-"):
             raise RuntimeError(f"{name} must use the __Host- prefix")
@@ -321,6 +325,19 @@ def validate_user_auth_security_config() -> None:
         raise RuntimeError("ALLOWED_ORIGINS must use HTTPS in production")
     if not settings.AUTH_FRONTEND_BASE_URL.startswith("https://"):
         raise RuntimeError("AUTH_FRONTEND_BASE_URL must use HTTPS in production")
+    github_values = (
+        settings.AUTH_GITHUB_CLIENT_ID,
+        settings.AUTH_GITHUB_CLIENT_SECRET,
+    )
+    if any(github_values) and not all(github_values):
+        raise RuntimeError(
+            "AUTH_GITHUB_CLIENT_ID and AUTH_GITHUB_CLIENT_SECRET "
+            "must be configured together"
+        )
+    if all(github_values) and not settings.AUTH_GITHUB_CALLBACK_URL.startswith(
+        "https://"
+    ):
+        raise RuntimeError("AUTH_GITHUB_CALLBACK_URL must use HTTPS in production")
 
 
 _password_service: Optional[PasswordService] = None

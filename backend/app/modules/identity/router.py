@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime
-from urllib.parse import quote
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import ApiResponse
@@ -44,6 +45,11 @@ from app.modules.identity.password_reset import (
     PasswordResetRequestOutcome,
     PasswordResetService,
 )
+from app.modules.identity.github_oauth import (
+    GitHubOAuthClient,
+    GitHubOAuthFlowError,
+    GitHubOAuthService,
+)
 from app.modules.identity.registration import (
     RegistrationFlowError,
     RegistrationOutcome,
@@ -52,6 +58,7 @@ from app.modules.identity.registration import (
 from app.modules.identity.schemas import (
     ConfirmEmailVerificationRequest,
     ForgotPasswordRequest,
+    GitHubOAuthStartRequest,
     LoginRequest,
     RegisterRequest,
     ResetPasswordRequest,
@@ -108,6 +115,119 @@ def get_password_reset_service(
     """Build the request-scoped password-reset service."""
 
     return PasswordResetService(db, password_service)
+
+
+def get_github_oauth_service(
+    db: AsyncSession = Depends(get_db),
+) -> GitHubOAuthService:
+    """Build the request-scoped GitHub OAuth service."""
+
+    return GitHubOAuthService(db, GitHubOAuthClient())
+
+
+@router.post(
+    "/github/start",
+    response_model=ApiResponse,
+)
+async def start_github_oauth(
+    payload: GitHubOAuthStartRequest,
+    request: Request,
+    response: Response,
+    service: GitHubOAuthService = Depends(get_github_oauth_service),
+    rate_limiter: AuthRateLimiter = Depends(get_auth_rate_limiter),
+) -> ApiResponse:
+    """Create one server-side OAuth transaction and return GitHub's URL."""
+
+    validate_json_origin(request)
+    context = auth_request_context(request)
+    device_signal = (
+        f"{context.remote_ip or 'unknown'}:"
+        f"{sanitize_user_agent(context.user_agent) or 'unknown'}"
+    )
+    await _enforce_rate_limits(
+        rate_limiter,
+        "github-oauth-start",
+        [
+            RateLimitBucket("ip", context.remote_ip or "unknown", 30, 900),
+            RateLimitBucket("device", device_signal, 20, 900),
+        ],
+    )
+    try:
+        outcome = await service.start(payload, context)
+    except GitHubOAuthFlowError as exc:
+        raise APIException(
+            message=str(exc),
+            status_code=exc.status_code,
+            code=exc.code,
+            headers=AUTH_NO_STORE_HEADERS,
+        ) from exc
+
+    _harden_auth_response(response)
+    response.set_cookie(
+        settings.AUTH_GITHUB_OAUTH_COOKIE_NAME,
+        outcome.verifier_cookie,
+        max_age=settings.AUTH_GITHUB_TRANSACTION_MINUTES * 60,
+        path="/",
+        secure=settings.AUTH_COOKIE_SECURE,
+        httponly=True,
+        samesite="lax",
+    )
+    return ApiResponse(
+        message="GitHub 授权已准备",
+        data={
+            "authorization_url": outcome.authorization_url,
+            "expires_at": _utc_iso(outcome.expires_at),
+        },
+    )
+
+
+@router.get("/github/callback")
+async def github_oauth_callback(
+    request: Request,
+    state: str | None = None,
+    code: str | None = None,
+    error: str | None = None,
+    service: GitHubOAuthService = Depends(get_github_oauth_service),
+) -> RedirectResponse:
+    """Validate GitHub's callback, rotate the session, and redirect safely."""
+
+    try:
+        outcome = await service.callback(
+            state=state,
+            code=code,
+            provider_error=error,
+            verifier_cookie=request.cookies.get(settings.AUTH_GITHUB_OAUTH_COOKIE_NAME),
+            context=auth_request_context(request),
+            previous_session_token=request.cookies.get(
+                settings.AUTH_SESSION_COOKIE_NAME
+            ),
+        )
+    except GitHubOAuthFlowError as exc:
+        redirect = RedirectResponse(
+            _oauth_frontend_redirect(
+                "/login",
+                oauth_error=exc.code,
+                return_path=exc.return_path,
+            ),
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+        _clear_github_oauth_cookie(redirect)
+        _harden_auth_response(redirect)
+        return redirect
+
+    redirect = RedirectResponse(
+        _oauth_frontend_redirect(
+            outcome.return_path,
+            oauth="success",
+            new_user="1" if outcome.new_user else "0",
+        ),
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+    _set_session_cookie(redirect, outcome.login)
+    _clear_registration_cookie(redirect)
+    _clear_github_oauth_cookie(redirect)
+    _harden_auth_response(redirect)
+    return redirect
 
 
 @router.post(
@@ -645,6 +765,16 @@ def _clear_session_cookie(response: Response) -> None:
     )
 
 
+def _clear_github_oauth_cookie(response: Response) -> None:
+    response.delete_cookie(
+        settings.AUTH_GITHUB_OAUTH_COOKIE_NAME,
+        path="/",
+        secure=settings.AUTH_COOKIE_SECURE,
+        httponly=True,
+        samesite="lax",
+    )
+
+
 def _harden_auth_response(response: Response) -> None:
     response.headers["Cache-Control"] = "no-store"
     response.headers["Pragma"] = "no-cache"
@@ -689,6 +819,16 @@ def _authenticated_data(user, profile, auth_session, csrf_token: str) -> dict:
             "absolute_expires_at": _utc_iso(auth_session.absolute_expires_at),
         },
     }
+
+
+def _oauth_frontend_redirect(path: str, **values: str) -> str:
+    """Append bounded OAuth status fields to one trusted frontend path."""
+
+    parsed = urlsplit(path)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query.update(values)
+    relative = urlunsplit(("", "", parsed.path, urlencode(query), ""))
+    return f"{settings.AUTH_FRONTEND_BASE_URL}{relative}"
 
 
 def _utc_iso(value: datetime) -> str:

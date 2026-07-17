@@ -452,6 +452,99 @@ class SessionService:
             cookie_max_age=None,
         )
 
+    async def create_for_external_login(
+        self,
+        user_id: uuid.UUID,
+        *,
+        auth_method: str,
+        context: AuthRequestContext,
+        previous_session_token: Optional[str],
+        remember_me: bool,
+    ) -> Optional[LoginOutcome]:
+        """Create and rotate a session after a trusted external login."""
+
+        if not auth_method or len(auth_method) > 32:
+            raise ValueError("invalid external authentication method")
+        user = await self.db.scalar(
+            select(User)
+            .options(selectinload(User.profile))
+            .where(User.id == user_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if (
+            user is None
+            or user.status != "active"
+            or user.email_verified_at is None
+            or user.deleted_at is not None
+            or user.suspended_at is not None
+        ):
+            await self.db.rollback()
+            return None
+
+        now = self.clock()
+        await self._revoke_presented_session(
+            previous_session_token,
+            now,
+            reason=f"{auth_method}_login_rotation",
+        )
+        session_token = generate_opaque_token()
+        csrf_token = derive_csrf_token(session_token)
+        if remember_me:
+            idle_lifetime = timedelta(days=settings.AUTH_REMEMBER_IDLE_DAYS)
+            absolute_lifetime = timedelta(days=settings.AUTH_REMEMBER_ABSOLUTE_DAYS)
+        else:
+            idle_lifetime = timedelta(hours=settings.AUTH_SESSION_IDLE_HOURS)
+            absolute_lifetime = timedelta(days=settings.AUTH_SESSION_ABSOLUTE_DAYS)
+        auth_session = AuthSession(
+            id=new_uuid7(),
+            user_id=user.id,
+            token_hash=session_token_digest(session_token),
+            csrf_secret_hash=csrf_token_digest(csrf_token),
+            auth_version=user.auth_version,
+            auth_method=auth_method,
+            created_ip=pack_ip_address(context.remote_ip),
+            last_ip=pack_ip_address(context.remote_ip),
+            user_agent=sanitize_user_agent(context.user_agent),
+            device_label=infer_device_label(context.user_agent),
+            created_at=now,
+            last_seen_at=now,
+            idle_expires_at=now + idle_lifetime,
+            absolute_expires_at=now + absolute_lifetime,
+        )
+        self.db.add(auth_session)
+        user.last_login_at = now
+        user.last_login_method = auth_method
+        user.updated_at = now
+        user.row_version += 1
+        self.db.add(
+            AuthEvent(
+                user_id=user.id,
+                session_id=auth_session.id,
+                event_type="login",
+                outcome="success",
+                provider=auth_method,
+                reason_code="external_oauth_callback",
+                identifier_hmac=identifier_digest(
+                    user.email_normalized or str(user.id)
+                ),
+                ip_address=pack_ip_address(context.remote_ip),
+                user_agent=sanitize_user_agent(context.user_agent),
+                request_id=(context.request_id or "")[:64] or None,
+            )
+        )
+        await self.db.commit()
+        return LoginOutcome(
+            user=user,
+            profile=user.profile,
+            session=auth_session,
+            session_token=session_token,
+            csrf_token=csrf_token,
+            cookie_max_age=(
+                int(absolute_lifetime.total_seconds()) if remember_me else None
+            ),
+        )
+
     async def authenticate(
         self,
         raw_token: Optional[str],

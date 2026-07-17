@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
@@ -14,6 +14,16 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=128)
     remember_me: bool = False
     anti_bot_token: Optional[str] = Field(default=None, max_length=2048)
+
+
+class GitHubOAuthStartRequest(BaseModel):
+    """Start a one-time GitHub OAuth browser transaction."""
+
+    source: Literal["login", "register"] = "login"
+    return_path: Optional[str] = Field(default=None, max_length=1024)
+    remember_me: bool = False
+    accept_terms: bool = False
+    accept_privacy: bool = False
 
 
 class RegisterRequest(BaseModel):

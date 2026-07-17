@@ -49,6 +49,14 @@ class Settings(BaseSettings):
             else "starmap_registration"
         ),
     )
+    AUTH_GITHUB_OAUTH_COOKIE_NAME: str = os.getenv(
+        "AUTH_GITHUB_OAUTH_COOKIE_NAME",
+        (
+            "__Host-starmap_github_oauth"
+            if ENV == "production"
+            else "starmap_github_oauth"
+        ),
+    )
     AUTH_COOKIE_SECURE: bool = (
         os.getenv(
             "AUTH_COOKIE_SECURE",
@@ -95,6 +103,15 @@ class Settings(BaseSettings):
         "AUTH_FRONTEND_BASE_URL",
         "http://localhost:5173",
     ).rstrip("/")
+    AUTH_GITHUB_CLIENT_ID: str = os.getenv("AUTH_GITHUB_CLIENT_ID", "")
+    AUTH_GITHUB_CLIENT_SECRET: str = os.getenv("AUTH_GITHUB_CLIENT_SECRET", "")
+    AUTH_GITHUB_CALLBACK_URL: str = os.getenv(
+        "AUTH_GITHUB_CALLBACK_URL",
+        "http://localhost:8000/api/v1/auth/github/callback",
+    )
+    AUTH_GITHUB_TRANSACTION_MINUTES: int = int(
+        os.getenv("AUTH_GITHUB_TRANSACTION_MINUTES", "10")
+    )
     AUTH_EMAIL_BACKEND: str = os.getenv("AUTH_EMAIL_BACKEND", "memory")
     AUTH_ANTI_BOT_MODE: str = os.getenv("AUTH_ANTI_BOT_MODE", "disabled")
 
