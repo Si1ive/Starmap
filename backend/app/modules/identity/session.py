@@ -370,6 +370,88 @@ class SessionService:
         self.db = db
         self.clock = clock
 
+    async def create_after_email_verification(
+        self,
+        user_id: uuid.UUID,
+        context: AuthRequestContext,
+        previous_session_token: Optional[str],
+    ) -> Optional[LoginOutcome]:
+        """Create a short-lived browser session for a just-verified user."""
+
+        user = await self.db.scalar(
+            select(User)
+            .options(selectinload(User.profile))
+            .where(User.id == user_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if (
+            user is None
+            or user.status != "active"
+            or user.email_verified_at is None
+            or user.deleted_at is not None
+            or user.suspended_at is not None
+        ):
+            await self.db.rollback()
+            return None
+
+        now = self.clock()
+        await self._revoke_presented_session(
+            previous_session_token,
+            now,
+            reason="email_verification_rotation",
+        )
+        session_token = generate_opaque_token()
+        csrf_token = derive_csrf_token(session_token)
+        idle_lifetime = timedelta(hours=settings.AUTH_SESSION_IDLE_HOURS)
+        absolute_lifetime = timedelta(days=settings.AUTH_SESSION_ABSOLUTE_DAYS)
+        auth_session = AuthSession(
+            id=new_uuid7(),
+            user_id=user.id,
+            token_hash=session_token_digest(session_token),
+            csrf_secret_hash=csrf_token_digest(csrf_token),
+            auth_version=user.auth_version,
+            auth_method="email_verification",
+            created_ip=pack_ip_address(context.remote_ip),
+            last_ip=pack_ip_address(context.remote_ip),
+            user_agent=sanitize_user_agent(context.user_agent),
+            device_label=infer_device_label(context.user_agent),
+            created_at=now,
+            last_seen_at=now,
+            idle_expires_at=now + idle_lifetime,
+            absolute_expires_at=now + absolute_lifetime,
+        )
+        self.db.add(auth_session)
+        user.last_login_at = now
+        user.last_login_method = "email_verification"
+        user.updated_at = now
+        user.row_version += 1
+        self.db.add(
+            AuthEvent(
+                user_id=user.id,
+                session_id=auth_session.id,
+                event_type="login",
+                outcome="success",
+                provider="email_verification",
+                reason_code="same_browser_verification",
+                identifier_hmac=identifier_digest(
+                    user.email_normalized or str(user.id)
+                ),
+                ip_address=pack_ip_address(context.remote_ip),
+                user_agent=sanitize_user_agent(context.user_agent),
+                request_id=(context.request_id or "")[:64] or None,
+            )
+        )
+        await self.db.commit()
+        return LoginOutcome(
+            user=user,
+            profile=user.profile,
+            session=auth_session,
+            session_token=session_token,
+            csrf_token=csrf_token,
+            cookie_max_age=None,
+        )
+
     async def authenticate(
         self,
         raw_token: Optional[str],
@@ -458,6 +540,24 @@ class SessionService:
             )
         )
         await self.db.commit()
+
+    async def _revoke_presented_session(
+        self,
+        raw_token: Optional[str],
+        now: datetime,
+        *,
+        reason: str,
+    ) -> None:
+        if not _is_bounded_token(raw_token):
+            return
+        existing = await self.db.scalar(
+            select(AuthSession)
+            .where(AuthSession.token_hash == session_token_digest(raw_token))
+            .with_for_update()
+        )
+        if existing is not None and existing.revoked_at is None:
+            existing.revoked_at = now
+            existing.revoke_reason = reason
 
     async def _revoke_invalid_session(
         self,

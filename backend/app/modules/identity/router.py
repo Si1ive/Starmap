@@ -324,6 +324,7 @@ async def confirm_email_verification(
     request: Request,
     response: Response,
     service: RegistrationService = Depends(get_registration_service),
+    session_service: SessionService = Depends(get_session_service),
 ) -> ApiResponse:
     """Activate an account by consuming one verification credential."""
 
@@ -339,17 +340,26 @@ async def confirm_email_verification(
     except RegistrationFlowError as exc:
         raise _api_error(exc) from exc
 
-    response.delete_cookie(
-        settings.AUTH_REGISTRATION_COOKIE_NAME,
-        path="/",
-        secure=settings.AUTH_COOKIE_SECURE,
-        httponly=True,
-        samesite="lax",
-    )
-    _harden_auth_response(response)
-    return ApiResponse(
-        message="邮箱验证成功",
-        data={
+    session_outcome = None
+    if outcome.same_browser:
+        create_session = session_service.create_after_email_verification
+        session_outcome = await create_session(
+            outcome.user_id,
+            context,
+            request.cookies.get(settings.AUTH_SESSION_COOKIE_NAME),
+        )
+
+    _clear_registration_cookie(response)
+    if session_outcome is not None:
+        _set_session_cookie(response, session_outcome)
+        data = _authenticated_data(
+            session_outcome.user,
+            session_outcome.profile,
+            session_outcome.session,
+            session_outcome.csrf_token,
+        )
+    else:
+        data = {
             "user": {
                 "id": str(outcome.user_id),
                 "email": outcome.email,
@@ -357,7 +367,11 @@ async def confirm_email_verification(
                 "email_verified": True,
             },
             "authenticated": False,
-        },
+        }
+    _harden_auth_response(response)
+    return ApiResponse(
+        message="邮箱验证成功",
+        data=data,
     )
 
 

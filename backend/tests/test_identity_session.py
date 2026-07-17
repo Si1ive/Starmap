@@ -171,6 +171,56 @@ async def test_password_login_persists_only_session_and_csrf_digests(db_session)
 
 
 @pytest.mark.asyncio
+async def test_email_verification_creates_standard_session(db_session):
+    password_service = PasswordService()
+    user = await create_user(db_session, password_service)
+    previous_token = "previous-session-before-verification"
+    previous = AuthSession(
+        user_id=user.id,
+        token_hash=session_token_digest(previous_token),
+        csrf_secret_hash=csrf_token_digest(derive_csrf_token(previous_token)),
+        auth_version=user.auth_version,
+        auth_method="password",
+        created_at=NOW - timedelta(hours=1),
+        last_seen_at=NOW - timedelta(hours=1),
+        idle_expires_at=NOW + timedelta(hours=11),
+        absolute_expires_at=NOW + timedelta(days=6),
+    )
+    db_session.add(previous)
+    await db_session.commit()
+    service = SessionService(db_session, clock=lambda: NOW)
+
+    outcome = await service.create_after_email_verification(
+        user.id,
+        CONTEXT,
+        previous_token,
+    )
+
+    assert outcome is not None
+    assert outcome.user.id == user.id
+    assert outcome.profile.display_name == "测试学习者"
+    assert outcome.session.auth_method == "email_verification"
+    assert outcome.session.idle_expires_at == NOW + timedelta(hours=12)
+    assert outcome.session.absolute_expires_at == NOW + timedelta(days=7)
+    assert outcome.cookie_max_age is None
+    assert outcome.csrf_token == derive_csrf_token(outcome.session_token)
+
+    refreshed_previous = await db_session.get(AuthSession, previous.id)
+    assert refreshed_previous.revoked_at == NOW
+    assert refreshed_previous.revoke_reason == "email_verification_rotation"
+    refreshed_user = await db_session.get(User, user.id)
+    assert refreshed_user.last_login_method == "email_verification"
+    event = await db_session.scalar(
+        select(AuthEvent).where(
+            AuthEvent.session_id == outcome.session.id,
+            AuthEvent.event_type == "login",
+        )
+    )
+    assert event.provider == "email_verification"
+    assert event.reason_code == "same_browser_verification"
+
+
+@pytest.mark.asyncio
 async def test_unknown_and_wrong_password_share_the_same_public_failure(db_session):
     password_service = PasswordService()
     user = await create_user(db_session, password_service)
