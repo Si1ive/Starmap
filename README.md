@@ -28,6 +28,7 @@
 - [408 学习 Agent 文字原型](./docs/product/408-agent-product-prototype.md) - 用户端产品定位、信息架构、核心流程和可信交互基线
 - [用户端 Agent 技术架构](./docs/tech/user-agent-client-architecture.md) - Web/桌面选型、Agent Runtime、客户端能力适配和安全边界
 - [用户端实施路线](./docs/roadmap/user-agent-delivery-plan.md) - 从提问验证到练习、计划、资料和可选桌面能力的纵向交付顺序
+- [本地 GitHub OAuth 与 SMTP 联调](./docs/tech/local-auth-integration.md) - 无公网服务器和域名时的真实认证联调配置
 - [多模态入库与检索实施设计](./docs/tech/multimodal-ingestion-retrieval-design.md) - 工程执行基线，覆盖语料入库、数据结构、Qdrant 检索、题目/知识点分流、阶段开发路线
 - [多模态执行清单](./docs/roadmap/multimodal-execution-checklist.md) - 面向 PM、前后端、数据和 QA 的逐项开发与联调清单
 
@@ -78,7 +79,7 @@ podman machine start
 ### 3. 启动基础设施（Podman）
 
 ```bash
-# 启动 MySQL + Redis + Qdrant + PDF Parser + Backend + Admin
+# 启动 MySQL + Redis + Qdrant + PDF Parser + Backend + 用户端 + Admin
 podman-compose -f docker-compose.podman.yml up -d
 
 # 查看服务状态
@@ -142,7 +143,22 @@ source venv/bin/activate && nohup python -m uvicorn app.main:app --reload --host
 - API 地址: http://localhost:8000
 - API 文档: http://localhost:8000/docs
 
-### 6. 启动前端管理端
+### 6. 启动用户端
+
+如已使用 `podman-compose -f docker-compose.podman.yml up -d frontend`，可跳过本节。
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+用户端地址: http://localhost:5173
+
+GitHub OAuth 和真实邮件的本地配置见
+[本地认证联调指南](./docs/tech/local-auth-integration.md)。
+
+### 7. 启动前端管理端
 
 如已使用 `podman-compose -f docker-compose.podman.yml up -d frontend-admin`，可跳过本节。
 
@@ -227,6 +243,7 @@ my-agent/
 | PDF Parser Service | 8090 | 独立 PDF 解析服务 |
 | Scrapy Service | - | 爬虫消费进程（无对外端口） |
 | 后端 API | 8000 | FastAPI 服务 |
+| 用户端前端 | 5173 | Vite 开发服务器 |
 | 管理端前端 | 5174 | Vite 开发服务器 |
 
 ## API 接口
