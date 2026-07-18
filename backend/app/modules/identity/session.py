@@ -242,6 +242,7 @@ class LoginService:
             absolute_expires_at=now + absolute_lifetime,
         )
         self.db.add(auth_session)
+        await self.db.flush()
         locked_user.last_login_at = now
         locked_user.last_login_method = "password"
         locked_user.updated_at = now
@@ -453,6 +454,7 @@ class SessionService:
             absolute_expires_at=now + absolute_lifetime,
         )
         self.db.add(auth_session)
+        await self.db.flush()
         user.last_login_at = now
         user.last_login_method = "email_verification"
         user.updated_at = now
@@ -544,6 +546,7 @@ class SessionService:
             absolute_expires_at=now + absolute_lifetime,
         )
         self.db.add(auth_session)
+        await self.db.flush()
         user.last_login_at = now
         user.last_login_method = auth_method
         user.updated_at = now

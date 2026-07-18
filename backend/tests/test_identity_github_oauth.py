@@ -88,6 +88,7 @@ async def db_session():
         poolclass=StaticPool,
     )
     async with engine.begin() as connection:
+        await connection.exec_driver_sql("PRAGMA foreign_keys=ON")
         await connection.run_sync(
             lambda sync_connection: Base.metadata.create_all(
                 sync_connection,
