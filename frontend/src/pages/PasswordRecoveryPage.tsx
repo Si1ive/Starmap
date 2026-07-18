@@ -6,13 +6,13 @@ import {
   Check,
   Eye,
   EyeOff,
-  KeyRound,
   Lock,
   Mail,
   ShieldCheck,
 } from 'lucide-react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { AuthApiError, requestPasswordReset, resetPassword } from '../auth'
+import PlatformBrand from '../components/PlatformBrand'
 import useAuth from '../useAuth'
 
 interface PasswordRecoveryPageProps {
@@ -139,14 +139,11 @@ export default function PasswordRecoveryPage({
     <main className="recovery-page">
       <header className="recovery-header">
         <button
-          className="recovery-brand"
+          className="platform-brand recovery-brand"
           onClick={returnToLogin}
           type="button"
         >
-          <span aria-hidden="true">
-            <KeyRound size={20} />
-          </span>
-          <strong>408 学习工作台</strong>
+          <PlatformBrand />
         </button>
         <button
           className="recovery-header__return"

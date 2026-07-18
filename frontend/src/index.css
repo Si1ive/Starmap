@@ -11938,6 +11938,10 @@ summary:focus-visible {
 /* Password recovery */
 
 .recovery-page {
+  --login-blue: #59617e;
+  --login-ink: #17231d;
+  --login-jade: #2f6f62;
+  --login-red: #b86147;
   --recovery-blue: #2f5bd3;
   --recovery-blue-dark: #2247ad;
   --recovery-ink: #17211c;
@@ -11978,23 +11982,16 @@ summary:focus-visible {
 }
 
 .recovery-brand {
-  gap: 11px;
+  gap: 10px;
 }
 
-.recovery-brand > span {
-  align-items: center;
-  background: var(--recovery-ink);
-  border-radius: 6px;
-  color: #fff;
-  display: inline-flex;
-  height: 36px;
-  justify-content: center;
-  width: 36px;
+.recovery-brand .platform-brand__mark {
+  height: 38px;
+  width: 47px;
 }
 
-.recovery-brand strong {
-  font-family: var(--serif);
-  font-size: 18px;
+.recovery-brand .platform-brand__name strong {
+  font-size: 17px;
 }
 
 .recovery-header__return {
@@ -12090,6 +12087,7 @@ summary:focus-visible {
   box-shadow: 14px 16px 0 rgba(24, 45, 34, 0.08);
   margin: 50px 30px 50px 0;
   min-height: 560px;
+  min-width: 0;
   padding: 46px 44px;
 }
 
@@ -12267,7 +12265,7 @@ summary:focus-visible {
 
 @media (max-width: 840px) {
   .recovery-workspace {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .recovery-context {
@@ -12298,7 +12296,7 @@ summary:focus-visible {
     padding: 0 16px;
   }
 
-  .recovery-brand strong {
+  .recovery-brand .platform-brand__name strong {
     font-size: 15px;
   }
 
@@ -12903,6 +12901,8 @@ summary:focus-visible {
   display: grid;
   gap: 8px;
   grid-template-columns: repeat(6, minmax(0, 1fr));
+  min-width: 0;
+  width: 100%;
 }
 
 .verification-code__inputs input {
@@ -12910,6 +12910,7 @@ summary:focus-visible {
   background: var(--recovery-paper);
   border: 1px solid var(--recovery-line);
   border-radius: 6px;
+  box-sizing: border-box;
   font-family: var(--mono);
   font-size: 24px;
   font-weight: 800;

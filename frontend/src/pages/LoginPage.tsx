@@ -36,6 +36,7 @@ import {
   registerWithPassword,
   startGitHubOAuth,
 } from '../auth'
+import PlatformBrand from '../components/PlatformBrand'
 import useAuth from '../useAuth'
 
 type AuthMode = 'login' | 'register'
@@ -197,28 +198,6 @@ const reviewWindows = [
     detail: '改变指针约定，确认你掌握的是关系，而不是记住一道题。',
   },
 ] as const
-
-function BrandContent() {
-  return (
-    <>
-      <span className="platform-brand__mark" aria-hidden="true">
-        <svg viewBox="0 0 54 44">
-          <g transform="translate(0 44) scale(1 -1)">
-            <path d="M5 34C12 7 23 9 22 23C21 36 33 38 35 22C37 8 45 8 50 13" />
-            <circle className="mark-node mark-node--one" cx="5" cy="34" r="3.1" />
-            <circle className="mark-node mark-node--two" cx="22" cy="23" r="3.1" />
-            <circle className="mark-node mark-node--three" cx="35" cy="22" r="3.1" />
-            <circle className="mark-node mark-node--four" cx="50" cy="13" r="3.1" />
-          </g>
-        </svg>
-      </span>
-      <span className="platform-brand__name">
-        <b>408</b>
-        <strong>学习工作台</strong>
-      </span>
-    </>
-  )
-}
 
 export default function LoginPage() {
   const { login } = useAuth()
@@ -475,7 +454,7 @@ export default function LoginPage() {
           onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
           type="button"
         >
-          <BrandContent />
+          <PlatformBrand />
         </button>
         <nav aria-label="产品能力">
           <a href="#question">主动追问</a>
@@ -1031,7 +1010,7 @@ export default function LoginPage() {
           onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
           type="button"
         >
-          <BrandContent />
+          <PlatformBrand />
         </button>
         <p>让每一道不会，都有清楚的下一步。</p>
         <button onClick={() => openAuth('login')} type="button">
@@ -1051,7 +1030,7 @@ export default function LoginPage() {
           <aside aria-labelledby="auth-title" aria-modal="true" className="auth-panel" role="dialog">
             <div className="auth-panel__top">
               <div className="platform-brand platform-brand--panel">
-                <BrandContent />
+                <PlatformBrand />
               </div>
               <button
                 aria-label="关闭"

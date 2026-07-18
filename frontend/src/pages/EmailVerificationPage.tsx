@@ -16,7 +16,6 @@ import {
   Check,
   Clock3,
   Link2,
-  MailCheck,
   RefreshCw,
   ShieldCheck,
 } from 'lucide-react'
@@ -26,6 +25,7 @@ import {
   EmailVerificationCredential,
   resendEmailVerification,
 } from '../auth'
+import PlatformBrand from '../components/PlatformBrand'
 import useAuth from '../useAuth'
 
 type VerificationPhase = 'code' | 'confirming' | 'complete' | 'invalid'
@@ -239,14 +239,11 @@ export default function EmailVerificationPage() {
     <main className="recovery-page verification-page">
       <header className="recovery-header">
         <button
-          className="recovery-brand"
+          className="platform-brand recovery-brand"
           onClick={returnToLogin}
           type="button"
         >
-          <span aria-hidden="true">
-            <MailCheck size={20} />
-          </span>
-          <strong>408 学习工作台</strong>
+          <PlatformBrand />
         </button>
         <button
           className="recovery-header__return"

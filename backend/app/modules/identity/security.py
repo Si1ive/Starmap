@@ -20,6 +20,7 @@ from argon2.exceptions import (
 from email_validator import EmailNotValidError, validate_email
 
 from app.core.config import settings
+from app.modules.identity.email import validate_smtp_configuration
 
 MIN_PASSWORD_LENGTH = 15
 MAX_PASSWORD_LENGTH = 128
@@ -311,12 +312,14 @@ def validate_user_auth_security_config() -> None:
 
     if not settings.AUTH_COOKIE_SECURE:
         raise RuntimeError("AUTH_COOKIE_SECURE must be enabled in production")
-    if settings.AUTH_EMAIL_BACKEND != "memory":
-        raise RuntimeError("AUTH_EMAIL_BACKEND is not supported by this build")
+    email_backend = settings.AUTH_EMAIL_BACKEND.strip().lower()
+    if email_backend not in {"memory", "smtp"}:
+        raise RuntimeError("AUTH_EMAIL_BACKEND must be memory or smtp")
     if settings.AUTH_ANTI_BOT_MODE != "disabled":
         raise RuntimeError("AUTH_ANTI_BOT_MODE is not supported by this build")
-    if settings.AUTH_EMAIL_BACKEND == "memory":
+    if email_backend == "memory":
         raise RuntimeError("AUTH_EMAIL_BACKEND must be configured in production")
+    validate_smtp_configuration(require_tls=True)
     if settings.AUTH_ANTI_BOT_MODE == "disabled":
         raise RuntimeError("AUTH_ANTI_BOT_MODE must be configured in production")
     if "*" in settings.ALLOWED_ORIGINS:

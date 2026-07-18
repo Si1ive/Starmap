@@ -113,6 +113,20 @@ class Settings(BaseSettings):
         os.getenv("AUTH_GITHUB_TRANSACTION_MINUTES", "10")
     )
     AUTH_EMAIL_BACKEND: str = os.getenv("AUTH_EMAIL_BACKEND", "memory")
+    AUTH_EMAIL_FROM_ADDRESS: str = os.getenv("AUTH_EMAIL_FROM_ADDRESS", "")
+    AUTH_EMAIL_FROM_NAME: str = os.getenv(
+        "AUTH_EMAIL_FROM_NAME",
+        "408 学习工作台",
+    )
+    AUTH_EMAIL_REPLY_TO: str = os.getenv("AUTH_EMAIL_REPLY_TO", "")
+    AUTH_SMTP_HOST: str = os.getenv("AUTH_SMTP_HOST", "")
+    AUTH_SMTP_PORT: int = int(os.getenv("AUTH_SMTP_PORT", "587"))
+    AUTH_SMTP_USERNAME: str = os.getenv("AUTH_SMTP_USERNAME", "")
+    AUTH_SMTP_PASSWORD: str = os.getenv("AUTH_SMTP_PASSWORD", "")
+    AUTH_SMTP_SECURITY: str = os.getenv("AUTH_SMTP_SECURITY", "starttls")
+    AUTH_SMTP_TIMEOUT_SECONDS: float = float(
+        os.getenv("AUTH_SMTP_TIMEOUT_SECONDS", "10")
+    )
     AUTH_ANTI_BOT_MODE: str = os.getenv("AUTH_ANTI_BOT_MODE", "disabled")
 
     # CORS
