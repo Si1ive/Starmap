@@ -26,6 +26,7 @@ import {
 } from '@ant-design/icons'
 import { useAdminStore } from '@/store'
 import { usePermission } from '@/hooks/usePermission'
+import AdminBrand from '../Brand'
 
 const { Sider } = Layout
 
@@ -84,6 +85,40 @@ const menuItems = [
   },
 ]
 
+const selectableMenuKeys = [
+  '/admin/review/chapter-relation-graph',
+  '/admin/review/chapter-relations',
+  '/admin/review/relations',
+  '/admin/crawler/schedules',
+  '/admin/crawler/sources',
+  '/admin/crawler/config',
+  '/admin/crawler/stats',
+  '/admin/crawler/logs',
+  '/admin/monitor/vector-recall',
+  '/admin/monitor/database',
+  '/admin/monitor/errors',
+  '/admin/monitor/api',
+  '/admin/monitor/llm',
+  '/admin/settings/users',
+  '/admin/conversations',
+  '/admin/knowledge',
+  '/admin/questions',
+  '/admin/dashboard',
+  '/admin/outlines',
+  '/admin/crawler',
+  '/admin/monitor',
+  '/admin/settings',
+  '/admin/corpus',
+  '/admin/search',
+]
+
+const menuGroups = [
+  { key: '/admin/review-group', prefix: '/admin/review' },
+  { key: '/admin/crawler-group', prefix: '/admin/crawler' },
+  { key: '/admin/monitor-group', prefix: '/admin/monitor' },
+  { key: '/admin/settings-group', prefix: '/admin/settings' },
+]
+
 const AppSider = () => {
   const navigate = useNavigate()
   const location = useLocation()
@@ -125,20 +160,24 @@ const AppSider = () => {
 
   const filteredItems = filterByPermission([...menuItems])
 
-  // 获取当前选中的菜单key和展开的子菜单key
-  const selectedKey = location.pathname
-  const defaultOpenKeys = useMemo(
+  const selectedKey = useMemo(
     () =>
-      ['/admin/crawler-group', '/admin/monitor-group', '/admin/settings-group', '/admin/review-group'].filter(
-        (key) => location.pathname.startsWith(key.replace('-group', '').replace('/admin/settings-group', '/admin/settings')),
-      ),
+      selectableMenuKeys.find(
+        (key) => location.pathname === key || location.pathname.startsWith(`${key}/`),
+      ) ?? location.pathname,
     [location.pathname],
   )
 
-  // 使用 state 管理展开的菜单（受控组件）
+  const defaultOpenKeys = useMemo(
+    () =>
+      menuGroups
+        .filter(({ prefix }) => location.pathname.startsWith(prefix))
+        .map(({ key }) => key),
+    [location.pathname],
+  )
+
   const [openKeys, setOpenKeys] = useState<string[]>(collapsed ? [] : defaultOpenKeys)
 
-  // collapsed 变化时重置 openKeys
   useEffect(() => {
     if (collapsed) {
       setOpenKeys([])
@@ -152,57 +191,31 @@ const AppSider = () => {
       trigger={null}
       collapsible
       collapsed={collapsed}
-      style={{
-        overflow: 'auto',
-        height: '100vh',
-        position: 'fixed',
-        left: 0,
-        top: 0,
-        bottom: 0,
-        zIndex: 100,
-        display: 'flex',
-        flexDirection: 'column',
-      }}
+      collapsedWidth={76}
+      width={236}
+      className="admin-sider"
     >
-      <div
-        style={{
-          height: 64,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: '#fff',
-          fontSize: collapsed ? 16 : 20,
-          fontWeight: 'bold',
-          borderBottom: '1px solid rgba(255,255,255,0.1)',
-          flex: '0 0 64px',
-        }}
+      <button
+        className="admin-sider__brand"
+        onClick={() => navigate('/admin/dashboard')}
+        type="button"
       >
-        {collapsed ? '408' : '408考研学习平台'}
-      </div>
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', paddingBottom: 8 }}>
+        <AdminBrand compact={collapsed} />
+      </button>
+      <div className="admin-sider__menu">
         <Menu
-          theme="dark"
           mode="inline"
           selectedKeys={[selectedKey]}
           openKeys={openKeys}
           onOpenChange={setOpenKeys}
           items={filteredItems}
           onClick={({ key }) => navigate(key)}
-          style={{ borderRight: 0 }}
+          className="admin-navigation"
         />
       </div>
-      <div
-        style={{
-          width: '100%',
-          padding: '16px',
-          color: 'rgba(255,255,255,0.45)',
-          fontSize: 12,
-          textAlign: 'center',
-          borderTop: '1px solid rgba(255,255,255,0.1)',
-          flex: '0 0 auto',
-        }}
-      >
-        {collapsed ? '©' : '© 2026 StarMap'}
+      <div className="admin-sider__status">
+        <span className="admin-sider__status-dot" />
+        {collapsed ? null : <span>管理节点在线</span>}
       </div>
     </Sider>
   )

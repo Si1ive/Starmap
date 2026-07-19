@@ -38,7 +38,7 @@ const ChapterRelationGraphPage = lazy(() => import('@/pages/Review/ChapterRelati
 const SearchDebugPage = lazy(() => import('@/pages/Search'))
 
 const PageFallback = () => (
-  <div style={{ display: 'grid', minHeight: 320, placeItems: 'center' }}>
+  <div className="admin-page-loading">
     <Spin size="large" />
   </div>
 )

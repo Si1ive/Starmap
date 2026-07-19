@@ -10,20 +10,16 @@ const Layout = () => {
   const { collapsed } = useAdminStore()
 
   return (
-    <AntLayout style={{ minHeight: '100vh' }}>
+    <AntLayout className="admin-shell">
       <AppSider />
-      <AntLayout style={{ marginLeft: collapsed ? 80 : 200, transition: 'margin-left 0.2s' }}>
+      <AntLayout
+        className={`admin-shell__column ${collapsed ? 'admin-shell__column--collapsed' : ''}`}
+      >
         <AppHeader />
-        <Content
-          style={{
-            margin: '24px 16px',
-            padding: 24,
-            minHeight: 280,
-            background: '#fff',
-            borderRadius: 8,
-          }}
-        >
-          <Outlet />
+        <Content className="admin-content">
+          <div className="admin-content__inner">
+            <Outlet />
+          </div>
         </Content>
       </AntLayout>
     </AntLayout>
