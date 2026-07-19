@@ -1,4 +1,12 @@
-import { ArrowRight, CalendarCheck2, Check, Clock3, Filter, History, ListChecks, RotateCcw } from 'lucide-react'
+import {
+  ArrowRight,
+  BookOpenCheck,
+  CalendarCheck2,
+  Check,
+  History,
+  ListChecks,
+  RotateCcw,
+} from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { mistakeClusters } from '../data/fixtures'
 import { Button, PageHeading, SectionHeading, StatusMark } from '../components/Primitives'
@@ -13,32 +21,34 @@ export default function MistakesPage() {
     <div className="page page--wide mistakes-page">
       <PageHeading
         actions={
-          <button className="filter-control" type="button">
-            <Filter size={16} />
-            待复习
-          </button>
+          <Button
+            icon={<BookOpenCheck size={17} />}
+            onClick={() => navigate('/practice/queue-check?question=1')}
+          >
+            去练习
+          </Button>
         }
-        description="按错误模式组织，而不是把做错的题简单堆在一起。"
-        eyebrow="错题与复习"
-        title="先修正稳定出现的错误路径"
+        description="这里汇总做题错误、对话中暴露的未理解考点和后续验证证据，帮助你知道下一步该补什么。"
+        eyebrow="知识诊断"
+        title="把错误和未理解的考点归纳成下一步"
       />
 
       {newMistake ? (
         <section className="mistake-created">
           <span><Check size={18} /></span>
           <div>
-            <p className="eyebrow">已记录并安排复习</p>
+            <p className="eyebrow">已更新知识薄弱点</p>
             <h2>循环队列 · {confirmedReason}</h2>
-            <p>首次无提示验证已加入今日队列；答对后将在 4 天后安排变式题。</p>
+            <p>首次无提示验证已加入建议列表；后续答题结果会继续更新巩固优先级。</p>
           </div>
-          <Button icon={<ArrowRight size={16} />} onClick={() => navigate('/today')} tone="secondary">
-            查看今日任务
+          <Button icon={<ArrowRight size={16} />} onClick={() => navigate('/progress')} tone="secondary">
+            查看学习进度
           </Button>
         </section>
       ) : null}
 
       <section className="review-queue">
-        <SectionHeading meta="4 个考点 · 预计 15 分钟" title="今天到期" />
+        <SectionHeading meta="4 个考点 · 根据错误和对话证据排序" title="待巩固队列" />
         <div className="review-queue__lead">
           <span className="review-queue__index">01</span>
           <span className="review-queue__icon"><RotateCcw size={19} /></span>
@@ -47,7 +57,7 @@ export default function MistakesPage() {
             <small>错误模式：条件遗漏 · 最近错误 3 次</small>
             <em>先回忆推导，再做 1 道无提示变式题</em>
           </span>
-          <span><Clock3 size={15} /> 6 分钟</span>
+          <span><History size={15} /> 建议巩固</span>
           <Button icon={<ArrowRight size={16} />} onClick={() => navigate('/practice/queue-check?question=1')}>
             开始复习
           </Button>
@@ -55,7 +65,7 @@ export default function MistakesPage() {
       </section>
 
       <section className="mistake-clusters">
-        <SectionHeading meta="根据最近行为动态更新" title="错误模式" />
+        <SectionHeading meta="根据作答、用时和 Agent 对话动态更新" title="知识薄弱点" />
         <div className="mistake-cluster-list">
           {mistakeClusters.map((cluster, index) => (
             <button className={index === 0 ? 'is-active' : ''} key={cluster.title} type="button">
@@ -80,7 +90,7 @@ export default function MistakesPage() {
       </section>
 
       <section className="mistake-history">
-        <SectionHeading meta="只展示会影响下一步的变化" title="本周复习轨迹" />
+        <SectionHeading meta="只展示会影响下一步的变化" title="本周诊断轨迹" />
         <div className="history-line">
           <div>
             <span><CalendarCheck2 size={16} /></span>

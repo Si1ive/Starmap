@@ -76,7 +76,7 @@ export default function PracticePage() {
     return (
       <div className="practice-shell">
         <header className="practice-topbar">
-          <IconButton label="退出练习" onClick={() => navigate('/today')}>
+          <IconButton label="退出练习" onClick={() => navigate('/progress')}>
             <X size={20} />
           </IconButton>
           <div className="practice-progress">
@@ -298,7 +298,7 @@ export default function PracticePage() {
             <div>
               <p className="eyebrow">确认错因</p>
               <h2>这次错误更接近哪一种？</h2>
-              <p>确认后只会影响后续复习题型和间隔，可以在错题页修改。</p>
+              <p>确认后只会影响后续复习题型和间隔，可以在知识薄弱点页修改。</p>
             </div>
             <div className="reason-options">
               {['条件遗漏', '公式记混', '计算失误', '题意理解'].map((reason) => (
@@ -335,7 +335,7 @@ export default function PracticePage() {
               icon={<CheckCircle2 size={17} />}
               onClick={() => navigate(`/mistakes?new=queue&reason=${encodeURIComponent(mistakeReason)}`)}
             >
-              记录错因并安排复习
+              记录错因并更新巩固状态
             </Button>
             <Button icon={<ArrowRight size={17} />} tone="secondary">继续第 2 题</Button>
           </div>

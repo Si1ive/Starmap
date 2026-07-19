@@ -18,6 +18,92 @@ export interface AgentStep {
   status: 'completed' | 'running' | 'failed' | 'waiting'
 }
 
+export type AgentHistoryState = 'complete' | 'failed' | 'approval'
+
+export interface AgentHistoryItem {
+  id: string
+  title: string
+  subject: string
+  time: string
+  state: AgentHistoryState
+}
+
+export type ActiveTaskKind = 'agent' | 'source' | 'practice'
+
+export interface ActiveTask {
+  id: string
+  kind: ActiveTaskKind
+  title: string
+  detail: string
+  status: string
+  route: string
+}
+
+export const agentHistory: AgentHistoryItem[] = [
+  {
+    id: 'queue-front',
+    title: '循环队列的 front 怎么算',
+    subject: '数据结构 · 栈和队列',
+    time: '今天 09:42',
+    state: 'complete',
+  },
+  {
+    id: 'practice-draft',
+    title: '根据错题生成一组专项练习',
+    subject: '循环队列 · 练习生成',
+    time: '昨天 20:16',
+    state: 'failed',
+  },
+  {
+    id: 'priority-adjustment',
+    title: '调整巩固优先级',
+    subject: '操作系统 · 死锁',
+    time: '昨天 18:03',
+    state: 'approval',
+  },
+  {
+    id: 'interrupt-explanation',
+    title: '中断、异常和系统调用的区别',
+    subject: '计算机组成原理 · 中央处理器',
+    time: '7 月 16 日',
+    state: 'complete',
+  },
+  {
+    id: 'cache-access-time',
+    title: 'Cache 平均访问时间怎么分析',
+    subject: '计算机组成原理 · 存储系统',
+    time: '7 月 15 日',
+    state: 'complete',
+  },
+]
+
+export const activeTasks: ActiveTask[] = [
+  {
+    id: 'agent-queue',
+    kind: 'agent',
+    title: '循环队列讲解',
+    detail: '正在组织分层讲解 · 4/6',
+    status: '运行中',
+    route: '/agent/queue?state=running&hold=1',
+  },
+  {
+    id: 'source-ingestion',
+    kind: 'source',
+    title: '我的组成原理错题笔记.pdf',
+    detail: '正在建立索引 · 第 18/28 页',
+    status: '入库中',
+    route: '/sources',
+  },
+  {
+    id: 'practice-queue',
+    kind: 'practice',
+    title: '循环队列验证',
+    detail: '第 1/2 题 · 草稿已自动保存',
+    status: '进行中',
+    route: '/practice/queue-check?question=1',
+  },
+]
+
 export const todayTasks: StudyTask[] = [
   {
     id: 'queue-review',
@@ -214,7 +300,7 @@ export const mistakeClusters = [
     point: '中断与异常',
     count: 2,
     state: '待验证',
-    next: '明天 · 对比辨析 3 题',
+    next: '建议继续 · 对比辨析 3 题',
   },
   {
     title: '计算路径不稳定',
@@ -222,7 +308,7 @@ export const mistakeClusters = [
     point: 'Cache 性能计算',
     count: 2,
     state: '学习中',
-    next: '4 天后 · 变式题',
+    next: '等待新证据 · 变式题',
   },
 ]
 

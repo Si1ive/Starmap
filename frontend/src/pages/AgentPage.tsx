@@ -24,7 +24,7 @@ import {
   X,
 } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { agentSources, agentSteps, completedAgentSteps } from '../data/fixtures'
+import { agentHistory, agentSources, agentSteps, completedAgentSteps } from '../data/fixtures'
 import {
   Button,
   Formula,
@@ -39,7 +39,7 @@ type AgentState = 'new' | 'running' | 'complete' | 'failed' | 'approval'
 const suggestions = [
   '讲清楚循环队列 front 的推导',
   '根据错题生成一组专项练习',
-  '检查本周计划是否需要调整',
+  '检查哪些内容需要优先巩固',
 ]
 
 const sourceIcons = {
@@ -181,6 +181,7 @@ export default function AgentPage() {
   const queryState = searchParams.get('state') as AgentState | null
   const state: AgentState = threadId ? queryState ?? 'complete' : 'new'
   const evidenceOpen = searchParams.get('evidence') === '1'
+  const historyItem = agentHistory.find((item) => item.id === threadId)
   const [message, setMessage] = useState('')
   const [expandedStep, setExpandedStep] = useState<string | null>(state === 'running' ? 'knowledge' : null)
   const [approvalRejected, setApprovalRejected] = useState(false)
@@ -197,11 +198,12 @@ export default function AgentPage() {
   }, [navigate, searchParams, state, threadId])
 
   const title = useMemo(() => {
-    if (state === 'approval') return '调整本周复习计划'
+    if (historyItem) return historyItem.title
+    if (state === 'approval') return '调整巩固优先级'
     if (state === 'failed') return '生成 20 题专项练习'
-    if (state === 'new') return '新学习线程'
+    if (state === 'new') return 'Agent'
     return '循环队列的 front 怎么算'
-  }, [state])
+  }, [historyItem, state])
 
   const openEvidence = () => {
     const next = new URLSearchParams(searchParams)
@@ -225,7 +227,7 @@ export default function AgentPage() {
       <div className="page agent-new">
         <div className="agent-new__intro">
           <span className="agent-new__mark"><Sparkles size={21} /></span>
-          <p className="eyebrow">新学习线程</p>
+          <p className="eyebrow">新对话</p>
           <h1>现在最想弄清哪件事？</h1>
           <p>可以提问、粘贴题目，或直接描述你希望 Agent 完成的学习任务。</p>
         </div>
@@ -274,8 +276,8 @@ export default function AgentPage() {
       <div className="page agent-page">
         <PageHeading
           actions={<StatusMark tone={approvalRejected ? 'neutral' : 'warning'}>{approvalRejected ? '已拒绝' : '等待确认'}</StatusMark>}
-          description="Agent 发现“操作系统 · 死锁”连续错误 3 次，建议替换本周一项同等时长任务。"
-          eyebrow="学习计划 · 持续性修改"
+          description="Agent 发现“操作系统 · 死锁”连续错误 3 次，建议提高该考点的巩固优先级。"
+          eyebrow="学习建议 · 内容调整"
           title={title}
         />
 
@@ -283,11 +285,11 @@ export default function AgentPage() {
           <div className="approval-sheet__why">
             <span><Sparkles size={18} /></span>
             <div>
-              <h2>{approvalRejected ? '原计划保持不变' : '这次修改会改变什么'}</h2>
+              <h2>{approvalRejected ? '原优先级保持不变' : '这次修改会改变什么'}</h2>
               <p>
                 {approvalRejected
-                  ? '拒绝后没有写入任何计划数据。你仍可重新打开差异并决定是否采用。'
-                  : '只替换周四的一项 20 分钟任务，其余安排和完成记录不变。修改后可在 48 小时内撤销。'}
+                  ? '拒绝后没有改变内容优先级。你仍可重新打开差异并决定是否采用。'
+                  : '只调整两个考点的相对优先级，不创建学习时间表，也不会改变已有完成记录。'}
               </p>
             </div>
           </div>
@@ -295,20 +297,20 @@ export default function AgentPage() {
           {!approvalRejected ? (
             <div className="approval-diff">
               <div className="approval-diff__column">
-                <span>当前计划</span>
+                <span>当前优先级</span>
                 <div className="approval-diff__item approval-diff__item--remove">
-                  <small>周四 · 19:30</small>
+                  <small>优先巩固</small>
                   <strong>数据结构排序练习</strong>
-                  <em>20 分钟</em>
+                  <em>下调</em>
                 </div>
               </div>
               <ArrowRight className="approval-diff__arrow" size={22} />
               <div className="approval-diff__column">
-                <span>建议计划</span>
+                <span>建议优先级</span>
                 <div className="approval-diff__item approval-diff__item--add">
-                  <small>周四 · 19:30</small>
+                  <small>优先巩固</small>
                   <strong>操作系统死锁专项</strong>
-                  <em>20 分钟</em>
+                  <em>上调</em>
                 </div>
               </div>
             </div>
@@ -316,31 +318,31 @@ export default function AgentPage() {
             <div className="approval-rejected">
               <History size={20} />
               <span>
-                <strong>计划版本仍为 v11</strong>
-                <small>排序练习继续保留在周四 19:30</small>
+                <strong>内容顺序保持不变</strong>
+                <small>Agent 会继续根据后续对话和练习记录更新建议</small>
               </span>
             </div>
           )}
 
           <div className="approval-impact">
             <span><ShieldCheck size={17} /> 不会删除历史记录</span>
-            <span><RotateCcw size={17} /> 应用后 48 小时内可撤销</span>
+            <span><RotateCcw size={17} /> 可随时在对话中调整</span>
             <span><CircleStop size={17} /> 拒绝不会中断当前线程</span>
           </div>
 
           <div className="approval-sheet__actions">
             {approvalRejected ? (
               <>
-                <Button onClick={() => navigate('/today')} tone="quiet">返回今日</Button>
+                <Button onClick={() => navigate('/progress')} tone="quiet">查看学习进度</Button>
                 <Button icon={<RefreshCw size={16} />} onClick={() => setApprovalRejected(false)} tone="secondary">
                   重新打开差异
                 </Button>
               </>
             ) : (
               <>
-                <Button onClick={() => setApprovalRejected(true)} tone="secondary">保留原计划</Button>
-                <Button icon={<Check size={16} />} onClick={() => navigate('/today?preview=plan')}>
-                  同意并预览
+                <Button onClick={() => setApprovalRejected(true)} tone="secondary">保持当前顺序</Button>
+                <Button icon={<Check size={16} />} onClick={() => navigate('/progress')}>
+                  采用调整
                 </Button>
               </>
             )}
@@ -355,7 +357,7 @@ export default function AgentPage() {
       <section className="agent-thread">
         <header className="agent-thread__header">
           <div>
-            <p className="eyebrow">数据结构 · 栈和队列</p>
+            <p className="eyebrow">{historyItem?.subject ?? '数据结构 · 栈和队列'}</p>
             <h1>{title}</h1>
           </div>
           <div className="agent-thread__header-actions">

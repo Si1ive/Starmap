@@ -1,40 +1,41 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
-  Bell,
   BookOpenCheck,
   BotMessageSquare,
-  CalendarCheck2,
-  CircleUserRound,
-  Clock3,
-  Command,
-  Ellipsis,
+  BrainCircuit,
+  ChevronDown,
+  FileUp,
+  History,
   Library,
-  ListChecks,
+  ListTodo,
   LoaderCircle,
   LogOut,
   Map,
   Menu,
-  MessageSquarePlus,
   PanelLeftClose,
-  Search,
-  Settings,
-  TriangleAlert,
+  UserRound,
   X,
 } from 'lucide-react'
 import { IconButton, StatusMark } from './Primitives'
+import PlatformBrand from './PlatformBrand'
 import useAuth from '../useAuth'
+import { activeTasks, agentHistory } from '../data/fixtures'
 
 const navItems = [
-  { to: '/today', label: '今日', icon: CalendarCheck2 },
   { to: '/agent', label: 'Agent', icon: BotMessageSquare },
-  { to: '/map', label: '学习地图', icon: Map },
-  { to: '/practice/queue-check?question=1', label: '练习', icon: BookOpenCheck },
-  { to: '/mistakes', label: '错题', icon: ListChecks },
+  { to: '/practice', label: '练习', icon: BookOpenCheck },
+  { to: '/mistakes', label: '知识薄弱点', icon: BrainCircuit },
+  { to: '/progress', label: '学习进度', icon: Map },
   { to: '/sources', label: '资料', icon: Library },
 ]
 
-const mobileNav = navItems.slice(0, 5).filter((item) => item.label !== '学习地图')
+const mobileNav = navItems
+const activeTaskIcons = {
+  agent: BotMessageSquare,
+  source: FileUp,
+  practice: BookOpenCheck,
+}
 
 export default function AppShell() {
   const { logout, user } = useAuth()
@@ -43,8 +44,10 @@ export default function AppShell() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [taskCenterOpen, setTaskCenterOpen] = useState(false)
   const [sidebarCompact, setSidebarCompact] = useState(false)
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
   const [logoutError, setLogoutError] = useState('')
+  const accountMenuRef = useRef<HTMLDivElement | null>(null)
   const isPractice = location.pathname.startsWith('/practice/')
   const displayName = user?.display_name || user?.email || '学习用户'
   const avatarLabel = Array.from(displayName.trim())[0] || '学'
@@ -55,7 +58,32 @@ export default function AppShell() {
     return item?.label ?? '408 Agent'
   }, [location.pathname])
 
+  useEffect(() => {
+    setAccountMenuOpen(false)
+    setTaskCenterOpen(false)
+  }, [location.pathname])
+
+  useEffect(() => {
+    if (!accountMenuOpen) return undefined
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!accountMenuRef.current?.contains(event.target as Node)) {
+        setAccountMenuOpen(false)
+      }
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setAccountMenuOpen(false)
+    }
+    document.addEventListener('pointerdown', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [accountMenuOpen])
+
   const handleLogout = async () => {
+    setAccountMenuOpen(false)
     setLoggingOut(true)
     setLogoutError('')
     try {
@@ -72,9 +100,8 @@ export default function AppShell() {
     <div className={`app-frame ${sidebarCompact ? 'app-frame--compact' : ''} ${isPractice ? 'app-frame--practice' : ''}`}>
       <aside className={`sidebar ${sidebarOpen ? 'sidebar--open' : ''}`}>
         <div className="sidebar__brand">
-          <button className="brand-mark" onClick={() => navigate('/today')} type="button">
-            <span>408</span>
-            <strong>学习工作台</strong>
+          <button className="brand-mark" onClick={() => navigate('/agent')} type="button">
+            <PlatformBrand />
           </button>
           <IconButton
             className="sidebar__collapse"
@@ -87,12 +114,6 @@ export default function AppShell() {
             <X size={19} />
           </IconButton>
         </div>
-
-        <button className="new-thread" onClick={() => navigate('/agent')} type="button">
-          <MessageSquarePlus size={17} />
-          <span>新建学习线程</span>
-          <kbd>⌘ K</kbd>
-        </button>
 
         <nav className="primary-nav" aria-label="主要导航">
           {navItems.map((item) => {
@@ -113,44 +134,21 @@ export default function AppShell() {
 
         <div className="recent-threads">
           <div className="sidebar-label">
-            <span>最近线程</span>
-            <IconButton label="线程选项">
-              <Ellipsis size={16} />
-            </IconButton>
+            <span>历史记录</span>
+            <History size={15} />
           </div>
-          <button onClick={() => navigate('/agent/queue?state=complete')} type="button">
-            <span>循环队列的 front 怎么算</span>
-            <small>刚刚</small>
-          </button>
-          <button onClick={() => navigate('/agent/recovery?state=failed')} type="button">
-            <span>生成 20 题专项练习</span>
-            <small className="text-error">需要处理</small>
-          </button>
-          <button onClick={() => navigate('/agent/plan?state=approval')} type="button">
-            <span>调整本周复习计划</span>
-            <small className="text-amber">待确认</small>
-          </button>
+          {agentHistory.map((thread) => (
+            <button
+              key={thread.id}
+              onClick={() => navigate(`/agent/${thread.id}?state=${thread.state}`)}
+              type="button"
+            >
+              <span>{thread.title}</span>
+              <small>{thread.time} · {thread.subject}</small>
+            </button>
+          ))}
         </div>
 
-        <div className="sidebar__account">
-          <div className="avatar">{avatarLabel}</div>
-          <div>
-            <strong title={displayName}>{displayName}</strong>
-            {logoutError ? (
-              <small className="text-error">{logoutError}</small>
-            ) : (
-              <small><span className="sync-dot" /> 已同步</small>
-            )}
-          </div>
-          <IconButton
-            className="sidebar__logout"
-            disabled={loggingOut}
-            label="退出登录"
-            onClick={() => void handleLogout()}
-          >
-            {loggingOut ? <LoaderCircle className="spin" size={17} /> : <LogOut size={17} />}
-          </IconButton>
-        </div>
       </aside>
 
       {sidebarOpen ? <button aria-label="关闭导航遮罩" className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} type="button" /> : null}
@@ -163,92 +161,99 @@ export default function AppShell() {
                 <Menu size={20} />
               </IconButton>
               <span className="topbar__page">{currentLabel}</span>
-              <span className="topbar__context">强化阶段 · 距本周目标还差 3 项</span>
+              <span className="topbar__context">学习内容由对话和记录持续更新</span>
             </div>
             <div className="topbar__actions">
-              <button className="command-shortcut" onClick={() => navigate('/agent')} type="button">
-                <Search size={16} />
-                <span>提问或开始任务</span>
-                <kbd><Command size={12} /> K</kbd>
-              </button>
               <div className="task-center-anchor">
                 <IconButton
                   className="task-center-button"
-                  label="任务状态中心"
+                  label="查看进行中的任务"
                   onClick={() => setTaskCenterOpen((value) => !value)}
                 >
-                  <Clock3 size={19} />
+                  <ListTodo size={19} />
                   <span className="task-dot" />
                 </IconButton>
                 {taskCenterOpen ? (
                   <div className="task-center">
                     <div className="task-center__header">
                       <div>
-                        <p className="eyebrow">任务状态</p>
-                        <h2>Agent 仍在工作</h2>
+                        <p className="eyebrow">当前任务</p>
+                        <h2>正在执行中的任务</h2>
                       </div>
                       <IconButton label="关闭任务中心" onClick={() => setTaskCenterOpen(false)}>
                         <X size={18} />
                       </IconButton>
                     </div>
-                    <button
-                      className="task-center__item"
-                      onClick={() => {
-                        navigate('/agent/queue?state=running&hold=1')
-                        setTaskCenterOpen(false)
-                      }}
-                      type="button"
-                    >
-                      <span className="task-center__icon task-center__icon--running">
-                        <BotMessageSquare size={17} />
-                      </span>
-                      <span>
-                        <strong>循环队列讲解</strong>
-                        <small>正在组织分层讲解 · 4/6</small>
-                      </span>
-                      <StatusMark tone="running">运行中</StatusMark>
-                    </button>
-                    <button
-                      className="task-center__item"
-                      onClick={() => {
-                        navigate('/agent/plan?state=approval')
-                        setTaskCenterOpen(false)
-                      }}
-                      type="button"
-                    >
-                      <span className="task-center__icon task-center__icon--approval">
-                        <Bell size={17} />
-                      </span>
-                      <span>
-                        <strong>调整本周计划</strong>
-                        <small>需要确认 1 项持续修改</small>
-                      </span>
-                      <StatusMark tone="warning">待确认</StatusMark>
-                    </button>
-                    <button
-                      className="task-center__item"
-                      onClick={() => {
-                        navigate('/agent/recovery?state=failed')
-                        setTaskCenterOpen(false)
-                      }}
-                      type="button"
-                    >
-                      <span className="task-center__icon task-center__icon--failed">
-                        <TriangleAlert size={17} />
-                      </span>
-                      <span>
-                        <strong>专项练习提示</strong>
-                        <small>草稿已保留，可局部重试</small>
-                      </span>
-                      <StatusMark tone="error">失败</StatusMark>
-                    </button>
+                    {activeTasks.map((task) => {
+                      const Icon = activeTaskIcons[task.kind]
+                      return (
+                        <button
+                          className="task-center__item"
+                          key={task.id}
+                          onClick={() => {
+                            navigate(task.route)
+                            setTaskCenterOpen(false)
+                          }}
+                          type="button"
+                        >
+                          <span className={`task-center__icon task-center__icon--${task.kind}`}>
+                            <Icon size={17} />
+                          </span>
+                          <span>
+                            <strong>{task.title}</strong>
+                            <small>{task.detail}</small>
+                          </span>
+                          <StatusMark tone={task.kind === 'source' ? 'warning' : 'running'}>
+                            {task.status}
+                          </StatusMark>
+                        </button>
+                      )
+                    })}
+                    <p className="task-center__note">仅显示尚未结束的任务。历史对话从左侧历史记录进入。</p>
                   </div>
                 ) : null}
               </div>
-              <IconButton label="账户设置" onClick={() => navigate('/account')}>
-                <Settings size={19} />
-              </IconButton>
-              <CircleUserRound className="topbar__avatar" size={25} />
+              <div className="account-menu-anchor" ref={accountMenuRef}>
+                <button
+                  aria-expanded={accountMenuOpen}
+                  aria-haspopup="menu"
+                  aria-label="打开账户菜单"
+                  className="account-menu-button"
+                  onClick={() => setAccountMenuOpen((value) => !value)}
+                  type="button"
+                >
+                  <span className="account-menu-button__avatar">{avatarLabel}</span>
+                  <ChevronDown className={accountMenuOpen ? 'is-open' : ''} size={15} />
+                </button>
+                {accountMenuOpen ? (
+                  <div className="account-menu" role="menu">
+                    <button
+                      onClick={() => navigate('/account')}
+                      role="menuitem"
+                      type="button"
+                    >
+                      <UserRound size={17} />
+                      <span>
+                        <strong>账户与登录</strong>
+                        <small>{displayName}</small>
+                      </span>
+                    </button>
+                    <button
+                      disabled={loggingOut}
+                      onClick={() => void handleLogout()}
+                      role="menuitem"
+                      type="button"
+                    >
+                      {loggingOut ? <LoaderCircle className="spin" size={17} /> : <LogOut size={17} />}
+                      <span>
+                        <strong>{loggingOut ? '正在退出' : '退出登录'}</strong>
+                        <small>结束当前设备会话</small>
+                      </span>
+                    </button>
+                    {logoutError ? <p role="alert">{logoutError}</p> : null}
+                  </div>
+                ) : null}
+              </div>
             </div>
           </header>
         ) : null}
@@ -268,10 +273,6 @@ export default function AppShell() {
                 </NavLink>
               )
             })}
-            <button onClick={() => setSidebarOpen(true)} type="button">
-              <Menu size={20} />
-              <span>更多</span>
-            </button>
           </nav>
         ) : null}
       </div>
