@@ -9,12 +9,13 @@ import {
   getChapters,
 } from '@/api'
 import EntityAssets from '@/components/EntityAssets'
+import PageHeader from '@/components/PageHeader'
 
 const typeConfig: Record<string, { color: string; text: string }> = {
   choice: { color: 'blue', text: '选择题' },
   fill: { color: 'green', text: '填空题' },
   judge: { color: 'orange', text: '判断题' },
-  short_answer: { color: 'purple', text: '简答题' },
+  short_answer: { color: 'cyan', text: '简答题' },
   design: { color: 'red', text: '设计题' },
   analysis: { color: 'cyan', text: '分析题' },
 }
@@ -28,7 +29,7 @@ const difficultyConfig: Record<string, { color: string; text: string }> = {
 // 答案/解析来源标识
 const sourceTag = (src?: string) => {
   if (src === 'extracted') return <Tag color="green">原卷</Tag>
-  if (src === 'llm') return <Tag color="purple">AI 生成</Tag>
+  if (src === 'llm') return <Tag color="gold">AI 生成</Tag>
   if (src === 'manual') return <Tag color="blue">人工</Tag>
   return null
 }
@@ -89,24 +90,28 @@ const QuestionDetail = () => {
   const difficulty = difficultyConfig[question.difficulty] || { color: 'default', text: question.difficulty }
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <Space>
-          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(listPath)}>
-            返回
-          </Button>
-          <h2 style={{ margin: 0 }}>题目详情</h2>
-        </Space>
-        <Button
-          type="primary"
-          icon={<EditOutlined />}
-          onClick={() => navigate(`/admin/questions/${id}/edit${location.search}`)}
-        >
-          编辑
-        </Button>
-      </div>
+    <div className="content-detail-page question-detail-page">
+      <PageHeader
+        eyebrow="内容资产 / 题目"
+        title="题目详情"
+        description={`${subject?.name || question.subject_id} · ${question.question_no ? `第 ${question.question_no} 题` : '未标记题号'}`}
+        actions={
+          <Space>
+            <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(listPath)}>
+              返回列表
+            </Button>
+            <Button
+              type="primary"
+              icon={<EditOutlined />}
+              onClick={() => navigate(`/admin/questions/${id}/edit${location.search}`)}
+            >
+              编辑
+            </Button>
+          </Space>
+        }
+      />
 
-      <Card title="题目内容" style={{ marginBottom: 16 }}>
+      <Card className="content-detail-card" title="题目内容">
         <div style={{ marginBottom: 16 }}>
           <Space>
             <Tag color={typeInfo.color}>{typeInfo.text}</Tag>
@@ -133,7 +138,7 @@ const QuestionDetail = () => {
         )}
       </Card>
 
-      <Card title="答案与解析" style={{ marginBottom: 16 }}>
+      <Card className="content-detail-card" title="答案与解析">
         <Descriptions bordered column={1}>
           <Descriptions.Item label={
             <span>标准答案 {sourceTag(question.answer_source)}</span>
@@ -152,7 +157,7 @@ const QuestionDetail = () => {
         </Descriptions>
       </Card>
 
-      <Card title="所考知识点" style={{ marginBottom: 16 }}>
+      <Card className="content-detail-card" title="所考知识点">
         {question.knowledge_points && question.knowledge_points.length > 0 ? (
           <Space wrap>
             {question.knowledge_points.map((kp) => (
@@ -173,7 +178,7 @@ const QuestionDetail = () => {
         )}
       </Card>
 
-      <Card title="基本信息">
+      <Card className="content-detail-card" title="基本信息">
         <Descriptions bordered column={2}>
           <Descriptions.Item label="学科">{subject?.name || question.subject_id}</Descriptions.Item>
           <Descriptions.Item label="章节">{chapter?.name || question.chapter_id}</Descriptions.Item>
@@ -191,7 +196,7 @@ const QuestionDetail = () => {
         </Descriptions>
       </Card>
 
-      <Card title={`图片/表格/公式 (${(question as any).assets?.length || 0})`} style={{ marginTop: 16 }}>
+      <Card className="content-detail-card" title={`图片/表格/公式 (${(question as any).assets?.length || 0})`}>
         <EntityAssets assets={(question as any).assets || []} />
       </Card>
     </div>

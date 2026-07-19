@@ -6,6 +6,7 @@ import { getKnowledgePointDetail, getSubjects, getChapters } from '@/api'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import EntityAssets from '@/components/EntityAssets'
+import PageHeader from '@/components/PageHeader'
 
 const difficultyConfig: Record<string, { color: string; text: string }> = {
   easy: { color: 'green', text: '简单' },
@@ -64,31 +65,36 @@ const KnowledgeDetail = () => {
   const examFreq = examFreqConfig[point.exam_frequency] || { color: 'default', text: point.exam_frequency }
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <Space>
-          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/admin/knowledge')}>
-            返回
-          </Button>
-          <h2 style={{ margin: 0 }}>{point.title}</h2>
-        </Space>
-        <Button
-          type="primary"
-          icon={<EditOutlined />}
-          onClick={() => navigate(`/admin/knowledge/${id}/edit`)}
-        >
-          编辑
-        </Button>
-      </div>
+    <div className="content-detail-page knowledge-detail-page">
+      <PageHeader
+        eyebrow="内容资产 / 知识点"
+        title={point.title}
+        description={`${subject?.name || point.subject_id} · ${chapter?.name || point.chapter_id}`}
+        actions={
+          <Space>
+            <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/admin/knowledge')}>
+              返回列表
+            </Button>
+            <Button
+              type="primary"
+              icon={<EditOutlined />}
+              onClick={() => navigate(`/admin/knowledge/${id}/edit`)}
+            >
+              编辑
+            </Button>
+          </Space>
+        }
+      />
 
       <Tabs
+        className="content-detail-tabs"
         defaultActiveKey="content"
         items={[
           {
             key: 'content',
             label: '知识点内容',
             children: (
-              <Card>
+              <Card className="content-detail-card">
                 <div style={{ marginBottom: 24 }}>
                   <Space>
                     <Tag color={difficulty.color}>{difficulty.text}</Tag>
@@ -117,7 +123,7 @@ const KnowledgeDetail = () => {
             key: 'info',
             label: '基本信息',
             children: (
-              <Card>
+              <Card className="content-detail-card">
                 <Descriptions bordered column={2}>
                   <Descriptions.Item label="学科">{subject?.name || point.subject_id}</Descriptions.Item>
                   <Descriptions.Item label="章节">{chapter?.name || point.chapter_id}</Descriptions.Item>
@@ -143,7 +149,7 @@ const KnowledgeDetail = () => {
             key: 'keypoints',
             label: '核心要点',
             children: (
-              <Card>
+              <Card className="content-detail-card">
                 {point.key_points && point.key_points.length > 0 ? (
                   <div>
                     {point.key_points.map((kp, idx) => (
@@ -176,7 +182,7 @@ const KnowledgeDetail = () => {
             key: 'assets',
             label: `图片/表格/公式 (${(point as any).assets?.length || 0})`,
             children: (
-              <Card>
+              <Card className="content-detail-card">
                 <EntityAssets assets={(point as any).assets || []} />
               </Card>
             ),

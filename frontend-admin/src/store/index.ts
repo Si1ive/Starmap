@@ -29,6 +29,7 @@ interface AdminState {
   setToken: (token: string | null) => void
   setPermissions: (permissions: string[]) => void
   toggleCollapsed: () => void
+  setCollapsed: (collapsed: boolean) => void
   setTheme: (theme: 'light' | 'dark') => void
   addNotification: (notification: Notification) => void
   removeNotification: (id: string) => void
@@ -49,6 +50,7 @@ export const useAdminStore = create<AdminState>()(
       setToken: (token) => set({ token }),
       setPermissions: (permissions) => set({ permissions }),
       toggleCollapsed: () => set((state) => ({ collapsed: !state.collapsed })),
+      setCollapsed: (collapsed) => set({ collapsed }),
       setTheme: (theme) => set({ theme }),
       addNotification: (notification) =>
         set((state) => ({

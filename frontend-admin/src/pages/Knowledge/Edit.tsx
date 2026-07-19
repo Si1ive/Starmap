@@ -6,6 +6,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getKnowledgePointDetail, updateKnowledgePoint, getSubjects, getChapters } from '@/api'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import PageHeader from '@/components/PageHeader'
 
 const KnowledgeEdit = () => {
   const { id } = useParams<{ id: string }>()
@@ -128,29 +129,31 @@ const KnowledgeEdit = () => {
   }
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <Space>
-          <Button icon={<ArrowLeftOutlined />} onClick={handleBack}>
-            返回
-          </Button>
-          <h2 style={{ margin: 0 }}>编辑知识点</h2>
-          {isFormDirty && (
-            <Tag color="orange">未保存</Tag>
-          )}
-        </Space>
-        <Button
-          type="primary"
-          icon={<SaveOutlined />}
-          loading={mutation.isPending}
-          onClick={handleSubmit}
-        >
-          保存
-        </Button>
-      </div>
+    <div className="content-form-page knowledge-edit-page">
+      <PageHeader
+        eyebrow="内容资产 / 知识点"
+        title="编辑知识点"
+        description="维护知识点归属、正文、核心要点和检索状态。"
+        actions={
+          <Space>
+            {isFormDirty ? <Tag color="orange">未保存</Tag> : null}
+            <Button icon={<ArrowLeftOutlined />} onClick={handleBack}>
+              返回列表
+            </Button>
+            <Button
+              type="primary"
+              icon={<SaveOutlined />}
+              loading={mutation.isPending}
+              onClick={handleSubmit}
+            >
+              保存
+            </Button>
+          </Space>
+        }
+      />
 
       <Form form={form} layout="vertical" onValuesChange={handleFormChange}>
-        <Card title="基本信息" style={{ marginBottom: 16 }}>
+        <Card className="content-form-section" title="基本信息">
           <Form.Item
             name="title"
             label="标题"
@@ -186,7 +189,7 @@ const KnowledgeEdit = () => {
               options={chapters.map((c) => ({ label: c.name, value: c.id }))}
             />
           </Form.Item>
-          <Space size="large" style={{ width: '100%' }} wrap>
+          <Space className="content-form-fields" size="large" wrap>
             <Form.Item name="difficulty" label="难度" initialValue="medium">
               <Select
                 style={{ width: 120 }}
@@ -232,7 +235,7 @@ const KnowledgeEdit = () => {
           </Form.Item>
         </Card>
 
-        <Card title="知识点内容" style={{ marginBottom: 16 }}>
+        <Card className="content-form-section" title="知识点内容">
           <Tabs
             defaultActiveKey="edit"
             items={[
@@ -269,14 +272,7 @@ const KnowledgeEdit = () => {
                   </span>
                 ),
                 children: (
-                  <div
-                    style={{
-                      minHeight: 400,
-                      padding: 16,
-                      background: '#fafafa',
-                      borderRadius: 4,
-                    }}
-                  >
+                  <div className="content-preview">
                     <div className="markdown-content">
                       {previewContent ? (
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>

@@ -76,8 +76,9 @@ const ContentReviewDrawer = ({
       open={open}
       onClose={onClose}
       width={620}
+      rootClassName="content-review-drawer"
       extra={
-        <Space>
+        <Space wrap>
           <Button danger icon={<CloseOutlined />} loading={submitting} onClick={() => submit('rejected')}>
             未通过
           </Button>
@@ -89,7 +90,7 @@ const ContentReviewDrawer = ({
     >
       {item && (
         <>
-          <Descriptions column={1} bordered size="small" style={{ marginBottom: 16 }}>
+          <Descriptions className="content-review-details" column={1} bordered size="small">
             {details.map((detail) => (
               <Descriptions.Item key={detail.key} label={detail.label}>
                 {detail.content}
@@ -105,7 +106,7 @@ const ContentReviewDrawer = ({
                 : '-'}
             </Descriptions.Item>
           </Descriptions>
-          <div style={{ marginBottom: 8, fontWeight: 600 }}>审核备注</div>
+          <div className="content-review-notes-label">审核备注</div>
           <TextArea
             rows={4}
             value={reviewNotes}

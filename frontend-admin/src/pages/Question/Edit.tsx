@@ -26,6 +26,7 @@ import {
 } from '@/api'
 import type { UpdateQuestionData } from '@/api/question'
 import type { CanonicalChapter, Question } from '@/types'
+import PageHeader from '@/components/PageHeader'
 
 type EditableOption = {
   key?: string
@@ -308,42 +309,31 @@ const QuestionEdit = () => {
   }
 
   return (
-    <div>
-      <div
-        style={{
-          alignItems: 'center',
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: 12,
-          justifyContent: 'space-between',
-          marginBottom: 16,
-        }}
-      >
-        <Space>
-          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(listPath)}>
-            返回
-          </Button>
-          <h2 style={{ margin: 0 }}>编辑题目</h2>
-        </Space>
-        <Button
-          type="primary"
-          icon={<SaveOutlined />}
-          loading={mutation.isPending}
-          onClick={handleSubmit}
-        >
-          保存
-        </Button>
-      </div>
+    <div className="content-form-page question-edit-page">
+      <PageHeader
+        eyebrow="内容资产 / 题目"
+        title="编辑题目"
+        description="维护题目归属、题型、题干、标准答案与解析。"
+        actions={
+          <Space>
+            <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(listPath)}>
+              返回列表
+            </Button>
+            <Button
+              type="primary"
+              icon={<SaveOutlined />}
+              loading={mutation.isPending}
+              onClick={handleSubmit}
+            >
+              保存
+            </Button>
+          </Space>
+        }
+      />
 
       <Form form={form} layout="vertical">
-        <Card title="归属信息" style={{ marginBottom: 16 }}>
-          <div
-            style={{
-              display: 'grid',
-              gap: 16,
-              gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-            }}
-          >
+        <Card className="content-form-section" title="归属信息">
+          <div className="content-form-grid content-form-grid--wide">
             <Form.Item
               name="subject_id"
               label="科目"
@@ -401,14 +391,8 @@ const QuestionEdit = () => {
           </div>
         </Card>
 
-        <Card title="题目属性" style={{ marginBottom: 16 }}>
-          <div
-            style={{
-              display: 'grid',
-              gap: 16,
-              gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
-            }}
-          >
+        <Card className="content-form-section" title="题目属性">
+          <div className="content-form-grid">
             <Form.Item
               name="type"
               label="题型"
@@ -461,7 +445,7 @@ const QuestionEdit = () => {
           </Form.Item>
         </Card>
 
-        <Card title="题目内容" style={{ marginBottom: 16 }}>
+        <Card className="content-form-section" title="题目内容">
           <Form.Item
             name="content"
             label="题目"
@@ -475,15 +459,7 @@ const QuestionEdit = () => {
               {(fields, { add, remove }) => (
                 <>
                   {fields.map((field) => (
-                    <div
-                      key={field.key}
-                      style={{
-                        alignItems: 'start',
-                        display: 'grid',
-                        gap: 12,
-                        gridTemplateColumns: '72px minmax(0, 1fr) 40px',
-                      }}
-                    >
+                    <div className="question-option-row" key={field.key}>
                       <Form.Item
                         {...field}
                         name={[field.name, 'key']}
@@ -526,7 +502,7 @@ const QuestionEdit = () => {
           )}
         </Card>
 
-        <Card title="答案与解析" style={{ marginBottom: 16 }}>
+        <Card className="content-form-section" title="答案与解析">
           <Form.Item
             name="answer"
             label="标准答案"

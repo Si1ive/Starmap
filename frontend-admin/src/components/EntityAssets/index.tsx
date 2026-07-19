@@ -1,4 +1,4 @@
-import { Card, Empty, Image, Tag, Tabs, Typography } from 'antd'
+import { Empty, Image, Tag, Tabs, Typography } from 'antd'
 import { BlockMath, InlineMath } from 'react-katex'
 import 'katex/dist/katex.min.css'
 
@@ -25,8 +25,8 @@ interface Props {
 const typeColor: Record<string, string> = {
   figure: 'blue',
   table: 'cyan',
-  formula: 'purple',
-  page_crop: 'magenta',
+  formula: 'orange',
+  page_crop: 'gold',
   other: 'default',
 }
 
@@ -45,21 +45,21 @@ const EntityAssets = ({ assets, emptyText = '暂无关联资产' }: Props) => {
       key: 'figures',
       label: `图片 (${figures.length})`,
       children: (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12 }}>
+        <div className="entity-assets-grid">
           {figures.map((a) => (
-            <Card key={a.asset_id} size="small" styles={{ body: { padding: 8 } }}>
+            <article className="entity-asset-card" key={a.asset_id}>
               <Image
                 src={a.file_path ? `/api/v1/admin/assets/${a.asset_id}/file` : undefined}
                 fallback="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNTAiIGhlaWdodD0iMTAwIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZjVmNWY1Ii8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGRvbWluYW50LWJhc2VsaW5lPSJtaWRkbGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZpbGw9IiM5OTkiPm5vIGltYWdlPC90ZXh0Pjwvc3ZnPg=="
                 alt={a.caption_text || `figure-${a.asset_id}`}
                 style={{ width: '100%', objectFit: 'contain' }}
               />
-              <div style={{ marginTop: 4 }}>
+              <div className="entity-asset-card__meta">
                 <Tag color={typeColor[a.asset_type]}>{a.asset_type}</Tag>
                 {a.page_no && <Text type="secondary" style={{ fontSize: 11 }}>p.{a.page_no}</Text>}
               </div>
               {a.caption_text && <Text type="secondary" style={{ fontSize: 11 }} ellipsis>{a.caption_text}</Text>}
-            </Card>
+            </article>
           ))}
         </div>
       ),
@@ -72,15 +72,18 @@ const EntityAssets = ({ assets, emptyText = '暂无关联资产' }: Props) => {
           {tables.map((a) => {
             const html = (a.metadata as any)?.html as string | undefined
             return (
-              <Card key={a.asset_id} size="small" style={{ marginBottom: 12 }}
-                title={<><Tag color={typeColor.table}>table</Tag>{a.page_no && <Text type="secondary" style={{ fontSize: 12 }}>p.{a.page_no}</Text>}</>}>
+              <article className="entity-asset-card entity-asset-card--stacked" key={a.asset_id}>
+                <header className="entity-asset-card__header">
+                  <Tag color={typeColor.table}>table</Tag>
+                  {a.page_no && <Text type="secondary" style={{ fontSize: 12 }}>p.{a.page_no}</Text>}
+                </header>
                 {html ? (
                   <div className="entity-asset-table" style={{ overflowX: 'auto' }}
                     dangerouslySetInnerHTML={{ __html: html }} />
                 ) : (
                   <Text type="secondary">无 HTML，原文：{a.caption_text || '-'}</Text>
                 )}
-              </Card>
+              </article>
             )
           })}
         </div>
@@ -94,8 +97,11 @@ const EntityAssets = ({ assets, emptyText = '暂无关联资产' }: Props) => {
           {formulas.map((a) => {
             const latex = (a.metadata as any)?.latex as string | undefined
             return (
-              <Card key={a.asset_id} size="small" style={{ marginBottom: 12 }}
-                title={<><Tag color={typeColor.formula}>formula</Tag>{a.page_no && <Text type="secondary" style={{ fontSize: 12 }}>p.{a.page_no}</Text>}</>}>
+              <article className="entity-asset-card entity-asset-card--stacked" key={a.asset_id}>
+                <header className="entity-asset-card__header">
+                  <Tag color={typeColor.formula}>formula</Tag>
+                  {a.page_no && <Text type="secondary" style={{ fontSize: 12 }}>p.{a.page_no}</Text>}
+                </header>
                 {latex ? (
                   <div style={{ overflow: 'auto' }}>
                     <BlockMath math={latex} />
@@ -104,7 +110,7 @@ const EntityAssets = ({ assets, emptyText = '暂无关联资产' }: Props) => {
                 ) : (
                   <Text type="secondary">{a.caption_text || '无 LaTeX 内容'}</Text>
                 )}
-              </Card>
+              </article>
             )
           })}
         </div>
@@ -116,10 +122,10 @@ const EntityAssets = ({ assets, emptyText = '暂无关联资产' }: Props) => {
       children: (
         <div>
           {others.map((a) => (
-            <Card key={a.asset_id} size="small" style={{ marginBottom: 8 }}>
+            <article className="entity-asset-card entity-asset-card--compact" key={a.asset_id}>
               <Tag color={typeColor.other}>{a.asset_type}</Tag>
               <Text>{a.caption_text || a.ocr_text || '-'}</Text>
-            </Card>
+            </article>
           ))}
         </div>
       ),

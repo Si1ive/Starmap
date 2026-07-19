@@ -14,6 +14,7 @@ import ContentReviewDrawer, {
   ReviewStatusTag,
   type ReviewStatus,
 } from '@/components/ContentReviewDrawer'
+import PageHeader from '@/components/PageHeader'
 import type { KnowledgePointListParams } from '@/api/knowledge'
 import type { KnowledgePoint } from '@/types'
 
@@ -242,22 +243,26 @@ const KnowledgeList = () => {
   ]
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <h2 style={{ margin: 0 }}>知识点管理</h2>
-        <Button
-          danger
-          icon={<DeleteOutlined />}
-          disabled={selectedRowKeys.length === 0}
-          loading={batchDeleteMutation.isPending}
-          onClick={handleBatchDelete}
-        >
-          批量删除{selectedRowKeys.length ? ` (${selectedRowKeys.length})` : ''}
-        </Button>
-      </div>
+    <div className="content-list-page">
+      <PageHeader
+        eyebrow="内容资产"
+        title="知识点管理"
+        description="筛选、核验和维护可检索的知识点内容资产。"
+        actions={
+          <Button
+            danger
+            icon={<DeleteOutlined />}
+            disabled={selectedRowKeys.length === 0}
+            loading={batchDeleteMutation.isPending}
+            onClick={handleBatchDelete}
+          >
+            批量删除{selectedRowKeys.length ? ` (${selectedRowKeys.length})` : ''}
+          </Button>
+        }
+      />
 
-      <Card>
-        <Space wrap style={{ marginBottom: 16 }}>
+      <Card className="content-list-panel">
+        <Space className="content-filter-bar" wrap>
           <Input.Search
             placeholder="搜索知识点标题"
             style={{ width: 250 }}

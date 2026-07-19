@@ -122,7 +122,7 @@ const menuGroups = [
 const AppSider = () => {
   const navigate = useNavigate()
   const location = useLocation()
-  const { collapsed } = useAdminStore()
+  const { collapsed, setCollapsed } = useAdminStore()
   const { hasPermission } = usePermission()
 
   // 根据权限过滤菜单项
@@ -209,7 +209,12 @@ const AppSider = () => {
           openKeys={openKeys}
           onOpenChange={setOpenKeys}
           items={filteredItems}
-          onClick={({ key }) => navigate(key)}
+          onClick={({ key }) => {
+            navigate(key)
+            if (window.matchMedia('(max-width: 640px)').matches) {
+              setCollapsed(true)
+            }
+          }}
           className="admin-navigation"
         />
       </div>
