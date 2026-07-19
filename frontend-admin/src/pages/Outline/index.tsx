@@ -15,6 +15,7 @@ import {
   type OutlinePreviewItem, type OutlineSubjectInfo, type OutlineSubjectSplit,
   type OutlineRunListItem,
 } from '@/api'
+import PageHeader from '@/components/PageHeader'
 
 const { Dragger } = Upload
 const { Paragraph, Text } = Typography
@@ -311,19 +312,33 @@ const OutlineList = () => {
   ]
 
   return (
-    <div>
-      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h2 style={{ margin: 0 }}>大纲管理</h2>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setImportModalOpen(true)}>导入大纲</Button>
-      </div>
+    <div className="admin-workspace outline-page">
+      <PageHeader
+        eyebrow="内容资产"
+        title="大纲管理"
+        description="管理考试大纲、章节树、考察目标和复习指导生成任务。"
+        actions={
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setImportModalOpen(true)}>
+            导入大纲
+          </Button>
+        }
+      />
 
       {/* 已入库大纲列表 */}
-      <Card title="已入库大纲" style={{ marginBottom: 16 }}>
-        <Table dataSource={outlines} columns={outlineColumns} rowKey="id" pagination={false} size="small" />
+      <Card className="workspace-table-panel outline-page__panel" title="已入库大纲" style={{ marginBottom: 16 }}>
+        <Table
+          dataSource={outlines}
+          columns={outlineColumns}
+          rowKey="id"
+          pagination={false}
+          size="small"
+          scroll={{ x: 820 }}
+        />
       </Card>
 
       {/* 入库任务列表 */}
       <Card
+        className="workspace-table-panel outline-page__panel"
         title="入库任务"
         extra={
           selectedRunKeys.length > 0 && (
@@ -346,6 +361,7 @@ const OutlineList = () => {
           rowKey="id"
           size="small"
           pagination={false}
+          scroll={{ x: 900 }}
           rowSelection={{
             selectedRowKeys: selectedRunKeys,
             onChange: (keys) => setSelectedRunKeys(keys),
@@ -356,14 +372,15 @@ const OutlineList = () => {
 
       {/* 导入大纲弹窗 / 查看任务详情弹窗 */}
       <Modal
-        title={detailRunId ? `任务详情 - ${parsedFileName}` : "导入大纲（PDF + LLM 拆分）"}
+        rootClassName="admin-modal outline-modal"
+        title={detailRunId ? `任务详情 - ${parsedFileName}` : '导入大纲（PDF + LLM 拆分）'}
         open={importModalOpen}
         onCancel={resetImport}
         footer={null}
         width={960}
         destroyOnClose
       >
-        <Space direction="vertical" style={{ width: '100%' }} size="middle">
+        <Space className="outline-modal__stack" direction="vertical" style={{ width: '100%' }} size="middle">
           {/* 导入模式下显示上传控件 */}
           {!detailRunId && (
             <>
@@ -393,7 +410,7 @@ const OutlineList = () => {
           )}
 
           {splitSubjects && splitSubjects.length > 0 && (
-            <Card size="small" title={`拆分预览（${parsedFileName}，${splitSubjects.length} 门课）`}>
+            <Card className="workspace-panel outline-modal__preview" size="small" title={`拆分预览（${parsedFileName}，${splitSubjects.length} 门课）`}>
               <Tabs
                 items={splitSubjects.map((s) => ({
                   key: s.subject_id,
@@ -435,10 +452,10 @@ const OutlineList = () => {
           )}
 
           {splitSubjects && splitSubjects.length > 0 && (
-            <Card size="small" title="入库设置（四门课一次入库）">
+            <Card className="workspace-panel outline-modal__settings" size="small" title="入库设置（四门课一次入库）">
               <Form form={form} layout="vertical" onFinish={(v) => importMut.mutate(v)}>
-                <Space wrap>
-                  <Form.Item name="name" label="大纲名称" rules={[{ required: true }]} style={{ minWidth: 240 }}>
+                <div className="outline-import-form__grid">
+                  <Form.Item name="name" label="大纲名称" rules={[{ required: true }]}>
                     <Input placeholder="如：2025 年 408 大纲" />
                   </Form.Item>
                   <Form.Item name="year" label="年份" rules={[{ required: true }]}>
@@ -450,7 +467,7 @@ const OutlineList = () => {
                   <Form.Item name="set_default" label="设为默认" valuePropName="checked">
                     <Switch />
                   </Form.Item>
-                </Space>
+                </div>
                 <Button type="primary" htmlType="submit" loading={importMut.isPending}>确认导入</Button>
               </Form>
             </Card>
@@ -460,6 +477,7 @@ const OutlineList = () => {
 
       {/* 章节查看：按科目分 Tab，展示考察目标 + 章节树 + 复习指导生成 */}
       <Modal
+        rootClassName="admin-modal outline-chapter-modal"
         title={chapterDrawer.outline ? `章节 - ${chapterDrawer.outline.name}` : '章节'}
         open={chapterDrawer.open}
         onCancel={() => { setChapterDrawer({ outline: null, open: false }); setActiveSubject('') }}
@@ -467,7 +485,7 @@ const OutlineList = () => {
         width={820}
       >
         {chapterDrawer.outline && (
-          <Descriptions column={2} size="small" style={{ marginBottom: 16 }}>
+          <Descriptions column={{ xs: 1, sm: 2 }} size="small" style={{ marginBottom: 16 }}>
             <Descriptions.Item label="年份">{chapterDrawer.outline.year}</Descriptions.Item>
             <Descriptions.Item label="版本">{chapterDrawer.outline.version}</Descriptions.Item>
             <Descriptions.Item label="状态">{chapterDrawer.outline.status}</Descriptions.Item>
@@ -489,7 +507,7 @@ const OutlineList = () => {
                     <Alert type="success" message="考察目标"
                       description={<Paragraph style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{s.exam_objective}</Paragraph>} />
                   )}
-                  <Space>
+                  <Space className="outline-chapter-modal__actions" wrap>
                     <Tag color={s.guidance_status === 'done' ? 'success' : s.guidance_status === 'failed' ? 'error' : 'default'}>
                       复习指导：{s.guidance_status}
                     </Tag>
@@ -500,19 +518,21 @@ const OutlineList = () => {
                     </Button>
                   </Space>
                   {chaptersLoading ? <Spin /> : (
-                    <Tree
-                      treeData={buildTreeNodes(chaptersRes?.data || [])}
-                      defaultExpandAll={(chaptersRes?.data || []).length < 25}
-                      showLine
-                      onSelect={(_, info: any) => {
-                        const node = info.node
-                        if (node) Modal.info({
-                          title: '章节详情',
-                          width: 600,
-                          content: <ChapterDetail nodeKey={node.key} chapters={chaptersRes?.data || []} />,
-                        })
-                      }}
-                    />
+                    <div className="outline-chapter-modal__tree">
+                      <Tree
+                        treeData={buildTreeNodes(chaptersRes?.data || [])}
+                        defaultExpandAll={(chaptersRes?.data || []).length < 25}
+                        showLine
+                        onSelect={(_, info: any) => {
+                          const node = info.node
+                          if (node) Modal.info({
+                            title: '章节详情',
+                            width: 600,
+                            content: <ChapterDetail nodeKey={node.key} chapters={chaptersRes?.data || []} />,
+                          })
+                        }}
+                      />
+                    </div>
                   )}
                 </Space>
               ),

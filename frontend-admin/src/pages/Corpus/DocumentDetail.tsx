@@ -12,6 +12,8 @@ import {
 } from '@/api'
 import PageAnalysis from './PageAnalysis'
 import ContentOverview from './ContentOverview'
+import ChapterDiagnostics from './ChapterDiagnostics'
+import PageHeader from '@/components/PageHeader'
 
 const EXAM_DOC_TYPES = new Set(['past_exam', 'mock_exam'])
 
@@ -114,13 +116,20 @@ const DocumentDetailPage = () => {
   const subjectOptions = subjects.map((s: any) => ({ label: s.name, value: s.id }))
 
   return (
-    <div>
-      <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/admin/corpus')} style={{ marginBottom: 16 }}>
-        返回列表
-      </Button>
+    <div className="admin-workspace document-detail-page">
+      <PageHeader
+        eyebrow="内容资产 / 语料"
+        title={document.file_name || document.title || '文档详情'}
+        description={`${docTypeText[document.doc_type || ''] || document.doc_type || '文档'} · ${document.page_count || document.pages?.length || 0} 页`}
+        actions={
+          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/admin/corpus')}>
+            返回列表
+          </Button>
+        }
+      />
 
-      <Card style={{ marginBottom: 16 }}>
-        <Descriptions title="第一步 · 解析产物（文档信息）" column={2}>
+      <Card className="workspace-panel document-detail-page__summary" style={{ marginBottom: 16 }}>
+        <Descriptions title="第一步 · 解析产物（文档信息）" column={{ xs: 1, md: 2 }}>
           <Descriptions.Item label="文件名">{document.file_name || document.title || '-'}</Descriptions.Item>
           <Descriptions.Item label="文档类型">
             <Tag color={isExamDoc ? 'volcano' : 'blue'}>{docTypeText[document.doc_type || ''] || document.doc_type || '-'}</Tag>
@@ -135,9 +144,10 @@ const DocumentDetailPage = () => {
       </Card>
 
       <Card
+        className="workspace-panel document-detail-page__extraction"
         style={{ marginBottom: 16 }}
         title={
-          <Space>
+          <Space wrap>
             <span>第二步 · 抽取知识点/题目</span>
             {isExtracting ? (
               <Tag color="processing">抽取中</Tag>
@@ -157,7 +167,7 @@ const DocumentDetailPage = () => {
           message="解析与抽取是两个独立步骤"
           description="上一步「解析」只把 PDF 拆成文字/图片/表格等版面块；这一步「抽取」才用 LLM 把版面块理解成知识点和题目，并挂到学科+标准章节上。重新解析会清空本文档已抽取的实体，需要重新点此抽取。"
         />
-        <Space>
+        <Space className="document-detail-page__extraction-actions" wrap>
           <Select
             placeholder={isExamDoc ? '选择兜底学科（必选）' : '全部学科（自动识别）'}
             style={{ width: 220 }}
@@ -190,8 +200,9 @@ const DocumentDetailPage = () => {
         </Space>
       </Card>
 
-      <Card>
+      <div className="document-detail-page__results">
         <Tabs
+          className="document-detail-page__tabs"
           defaultActiveKey="content-overview"
           items={[
             {
@@ -214,9 +225,19 @@ const DocumentDetailPage = () => {
                 />
               ),
             },
+            {
+              key: 'chapter-diagnostics',
+              label: '章节归属诊断',
+              children: (
+                <ChapterDiagnostics
+                  documentId={documentId}
+                  totalPages={document?.page_count || document?.pages?.length || 0}
+                />
+              ),
+            },
           ]}
         />
-      </Card>
+      </div>
     </div>
   )
 }

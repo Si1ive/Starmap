@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Alert, Card, Col, Empty, Row, Select, Space, Spin, Statistic, Table, Tag, Tooltip, Typography } from 'antd'
+import { Alert, Card, Empty, Select, Space, Spin, Statistic, Table, Tag, Tooltip, Typography } from 'antd'
 import { InfoCircleOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { getDocumentChapterDiagnostics } from '@/api'
@@ -247,6 +247,7 @@ const ChapterDiagnostics = ({ documentId, totalPages }: ChapterDiagnosticsProps)
           rowKey="id"
           dataSource={blocks}
           columns={blockColumns}
+          scroll={{ x: 980 }}
           pagination={{ pageSize: 10, hideOnSinglePage: true }}
         />
       )
@@ -258,8 +259,9 @@ const ChapterDiagnostics = ({ documentId, totalPages }: ChapterDiagnosticsProps)
   }
 
   return (
-    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+    <Space className="chapter-diagnostics" direction="vertical" size={16} style={{ width: '100%' }}>
       <Alert
+        className="workspace-callout"
         type="info"
         showIcon
         message={
@@ -270,41 +272,34 @@ const ChapterDiagnostics = ({ documentId, totalPages }: ChapterDiagnosticsProps)
       />
 
       {summary && (
-        <Row gutter={16}>
+        <div className={`chapter-diagnostics__metrics${isExam ? ' chapter-diagnostics__metrics--exam' : ''}`}>
           {!isExam && (
-            <Col span={6}>
-              <Card size="small">
-                <Statistic title="原生章节 / 映射" value={`${summary.total_sections} / ${summary.total_mappings}`} />
-              </Card>
-            </Col>
+            <Card className="content-overview__metric" size="small">
+              <Statistic title="原生章节 / 映射" value={`${summary.total_sections} / ${summary.total_mappings}`} />
+            </Card>
           )}
-          <Col span={isExam ? 8 : 6}>
-            <Card size="small">
-              <Statistic title="异常页" value={summary.pages_warning + summary.pages_error} suffix={`/ ${summary.total_pages}`} />
-            </Card>
-          </Col>
-          <Col span={isExam ? 8 : 6}>
-            <Card size="small">
-              <Statistic title="题目信号块" value={summary.question_like_blocks} suffix="块" />
-            </Card>
-          </Col>
-          <Col span={isExam ? 8 : 6}>
-            <Card size="small">
-              <Statistic
-                title="已抽取"
-                value={`${summary.extracted_knowledge_count} / ${summary.extracted_question_count}`}
-                suffix="知/题"
-              />
-            </Card>
-          </Col>
-        </Row>
+          <Card className="content-overview__metric" size="small">
+            <Statistic title="异常页" value={summary.pages_warning + summary.pages_error} suffix={`/ ${summary.total_pages}`} />
+          </Card>
+          <Card className="content-overview__metric" size="small">
+            <Statistic title="题目信号块" value={summary.question_like_blocks} suffix="块" />
+          </Card>
+          <Card className="content-overview__metric" size="small">
+            <Statistic
+              title="已抽取"
+              value={`${summary.extracted_knowledge_count} / ${summary.extracted_question_count}`}
+              suffix="知/题"
+            />
+          </Card>
+        </div>
       )}
 
       <Card
+        className="workspace-panel chapter-diagnostics__table"
         size="small"
         title="页级章节归属（点击行查看该页块级明细）"
         extra={
-          <Space>
+          <Space className="chapter-diagnostics__filters" wrap>
             <Select
               value={statusFilter}
               style={{ width: 120 }}
@@ -333,6 +328,7 @@ const ChapterDiagnostics = ({ documentId, totalPages }: ChapterDiagnosticsProps)
           dataSource={visiblePages}
           columns={pageColumns}
           expandable={expandable}
+          scroll={{ x: 1120 }}
           pagination={{ pageSize: 20, showSizeChanger: true }}
         />
       </Card>

@@ -43,6 +43,7 @@ import {
   uploadCorpusFiles,
 } from '@/api'
 import type { CorpusFile, DownloadedFile, ParseRun } from '@/types'
+import PageHeader from '@/components/PageHeader'
 
 const { Search } = Input
 
@@ -446,55 +447,55 @@ const CorpusPage = () => {
   ]
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <div>
-          <h3 style={{ margin: 0 }}>语料管理</h3>
-          <div style={{ marginTop: 4, color: 'rgba(0,0,0,0.45)' }}>
-            统一管理文件注册、解析、标题树、章节映射和实体抽取。
-          </div>
-        </div>
-        <Space>
-          <Button
-            danger
-            icon={<DeleteOutlined />}
-            disabled={selectedRowKeys.length === 0}
-            loading={batchDeleteMutation.isPending}
-            onClick={handleBatchDelete}
-          >
-            批量删除{selectedRowKeys.length ? ` (${selectedRowKeys.length})` : ''}
-          </Button>
-          <Button icon={<SyncOutlined />} onClick={() => queryClient.invalidateQueries({ queryKey: ['corpusFiles'] })}>
-            刷新
-          </Button>
-          <Upload {...uploadProps}>
-            <Button icon={<UploadOutlined />}>上传文件</Button>
-          </Upload>
-          <Button icon={<FolderOpenOutlined />} onClick={() => setScanModalOpen(true)}>
-            扫描目录
-          </Button>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => {
-              setFileParams({ page: 1, page_size: 10, file_type: 'pdf' })
-              setFilePickerOpen(true)
-            }}
-          >
-            选择已下载文件
-          </Button>
-        </Space>
-      </div>
+    <div className="admin-workspace corpus-page">
+      <PageHeader
+        eyebrow="内容资产"
+        title="语料管理"
+        description="统一管理文件注册、解析、标题树、章节映射和实体抽取。"
+        actions={
+          <Space className="corpus-page__actions" wrap>
+            <Button
+              danger
+              icon={<DeleteOutlined />}
+              disabled={selectedRowKeys.length === 0}
+              loading={batchDeleteMutation.isPending}
+              onClick={handleBatchDelete}
+            >
+              批量删除{selectedRowKeys.length ? ` (${selectedRowKeys.length})` : ''}
+            </Button>
+            <Button icon={<SyncOutlined />} onClick={() => queryClient.invalidateQueries({ queryKey: ['corpusFiles'] })}>
+              刷新
+            </Button>
+            <Upload {...uploadProps}>
+              <Button icon={<UploadOutlined />}>上传文件</Button>
+            </Upload>
+            <Button icon={<FolderOpenOutlined />} onClick={() => setScanModalOpen(true)}>
+              扫描目录
+            </Button>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => {
+                setFileParams({ page: 1, page_size: 10, file_type: 'pdf' })
+                setFilePickerOpen(true)
+              }}
+            >
+              选择已下载文件
+            </Button>
+          </Space>
+        }
+      />
 
       <Alert
+        className="workspace-callout"
         style={{ marginBottom: 16 }}
         type="info"
         showIcon
         message="PDF 入库已并入语料管理。新文件先注册到语料库，再按需执行解析和后续结构化处理；已解析文件不会重复处理。"
       />
 
-      <Card style={{ marginBottom: 16 }}>
-        <Space wrap>
+      <Card className="workspace-filter-panel" style={{ marginBottom: 16 }}>
+        <Space className="workspace-filter-panel__controls" wrap>
           <Search
             placeholder="搜索文件名"
             style={{ width: 250 }}
@@ -516,7 +517,7 @@ const CorpusPage = () => {
         </Space>
       </Card>
 
-      <Card>
+      <Card className="workspace-table-panel">
         <Table
           dataSource={files}
           columns={columns}
@@ -540,6 +541,7 @@ const CorpusPage = () => {
       </Card>
 
       <Modal
+        rootClassName="admin-modal"
         title="扫描目录注册语料"
         open={scanModalOpen}
         onCancel={() => {
@@ -571,6 +573,7 @@ const CorpusPage = () => {
       </Modal>
 
       <Modal
+        rootClassName="admin-modal"
         title="选择已下载文件"
         open={filePickerOpen}
         onCancel={() => setFilePickerOpen(false)}
@@ -604,6 +607,7 @@ const CorpusPage = () => {
           rowKey="id"
           loading={filesLoading}
           size="small"
+          scroll={{ x: 760 }}
           pagination={{
             current: fileParams.page,
             pageSize: fileParams.page_size,
@@ -616,6 +620,7 @@ const CorpusPage = () => {
       </Modal>
 
       <Modal
+        rootClassName="admin-modal"
         title="入库处理进度"
         open={pipelineOpen}
         onCancel={() => setPipelineOpen(false)}

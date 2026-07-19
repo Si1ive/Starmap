@@ -592,6 +592,254 @@ button {
   border-radius: 6px;
 }
 
+.admin-workspace,
+.workspace-panel,
+.workspace-table-panel,
+.workspace-filter-panel {
+  min-width: 0;
+}
+
+.workspace-panel.ant-card,
+.workspace-table-panel.ant-card,
+.workspace-filter-panel.ant-card {
+  border-color: var(--admin-border);
+  background: var(--admin-surface);
+}
+
+.workspace-filter-panel .ant-card-body {
+  padding: 14px 16px;
+  background: var(--admin-surface-soft);
+}
+
+.workspace-filter-panel__controls.ant-space {
+  display: flex;
+}
+
+.workspace-table-panel .ant-card-body {
+  padding: 0;
+}
+
+.workspace-table-panel .ant-table {
+  border: 0;
+  border-radius: 0;
+}
+
+.workspace-table-panel .ant-table-container {
+  border-radius: 0;
+}
+
+.workspace-table-panel .ant-table-pagination.ant-pagination {
+  padding: 0 16px 16px;
+}
+
+.workspace-callout.ant-alert {
+  border-color: #d8e1de;
+  background: #f7faf9;
+}
+
+.admin-modal .ant-modal {
+  max-width: calc(100vw - 32px);
+}
+
+.admin-modal .ant-modal-body {
+  min-width: 0;
+}
+
+.document-detail-page__summary .ant-descriptions-title {
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+
+.document-detail-page__extraction-actions.ant-space {
+  display: flex;
+}
+
+.document-detail-page__results {
+  min-width: 0;
+  padding-top: 2px;
+  border-top: 1px solid var(--admin-border);
+}
+
+.document-detail-page__tabs > .ant-tabs-nav {
+  margin-bottom: 18px;
+}
+
+.document-detail-page__tabs > .ant-tabs-nav .ant-tabs-nav-wrap {
+  scrollbar-width: none;
+}
+
+.document-detail-page__tabs > .ant-tabs-nav .ant-tabs-nav-wrap::-webkit-scrollbar {
+  display: none;
+}
+
+.content-overview {
+  min-width: 0;
+}
+
+.content-overview__metrics,
+.chapter-diagnostics__metrics {
+  display: grid;
+  min-width: 0;
+  margin-bottom: 16px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.chapter-diagnostics__metrics {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.chapter-diagnostics__metrics--exam {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.content-overview__metric.ant-card {
+  height: 100%;
+  background: var(--admin-surface);
+}
+
+.content-overview__metric .ant-card-body {
+  min-height: 96px;
+  padding: 15px 16px;
+}
+
+.content-overview__metric .ant-statistic-content {
+  font-size: 21px;
+}
+
+.content-overview__knowledge .ant-collapse {
+  border-color: var(--admin-border);
+  background: var(--admin-surface);
+}
+
+.content-overview__knowledge .ant-collapse-item {
+  border-bottom-color: var(--admin-border-soft);
+}
+
+.content-overview__knowledge-item {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--admin-border-soft);
+}
+
+.content-overview__knowledge-item:last-child {
+  border-bottom: 0;
+}
+
+.content-overview__knowledge-row {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.quality-issue-row {
+  min-width: 0;
+}
+
+.page-analysis__controls {
+  display: flex;
+  align-items: center;
+}
+
+.page-analysis__grid {
+  row-gap: 16px;
+}
+
+.page-analysis__grid > .ant-col {
+  display: flex;
+  min-width: 0;
+}
+
+.page-analysis__grid > .ant-col > .ant-card {
+  width: 100%;
+}
+
+.page-analysis__page-image,
+.page-analysis__asset-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--admin-border);
+}
+
+.page-analysis__page-image {
+  width: 100%;
+}
+
+.page-analysis__code {
+  max-width: 100%;
+  max-height: 200px;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding: 10px;
+  border: 1px solid var(--admin-border-soft);
+  border-radius: 5px;
+  background: var(--admin-surface-soft);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.page-analysis__code--raw {
+  max-height: 600px;
+}
+
+.page-analysis__code--compact {
+  font-size: 10px;
+}
+
+.page-analysis__asset {
+  min-width: 0;
+  margin-bottom: 8px;
+  padding: 12px;
+  border: 1px solid var(--admin-border-soft);
+  border-radius: 6px;
+  background: var(--admin-surface-soft);
+}
+
+.page-analysis__asset:last-child {
+  margin-bottom: 0;
+}
+
+.chapter-diagnostics__table .ant-card-extra {
+  min-width: 0;
+}
+
+.outline-page__panel + .outline-page__panel {
+  margin-top: 16px;
+}
+
+.outline-modal__preview .ant-tree,
+.outline-chapter-modal__tree {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--admin-border-soft);
+  border-radius: 6px;
+  background: var(--admin-surface-soft);
+}
+
+.outline-import-form__grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 2fr) minmax(110px, 0.7fr) minmax(120px, 0.8fr) minmax(100px, 0.6fr);
+  gap: 14px;
+}
+
+.outline-import-form__grid .ant-form-item {
+  min-width: 0;
+  margin-bottom: 16px;
+}
+
+.outline-import-form__grid .ant-input-number {
+  width: 100%;
+}
+
+.outline-chapter-modal__tree {
+  max-height: 480px;
+  overflow: auto;
+}
+
 .content-list-page,
 .content-detail-page,
 .content-form-page {
@@ -1193,6 +1441,16 @@ button {
   .dashboard-grid {
     grid-template-columns: minmax(0, 1fr);
   }
+
+  .content-overview__metrics,
+  .chapter-diagnostics__metrics,
+  .chapter-diagnostics__metrics--exam {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .outline-import-form__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 640px) {
@@ -1270,6 +1528,105 @@ button {
   .admin-page-header__actions .ant-space {
     width: 100%;
     flex-wrap: wrap;
+  }
+
+  .workspace-filter-panel__controls.ant-space,
+  .workspace-filter-panel__controls .ant-space-item,
+  .workspace-filter-panel__controls .ant-input-search,
+  .workspace-filter-panel__controls .ant-select {
+    width: 100% !important;
+  }
+
+  .admin-modal .ant-modal {
+    top: 16px;
+    max-width: calc(100vw - 20px);
+    margin: 0 auto;
+    padding-bottom: 16px;
+  }
+
+  .corpus-page__actions .ant-space-item,
+  .corpus-page__actions .ant-btn,
+  .corpus-page__actions .ant-upload {
+    width: 100%;
+  }
+
+  .document-detail-page__extraction-actions.ant-space,
+  .document-detail-page__extraction-actions .ant-space-item,
+  .document-detail-page__extraction-actions .ant-select,
+  .document-detail-page__extraction-actions .ant-btn {
+    width: 100% !important;
+  }
+
+  .document-detail-page__tabs > .ant-tabs-nav {
+    margin-bottom: 14px;
+  }
+
+  .document-detail-page__tabs > .ant-tabs-nav .ant-tabs-nav-wrap {
+    padding-bottom: 2px;
+    overflow-x: auto;
+  }
+
+  .document-detail-page__tabs > .ant-tabs-nav .ant-tabs-nav-list {
+    min-width: max-content;
+  }
+
+  .document-detail-page__tabs > .ant-tabs-nav .ant-tabs-tab {
+    margin: 0 16px 0 0;
+    padding: 10px 0;
+  }
+
+  .content-overview__metrics,
+  .chapter-diagnostics__metrics,
+  .chapter-diagnostics__metrics--exam {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .content-overview__knowledge-row {
+    flex-direction: column;
+  }
+
+  .content-overview__knowledge-row > .ant-btn {
+    width: 100%;
+  }
+
+  .page-analysis__controls {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .page-analysis__controls .ant-select {
+    width: 100% !important;
+    margin-left: 0 !important;
+  }
+
+  .chapter-diagnostics__table .ant-card-head-wrapper {
+    align-items: stretch;
+    flex-direction: column;
+    padding: 12px 0;
+  }
+
+  .chapter-diagnostics__table .ant-card-head-title,
+  .chapter-diagnostics__table .ant-card-extra,
+  .chapter-diagnostics__filters.ant-space {
+    width: 100%;
+  }
+
+  .chapter-diagnostics__filters .ant-space-item {
+    flex: 1 1 130px;
+  }
+
+  .chapter-diagnostics__filters .ant-select {
+    width: 100% !important;
+  }
+
+  .outline-import-form__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .outline-modal__stack .ant-space-item,
+  .outline-modal__stack .ant-card {
+    min-width: 0;
   }
 
   .content-filter-bar.ant-space {

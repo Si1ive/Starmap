@@ -4,12 +4,10 @@ import {
   Alert,
   Button,
   Card,
-  Col,
   Collapse,
   Empty,
   message,
   Modal,
-  Row,
   Space,
   Spin,
   Statistic,
@@ -184,6 +182,7 @@ function QualityGateSummary({ gate }: { gate: ContentQualityGate }) {
 
   return (
     <Alert
+      className="workspace-callout quality-gate-summary"
       type={config.alertType}
       showIcon
       style={{ marginBottom: 16 }}
@@ -246,6 +245,7 @@ function QualityIssueRow({
 
   return (
     <div
+      className="quality-issue-row"
       style={{
         display: 'flex',
         alignItems: 'flex-start',
@@ -280,10 +280,10 @@ function KnowledgePointList({
   onReextract: (item: ContentOverviewKPBrief) => void
 }) {
   return (
-    <div>
+    <div className="content-overview__knowledge-list">
       {items.map((kp) => (
-        <div key={kp.id} style={{ padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}>
-          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+        <div key={kp.id} className="content-overview__knowledge-item">
+          <div className="content-overview__knowledge-row">
             <Space size={[4, 4]} wrap>
               <Text strong>{kp.title}</Text>
               <ReviewTag status={kp.review_status} />
@@ -483,19 +483,19 @@ const ContentOverview = ({
   ]
 
   return (
-    <div>
+    <div className="content-overview">
       <QualityGateSummary gate={quality_gate} />
 
-      <Row gutter={16} style={{ marginBottom: 16 }}>
-        <Col span={5}><Card size="small"><Statistic title="知识点" value={summary.knowledge_count} /></Card></Col>
-        <Col span={5}><Card size="small"><Statistic title="题目" value={summary.question_count} /></Card></Col>
-        <Col span={5}><Card size="small"><Statistic title="覆盖考点" value={summary.chapter_count} /></Card></Col>
-        <Col span={5}><Card size="small"><Statistic title="未挂考点知识点" value={summary.ungrouped_count} valueStyle={{ color: summary.ungrouped_count > 0 ? '#faad14' : undefined }} /></Card></Col>
-        <Col span={4}><Card size="small"><Statistic title="未归属题目" value={summary.unassigned_question_count} valueStyle={{ color: summary.unassigned_question_count > 0 ? '#fa541c' : undefined }} /></Card></Col>
-      </Row>
+      <div className="content-overview__metrics">
+        <Card className="content-overview__metric" size="small"><Statistic title="知识点" value={summary.knowledge_count} /></Card>
+        <Card className="content-overview__metric" size="small"><Statistic title="题目" value={summary.question_count} /></Card>
+        <Card className="content-overview__metric" size="small"><Statistic title="覆盖考点" value={summary.chapter_count} /></Card>
+        <Card className="content-overview__metric" size="small"><Statistic title="未挂考点知识点" value={summary.ungrouped_count} valueStyle={{ color: summary.ungrouped_count > 0 ? '#faad14' : undefined }} /></Card>
+        <Card className="content-overview__metric" size="small"><Statistic title="未归属题目" value={summary.unassigned_question_count} valueStyle={{ color: summary.unassigned_question_count > 0 ? '#fa541c' : undefined }} /></Card>
+      </div>
 
       {(knowledge_chapters.length > 0 || ungrouped_knowledge_points.length > 0) && (
-        <Card title="知识点（按考点分组）" size="small" style={{ marginBottom: 16 }}>
+        <Card className="workspace-panel content-overview__knowledge" title="知识点（按考点分组）" size="small" style={{ marginBottom: 16 }}>
           <Collapse
             defaultActiveKey={knowledge_chapters.map((c) => c.chapter_id)}
             items={[
@@ -555,7 +555,7 @@ const ContentOverview = ({
       )}
 
       {questions.length > 0 && (
-        <Card title="题目（按题号排列）" size="small">
+        <Card className="workspace-panel content-overview__questions" title="题目（按题号排列）" size="small">
           <Table
             dataSource={questions}
             columns={questionColumns}
