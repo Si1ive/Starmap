@@ -7,7 +7,7 @@ interface PieChartProps {
   height?: number
 }
 
-const COLORS = ['#1890ff', '#52c41a', '#fa8c16', '#eb2f96', '#722ed1', '#13c2c2', '#f5222d', '#faad14']
+const COLORS = ['#2f5bd3', '#1a7a68', '#b87922', '#b24c45', '#6f7d76', '#4f77d8', '#4c9789', '#d29a4d']
 
 const PieChart = ({ data, title = '', height = 300 }: PieChartProps) => {
   const chartRef = useRef<HTMLDivElement>(null)
@@ -32,17 +32,24 @@ const PieChart = ({ data, title = '', height = 300 }: PieChartProps) => {
         orient: 'vertical',
         right: '5%',
         top: 'center',
+        itemWidth: 10,
+        itemHeight: 10,
+        itemGap: 14,
+        textStyle: {
+          color: '#5f6d66',
+          fontSize: 11,
+        },
       },
       series: [
         {
           type: 'pie',
-          radius: ['40%', '70%'],
-          center: ['40%', '50%'],
+          radius: ['48%', '72%'],
+          center: ['36%', '50%'],
           avoidLabelOverlap: false,
           itemStyle: {
-            borderRadius: 10,
+            borderRadius: 3,
             borderColor: '#fff',
-            borderWidth: 2,
+            borderWidth: 3,
           },
           label: {
             show: false,
@@ -51,8 +58,9 @@ const PieChart = ({ data, title = '', height = 300 }: PieChartProps) => {
           emphasis: {
             label: {
               show: true,
-              fontSize: 20,
-              fontWeight: 'bold',
+              color: '#18211d',
+              fontSize: 18,
+              fontWeight: 700,
             },
           },
           labelLine: { show: false },

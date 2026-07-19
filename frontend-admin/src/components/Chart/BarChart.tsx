@@ -30,36 +30,32 @@ const BarChart = ({ data, title = '', color = '#1890ff', height = 300 }: BarChar
       xAxis: {
         type: 'category',
         data: data.map((item) => item.name),
-        axisLabel: { rotate: 30 },
+        axisLine: { lineStyle: { color: '#dce4df' } },
+        axisTick: { show: false },
+        axisLabel: { color: '#5f6d66', fontSize: 11 },
       },
       yAxis: {
         type: 'value',
         minInterval: 1,
+        axisLabel: { color: '#7b8982', fontSize: 10 },
+        splitLine: { lineStyle: { color: '#e7ede9' } },
       },
       series: [
         {
           data: data.map((item) => item.value),
           type: 'bar',
+          barMaxWidth: 56,
           itemStyle: {
-            color: {
-              type: 'linear',
-              x: 0,
-              y: 0,
-              x2: 0,
-              y2: 1,
-              colorStops: [
-                { offset: 0, color: color },
-                { offset: 1, color: color + '60' },
-              ],
-            },
-            borderRadius: [4, 4, 0, 0],
+            color,
+            borderRadius: [3, 3, 0, 0],
           },
         },
       ],
       grid: {
-        left: '3%',
-        right: '4%',
-        bottom: '3%',
+        left: 12,
+        right: 14,
+        top: 22,
+        bottom: 4,
         containLabel: true,
       },
     }
