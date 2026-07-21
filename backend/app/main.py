@@ -59,6 +59,8 @@ from app.modules.operations.schema_guard import (
     DatabaseSchemaError,
     verify_database_schema,
 )
+from app.modules.agent.router import router as agent_router
+from app.modules.workspace.router import router as workspace_router
 from app.middleware.error_handler import (
     ErrorHandlerMiddleware,
     api_exception_handler,
@@ -369,6 +371,15 @@ app.include_router(
     monitoring_router,
     prefix="/api/v1",
     dependencies=admin_dependencies,
+)
+
+app.include_router(
+    agent_router,
+    prefix="/api/v1",
+)
+app.include_router(
+    workspace_router,
+    prefix="/api/v1",
 )
 
 
