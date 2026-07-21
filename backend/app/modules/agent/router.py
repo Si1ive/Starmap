@@ -307,3 +307,73 @@ async def get_run_artifacts(
                 for a in artifacts
             ],
         }
+
+
+# ==================== Input API ====================
+
+@router.post("/runs/{run_id}/inputs/{input_key}/answer")
+async def submit_input_answer(
+    run_id: str,
+    input_key: str,
+    request: dict,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """提交结构化输入答案"""
+    answer = request.get("answer", "")
+    if not answer:
+        raise HTTPException(status_code=400, detail="answer 不能为空")
+    async with db:
+        service = AgentService(db)
+        agent_input = await service.submit_input_answer(run_id, input_key, answer, user_id)
+        if not agent_input:
+            raise HTTPException(status_code=404, detail="输入不存在、已过期或已回答")
+        return {
+            "id": agent_input.id,
+            "run_id": agent_input.run_id,
+            "input_key": agent_input.input_key,
+            "status": agent_input.status,
+            "message": "答案已提交，运行已恢复",
+        }
+
+
+# ==================== Approval API ====================
+
+@router.post("/runs/{run_id}/approvals/{approval_id}/approve")
+async def approve_approval(
+    run_id: str,
+    approval_id: str,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """批准审批请求"""
+    async with db:
+        service = AgentService(db)
+        approval = await service.decide_approval(run_id, approval_id, "approved", user_id)
+        if not approval:
+            raise HTTPException(status_code=404, detail="审批不存在或已处理")
+        return {
+            "id": approval.id,
+            "status": approval.status,
+            "message": "已批准",
+        }
+
+
+@router.post("/runs/{run_id}/approvals/{approval_id}/reject")
+async def reject_approval(
+    run_id: str,
+    approval_id: str,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """拒绝审批请求"""
+    async with db:
+        service = AgentService(db)
+        approval = await service.decide_approval(run_id, approval_id, "rejected", user_id)
+        if not approval:
+            raise HTTPException(status_code=404, detail="审批不存在或已处理")
+        return {
+            "id": approval.id,
+            "status": approval.status,
+            "message": "已拒绝",
+        }

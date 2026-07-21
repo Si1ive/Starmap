@@ -223,3 +223,140 @@ class AgentService:
             .order_by(desc(AgentArtifact.created_at))
         )
         return result.scalars().all()
+
+    # ==================== Input ====================
+
+    async def create_input(
+        self,
+        run_id: str,
+        input_key: str,
+        prompt_ref: str,
+        input_schema_version: str = "v1",
+        expires_at: Optional[datetime] = None,
+    ) -> "AgentInput":
+        """创建待用户输入项"""
+        from .models import AgentInput
+        input_id = f"inp_{uuid.uuid4().hex[:20]}"
+        agent_input = AgentInput(
+            id=input_id,
+            run_id=run_id,
+            input_key=input_key,
+            input_schema_version=input_schema_version,
+            prompt_ref=prompt_ref,
+            status="pending",
+            expires_at=expires_at,
+        )
+        self.db.add(agent_input)
+        await self.db.flush()
+        await self.db.refresh(agent_input)
+        logger.info("输入项创建", run_id=run_id, input_id=input_id, key=input_key)
+        return agent_input
+
+    async def get_input(self, run_id: str, input_key: str) -> Optional["AgentInput"]:
+        """获取输入项"""
+        from .models import AgentInput
+        result = await self.db.execute(
+            select(AgentInput)
+            .where(AgentInput.run_id == run_id)
+            .where(AgentInput.input_key == input_key)
+        )
+        return result.scalar_one_or_none()
+
+    async def submit_input_answer(
+        self,
+        run_id: str,
+        input_key: str,
+        answer: str,
+        user_id: str,
+    ) -> Optional["AgentInput"]:
+        """提交用户答案，恢复运行"""
+        from .models import AgentInput
+        agent_input = await self.get_input(run_id, input_key)
+        if not agent_input:
+            return None
+        if agent_input.status != "pending":
+            return None
+        if agent_input.expires_at and agent_input.expires_at < datetime.utcnow():
+            agent_input.status = "expired"
+            await self.db.flush()
+            return None
+        agent_input.status = "answered"
+        agent_input.answer_ref = answer
+        agent_input.answered_by = user_id
+        agent_input.updated_at = datetime.utcnow()
+        await self.db.flush()
+        # 恢复运行状态
+        run = await self.get_run(run_id, user_id)
+        if run and run.status == RunStatus.WAITING_FOR_USER.value:
+            state_machine.transition(run, RunStatus.RUNNING, reason="用户输入已提交")
+            await outbox_store.enqueue(self.db, run_id)
+        logger.info("用户答案提交", run_id=run_id, input_key=input_key, user_id=user_id)
+        return agent_input
+
+    # ==================== Approvals ====================
+
+    async def create_approval(
+        self,
+        run_id: str,
+        action_key: str,
+        diff_ref: str,
+        precondition_ref: Optional[str] = None,
+        expires_at: Optional[datetime] = None,
+    ) -> "AgentApproval":
+        """创建审批请求"""
+        from .models import AgentApproval
+        approval_id = f"aprv_{uuid.uuid4().hex[:20]}"
+        approval = AgentApproval(
+            id=approval_id,
+            run_id=run_id,
+            action_key=action_key,
+            diff_ref=diff_ref,
+            precondition_ref=precondition_ref,
+            status="pending",
+            expires_at=expires_at,
+        )
+        self.db.add(approval)
+        await self.db.flush()
+        await self.db.refresh(approval)
+        logger.info("审批请求创建", run_id=run_id, approval_id=approval_id, action=action_key)
+        return approval
+
+    async def get_approval(self, run_id: str, approval_id: str) -> Optional["AgentApproval"]:
+        """获取审批请求"""
+        from .models import AgentApproval
+        result = await self.db.execute(
+            select(AgentApproval)
+            .where(AgentApproval.id == approval_id)
+            .where(AgentApproval.run_id == run_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def decide_approval(
+        self,
+        run_id: str,
+        approval_id: str,
+        decision: str,
+        decided_by: str,
+    ) -> Optional["AgentApproval"]:
+        """处理审批决定（approve/reject）"""
+        from .models import AgentApproval
+        approval = await self.get_approval(run_id, approval_id)
+        if not approval:
+            return None
+        if approval.status != "pending":
+            return None
+        if approval.expires_at and approval.expires_at < datetime.utcnow():
+            approval.status = "expired"
+            await self.db.flush()
+            return None
+        approval.status = decision
+        approval.decided_by = decided_by
+        approval.updated_at = datetime.utcnow()
+        await self.db.flush()
+        # 恢复运行状态
+        run = await self.get_run(run_id, decided_by)
+        if run and run.status == RunStatus.WAITING_FOR_APPROVAL.value:
+            state_machine.transition(run, RunStatus.RUNNING, reason=f"审批已{decision}")
+            await outbox_store.enqueue(self.db, run_id)
+        logger.info("审批决定", run_id=run_id, approval_id=approval_id, decision=decision)
+        return approval
