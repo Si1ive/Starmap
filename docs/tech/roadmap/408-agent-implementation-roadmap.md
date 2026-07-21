@@ -15,7 +15,7 @@
 
  **P1 判定标准**：没有它，Agent 仍可工作，但功能不完整（缺少练习、批改、计划）。
 
- **P2 判定标准**：锦上添花或需要额外基础设施（Temporal、LangGraph PoC、AI 生成题）。
+ **P2 判定标准**：锦上添花或需要额外基础设施（AI 生成题、多模态输入等）。
 
  ---
 
@@ -36,6 +36,7 @@
  | 幂等写入 | `(user_id, client_idempotency_key)` 唯一约束 | 重复提交返回同一结果 |
  | 基础状态机 | `queued → running → completed/failed` | 先支持 3 个核心状态，等待态延后 |
  | SSE 通道 | `/runs/{run_id}/events` | 按 `Last-Event-ID` 重放 |
+ | `agent_loop_turns` 完整持久化 | `parent_step_id` + `turn_no` + `decision_ref` + `action_key` + `observation_ref` | 每一轮 Loop 决策与 observation 全量可追溯，支撑崩溃恢复与调试 |
  | 基础 API | 创建 run、查询 run、提交 input | 先支持 conversation/explain 两种工作流 |
 
  #### 1.2.1 刻意简化的设计（P0 够用即可）
@@ -45,7 +46,6 @@
  | `waiting_for_user` / `waiting_for_approval` 状态 | P0 只保留 `waiting_for_user`，`waiting_for_approval` 移到 P1 | 计划审批是 P1 功能 |
  | `agent_approvals` 表 | P0 不建 | 没有审批流程 |
  | 复杂预算体系（token/时间/turn 多维） | P0 只限制模型调用次数（如最多 6 次） | 够用即可，后续校准 |
- | `agent_loop_turns` 完整持久化 | P0 持久 decision + action + observation 摘要，不存原始模型 I/O | 减少存储，后续补充 |
  | 多模型提供商切换 | P0 只接入一个提供商（如 OpenAI） | 降低复杂度 |
  | 旧 Chat 迁移 | P0 完全不碰 | 新旧并行，互不干扰 |
  | Redis Stream | P0 先用 MySQL outbox + 定时扫描；Redis Stream 作为 P1 优化 | 避免引入新基础设施 |
@@ -151,7 +151,6 @@
  | `agent_approvals` 表 | 计划 diff 审批（plan 工作流需要） |
  | `waiting_for_approval` 状态 | 计划审批等待 |
  | 完整预算体系 | token/时间/turn 多维限制 + 预算耗尽处理 |
- | `agent_loop_turns` 完整持久化 | 存储原始模型 I/O、完整 observation 供调试 |
  | Redis Stream | 替换 MySQL 轮询，降低延迟 |
  | 多模型提供商切换 | OpenAI → Anthropic 等 |
 
@@ -219,8 +218,6 @@
 
  | 能力 | 说明 |
  |------|------|
- | LangGraph PoC | 验证图编排适配层，评估是否替换自建 engine |
- | Temporal 评估 | 当 timer/跨服务/SLO 需求触发时评估 |
  | AI 生成题 | 独立验证器、生成/验证循环、题目质量闸 |
  | 计划约束求解器 | 复杂日程优化、冲突检测 |
  | MCP adapter | 外部工具接入 |
@@ -260,7 +257,7 @@
  |------|-------------|------|
  | P0 | 4-6 周 | conversation + explain 可用，SSE 可推，Worker 可恢复 |
  | P1 | 4-6 周 | validate + grade + plan（简化版）可用，完整学习闭环 |
- | P2 | 按需 | LangGraph PoC、Temporal 评估、AI 生成题等 |
+ | P2 | 按需 | AI 生成题、多模态输入等 |
 
  **关键里程碑**：
  - **W2**：Runtime 骨架（thread/run/event/SSE）可用
