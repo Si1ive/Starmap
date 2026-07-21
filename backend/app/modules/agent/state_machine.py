@@ -20,6 +20,7 @@ class RunStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     WAITING_FOR_USER = "waiting_for_user"
+    WAITING_FOR_APPROVAL = "waiting_for_approval"
 
 
 class TransitionError(Exception):
@@ -34,8 +35,10 @@ VALID_TRANSITIONS = {
         RunStatus.COMPLETED,
         RunStatus.FAILED,
         RunStatus.WAITING_FOR_USER,
+        RunStatus.WAITING_FOR_APPROVAL,
     },
     RunStatus.WAITING_FOR_USER: {RunStatus.RUNNING, RunStatus.FAILED},
+    RunStatus.WAITING_FOR_APPROVAL: {RunStatus.RUNNING, RunStatus.FAILED},
     RunStatus.COMPLETED: set(),
     RunStatus.FAILED: set(),
 }

@@ -243,3 +243,65 @@ class AgentArtifact(Base):
         Index("idx_agent_artifact_run", "run_id"),
         {"comment": "Agent 产物表"}
     )
+
+
+class AgentInput(Base):
+    """输入表：结构化澄清、范围选择和其他等待用户输入"""
+    __tablename__ = "agent_inputs"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("agent_runs.id", ondelete="CASCADE"),
+        nullable=False, comment="所属运行ID"
+    )
+    input_key: Mapped[str] = mapped_column(String(80), nullable=False, comment="输入标识")
+    input_schema_version: Mapped[Optional[str]] = mapped_column(String(20), comment="输入Schema版本")
+    prompt_ref: Mapped[Optional[str]] = mapped_column(Text, comment="提示内容引用")
+    status: Mapped[str] = mapped_column(
+        SAEnum("pending", "answered", "expired"),
+        default="pending",
+        comment="输入状态"
+    )
+    answer_ref: Mapped[Optional[str]] = mapped_column(Text, comment="用户答案引用")
+    answered_by: Mapped[Optional[str]] = mapped_column(String(32), comment="回答者用户ID")
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, comment="过期时间")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    __table_args__ = (
+        Index("idx_agent_input_run", "run_id"),
+        UniqueConstraint("run_id", "input_key", name="uk_agent_input_key"),
+        {"comment": "Agent 输入表"}
+    )
+
+
+class AgentApproval(Base):
+    """审批表：计划审批等人工审批流程"""
+    __tablename__ = "agent_approvals"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("agent_runs.id", ondelete="CASCADE"),
+        nullable=False, comment="所属运行ID"
+    )
+    action_key: Mapped[str] = mapped_column(String(80), nullable=False, comment="审批动作标识")
+    status: Mapped[str] = mapped_column(
+        SAEnum("pending", "approved", "rejected", "expired"),
+        default="pending",
+        comment="审批状态"
+    )
+    diff_ref: Mapped[Optional[str]] = mapped_column(Text, comment="变更差异引用")
+    precondition_ref: Mapped[Optional[str]] = mapped_column(Text, comment="前置条件引用")
+    decided_by: Mapped[Optional[str]] = mapped_column(String(32), comment="审批者ID")
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, comment="过期时间")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    __table_args__ = (
+        Index("idx_agent_approval_run", "run_id"),
+        {"comment": "Agent 审批表"}
+    )
