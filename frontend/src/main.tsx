@@ -4,6 +4,7 @@ import { BrowserRouter } from 'react-router-dom'
 import 'katex/dist/katex.min.css'
 import App from './App'
 import AuthProvider from './AuthProvider'
+import { AgentProvider } from './store/agentStore'
 import './index.css'
 
 const rootElement = document.getElementById('root')
@@ -15,9 +16,11 @@ if (!rootElement) {
 ReactDOM.createRoot(rootElement).render(
   <React.StrictMode>
     <AuthProvider>
+      <AgentProvider>
       <BrowserRouter>
         <App />
       </BrowserRouter>
+      </AgentProvider>
     </AuthProvider>
   </React.StrictMode>
 )

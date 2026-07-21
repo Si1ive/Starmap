@@ -1,0 +1,155 @@
+/**
+ * Agent 对话 API 客户端
+ *
+ * 与 backend/app/modules/agent/router.py 的 API 对应。
+ */
+
+const API_BASE = '/api/v1'
+
+export interface Thread {
+  id: string
+  user_id: string
+  title: string | null
+  status: 'active' | 'archived' | 'deleted'
+  metadata?: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export interface Run {
+  id: string
+  thread_id: string
+  workflow_name: string
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'waiting_for_user'
+  input_message: string
+  result_artifact_id: string | null
+  error_message: string | null
+  model_call_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface AgentEvent {
+  id: number
+  run_id: string
+  sequence: number
+  event_type: string
+  payload: Record<string, unknown>
+  created_at: string
+}
+
+export interface Artifact {
+  id: string
+  run_id: string
+  artifact_type: 'explanation' | 'practice' | 'feedback' | 'plan' | 'message'
+  content: Record<string, unknown>
+  created_at: string
+}
+
+export interface CreateThreadRequest {
+  title?: string
+  metadata?: Record<string, unknown>
+}
+
+export interface CreateRunRequest {
+  thread_id: string
+  workflow_name: string
+  input_message: string
+  client_idempotency_key?: string
+  metadata?: Record<string, unknown>
+}
+
+export interface SubmitInputRequest {
+  run_id: string
+  input_text: string
+}
+
+class AgentApiError extends Error {
+  readonly status: number
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'AgentApiError'
+    this.status = status
+  }
+}
+
+async function apiRequest<T>(path: string, init: RequestInit): Promise<T> {
+  const url = `${API_BASE}${path}`
+  const response = await fetch(url, {
+    ...init,
+    credentials: 'include',
+    headers: {
+      ...init.headers,
+      ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+    },
+  })
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => 'Unknown error')
+    throw new AgentApiError(text, response.status)
+  }
+
+  const data = (await response.json().catch(() => null)) as T
+  return data
+}
+
+// ==================== Thread API ====================
+
+export async function createThread(req: CreateThreadRequest): Promise<Thread> {
+  return apiRequest<Thread>('/agent/threads', {
+    method: 'POST',
+    body: JSON.stringify(req),
+  })
+}
+
+export async function listThreads(limit = 20, offset = 0): Promise<{ items: Thread[]; total: number }> {
+  return apiRequest<{ items: Thread[]; total: number }>(`/agent/threads?limit=${limit}&offset=${offset}`)
+}
+
+export async function getThread(threadId: string): Promise<Thread> {
+  return apiRequest<Thread>(`/agent/threads/${threadId}`)
+}
+
+// ==================== Run API ====================
+
+export async function createRun(req: CreateRunRequest): Promise<Run> {
+  return apiRequest<Run>('/agent/runs', {
+    method: 'POST',
+    body: JSON.stringify(req),
+  })
+}
+
+export async function getRun(runId: string): Promise<Run> {
+  return apiRequest<Run>(`/agent/runs/${runId}`)
+}
+
+export async function submitInput(runId: string, inputText: string): Promise<SubmitInputRequest> {
+  return apiRequest<SubmitInputRequest>(`/agent/runs/${runId}/submit`, {
+    method: 'POST',
+    body: JSON.stringify({ input_text: inputText }),
+  })
+}
+
+// ==================== Events API ====================
+
+export async function getRunEvents(
+  runId: string,
+  afterSequence = 0,
+  limit = 100,
+): Promise<{ run_id: string; events: AgentEvent[]; total: number }> {
+  return apiRequest<{ run_id: string; events: AgentEvent[]; total: number }>(
+    `/agent/runs/${runId}/events?after_sequence=${afterSequence}&limit=${limit}`,
+  )
+}
+
+export function createEventSource(runId: string, afterSequence = 0): EventSource {
+  return new EventSource(`${API_BASE}/agent/runs/${runId}/events/stream?after_sequence=${afterSequence}`, {
+    withCredentials: true,
+  })
+}
+
+// ==================== Artifacts API ====================
+
+export async function getRunArtifacts(runId: string): Promise<{ run_id: string; artifacts: Artifact[] }> {
+  return apiRequest<{ run_id: string; artifacts: Artifact[] }>(`/agent/runs/${runId}/artifacts`)
+}
