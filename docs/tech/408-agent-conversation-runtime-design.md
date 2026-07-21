@@ -690,3 +690,134 @@ lock run + parent step
 7. 是否提供 MCP adapter：首发不开放 MCP server，未来 adapter 必须继续执行本文的工具 policy、资源归属、审批、审计和幂等约束，不能将内部领域能力无差别暴露。
 
 任何新增工具、模型自主决策或运行状态都必须更新本文，说明其资源归属、输入输出 Schema、幂等、超时、恢复、权限、审计、评测 fixture 和删除影响。
+
+## 16. 前端架构
+
+本文档前文聚焦于后端运行时设计，本节补充前端（用户端与管理员端）的功能模块设计、API 调用模式、SSE 连接管理、状态管理策略及与后端的交互契约。
+
+### 16.1 用户前端（frontend）
+
+#### 16.1.1 页面与路由
+
+- `AgentPage`：主对话页面，路径 `/agent` 和 `/agent/:threadId`。
+  - 三栏布局：线程列表（左）、对话区（中）、执行轨迹（右）。
+  - 支持新建线程、切换线程、发送消息、实时 SSE 推送。
+  - 自动路由到新线程，无选中线程时展示引导文案。
+
+#### 16.1.2 API 客户端（`api/agent.ts`）
+
+封装与后端 `/api/v1/agent` 对应的所有接口：
+
+| 方法 | 路径 | 用途 |
+|------|------|------|
+| POST | `/api/v1/agent/threads` | 创建线程 |
+| GET  | `/api/v1/agent/threads` | 获取线程列表（分页） |
+| GET  | `/api/v1/agent/threads/{id}` | 获取线程详情 |
+| POST | `/api/v1/agent/runs` | 创建运行 |
+| GET  | `/api/v1/agent/runs/{id}` | 查询运行状态 |
+| POST | `/api/v1/agent/runs/{id}/submit` | 提交用户输入 |
+| GET  | `/api/v1/agent/runs/{id}/events` | 分页获取事件 |
+| GET  | `/api/v1/agent/runs/{id}/events/stream` | SSE 实时事件流 |
+| GET  | `/api/v1/agent/runs/{id}/artifacts` | 获取运行产物 |
+
+所有请求均携带 `credentials: 'include'` 以支持 Cookie 认证；SSE 使用原生 `EventSource` 并开启 `withCredentials`。
+
+#### 16.1.3 状态管理（`store/agentStore.ts`）
+
+采用 **React Context + useReducer** 方案，不引入 Redux 或 Zustand，降低学习成本与打包体积：
+
+- **状态结构**：`threads`、`currentThreadId`、`currentRunId`、`runs`、`events`、`artifacts`、`loading`、`error`、`sseConnected`。
+- **核心 Action**：`SET_THREADS`、`SET_CURRENT_THREAD`、`SET_CURRENT_RUN`、`SET_RUN`、`APPEND_EVENTS`、`SET_ARTIFACTS`、`SET_SSE_CONNECTED` 等。
+- **SSE 连接管理**：`connectSSE(runId, afterSequence?)` 创建 `EventSource`，监听 `onmessage` 解析 JSON 并 dispatch `APPEND_EVENTS`；`disconnectSSE()` 关闭连接。连接断开后由页面级重试逻辑兜底（目前为手动刷新）。
+- **副作用封装**：`loadThreads`、`createThread`、`createRun`、`submitInput` 等 Action 封装在 Context 中，组件层只需调用即可。
+
+**注意**：`AgentProvider` 必须在 `main.tsx` 中包裹 `<App />`，否则 `useAgent()` 会在任何组件中抛出错误。
+
+```tsx
+// main.tsx 关键结构
+<AuthProvider>
+  <AgentProvider>
+    <BrowserRouter>
+      <App />
+    </BrowserRouter>
+  </AgentProvider>
+</AuthProvider>
+```
+
+#### 16.1.4 组件设计
+
+- **ThreadSidebar**：线程列表侧边栏，支持新建线程、切换线程、搜索线程。
+- **ChatMessage**：对话消息组件，根据 `role`（user/assistant/system）渲染不同样式。
+- **RunTrace**：执行轨迹面板，展示当前 run 的 step/event 流，支持步骤展开/折叠。
+- **EventLog**：事件日志组件，按时间顺序展示 SSE 事件，自动滚动到底部。
+
+### 16.2 管理员前端（frontend-admin）
+
+#### 16.2.1 页面与路由
+
+- `AgentRunsPage`：Agent Runs 监控页面，路径 `/admin/agent-runs`。
+  - 路由注册在 `frontend-admin/src/router/index.tsx`。
+  - 顶部统计卡片：总计、运行中、已完成、失败、等待用户、队列中。
+  - 筛选栏：按状态、工作流、用户 ID、时间范围筛选。
+  - 列表展示 Run ID、工作流、状态、用户、当前步骤、事件数、创建时间。
+  - 操作列：详情、重放。
+
+#### 16.2.2 API 客户端（`api/agentRuns.ts`）
+
+封装管理员端 `/api/v1/admin` 对应接口：
+
+| 方法 | 路径 | 用途 |
+|------|------|------|
+| GET  | `/api/v1/admin/agent-runs` | 分页查询运行列表 |
+| GET  | `/api/v1/admin/agent-runs/{id}` | 查询运行详情 |
+| GET  | `/api/v1/admin/agent-runs/{id}/events` | 查询运行事件（回放） |
+| POST | `/api/v1/admin/agent-runs/{id}/replay` | 重新运行（评测入口） |
+| GET  | `/api/v1/admin/agent-runs/stats` | 统计概览 |
+
+使用 `adminClient`（Axios 实例）统一处理 Token 注入和错误拦截。
+
+#### 16.2.3 组件设计
+
+- **统计卡片**：使用 Ant Design `Statistic` + `Card`，按状态着色（运行中蓝色、已完成绿色、失败红色、等待用户橙色）。
+- **筛选栏**：`Select`（状态、工作流）、`Search`（用户 ID）、`RangePicker`（时间范围）、`Button`（刷新）。
+- **数据表格**：`Table` 组件，支持分页、排序、滚动固定操作列。
+- **操作按钮**：
+  - 详情：导航到 `/admin/agent-runs/:id`（目前复用同一页面，后续可扩展详情页）。
+  - 重放：调用 `POST /api/v1/admin/agent-runs/{id}/replay`，成功后提示 Eval Run ID。
+
+### 16.3 前后端交互契约
+
+#### 16.3.1 认证方式
+
+- **用户端**：通过 Cookie 认证（`credentials: 'include'`），依赖 `AuthProvider` 维护登录态。
+- **管理员端**：通过 `Authorization: Bearer <token>` 头部认证，`adminClient` 拦截器自动注入。
+
+#### 16.3.2 SSE 事件协议
+
+客户端通过 `EventSource` 连接 `GET /api/v1/agent/runs/{run_id}/events/stream`：
+- 支持 `Last-Event-ID` 断线重连（通过 query 参数 `after_sequence` 传递）。
+- 事件格式为 JSON，`event_type` 字段标识事件类型（`run.started`、`step.started`、`loop.turn.completed`、`artifact.created` 等）。
+- 客户端需对事件去重（按 `sequence`），并处理事件序列的单调递增。
+- 心跳使用 SSE comment（`:` 开头的行），不触发 `onmessage`。
+- 连接断开后，客户端应轮询 `GET /api/v1/agent/runs/{run_id}` 确认终态，避免无限重连。
+
+#### 16.3.3 错误处理
+
+- **用户端**：API 错误统一抛出 `AgentApiError`，组件层通过 try-catch 捕获并展示 Toast/Alert。
+- **管理员端**：`adminClient` 响应拦截器统一处理 401（跳转登录）、403（无权限提示）、429（限流提示）。
+
+#### 16.3.4 状态同步策略
+
+- **乐观更新 vs 悲观更新**：
+  - 用户发送消息后立即在 UI 中展示（乐观），随后通过 SSE 事件同步后端真实状态。
+  - 线程创建、运行创建等操作等待 API 成功后再更新 UI（悲观），避免回滚复杂。
+- **SSE 事件驱动**：前端状态以 SSE 事件为唯一实时更新来源，HTTP 轮询仅作为 SSE 不可用时的降级方案。
+- **离线恢复**：页面刷新后，通过 `GET /api/v1/agent/runs/{id}` 获取最新状态和事件快照，重新建立 SSE 连接时携带 `after_sequence`。
+
+### 16.4 安全与性能
+
+- **防 XSS**：所有来自 SSE payload 的内容在渲染前进行 HTML 转义，避免模型输出或工具结果中的恶意脚本执行。
+- **防重复渲染**：`APPEND_EVENTS` action 中对事件按 `sequence` 去重，避免 SSE 重连时的重复事件导致 UI 闪烁。
+- **连接管理**：页面卸载时自动关闭 SSE 连接，避免内存泄漏。
+- **限流保护**：前端对发送按钮进行防抖（300ms），避免用户频繁点击创建重复 run。
+- **数据隔离**：用户端只展示当前用户的线程和运行；管理员端通过后端权限校验保证只能访问授权范围的数据。
