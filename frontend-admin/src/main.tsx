@@ -33,9 +33,10 @@ ReactDOM.createRoot(rootElement).render(
           locale={zhCN}
           theme={{
             token: {
-              colorPrimary: '#2f5bd3',
-              colorInfo: '#2f5bd3',
-              colorSuccess: '#1a7a68',
+              colorPrimary: '#31594e',
+              colorInfo: '#31594e',
+              colorLink: '#31594e',
+              colorSuccess: '#4c7568',
               colorWarning: '#b87922',
               colorError: '#b24c45',
               colorText: '#18211d',
@@ -56,6 +57,26 @@ ReactDOM.createRoot(rootElement).render(
               wireframe: false,
             },
             components: {
+              Button: {
+                fontWeight: 580,
+                defaultShadow: 'none',
+                primaryShadow: 'none',
+                dangerShadow: 'none',
+                defaultColor: '#31594e',
+                defaultBg: '#ffffff',
+                defaultBorderColor: '#c6d6cf',
+                defaultHoverBg: '#eef4f0',
+                defaultHoverColor: '#24453a',
+                defaultHoverBorderColor: '#31594e',
+                defaultActiveBg: '#e4ece8',
+                defaultActiveColor: '#24453a',
+                defaultActiveBorderColor: '#24453a',
+                textTextColor: '#31594e',
+                textTextHoverColor: '#24453a',
+                textTextActiveColor: '#24453a',
+                textHoverBg: '#eef4f0',
+                linkHoverBg: 'transparent',
+              },
               Layout: {
                 bodyBg: '#f4f7f5',
                 headerBg: '#ffffff',
@@ -77,8 +98,8 @@ ReactDOM.createRoot(rootElement).render(
                 borderColor: '#e2e9e5',
               },
               Tabs: {
-                inkBarColor: '#2f5bd3',
-                itemActiveColor: '#2247ad',
+                inkBarColor: '#31594e',
+                itemActiveColor: '#24453a',
                 itemSelectedColor: '#18211d',
               },
             },

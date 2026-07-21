@@ -79,8 +79,8 @@ const learningStages = [
     index: '04',
     label: '记忆巩固',
     title: '在遗忘前再次想起来',
-    description: '本次错因进入记忆轨迹，在保持率越过临界线前打开下一次主动回忆窗口。',
-    meta: '下一窗口已进入日程',
+    description: '本次错因进入记忆轨迹，后续对话和练习会继续验证是否已经稳固掌握。',
+    meta: '巩固状态持续更新',
     icon: CalendarCheck2,
   },
 ] as const
@@ -172,7 +172,7 @@ const practiceVariants = [
 const reviewWindows = [
   {
     id: 'record',
-    time: '现在',
+    time: '已记录',
     retention: 92,
     chartX: 45,
     chartY: 72,
@@ -181,7 +181,7 @@ const reviewWindows = [
   },
   {
     id: 'recall',
-    time: '明天 19:30',
+    time: '建议巩固',
     retention: 58,
     chartX: 292,
     chartY: 222,
@@ -190,7 +190,7 @@ const reviewWindows = [
   },
   {
     id: 'verify',
-    time: '3 天后',
+    time: '待新证据',
     retention: 64,
     chartX: 548,
     chartY: 205,
@@ -218,6 +218,7 @@ export default function LoginPage() {
       ? (location.state as { registrationEmail: string }).registrationEmail
       : ''
   const heroRef = useRef<HTMLElement>(null)
+  const authPanelRef = useRef<HTMLElement>(null)
   const arrivalTimerRef = useRef<number | null>(null)
   const [activeStage, setActiveStage] = useState<StageId>('question')
   const [destinationStage, setDestinationStage] = useState<StageId>('question')
@@ -278,6 +279,18 @@ export default function LoginPage() {
 
     return () => window.clearTimeout(holdTimer)
   }, [activeStage, moveToStage])
+
+  useEffect(() => {
+    if (!authOpen) {
+      return
+    }
+
+    const focusFrame = window.requestAnimationFrame(() => {
+      authPanelRef.current?.focus()
+    })
+
+    return () => window.cancelAnimationFrame(focusFrame)
+  }, [authMode, authOpen])
 
   useEffect(() => {
     const diagnosticTimer = window.setTimeout(() => {
@@ -464,7 +477,7 @@ export default function LoginPage() {
         </nav>
         <div className="showcase-nav__actions">
           <button className="showcase-nav__start" onClick={() => openAuth('register')} type="button">
-            免费开始
+            开始
             <ArrowRight size={16} />
           </button>
         </div>
@@ -499,7 +512,7 @@ export default function LoginPage() {
             而是完成一次学习闭环。
           </p>
           <p className="showcase-hero__lead">
-            一个会追问定位、识别知识缺口、安排针对训练并巩固记忆的 408 学习 Agent。
+            一个会追问定位、识别知识缺口、生成针对训练并巩固记忆的 408 学习 Agent。
           </p>
           <div className="showcase-hero__actions">
             <a href="#question">
@@ -920,7 +933,7 @@ export default function LoginPage() {
             <p>记忆巩固调度</p>
             <h2>让复习跟随记忆变化，而不是机械重复。</h2>
             <span>
-              每次作答都会改变下一次出现的时间。系统根据作答表现估算保持趋势，安排主动回忆，而不是重复浏览。
+              每次作答都会更新考点的巩固状态。系统根据作答表现识别是否需要主动回忆，而不是重复浏览。
             </span>
           </header>
 
@@ -981,10 +994,10 @@ export default function LoginPage() {
               ))}
 
               <div className="retention-dates" aria-hidden="true">
-                <span>今天</span>
-                <span>明天</span>
-                <span>3 天后</span>
-                <span>7 天后</span>
+                <span>本次记录</span>
+                <span>近期状态</span>
+                <span>建议关注</span>
+                <span>待新证据</span>
               </div>
             </div>
 
@@ -1012,9 +1025,9 @@ export default function LoginPage() {
         >
           <PlatformBrand />
         </button>
-        <p>让每一道不会，都有清楚的下一步。</p>
+        <p>把下一步做清楚。</p>
         <button onClick={() => openAuth('login')} type="button">
-          继续学习
+          登录
           <ArrowRight size={16} />
         </button>
       </footer>
@@ -1027,7 +1040,14 @@ export default function LoginPage() {
             onClick={() => setAuthOpen(false)}
             type="button"
           />
-          <aside aria-labelledby="auth-title" aria-modal="true" className="auth-panel" role="dialog">
+          <aside
+            aria-labelledby="auth-title"
+            aria-modal="true"
+            className="auth-panel"
+            ref={authPanelRef}
+            role="dialog"
+            tabIndex={-1}
+          >
             <div className="auth-panel__top">
               <div className="platform-brand platform-brand--panel">
                 <PlatformBrand />
@@ -1062,14 +1082,14 @@ export default function LoginPage() {
             </div>
 
             <div className="auth-panel__intro">
-              <p>{authMode === 'login' ? '账户登录' : '创建账户'}</p>
+              <p>{authMode === 'login' ? '登录' : '注册'}</p>
               <h2 id="auth-title">
-                {authMode === 'login' ? '登录后继续学习' : '创建你的学习账户'}
+                {authMode === 'login' ? '继续学习' : '创建账户'}
               </h2>
               <span>
                 {authMode === 'login'
-                  ? '验证账户后，回到今天的问题、训练和复习任务。'
-                  : '注册完成后进入短诊断，并生成第一周学习计划。'}
+                  ? '登录后回到工作台。'
+                  : '创建后直接进入工作台。'}
               </span>
             </div>
 
@@ -1112,7 +1132,7 @@ export default function LoginPage() {
                     )}
                   </button>
                   <p className="auth-form__provider-legal">
-                    首次使用将自动创建账户，继续即表示你同意服务条款与隐私说明
+                    首次使用会自动创建账户。
                   </p>
                 </>
               ) : null}
@@ -1137,7 +1157,6 @@ export default function LoginPage() {
                     <UserRound size={18} />
                     <input
                       autoComplete="nickname"
-                      autoFocus
                       maxLength={64}
                       name="nickname"
                       placeholder="用于学习工作台"
@@ -1153,15 +1172,17 @@ export default function LoginPage() {
                   <Mail size={18} />
                   <input
                     autoComplete="email"
-                    autoFocus={authMode === 'login'}
+                    autoCapitalize="none"
                     defaultValue={
                       authMode === 'register' ? registrationEmail : ''
                     }
+                    inputMode="email"
                     maxLength={320}
                     name="email"
                     placeholder="name@example.com"
                     required
-                    type="email"
+                    spellCheck={false}
+                    type="text"
                   />
                 </div>
               </label>
@@ -1239,7 +1260,7 @@ export default function LoginPage() {
                   </>
                 ) : (
                   <>
-                    {authMode === 'login' ? '登录并进入工作台' : '注册并开始诊断'}
+                    {authMode === 'login' ? '登录' : '创建账户'}
                     <ArrowRight size={17} />
                   </>
                 )}
@@ -1248,7 +1269,7 @@ export default function LoginPage() {
 
             <p className="auth-panel__security">
               <ShieldCheck size={16} />
-              学习工作台仅对已登录账户开放
+              仅对已登录账户开放
             </p>
           </aside>
         </div>

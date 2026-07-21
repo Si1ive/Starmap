@@ -5,13 +5,17 @@ import {
   AuthContextValue,
   AuthenticatedSessionData,
   AuthenticationStatus,
+  confirmEmailAccountLink,
   confirmEmailVerification,
+  EmailLinkCredential,
+  EmailLinkDetails,
   EmailVerificationCredential,
   fetchCurrentSession,
   LoginCredentials,
   loginWithPassword,
   logoutCurrentSession,
   revokeActiveSession,
+  startEmailAccountLink,
   startGitHubAccountLink,
 } from './auth'
 
@@ -157,6 +161,54 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [applySession, state.data?.csrf_token])
 
+  const startEmailLink = useCallback(
+    async (details: EmailLinkDetails) => {
+      const csrfToken = state.data?.csrf_token
+      if (!csrfToken) {
+        applySession(null)
+        throw new AuthApiError({
+          code: 'AUTHENTICATION_REQUIRED',
+          message: '请先登录',
+          status: 401,
+        })
+      }
+      try {
+        return await startEmailAccountLink(details, csrfToken)
+      } catch (error) {
+        if (error instanceof AuthApiError && error.status === 401) {
+          applySession(null)
+        }
+        throw error
+      }
+    },
+    [applySession, state.data?.csrf_token],
+  )
+
+  const confirmEmailLink = useCallback(
+    async (credential: EmailLinkCredential) => {
+      const csrfToken = state.data?.csrf_token
+      if (!csrfToken) {
+        applySession(null)
+        throw new AuthApiError({
+          code: 'AUTHENTICATION_REQUIRED',
+          message: '请先登录',
+          status: 401,
+        })
+      }
+      try {
+        const result = await confirmEmailAccountLink(credential, csrfToken)
+        applySession(await fetchCurrentSession())
+        return result
+      } catch (error) {
+        if (error instanceof AuthApiError && error.status === 401) {
+          applySession(null)
+        }
+        throw error
+      }
+    },
+    [applySession, state.data?.csrf_token],
+  )
+
   const value = useMemo<AuthContextValue>(
     () => ({
       status: state.status,
@@ -165,6 +217,8 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
       login,
       verifyEmail,
       startGitHubLink,
+      startEmailLink,
+      confirmEmailLink,
       revokeSession,
       logout,
       restore,
@@ -174,7 +228,9 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
       logout,
       restore,
       revokeSession,
+      confirmEmailLink,
       startGitHubLink,
+      startEmailLink,
       state,
       verifyEmail,
     ],

@@ -38,34 +38,14 @@ const Login = () => {
     <div className="admin-login">
       <header className="admin-login__header">
         <AdminBrand />
-        <span>内部管理入口</span>
       </header>
 
       <main className="admin-login__main">
-        <section className="admin-login__intro">
-          <p className="admin-eyebrow">408 CONTENT OPERATIONS</p>
-          <h1>让内容、语料和检索链路保持清晰可查。</h1>
-          <p>
-            面向知识资产维护、题目治理与模型运行观察的内部工作台。
-          </p>
-          <dl className="admin-login__signals">
-            <div>
-              <dt>内容链路</dt>
-              <dd>知识 · 题目 · 语料</dd>
-            </div>
-            <div>
-              <dt>运行链路</dt>
-              <dd>采集 · 检索 · 模型</dd>
-            </div>
-          </dl>
-        </section>
-
         <section className="admin-login__panel" aria-labelledby="admin-login-title">
           <span className="admin-login__panel-icon" aria-hidden="true">
             <SafetyCertificateOutlined />
           </span>
-          <p className="admin-eyebrow">ADMIN ACCESS</p>
-          <h2 id="admin-login-title">登录数据工作台</h2>
+          <h2 id="admin-login-title">管理员登录</h2>
           <p className="admin-login__hint">使用管理员账号继续。</p>
 
           <Form<LoginRequest>
@@ -112,14 +92,12 @@ const Login = () => {
             </Form.Item>
           </Form>
 
-          <p className="admin-login__demo">演示账号：admin / admin123</p>
+          <p className="admin-login__demo">
+            <span>测试账号</span>
+            <strong>admin / admin123</strong>
+          </p>
         </section>
       </main>
-
-      <footer className="admin-login__footer">
-        <span>408 数据工作台</span>
-        <span>受控访问 · 2026</span>
-      </footer>
     </div>
   )
 }

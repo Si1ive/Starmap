@@ -1,29 +1,128 @@
+import { useMemo, useRef, useState } from 'react'
+import type { ChangeEvent, DragEvent } from 'react'
 import {
-  AlertTriangle,
-  ArrowRight,
+  Check,
+  Database,
   FileText,
   Filter,
   FolderOpen,
   MoreHorizontal,
-  RefreshCw,
   Search,
   Upload,
+  X,
 } from 'lucide-react'
 import { sourceFiles } from '../data/fixtures'
-import { Button, PageHeading, ProgressBar, SectionHeading, StatusMark } from '../components/Primitives'
+import { Button, IconButton, PageHeading, SectionHeading, SourceBadge } from '../components/Primitives'
 
-const sourceStatus = {
-  ready: { tone: 'success', label: '可用' },
-  processing: { tone: 'running', label: '解析中' },
-  partial: { tone: 'warning', label: '部分可用' },
-} as const
+type SourceOrigin = 'platform' | 'personal'
+
+interface VisibleSource {
+  id: string
+  name: string
+  meta: string
+  detail: string
+  origin: SourceOrigin
+}
+
+const PERSONAL_SOURCES_KEY = 'starmap-personal-sources'
+
+function readPersonalSources(): VisibleSource[] {
+  try {
+    const value = window.localStorage.getItem(PERSONAL_SOURCES_KEY)
+    if (!value) return []
+    const parsed = JSON.parse(value) as VisibleSource[]
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
 
 export default function SourcesPage() {
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const [query, setQuery] = useState('')
+  const [scope, setScope] = useState<'all' | SourceOrigin>('all')
+  const [uploadOpen, setUploadOpen] = useState(false)
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([])
+  const [personalSources, setPersonalSources] = useState<VisibleSource[]>(readPersonalSources)
+
+  const availableSources = useMemo<VisibleSource[]>(() => {
+    const builtInSources = sourceFiles
+      .filter((file) => file.status === 'ready')
+      .map((file, index) => ({
+        id: `built-in-${index}`,
+        name: file.name,
+        meta: file.meta,
+        detail: file.detail,
+        origin: file.meta.startsWith('平台') ? 'platform' as const : 'personal' as const,
+      }))
+
+    return [...personalSources, ...builtInSources]
+  }, [personalSources])
+
+  const filteredSources = useMemo(() => {
+    const keyword = query.trim().toLowerCase()
+    return availableSources.filter((source) => {
+      const matchesScope = scope === 'all' || source.origin === scope
+      const matchesQuery =
+        !keyword ||
+        source.name.toLowerCase().includes(keyword) ||
+        source.meta.toLowerCase().includes(keyword)
+      return matchesScope && matchesQuery
+    })
+  }, [availableSources, query, scope])
+
+  const setFiles = (files: FileList | File[]) => {
+    const nextFiles = Array.from(files).filter((file) =>
+      /\.(pdf|md|txt|doc|docx)$/i.test(file.name),
+    )
+    setSelectedFiles(nextFiles)
+  }
+
+  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    if (event.target.files) setFiles(event.target.files)
+  }
+
+  const handleDrop = (event: DragEvent<HTMLLabelElement>) => {
+    event.preventDefault()
+    setFiles(event.dataTransfer.files)
+  }
+
+  const addToCorpus = () => {
+    if (!selectedFiles.length) return
+    const createdAt = Date.now()
+    const additions = selectedFiles.map((file, index) => ({
+      id: `personal-${createdAt}-${index}`,
+      name: file.name,
+      meta: `个人资料 · ${formatFileSize(file.size)}`,
+      detail: '刚刚加入 · 可供 Agent 检索',
+      origin: 'personal' as const,
+    }))
+    const nextSources = [...additions, ...personalSources]
+    setPersonalSources(nextSources)
+    window.localStorage.setItem(PERSONAL_SOURCES_KEY, JSON.stringify(nextSources))
+    setSelectedFiles([])
+    setUploadOpen(false)
+  }
+
+  const closeUpload = () => {
+    setSelectedFiles([])
+    setUploadOpen(false)
+  }
+
   return (
     <div className="page page--wide sources-page">
       <PageHeading
-        actions={<Button icon={<Upload size={17} />}>添加资料</Button>}
-        description="查看平台知识、个人资料及其可检索状态。解析失败会保留已可用页面。"
+        actions={
+          <Button icon={<Upload size={17} />} onClick={() => setUploadOpen(true)}>
+            添加资料
+          </Button>
+        }
+        description="这里只展示 Agent 当前可以使用的资料。你也可以上传自己的文件，构建个人语料库。"
         eyebrow="资料"
         title="Agent 当前可以使用的学习材料"
       />
@@ -31,62 +130,128 @@ export default function SourcesPage() {
       <div className="source-toolbar">
         <label>
           <Search size={17} />
-          <input aria-label="搜索资料" placeholder="搜索文件名或最近引用" />
+          <input
+            aria-label="搜索资料"
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="搜索文件名或最近引用"
+            value={query}
+          />
         </label>
-        <button type="button"><Filter size={16} /> 全部来源</button>
+        <label className="source-filter">
+          <Filter size={16} />
+          <select
+            aria-label="筛选资料来源"
+            onChange={(event) => setScope(event.target.value as 'all' | SourceOrigin)}
+            value={scope}
+          >
+            <option value="all">全部来源</option>
+            <option value="platform">平台资料</option>
+            <option value="personal">个人资料</option>
+          </select>
+        </label>
       </div>
 
       <section className="source-table">
-        <SectionHeading meta="4 份资料 · 3 份可参与检索" title="资料列表" />
+        <SectionHeading meta={`${filteredSources.length} 份资料`} title="资料列表" />
         <div className="source-table__header">
           <span>资料</span>
-          <span>可用状态</span>
-          <span>最近活动</span>
+          <span>来源</span>
+          <span>最近使用</span>
           <span />
         </div>
-        {sourceFiles.map((file) => {
-          const status = sourceStatus[file.status as keyof typeof sourceStatus]
-          return (
-            <div className="source-row" key={file.name}>
+        {filteredSources.map((source) => (
+            <div className="source-row" key={source.id}>
               <span className="source-row__icon"><FileText size={20} /></span>
               <span className="source-row__name">
-                <strong>{file.name}</strong>
-                <small>{file.meta}</small>
+                <strong>{source.name}</strong>
+                <small>{source.meta}</small>
               </span>
-              <span className="source-row__status">
-                <StatusMark tone={status.tone}>{status.label}</StatusMark>
-                {file.status === 'processing' ? <ProgressBar value={64} /> : null}
+              <span className="source-row__origin">
+                <SourceBadge type={source.origin === 'personal' ? 'personal' : 'knowledge'}>
+                  {source.origin === 'personal' ? '个人资料' : '平台资料'}
+                </SourceBadge>
               </span>
-              <span className="source-row__detail">{file.detail}</span>
-              <button aria-label={`${file.name}更多操作`} title="更多操作" type="button"><MoreHorizontal size={18} /></button>
+              <span className="source-row__detail">{source.detail}</span>
+              <button aria-label={`${source.name}更多操作`} title="更多操作" type="button"><MoreHorizontal size={18} /></button>
             </div>
-          )
-        })}
-      </section>
-
-      <section className="source-issues">
-        <SectionHeading meta="问题不会让已完成解析的页面失效" title="需要处理" />
-        <div className="source-issue">
-          <span><AlertTriangle size={19} /></span>
-          <div>
-            <strong>网络层补充讲义.pdf · 2 页图片识别失败</strong>
-            <p>其余 14 页仍可参与检索。失败页为第 7、12 页，可单独重新解析。</p>
+        ))}
+        {!filteredSources.length ? (
+          <div className="source-empty">
+            <Search size={20} />
+            <strong>没有找到匹配的资料</strong>
+            <span>调整关键词或资料来源后重试。</span>
           </div>
-          <Button icon={<RefreshCw size={16} />} tone="secondary">重试失败页</Button>
-        </div>
+        ) : null}
       </section>
 
-      <section className="source-boundary">
-        <span><FolderOpen size={20} /></span>
+      <section className="source-corpus-builder">
+        <span><Database size={21} /></span>
         <div>
-          <strong>当前版本通过网页上传资料</strong>
-          <p>Agent 只读取你明确加入的文件。不会扫描本地文件夹，也不会在未确认时修改原文件。</p>
+          <strong>构建你的个人语料库</strong>
+          <p>上传 PDF、Markdown、文本或 Word 资料，Agent 会将它们与平台资料一起用于回答和练习。只会使用你主动加入的文件。</p>
         </div>
-        <button type="button">
-          查看资料使用规则
-          <ArrowRight size={16} />
-        </button>
+        <Button icon={<FolderOpen size={17} />} onClick={() => setUploadOpen(true)} tone="secondary">
+          选择文件
+        </Button>
       </section>
+
+      {uploadOpen ? (
+        <div className="source-upload-backdrop" role="presentation">
+          <section aria-labelledby="source-upload-title" aria-modal="true" className="source-upload-dialog" role="dialog">
+            <header>
+              <div>
+                <p className="eyebrow">个人语料库</p>
+                <h2 id="source-upload-title">添加自己的学习资料</h2>
+              </div>
+              <IconButton label="关闭添加资料" onClick={closeUpload}>
+                <X size={19} />
+              </IconButton>
+            </header>
+
+            <label
+              className="source-dropzone"
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={handleDrop}
+            >
+              <input
+                accept=".pdf,.md,.txt,.doc,.docx"
+                multiple
+                onChange={handleFileChange}
+                ref={fileInputRef}
+                type="file"
+              />
+              <span><Upload size={23} /></span>
+              <strong>选择文件或拖到这里</strong>
+              <small>支持 PDF、Markdown、TXT、DOC、DOCX，可一次选择多个文件。</small>
+            </label>
+
+            {selectedFiles.length ? (
+              <div className="source-upload-selection">
+                <span>{selectedFiles.length} 个文件</span>
+                {selectedFiles.map((file) => (
+                  <div key={`${file.name}-${file.size}`}>
+                    <FileText size={17} />
+                    <strong>{file.name}</strong>
+                    <small>{formatFileSize(file.size)}</small>
+                    <Check size={16} />
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            <footer>
+              <Button onClick={closeUpload} tone="quiet">取消</Button>
+              <Button
+                disabled={!selectedFiles.length}
+                icon={<Database size={17} />}
+                onClick={addToCorpus}
+              >
+                加入个人语料库
+              </Button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
     </div>
   )
 }

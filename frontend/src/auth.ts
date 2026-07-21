@@ -12,6 +12,7 @@ export interface AuthenticatedUser {
   id: string
   email: string
   email_verified: boolean
+  email_login_enabled: boolean
   display_name: string
   locale: string
   timezone: string
@@ -67,6 +68,26 @@ export interface RegistrationDetails {
 export interface RegistrationAccepted {
   verification_required: true
   resend_after_seconds: number
+}
+
+export interface EmailLinkDetails {
+  email: string
+  password: string
+  password_confirmation: string
+}
+
+export interface EmailLinkAccepted {
+  verification_required: true
+  resend_after_seconds: number
+}
+
+export type EmailLinkCredential =
+  | { token: string; code?: never }
+  | { code: string; token?: never }
+
+export interface EmailLinkCompleted {
+  linked: true
+  email: string
 }
 
 export interface GitHubOAuthStartDetails {
@@ -162,6 +183,10 @@ export interface AuthContextValue {
     credential: EmailVerificationCredential,
   ) => Promise<EmailVerificationData>
   startGitHubLink: () => Promise<GitHubOAuthAuthorization>
+  startEmailLink: (details: EmailLinkDetails) => Promise<EmailLinkAccepted>
+  confirmEmailLink: (
+    credential: EmailLinkCredential,
+  ) => Promise<EmailLinkCompleted>
   revokeSession: (sessionId: string) => Promise<void>
   logout: () => Promise<void>
   restore: () => Promise<void>
@@ -188,7 +213,7 @@ export function postLoginPath(state: unknown): string {
     from.pathname.startsWith('//') ||
     from.pathname === '/login'
   ) {
-    return '/today'
+    return '/agent'
   }
   const search = typeof from.search === 'string' ? from.search : ''
   const hash = typeof from.hash === 'string' ? from.hash : ''
@@ -256,6 +281,32 @@ export function startGitHubAccountLink(
       'X-CSRF-Token': csrfToken,
     },
     body: JSON.stringify({ return_path: '/account' }),
+  })
+}
+
+export function startEmailAccountLink(
+  details: EmailLinkDetails,
+  csrfToken: string,
+): Promise<EmailLinkAccepted> {
+  return authRequest<EmailLinkAccepted>('/email-link/start', {
+    method: 'POST',
+    headers: {
+      'X-CSRF-Token': csrfToken,
+    },
+    body: JSON.stringify(details),
+  })
+}
+
+export function confirmEmailAccountLink(
+  credential: EmailLinkCredential,
+  csrfToken: string,
+): Promise<EmailLinkCompleted> {
+  return authRequest<EmailLinkCompleted>('/email-link/confirm', {
+    method: 'POST',
+    headers: {
+      'X-CSRF-Token': csrfToken,
+    },
+    body: JSON.stringify(credential),
   })
 }
 

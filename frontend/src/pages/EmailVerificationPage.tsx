@@ -95,7 +95,7 @@ export default function EmailVerificationPage() {
       try {
         const result = await verifyEmail(credential)
         if (result.authenticated) {
-          navigate('/onboarding', { replace: true })
+          navigate('/agent', { replace: true })
           return
         }
         setPhase('complete')
@@ -216,7 +216,7 @@ export default function EmailVerificationPage() {
   const returnToLogin = () => {
     const from =
       phase === 'complete'
-        ? { pathname: '/onboarding', search: '', hash: '' }
+        ? { pathname: '/agent', search: '', hash: '' }
         : routeState?.from
     navigate('/login?auth=login', {
       replace: phase === 'complete',
@@ -500,7 +500,7 @@ function verificationCopy(phase: VerificationPhase) {
     return {
       eyebrow: '邮箱已验证',
       title: '账户已经激活',
-      description: '重新登录后即可开始首次学习设置。',
+      description: '重新登录后即可进入工作台开始学习。',
       contextTitleParts: ['邮箱验证', '完成'],
       contextDescription:
         '当前链接不在原注册浏览器中打开，因此需要正常登录后继续。',
@@ -522,7 +522,7 @@ function verificationCopy(phase: VerificationPhase) {
     description: '验证码为 6 位数字，只能在发起注册的浏览器中使用。',
     contextTitleParts: ['还差一次', '邮箱确认'],
     contextDescription:
-      '完成验证后，原注册浏览器会直接建立正式会话并进入首次学习设置。',
+      '完成验证后，原注册浏览器会直接建立正式会话并进入学习工作台。',
   }
 }
 

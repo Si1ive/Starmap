@@ -73,7 +73,7 @@ export default function MapPage() {
               <strong>提示使用</strong>
               <span>一级提示 1 次</span>
             </div>
-            <small>证据只用于安排下一步，不换算为伪精确掌握率。</small>
+            <small>证据只用于判断下一步内容，不换算为伪精确掌握率。</small>
           </div>
         </section>
 

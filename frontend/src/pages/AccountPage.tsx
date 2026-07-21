@@ -1,12 +1,21 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Check,
   Clock3,
   GitBranch,
+  KeyRound,
   Laptop,
   LoaderCircle,
   LocateFixed,
   LogOut,
+  Mail,
   MailCheck,
   MapPin,
   MonitorSmartphone,
@@ -29,9 +38,11 @@ type ConnectionLoadState = "loading" | "ready" | "error";
 
 export default function AccountPage() {
   const {
+    confirmEmailLink,
     restore,
     revokeSession,
     session: currentSession,
+    startEmailLink,
     startGitHubLink,
     user,
   } = useAuth();
@@ -47,6 +58,15 @@ export default function AccountPage() {
     useState<ConnectionLoadState>("loading");
   const [connectionError, setConnectionError] = useState("");
   const [githubLinking, setGitHubLinking] = useState(false);
+  const [emailFormOpen, setEmailFormOpen] = useState(false);
+  const [emailStep, setEmailStep] = useState<"details" | "code">("details");
+  const [email, setEmail] = useState(user?.email || "");
+  const [password, setPassword] = useState("");
+  const [passwordConfirmation, setPasswordConfirmation] = useState("");
+  const [emailCode, setEmailCode] = useState("");
+  const [emailSubmitting, setEmailSubmitting] = useState(false);
+  const [emailCountdown, setEmailCountdown] = useState(0);
+  const emailLinkConfirmationStarted = useRef(false);
 
   const loadGitHubLink = useCallback(
     async (signal?: AbortSignal) => {
@@ -107,6 +127,46 @@ export default function AccountPage() {
   }, [loadGitHubLink, loadSessions]);
 
   useEffect(() => {
+    if (!emailFormOpen && user?.email) setEmail(user.email);
+  }, [emailFormOpen, user?.email]);
+
+  useEffect(() => {
+    if (emailCountdown <= 0) return undefined;
+    const timer = window.setInterval(() => {
+      setEmailCountdown((current) => Math.max(0, current - 1));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [emailCountdown]);
+
+  useEffect(() => {
+    const search = new URLSearchParams(window.location.search);
+    const emailToken = search.get("email_token");
+    if (!emailToken || emailLinkConfirmationStarted.current) return;
+    emailLinkConfirmationStarted.current = true;
+    search.delete("email_token");
+    window.history.replaceState(
+      window.history.state,
+      "",
+      `${window.location.pathname}${
+        search.toString() ? `?${search.toString()}` : ""
+      }${window.location.hash}`,
+    );
+
+    setActionError("");
+    setActionNotice("");
+    setEmailSubmitting(true);
+    void confirmEmailLink({ token: emailToken })
+      .then((result) => {
+        setActionNotice(`${result.email} 已绑定，现在可以使用邮箱和密码登录`);
+        setEmailFormOpen(false);
+      })
+      .catch((error) => {
+        setActionError(emailLinkErrorMessage(error));
+      })
+      .finally(() => setEmailSubmitting(false));
+  }, [confirmEmailLink]);
+
+  useEffect(() => {
     const search = new URLSearchParams(window.location.search);
     const linked = search.get("github") === "linked";
     const oauthError = search.get("oauth_error");
@@ -147,6 +207,71 @@ export default function AccountPage() {
     }
   };
 
+  const sendEmailLink = async () => {
+    if (password !== passwordConfirmation) {
+      setActionError("两次输入的密码不一致");
+      return;
+    }
+    setActionError("");
+    setActionNotice("");
+    setEmailSubmitting(true);
+    try {
+      const result = await startEmailLink({
+        email,
+        password,
+        password_confirmation: passwordConfirmation,
+      });
+      setEmailStep("code");
+      setEmailCode("");
+      setEmailCountdown(Math.max(0, result.resend_after_seconds));
+      setActionNotice(`确认邮件已发送到 ${email}`);
+    } catch (error) {
+      setActionError(emailLinkErrorMessage(error));
+    } finally {
+      setEmailSubmitting(false);
+    }
+  };
+
+  const handleStartEmailLink = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    void sendEmailLink();
+  };
+
+  const handleConfirmEmailLink = async (
+    event: FormEvent<HTMLFormElement>,
+  ) => {
+    event.preventDefault();
+    if (!/^\d{6}$/.test(emailCode)) {
+      setActionError("请输入邮件中的 6 位数字验证码");
+      return;
+    }
+    setActionError("");
+    setActionNotice("");
+    setEmailSubmitting(true);
+    try {
+      const result = await confirmEmailLink({ code: emailCode });
+      setActionNotice(`${result.email} 已绑定，现在可以使用邮箱和密码登录`);
+      setEmailFormOpen(false);
+      setEmailStep("details");
+      setPassword("");
+      setPasswordConfirmation("");
+      setEmailCode("");
+    } catch (error) {
+      setActionError(emailLinkErrorMessage(error));
+    } finally {
+      setEmailSubmitting(false);
+    }
+  };
+
+  const openEmailForm = () => {
+    setActionError("");
+    setActionNotice("");
+    setEmail(user?.email || "");
+    setEmailStep("details");
+    setEmailCode("");
+    setEmailFormOpen(true);
+  };
+
   const handleRevoke = async (managedSession: ManagedSession) => {
     setRevokingId(managedSession.id);
     setActionError("");
@@ -169,7 +294,7 @@ export default function AccountPage() {
         error instanceof AuthApiError &&
         error.code === "CURRENT_SESSION_LOGOUT_REQUIRED"
       ) {
-        setActionError("当前设备请使用侧边栏中的退出登录");
+        setActionError("当前设备请使用右上角账户菜单中的退出登录");
       } else {
         setActionError(
           error instanceof AuthApiError
@@ -195,7 +320,7 @@ export default function AccountPage() {
   return (
     <div className="page page--wide account-page">
       <PageHeading
-        description="查看账户身份和仍可使用的登录设备。"
+        description="管理登录方式和仍可使用的登录设备。"
         eyebrow="账户设置"
         title="账户与登录"
       />
@@ -209,15 +334,22 @@ export default function AccountPage() {
           <span>
             <small id="account-profile-title">学习账户</small>
             <strong>{displayName}</strong>
-            <em>{user?.email}</em>
+            <em>
+              {user?.email} ·{" "}
+              {user?.email_login_enabled ? "登录邮箱" : "联系邮箱"}
+            </em>
           </span>
         </div>
         <div className="account-profile__facts">
           <span>
             <MailCheck size={18} />
             <span>
-              <small>主邮箱</small>
-              <strong>{user?.email_verified ? "已验证" : "等待验证"}</strong>
+              <small>
+                {user?.email_login_enabled ? "登录邮箱" : "联系邮箱"}
+              </small>
+              <strong>
+                {user?.email_login_enabled ? "邮箱登录已启用" : "邮箱登录未绑定"}
+              </strong>
             </span>
           </span>
           <span>
@@ -230,6 +362,18 @@ export default function AccountPage() {
         </div>
       </section>
 
+      {actionNotice ? (
+        <p className="account-action-notice" role="status">
+          <Check size={16} />
+          {actionNotice}
+        </p>
+      ) : null}
+      {actionError ? (
+        <p className="account-action-error" role="alert">
+          {actionError}
+        </p>
+      ) : null}
+
       <section
         className="account-connections"
         aria-labelledby="account-connections-title"
@@ -238,9 +382,189 @@ export default function AccountPage() {
           <div>
             <p className="eyebrow">账号绑定</p>
             <h2 id="account-connections-title">登录方式</h2>
-            <p>绑定第三方账号后，可以使用对应方式登录同一个学习账户。</p>
+            <p>完成对应方式的验证后，才会标记为已绑定并允许登录。</p>
           </div>
         </header>
+
+        <div className="account-connection-row">
+          <span className="account-connection-row__icon account-connection-row__icon--email">
+            <Mail size={21} />
+          </span>
+          <div className="account-connection-row__main">
+            <strong>邮箱与密码</strong>
+            <small>
+              {user?.email_login_enabled
+                ? `已绑定 ${user.email}`
+                : currentSession?.auth_method === "github"
+                  ? `${user?.email} 来自 GitHub，目前仅作为联系邮箱`
+                  : "尚未启用邮箱密码登录"}
+            </small>
+          </div>
+          <div className="account-connection-row__status">
+            {user?.email_login_enabled ? (
+              <StatusMark tone="success">已绑定</StatusMark>
+            ) : (
+              <StatusMark tone="neutral">未绑定</StatusMark>
+            )}
+          </div>
+          <Button
+            disabled={Boolean(user?.email_login_enabled) || emailSubmitting}
+            icon={
+              emailSubmitting ? (
+                <LoaderCircle className="spin" size={16} />
+              ) : (
+                <KeyRound size={16} />
+              )
+            }
+            onClick={openEmailForm}
+            tone="secondary"
+          >
+            {user?.email_login_enabled ? "已启用" : "绑定邮箱"}
+          </Button>
+        </div>
+
+        {emailFormOpen && !user?.email_login_enabled ? (
+          emailStep === "details" ? (
+            <form
+              className="account-email-form"
+              onSubmit={handleStartEmailLink}
+            >
+              <header>
+                <div>
+                  <strong>启用邮箱登录</strong>
+                  <small>验证邮箱所有权后，这组邮箱和密码才可用于登录。</small>
+                </div>
+                <Button
+                  disabled={emailSubmitting}
+                  onClick={() => setEmailFormOpen(false)}
+                  tone="quiet"
+                >
+                  取消
+                </Button>
+              </header>
+              <div className="account-email-form__fields">
+                <label>
+                  <span>登录邮箱</span>
+                  <div>
+                    <Mail size={17} />
+                    <input
+                      autoComplete="email"
+                      autoCapitalize="none"
+                      inputMode="email"
+                      onChange={(event) => setEmail(event.target.value)}
+                      required
+                      spellCheck={false}
+                      type="text"
+                      value={email}
+                    />
+                  </div>
+                </label>
+                <label>
+                  <span>设置密码</span>
+                  <div>
+                    <KeyRound size={17} />
+                    <input
+                      autoComplete="new-password"
+                      minLength={15}
+                      onChange={(event) => setPassword(event.target.value)}
+                      placeholder="至少 15 位字符"
+                      required
+                      type="password"
+                      value={password}
+                    />
+                  </div>
+                </label>
+                <label>
+                  <span>确认密码</span>
+                  <div>
+                    <KeyRound size={17} />
+                    <input
+                      autoComplete="new-password"
+                      minLength={15}
+                      onChange={(event) =>
+                        setPasswordConfirmation(event.target.value)
+                      }
+                      required
+                      type="password"
+                      value={passwordConfirmation}
+                    />
+                  </div>
+                </label>
+              </div>
+              <div className="account-email-form__actions">
+                <Button
+                  disabled={emailSubmitting}
+                  icon={
+                    emailSubmitting ? (
+                      <LoaderCircle className="spin" size={16} />
+                    ) : (
+                      <MailCheck size={16} />
+                    )
+                  }
+                  type="submit"
+                >
+                  {emailSubmitting ? "正在发送" : "发送验证码"}
+                </Button>
+              </div>
+            </form>
+          ) : (
+            <form
+              className="account-email-form"
+              onSubmit={handleConfirmEmailLink}
+            >
+              <header>
+                <div>
+                  <strong>确认邮箱</strong>
+                  <small>确认邮件已发送到 {email}</small>
+                </div>
+                <Button
+                  disabled={emailSubmitting}
+                  onClick={() => setEmailStep("details")}
+                  tone="quiet"
+                >
+                  修改信息
+                </Button>
+              </header>
+              <label className="account-email-form__code">
+                <span>6 位验证码</span>
+                <input
+                  autoComplete="one-time-code"
+                  inputMode="numeric"
+                  maxLength={6}
+                  onChange={(event) =>
+                    setEmailCode(event.target.value.replace(/\D/g, ""))
+                  }
+                  placeholder="000000"
+                  value={emailCode}
+                />
+              </label>
+              <div className="account-email-form__actions account-email-form__actions--split">
+                <Button
+                  disabled={emailCountdown > 0 || emailSubmitting}
+                  onClick={() => void sendEmailLink()}
+                  tone="secondary"
+                >
+                  {emailCountdown > 0
+                    ? `${emailCountdown} 秒后可重发`
+                    : "重新发送"}
+                </Button>
+                <Button
+                  disabled={emailSubmitting || emailCode.length !== 6}
+                  icon={
+                    emailSubmitting ? (
+                      <LoaderCircle className="spin" size={16} />
+                    ) : (
+                      <Check size={16} />
+                    )
+                  }
+                  type="submit"
+                >
+                  {emailSubmitting ? "正在确认" : "确认绑定"}
+                </Button>
+              </div>
+            </form>
+          )
+        ) : null}
 
         <div className="account-connection-row">
           <span className="account-connection-row__icon">
@@ -304,18 +628,6 @@ export default function AccountPage() {
             </span>
           ) : null}
         </header>
-
-        {actionNotice ? (
-          <p className="account-action-notice" role="status">
-            <Check size={16} />
-            {actionNotice}
-          </p>
-        ) : null}
-        {actionError ? (
-          <p className="account-action-error" role="alert">
-            {actionError}
-          </p>
-        ) : null}
 
         {loadState === "loading" ? <SessionLoading /> : null}
         {loadState === "error" ? (
@@ -549,6 +861,25 @@ function githubIdentityLabel(identity: GitHubLinkStatus) {
   if (identity.username) return `已连接 @${identity.username}`;
   if (identity.email) return `已连接 ${identity.email}`;
   return "已连接 GitHub 账号";
+}
+
+function emailLinkErrorMessage(error: unknown) {
+  if (!(error instanceof AuthApiError)) {
+    return "邮箱绑定请求失败，请稍后重试";
+  }
+  const messages: Record<string, string> = {
+    EMAIL_LOGIN_ALREADY_ENABLED: "当前账户已经启用邮箱登录",
+    EMAIL_LINK_UNAVAILABLE: "该邮箱无法绑定到当前账户",
+    EMAIL_LINK_INVALID: "验证码无效或已过期，请重新发送",
+    PASSWORD_TOO_SHORT: "密码长度不足，请设置至少 15 位字符",
+    PASSWORD_TOO_LONG: "密码过长，请使用不超过 128 位字符",
+    AUTHENTICATION_REQUIRED: "登录状态已变化，请重新登录后绑定邮箱",
+    CSRF_INVALID: "登录状态已变化，请刷新页面后重试",
+  };
+  if (error.code === "AUTH_RATE_LIMITED" && error.retryAfterSeconds) {
+    return `操作过于频繁，请在 ${error.retryAfterSeconds} 秒后重试`;
+  }
+  return messages[error.code] || error.message;
 }
 
 function githubLinkErrorMessage(code: string) {

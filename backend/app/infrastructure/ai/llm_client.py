@@ -33,7 +33,7 @@ def extract_json_block(text: str) -> Any:
         start = cleaned.find("{")
         end = cleaned.rfind("}")
         if start != -1 and end != -1 and end > start:
-            cleaned = cleaned[start:end + 1]
+            cleaned = cleaned[start : end + 1]
     return json.loads(cleaned)
 
 
@@ -51,7 +51,9 @@ class BaseLLMClient:
         self.enabled = bool(config.get("enabled"))
         self.provider = str(config.get("provider") or "openai_compatible")
         self.base_url = str(config.get("base_url") or "").strip()
-        self.api_key = str(config.get("api_key") or settings.OPENAI_API_KEY or "").strip()
+        self.api_key = str(
+            config.get("api_key") or settings.OPENAI_API_KEY or ""
+        ).strip()
         self.model = str(config.get("model") or settings.OPENAI_MODEL).strip()
         self.temperature = float(config.get("temperature", self.default_temperature))
         self.max_tokens = int(config.get("max_tokens", 2000))
@@ -126,16 +128,16 @@ class BaseLLMClient:
 
 class PDFStructureLLMClient(BaseLLMClient):
     called_by = "pdf_structure_llm"
-    default_system_prompt = "你是一个PDF题目结构分析专家，负责判断跨页、跨列导致的题目拆分和选项缺失问题。"
+    default_system_prompt = (
+        "你是一个PDF题目结构分析专家，负责判断跨页、跨列导致的题目拆分和选项缺失问题。"
+    )
     default_temperature = 0.1
     default_purpose = "题目结构 LLM 兜底修复"
 
 
 class OutlineLLMClient(BaseLLMClient):
     called_by = "outline_llm"
-    default_system_prompt = (
-        "你是408考研大纲解析专家，负责把大纲文本拆成结构化章节树。"
-    )
+    default_system_prompt = "你是408考研大纲解析专家，负责把大纲文本拆成结构化章节树。"
     default_temperature = 0.2
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
@@ -149,7 +151,7 @@ class OutlineLLMClient(BaseLLMClient):
 
 class ChatLLMClient(BaseLLMClient):
     called_by = "chat_service"
-    default_system_prompt = "你是一个专业的408考研学习助手，擅长解释知识点、题目分析与学习规划。"
+    default_system_prompt = "你是一个专业的408考研学习助手，擅长解释知识点、分析题目并根据对话提供练习反馈。"
     default_temperature = 0.7
 
 

@@ -204,7 +204,7 @@ const Dashboard = () => {
             ) : (
               <BarChart
                 data={(charts.difficulty_distribution || []) as { name: string; value: number }[]}
-                color="#2f5bd3"
+                color="#31594e"
                 height={280}
               />
             )}

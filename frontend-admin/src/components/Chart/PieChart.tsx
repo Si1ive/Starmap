@@ -7,7 +7,7 @@ interface PieChartProps {
   height?: number
 }
 
-const COLORS = ['#2f5bd3', '#1a7a68', '#b87922', '#b24c45', '#6f7d76', '#4f77d8', '#4c9789', '#d29a4d']
+const COLORS = ['#31594e', '#527d6d', '#b87922', '#b24c45', '#6f7d76', '#7c9d8f', '#4c7568', '#d29a4d']
 
 const PieChart = ({ data, title = '', height = 300 }: PieChartProps) => {
   const chartRef = useRef<HTMLDivElement>(null)

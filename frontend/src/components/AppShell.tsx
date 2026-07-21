@@ -161,7 +161,6 @@ export default function AppShell() {
                 <Menu size={20} />
               </IconButton>
               <span className="topbar__page">{currentLabel}</span>
-              <span className="topbar__context">学习内容由对话和记录持续更新</span>
             </div>
             <div className="topbar__actions">
               <div className="task-center-anchor">
@@ -209,7 +208,7 @@ export default function AppShell() {
                         </button>
                       )
                     })}
-                    <p className="task-center__note">仅显示尚未结束的任务。历史对话从左侧历史记录进入。</p>
+                    <p className="task-center__note">历史记录从左侧进入。</p>
                   </div>
                 ) : null}
               </div>

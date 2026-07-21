@@ -205,12 +205,15 @@ export default function PasswordRecoveryPage({
                     <Mail size={18} />
                     <input
                       autoComplete="email"
+                      autoCapitalize="none"
                       autoFocus
+                      inputMode="email"
                       maxLength={320}
                       name="email"
                       placeholder="name@example.com"
                       required
-                      type="email"
+                      spellCheck={false}
+                      type="text"
                     />
                   </div>
                 </label>

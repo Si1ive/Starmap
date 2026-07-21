@@ -24,7 +24,7 @@ def default_system_settings() -> Dict[str, Any]:
             "temperature": 0.7,
             "max_tokens": 2000,
             "timeout_seconds": 60,
-            "system_prompt": "你是一个专业的408考研学习助手，擅长解释知识点、题目分析与学习规划。",
+            "system_prompt": "你是一个专业的408考研学习助手，擅长解释知识点、分析题目并根据对话提供练习反馈。",
         },
         "pdf_structure_llm": {
             "enabled": False,

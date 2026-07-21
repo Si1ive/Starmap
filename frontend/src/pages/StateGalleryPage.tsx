@@ -78,8 +78,8 @@ export default function StateGalleryPage() {
 
       <section className="state-section">
         <EmptyState
-          action={<Button icon={<ArrowRight size={16} />}>开始诊断</Button>}
-          description="完成短诊断后，这里会出现第一版今日计划。"
+          action={<Button icon={<ArrowRight size={16} />}>与 Agent 对话</Button>}
+          description="开始一次对话后，学习内容会根据问题和记录逐渐形成。"
           title="还没有学习记录"
         />
       </section>

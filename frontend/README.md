@@ -26,7 +26,6 @@ npm run build
 | 页面 | 地址 |
 | --- | --- |
 | 登录与产品介绍 | `/login` |
-| 首次设置 | `/onboarding` |
 | 今日工作台 | `/today` |
 | Agent 新线程 | `/agent` |
 | 学习地图 | `/map` |
@@ -51,11 +50,10 @@ npm run build
 | 状态 | 地址 |
 | --- | --- |
 | 今日空状态 | `/today?empty=1` |
-| 计划应用预览 | `/today?preview=plan` |
 | Agent 运行中 | `/agent/queue?state=running&hold=1` |
 | Agent 已完成 | `/agent/queue?state=complete` |
 | Agent 失败恢复 | `/agent/recovery?state=failed` |
-| 计划待审批 | `/agent/plan?state=approval` |
+| 内容优先级待确认 | `/agent/plan?state=approval` |
 | 回答证据 | `/agent/queue?state=complete&evidence=1` |
 | 考点详情 | `/map?point=queue` |
 | 客观题反馈 | `/practice/queue-check/feedback?question=1` |
@@ -69,8 +67,8 @@ npm run build
    从 `/agent/queue?state=running&hold=1` 打开任务中心；再进入 `/agent/recovery?state=failed`，查看已保留草稿并只重试失败步骤。
 3. **长主观题与图片反馈**
    在 `/practice/processor?question=1` 打开真实处理机题图、缩放、填写第一小问并提交，随后查看评分点反馈。
-4. **计划调整审批**
-   在 `/agent/plan?state=approval` 先拒绝并确认原计划未变，再重新打开差异、同意并进入计划应用预览。
+4. **内容优先级调整**
+   在 `/agent/plan?state=approval` 查看 Agent 根据对话和练习记录提出的内容优先级建议，并决定是否采用。
 5. **移动端核心闭环**
    使用 `390 x 844` 视口走一遍 Agent 步骤抽屉、证据抽屉、验证题和客观题反馈。
 

@@ -14,9 +14,9 @@
   --ink-faint: #7b8982;
   --line: #dce4df;
   --line-strong: #c8d3cd;
-  --blue: #2f5bd3;
-  --blue-dark: #2247ad;
-  --blue-soft: #edf2ff;
+  --blue: #31594e;
+  --blue-dark: #24453a;
+  --blue-soft: #e8f1ec;
   --jade: #1a7a68;
   --jade-soft: #eaf6f2;
   --amber: #b87922;
@@ -83,12 +83,12 @@ a:focus-visible,
 input:focus-visible,
 textarea:focus-visible,
 summary:focus-visible {
-  outline: 3px solid rgba(47, 91, 211, 0.25);
+  outline: 3px solid rgba(49, 89, 78, 0.22);
   outline-offset: 2px;
 }
 
 ::selection {
-  background: #cbd8ff;
+  background: #d9e8df;
 }
 
 .app-loading {
@@ -162,7 +162,7 @@ summary:focus-visible {
 
 .button--primary {
   background: var(--blue);
-  color: #fff;
+  color: #f8f5ed;
 }
 
 .button--primary:hover:not(:disabled) {
@@ -6587,7 +6587,7 @@ summary:focus-visible {
 }
 
 .auth-mode-switch button::after {
-  background: var(--login-red);
+  background: var(--login-jade);
   bottom: -1px;
   content: "";
   height: 2px;
@@ -6668,8 +6668,8 @@ summary:focus-visible {
 }
 
 .auth-form > label > div:focus-within {
-  border-color: var(--login-blue);
-  box-shadow: 0 0 0 3px rgba(49, 89, 201, 0.12);
+  border-color: var(--login-jade);
+  box-shadow: 0 0 0 3px rgba(49, 89, 78, 0.12);
 }
 
 .auth-form > label > div > svg {
@@ -6677,12 +6677,25 @@ summary:focus-visible {
 }
 
 .auth-form input:not([type="checkbox"]) {
+  appearance: none;
   background: transparent;
   border: 0;
+  border-radius: 0;
+  box-shadow: none;
   font-size: 14px;
   min-width: 0;
   outline: 0;
+  -webkit-appearance: none;
   width: 100%;
+}
+
+.auth-form input:not([type="checkbox"]):focus,
+.auth-form input:not([type="checkbox"]):focus-visible,
+.auth-form input:not([type="checkbox"]):invalid,
+.auth-form input:not([type="checkbox"]):focus:invalid {
+  border: 0 !important;
+  box-shadow: none !important;
+  outline: 0 !important;
 }
 
 .auth-form input::placeholder {
@@ -6758,8 +6771,8 @@ summary:focus-visible {
 }
 
 .auth-form__provider:focus-visible {
-  border-color: var(--login-red);
-  outline: 3px solid rgba(172, 82, 61, 0.14);
+  border-color: var(--login-jade);
+  outline: 3px solid rgba(49, 89, 78, 0.12);
 }
 
 .auth-form__provider:disabled {
@@ -9511,9 +9524,9 @@ summary:focus-visible {
   --login-ink: #17231d;
   --login-muted: #5d6962;
   --login-line: #c7d0ca;
-  --login-blue: #59617e;
-  --login-blue-dark: #454d68;
-  --login-jade: #2f6f62;
+  --login-blue: #5a766a;
+  --login-blue-dark: #34564a;
+  --login-jade: #31594e;
   --login-red: #b86147;
   --login-ochre: #9a7a3c;
   background: var(--login-canvas);
@@ -9555,27 +9568,32 @@ summary:focus-visible {
 }
 
 .showcase-nav nav a::after {
-  background: var(--login-red);
+  background: var(--login-jade);
 }
 
 .showcase-nav__start,
 .auth-form__submit {
-  background: var(--login-ink);
+  background: var(--blue);
   color: #f8f5ed;
 }
 
 .showcase-nav__start:hover,
 .auth-form__submit:hover {
-  background: var(--login-red);
+  background: var(--blue-dark);
 }
 
 .showcase-hero__actions button {
-  background: var(--login-red);
-  color: #fffaf4;
+  background: var(--blue);
+  color: #f8f5ed;
 }
 
 .showcase-hero__actions button:hover {
-  background: #9f4e39;
+  background: var(--blue-dark);
+}
+
+.auth-form > label > div:focus-within {
+  border-color: var(--login-jade);
+  box-shadow: 0 0 0 3px rgba(49, 89, 78, 0.12);
 }
 
 .showcase-hero__actions a {
@@ -11020,7 +11038,7 @@ summary:focus-visible {
 
 .showcase-footer > button:last-child,
 .auth-form label > div:focus-within {
-  border-color: var(--login-red);
+  border-color: var(--login-jade);
 }
 
 .auth-form input[type="checkbox"] {
@@ -11465,12 +11483,12 @@ summary:focus-visible {
 /* Password recovery */
 
 .recovery-page {
-  --login-blue: #59617e;
+  --login-blue: #5a766a;
   --login-ink: #17231d;
-  --login-jade: #2f6f62;
+  --login-jade: #31594e;
   --login-red: #b86147;
-  --recovery-blue: #2f5bd3;
-  --recovery-blue-dark: #2247ad;
+  --recovery-blue: #31594e;
+  --recovery-blue-dark: #24453a;
   --recovery-ink: #17211c;
   --recovery-muted: #5b6861;
   --recovery-line: #cad5ce;
@@ -11478,11 +11496,11 @@ summary:focus-visible {
   background:
     linear-gradient(
       90deg,
-      rgba(47, 91, 211, 0.045) 1px,
+      rgba(49, 89, 78, 0.045) 1px,
       transparent 1px
     ),
     linear-gradient(
-      rgba(47, 91, 211, 0.045) 1px,
+      rgba(49, 89, 78, 0.045) 1px,
       transparent 1px
     ),
     #eef3ef;
@@ -11673,7 +11691,7 @@ summary:focus-visible {
 
 .recovery-form > label > div:focus-within {
   border-color: var(--recovery-blue);
-  box-shadow: 0 0 0 3px rgba(47, 91, 211, 0.12);
+  box-shadow: 0 0 0 3px rgba(49, 89, 78, 0.12);
 }
 
 .recovery-form > label > div > svg {
@@ -12798,7 +12816,7 @@ summary:focus-visible {
 .account-email-form__fields > label > div:focus-within,
 .account-email-form__code input:focus {
   border-color: var(--blue);
-  box-shadow: 0 0 0 3px rgba(47, 91, 211, 0.1);
+  box-shadow: 0 0 0 3px rgba(49, 89, 78, 0.1);
 }
 
 .account-email-form__code {
@@ -13239,7 +13257,7 @@ summary:focus-visible {
 
 .verification-code__inputs input:focus {
   border-color: var(--recovery-blue);
-  box-shadow: 0 0 0 3px rgba(47, 91, 211, 0.12);
+  box-shadow: 0 0 0 3px rgba(49, 89, 78, 0.12);
 }
 
 .verification-form__notice {
@@ -13348,6 +13366,35 @@ summary:focus-visible {
 
 .verification-result__secondary:hover {
   color: var(--recovery-blue-dark);
+}
+
+.platform-brand__mark path {
+  stroke: #728078;
+}
+
+.platform-brand__mark .mark-node--one {
+  fill: #86a99a;
+}
+
+.platform-brand__mark .mark-node--two {
+  fill: #6f9585;
+}
+
+.platform-brand__mark .mark-node--three {
+  fill: #527d6d;
+}
+
+.platform-brand__mark .mark-node--four {
+  fill: #326453;
+}
+
+.platform-brand__name b {
+  color: var(--blue);
+  font-family: var(--mono);
+}
+
+.platform-brand__name strong {
+  font-family: var(--serif);
 }
 
 @media (max-width: 520px) {

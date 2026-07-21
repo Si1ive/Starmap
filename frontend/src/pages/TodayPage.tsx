@@ -3,20 +3,23 @@ import {
   ArrowRight,
   BookOpenCheck,
   CalendarDays,
-  Check,
+  ChevronDown,
+  ChevronRight,
+  CircleDot,
   Clock3,
   History,
+  Network,
   Play,
-  RotateCcw,
   Sparkles,
   Target,
 } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { todayTasks } from "../data/fixtures";
+import { outlineSubjects, todayTasks } from "../data/fixtures";
 import {
   Button,
   EmptyState,
   PageHeading,
+  SectionHeading,
   StatusMark,
 } from "../components/Primitives";
 
@@ -32,177 +35,120 @@ const memoryTopics = [
     title: "死锁必要条件",
     subject: "操作系统",
     retention: 78,
-    due: "周五 19:30",
+    statusLabel: "状态稳定",
     state: "stable",
     path: "M 76 74 C 164 82, 248 108, 330 145",
     x: "33%",
     y: "33%",
-    route: "/agent/plan?state=approval",
-    reason: "昨天已完成一次主动回忆，下一次复习间隔已经延长。",
+    route: "/agent/deadlock?state=complete",
+    reason: "已完成一次主动回忆，当前保持状态稳定。",
   },
   {
     id: "queue",
     title: "循环队列",
     subject: "数据结构",
     retention: 42,
-    due: "现在",
+    statusLabel: "建议巩固",
     state: "due",
     path: "M 126 72 C 274 88, 382 184, 548 310",
     x: "54.8%",
     y: "70.5%",
     route: "/agent/queue?state=complete",
-    reason: "昨天同类题连续错误 2 次，首次回忆窗口已经打开。",
+    reason: "同类题连续错误 2 次，建议继续完成一次无提示回忆。",
   },
   {
     id: "cache",
     title: "Cache 访问时间",
     subject: "组成原理",
     retention: 51,
-    due: "10:30",
+    statusLabel: "需要巩固",
     state: "due",
     path: "M 250 73 C 426 90, 548 174, 690 264",
     x: "69%",
     y: "60%",
     route: "/practice/queue-check?question=1",
-    reason: "计算路径仍有跳步，今天需要完成一次无提示回忆。",
+    reason: "计算路径仍有跳步，需要完成一次无提示回忆。",
   },
   {
     id: "interrupt",
     title: "中断与异常",
     subject: "组成原理",
     retention: 57,
-    due: "16:40",
+    statusLabel: "建议回顾",
     state: "due",
     path: "M 408 72 C 566 86, 700 142, 840 224",
     x: "84%",
     y: "51%",
     route: "/agent",
-    reason: "近两次混淆响应时机，傍晚将进入建议复习区。",
+    reason: "近两次混淆响应时机，建议重新核对触发条件。",
   },
 ] as const;
 
 const weekRhythm = [
   { day: "一", minutes: 72, height: 64, state: "done" },
   { day: "二", minutes: 96, height: 84, state: "done" },
-  { day: "三", minutes: 120, height: 100, state: "today" },
-  { day: "四", minutes: 80, height: 70, state: "future" },
-  { day: "五", minutes: 108, height: 90, state: "future" },
-  { day: "六", minutes: 45, height: 42, state: "future" },
-  { day: "日", minutes: 50, height: 46, state: "future" },
+  { day: "三", minutes: 120, height: 100, state: "done" },
+  { day: "四", minutes: 0, height: 6, state: "empty" },
+  { day: "五", minutes: 0, height: 6, state: "empty" },
+  { day: "六", minutes: 42, height: 38, state: "today" },
+  { day: "日", minutes: 0, height: 6, state: "future" },
 ] as const;
+
+const outlineStateTone = {
+  学习中: "success",
+  待巩固: "warning",
+  证据不足: "neutral",
+  未学习: "neutral",
+} as const;
 
 export default function TodayPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const [applied, setApplied] = useState(false);
   const [selectedMemoryId, setSelectedMemoryId] = useState("queue");
+  const [expandedSubjects, setExpandedSubjects] = useState(
+    outlineSubjects.map((subject) => subject.id),
+  );
   const isEmpty = searchParams.get("empty") === "1";
-  const isPreview = searchParams.get("preview") === "plan";
   const selectedMemory =
     memoryTopics.find((topic) => topic.id === selectedMemoryId) ??
     memoryTopics[1];
+  const allSubjectsExpanded =
+    expandedSubjects.length === outlineSubjects.length;
+
+  const toggleSubject = (id: string) => {
+    setExpandedSubjects((current) =>
+      current.includes(id)
+        ? current.filter((item) => item !== id)
+        : [...current, id],
+    );
+  };
+
+  const toggleAllSubjects = () => {
+    setExpandedSubjects(
+      allSubjectsExpanded ? [] : outlineSubjects.map((subject) => subject.id),
+    );
+  };
 
   if (isEmpty) {
     return (
       <div className="page page--narrow today-page">
         <PageHeading
-          description="强化阶段 · 还没有足够的学习记录"
-          eyebrow="7 月 15 日 · 星期三"
-          title="今天从建立第一份计划开始"
+          description="还没有足够的学习记录"
+          eyebrow={currentDateLabel()}
+          title="从一次对话开始"
         />
         <EmptyState
           action={
             <Button
               icon={<ArrowRight size={17} />}
-              onClick={() => navigate("/onboarding")}
+              onClick={() => navigate("/agent")}
             >
-              开始 10 分钟诊断
+              和 Agent 对话
             </Button>
           }
-          description="完成一组短诊断后，今日页会按考点证据安排讲解、练习与到期复习。"
-          title="还没有可执行的今日任务"
+          description="描述你正在学习的内容或遇到的问题，系统会根据后续对话和学习记录逐步形成建议。"
+          title="还没有学习记录"
         />
-      </div>
-    );
-  }
-
-  if (isPreview) {
-    return (
-      <div className="page page--wide today-page">
-        <PageHeading
-          actions={
-            <StatusMark tone={applied ? "success" : "warning"}>
-              {applied ? "已应用" : "等待确认"}
-            </StatusMark>
-          }
-          description="Agent 根据死锁连续错误 3 次提出调整。原计划会保留一个可撤销版本。"
-          eyebrow="计划版本 v12"
-          title={applied ? "本周计划已更新" : "确认这次计划调整"}
-        />
-
-        <section className="plan-preview">
-          <div className="plan-preview__header">
-            <div>
-              <span>影响范围</span>
-              <strong>只调整周四 20 分钟</strong>
-            </div>
-            <div>
-              <span>可撤销至</span>
-              <strong>7 月 17 日 23:59</strong>
-            </div>
-          </div>
-          <div className="plan-diff">
-            <div className="plan-diff__line plan-diff__line--remove">
-              <span>移除</span>
-              <strong>周四 · 数据结构排序练习</strong>
-              <small>20 分钟</small>
-            </div>
-            <div className="plan-diff__line plan-diff__line--add">
-              <span>新增</span>
-              <strong>周四 · 操作系统死锁专项</strong>
-              <small>20 分钟</small>
-            </div>
-            <div className="plan-diff__line">
-              <span>保持</span>
-              <strong>其余 9 项任务不变</strong>
-              <small>97 分钟</small>
-            </div>
-          </div>
-          <div className="plan-preview__footer">
-            {applied ? (
-              <>
-                <Button
-                  icon={<RotateCcw size={17} />}
-                  onClick={() => setApplied(false)}
-                  tone="secondary"
-                >
-                  撤销本次调整
-                </Button>
-                <Button
-                  icon={<ArrowRight size={17} />}
-                  onClick={() => navigate("/today")}
-                >
-                  查看更新后的今日
-                </Button>
-              </>
-            ) : (
-              <>
-                <Button
-                  onClick={() => navigate("/agent/plan?state=approval")}
-                  tone="quiet"
-                >
-                  返回审批
-                </Button>
-                <Button
-                  icon={<Check size={17} />}
-                  onClick={() => setApplied(true)}
-                >
-                  应用这次调整
-                </Button>
-              </>
-            )}
-          </div>
-        </section>
       </div>
     );
   }
@@ -211,8 +157,8 @@ export default function TodayPage() {
     <div className="page today-page today-page--visual">
       <header className="today-visual-header">
         <div>
-          <p>7 月 15 日 · 星期三 · 强化阶段</p>
-          <h1>今天，3 个记忆窗口正在打开</h1>
+          <p>{currentDateLabel()} · 强化阶段</p>
+          <h1>今天，3 个考点建议继续巩固</h1>
         </div>
         <div className="today-visual-snapshot" aria-label="今日学习概览">
           <span>
@@ -225,17 +171,17 @@ export default function TodayPage() {
           </span>
           <span className="today-visual-snapshot__time">
             <Clock3 size={16} />
-            <strong>120</strong>
-            <small>分钟可用</small>
+            <strong>42</strong>
+            <small>分钟已记录</small>
           </span>
         </div>
       </header>
 
-      <section className="memory-landscape">
+      <section className="memory-landscape" id="memory-landscape">
         <header className="memory-landscape__heading">
           <div>
             <span>记忆保持轨迹</span>
-            <h2>在曲线越过临界线前，把它重新想起来。</h2>
+            <h2>根据已有学习证据，判断下一步是否需要巩固。</h2>
           </div>
           <div className="memory-legend" aria-label="图例">
             <span>
@@ -244,17 +190,17 @@ export default function TodayPage() {
             </span>
             <span>
               <i className="memory-legend__line memory-legend__line--threshold" />{" "}
-              建议复习线
+              建议巩固线
             </span>
             <span>
-              <i className="memory-legend__dot" /> 下一窗口
+              <i className="memory-legend__dot" /> 学习状态
             </span>
           </div>
         </header>
 
         <div className="memory-chart">
           <svg
-            aria-label="过去七天到未来三天的考点记忆保持率曲线"
+            aria-label="根据近期学习记录生成的考点记忆保持率曲线"
             preserveAspectRatio="none"
             role="img"
             viewBox="0 0 1000 440"
@@ -311,12 +257,12 @@ export default function TodayPage() {
           <span className="memory-chart__axis memory-chart__axis--critical">
             临界
           </span>
-          <span className="memory-chart__threshold-label">55% · 建议复习</span>
-          <span className="memory-chart__now-label">现在</span>
+          <span className="memory-chart__threshold-label">55% · 建议巩固</span>
+          <span className="memory-chart__now-label">当前状态</span>
 
           {memoryTopics.map((topic) => (
             <button
-              aria-label={`${topic.title}，当前保持率 ${topic.retention}%，复习时间 ${topic.due}`}
+              aria-label={`${topic.title}，当前保持率 ${topic.retention}%，${topic.statusLabel}`}
               aria-pressed={selectedMemory.id === topic.id}
               className={`memory-node memory-node--${topic.id} ${
                 selectedMemory.id === topic.id ? "is-selected" : ""
@@ -329,17 +275,17 @@ export default function TodayPage() {
               <span className="memory-node__dot" />
               <span className="memory-node__label">
                 <strong>{topic.title}</strong>
-                <small>{topic.due}</small>
+                <small>{topic.statusLabel}</small>
               </span>
             </button>
           ))}
 
           <div className="memory-chart__dates" aria-hidden="true">
-            <span>7 月 11 日</span>
-            <span>7 月 13 日</span>
-            <span>今天</span>
-            <span>明天</span>
-            <span>周六</span>
+            <span>较早记录</span>
+            <span>最近记录</span>
+            <span>当前状态</span>
+            <span>建议关注</span>
+            <span>待新证据</span>
           </div>
         </div>
 
@@ -351,23 +297,14 @@ export default function TodayPage() {
           </div>
           <div className="memory-focus__copy">
             <span>
-              {selectedMemory.subject} ·{" "}
-              {selectedMemory.due === "现在"
-                ? "窗口已打开"
-                : `建议 ${selectedMemory.due} 复习`}
+              {selectedMemory.subject} · {selectedMemory.statusLabel}
             </span>
             <h2>{selectedMemory.title}</h2>
             <p>{selectedMemory.reason}</p>
           </div>
           <div className="memory-focus__action">
             <span>
-              <Clock3 size={15} /> 预计{" "}
-              {selectedMemory.id === "cache"
-                ? 25
-                : selectedMemory.id === "interrupt"
-                  ? 18
-                  : 12}{" "}
-              分钟
+              <History size={15} /> 基于最近学习记录
             </span>
             <Button
               icon={<Play size={16} />}
@@ -382,10 +319,10 @@ export default function TodayPage() {
       <section className="today-windows">
         <header>
           <div>
-            <span>今日复习窗口</span>
-            <h2>顺着记忆下降的速度安排，而不是堆满待办。</h2>
+            <span>建议继续巩固</span>
+            <h2>根据学习证据排序，不预设具体学习时间。</h2>
           </div>
-          <strong>55 分钟</strong>
+          <strong>3 个考点</strong>
         </header>
         <div className="today-window-list">
           {memoryTopics
@@ -402,7 +339,7 @@ export default function TodayPage() {
                   onClick={() => setSelectedMemoryId(topic.id)}
                   type="button"
                 >
-                  <span className="today-window__time">{topic.due}</span>
+                  <span className="today-window__time">{topic.statusLabel}</span>
                   <span
                     className={`today-window__icon today-window__icon--${topic.id}`}
                   >
@@ -429,9 +366,9 @@ export default function TodayPage() {
           <header>
             <span>
               <small>本周节奏</small>
-              <strong>6 小时 42 分</strong>
+              <strong>已记录 5 小时 30 分</strong>
             </span>
-            <em>71%</em>
+            <em>4 天</em>
           </header>
           <div className="week-rhythm__bars" aria-label="本周每日学习时长">
             {weekRhythm.map((item) => (
@@ -441,14 +378,14 @@ export default function TodayPage() {
               >
                 <i
                   style={{ height: `${item.height}%` }}
-                  title={`${item.minutes} 分钟`}
+                  title={item.minutes ? `${item.minutes} 分钟` : "尚无学习记录"}
                 />
                 <small>{item.day}</small>
               </span>
             ))}
           </div>
           <p>
-            <Target size={15} /> 按当前节奏，周五可完成队列与存储系统两组专项。
+            <Clock3 size={15} /> 学习时长只记录实际发生，不预设未来安排。
           </p>
         </div>
 
@@ -469,6 +406,131 @@ export default function TodayPage() {
           <ArrowRight size={18} />
         </button>
       </section>
+
+      <section className="progress-outline" id="outline-progress">
+        <div className="progress-outline__header">
+          <SectionHeading
+            meta="全局学习进度与今日巩固任务统一展示"
+            title="大纲进度"
+          />
+          <div className="map-legend">
+            <span><i className="is-learning" /> 学习中</span>
+            <span><i className="is-review" /> 待巩固</span>
+            <span><i className="is-unknown" /> 证据不足</span>
+          </div>
+        </div>
+
+        <div className="map-summary">
+          <div>
+            <span><Target size={18} /></span>
+            <p>本周聚焦</p>
+            <strong>3 组专项</strong>
+            <small>队列、存储系统、中断</small>
+          </div>
+          <div>
+            <span><CircleDot size={18} /></span>
+            <p>正在学习</p>
+            <strong>14 个考点</strong>
+            <small>其中 6 个等待验证</small>
+          </div>
+          <div>
+            <span><History size={18} /></span>
+            <p>到期复习</p>
+            <strong>13 个考点</strong>
+            <small>今天优先处理 4 个</small>
+          </div>
+          <div>
+            <span><Network size={18} /></span>
+            <p>证据不足</p>
+            <strong>8 个考点</strong>
+            <small>不显示推测掌握率</small>
+          </div>
+        </div>
+
+        <div className="outline-tree">
+          <div className="outline-tree__toolbar">
+            <span>按学科展开大纲章节，默认显示完整目录</span>
+            <button
+              className="outline-toggle-all"
+              onClick={toggleAllSubjects}
+              type="button"
+            >
+              <ChevronDown className={allSubjectsExpanded ? "is-open" : ""} size={16} />
+              {allSubjectsExpanded ? "收起全部" : "展开全部"}
+            </button>
+          </div>
+          {outlineSubjects.map((subject) => {
+            const isExpanded = expandedSubjects.includes(subject.id);
+            return (
+              <div className="subject-block" key={subject.id}>
+                <button
+                  className="subject-block__header"
+                  onClick={() => toggleSubject(subject.id)}
+                  type="button"
+                >
+                  <span className="subject-block__toggle">
+                    <ChevronDown className={isExpanded ? "is-open" : ""} size={18} />
+                  </span>
+                  <span className="subject-block__name">
+                    <strong>{subject.name}</strong>
+                    <small>{subject.chapters.length} 个章节 · {subject.progress}</small>
+                  </span>
+                  <span className="subject-block__stat">
+                    <strong>{subject.active}</strong>
+                    <small>学习中</small>
+                  </span>
+                  <span className="subject-block__stat">
+                    <strong>{subject.review}</strong>
+                    <small>待复习</small>
+                  </span>
+                  <ChevronRight size={17} />
+                </button>
+                {isExpanded ? (
+                  <div className="chapter-list">
+                    {subject.chapters.map((chapter) => (
+                      <button
+                        key={chapter.name}
+                        onClick={() => {
+                          if (chapter.name === "栈、队列和数组") {
+                            setSelectedMemoryId("queue");
+                            document
+                              .getElementById("memory-landscape")
+                              ?.scrollIntoView({ behavior: "smooth", block: "start" });
+                          }
+                        }}
+                        type="button"
+                      >
+                        <span className="chapter-list__line" />
+                        <span className="chapter-list__node" />
+                        <strong>{chapter.name}</strong>
+                        <StatusMark
+                          tone={
+                            outlineStateTone[
+                              chapter.state as keyof typeof outlineStateTone
+                            ]
+                          }
+                        >
+                          {chapter.state}
+                        </StatusMark>
+                        <small>{chapter.evidence}</small>
+                        <ChevronRight size={16} />
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      </section>
     </div>
   );
+}
+
+function currentDateLabel() {
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "long",
+    day: "numeric",
+    weekday: "long",
+  }).format(new Date());
 }
