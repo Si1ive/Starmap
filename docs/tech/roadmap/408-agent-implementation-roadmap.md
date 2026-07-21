@@ -19,6 +19,164 @@
 
  ---
 
+
+## 0.5 架构规划：现有代码与新模块的关系
+
+### 0.5.1 现有代码结构分析
+
+当前后端（`backend/app/`）结构如下：
+
+```text
+backend/app/
+├── main.py                    # FastAPI 入口：路由注册、生命周期管理
+├── core/                      # 配置、日志、监控
+│   ├── config.py              # 系统配置（API key、数据库 URL）
+│   ├── logging.py             # 结构化日志
+│   └── monitoring.py          # 基础监控指标
+├── db/                        # 数据库连接（复用，不改动）
+│   ├── mysql.py               # SQLAlchemy async engine + session
+│   ├── redis.py               # Redis 客户端（用于旧 Chat session 缓存）
+│   └── qdrant.py              # Qdrant 向量库
+├── models/                    # ORM 模型 + Pydantic Transaction Schema
+│   ├── mysql_models.py        # 现有 CrawlTask、CrawlLog、ChatSession 等
+│   └── transaction.py         # ChatRequest、ChatResponse、ChatHistory
+├── infrastructure/            # 共享基础设施
+│   └── ai/
+│       ├── llm_client.py      # 老版 OpenAI API（openai.ChatCompletion）
+│       └── embedding_service.py # 向量化服务
+├── modules/                   # 业务模块
+│   ├── chat/                  # 现有聊天（同步 POST，无 run/step/event）
+│   │   ├── router.py          # POST /chat、GET /chat/{session_id}/history
+│   │   ├── service.py         # ChatService（Redis session + 同步生成）
+│   │   └── retrieval_context.py # RAG 上下文构建
+│   ├── identity/              # 认证、授权（复用，不改动）
+│   ├── retrieval/             # 检索引擎（dense/sparse/hybrid，可复用）
+│   │   ├── service.py         # RetrievalService（async，接受 AsyncSession）
+│   │   ├── search_engine.py   # 检索主逻辑
+│   │   └── segment_service.py # 分片服务
+│   ├── monitoring/            # LLM 调用监控（可复用）
+│   │   └── llm_calls.py       # LLMCallRecorder（上下文管理器）
+│   ├── corpus/                # 语料管理（与 Agent 无关，不改动）
+│   ├── crawler/               # 爬虫管理（与 Agent 无关，不改动）
+│   └── operations/            # 运维管理（与 Agent 无关，不改动）
+```
+
+### 0.5.2 新增功能与现有代码的关系
+
+| 新增功能 | 依赖现有模块 | 关系说明 | 调整方式 |
+|---------|-------------|---------|---------|
+| **Thread 管理** | `identity`（用户认证） | 需要 `user_id` 关联 | 复用 identity 的 `get_current_user` |
+| **Run 执行** | `llm_client.py`（旧版） | 当前用 `openai.ChatCompletion`（老 API），需新增 `model_runtime` | 不改动旧版，新增 Pydantic AI 封装 |
+| **RAG 检索（Tool）** | `retrieval/service.py` | 已有 async `RetrievalService.search_with_outline_expansion` | 复用，包一层 Tool adapter |
+| **LLM 调用记录** | `monitoring/llm_calls.py` | 已有 `LLMCallRecorder`（上下文管理器） | 复用，在 Pydantic AI adapter 中接入 |
+| **数据库连接** | `db/mysql.py`、`db/redis.py` | 已有 async session manager | 直接复用，新增表共用同一 engine |
+| **向量存储** | `db/qdrant.py` | 已有 `qdrant_manager` | 复用 |
+| **认证中间件** | `identity/dependencies.py` | 已有 `get_current_user` | 复用 |
+
+**结论**：**不修改任何现有模块代码**。新增模块独立开发，仅通过依赖注入调用现有服务。
+
+### 0.5.3 数据表规划（Alembic 迁移）
+
+新增数据表统一放在 `models/mysql_models.py` 末尾，按命名空间前缀 `agent_` 区分：
+
+| 表名 | 用途 | 阶段 |
+|------|------|------|
+| `agent_threads` | 会话容器（用户级） | P0 |
+| `agent_runs` | 单次执行（工作流实例） | P0 |
+| `agent_steps` | 节点/步骤 | P0 |
+| `agent_events` | 事件流（sequence 单调递增） | P0 |
+| `agent_checkpoints` | 断点状态（崩溃恢复） | P0 |
+| `agent_run_outbox` | 任务唤醒（Worker 扫描） | P0 |
+| `agent_loop_turns` | Loop 决策与 observation 持久化 | P0 |
+| `agent_inputs` | 等待态用户输入 | P1 |
+| `agent_artifacts` | 渲染产物 | P0 |
+| `agent_approvals` | 计划审批 | P1 |
+
+**迁移策略**：新增 migration 文件（如 `alembic revision -m "add_agent_tables"`），不影响现有表。旧 `chat_sessions` 等表完全不动。
+
+### 0.5.4 P0 代码模块划分与文件位置
+
+```text
+backend/app/
+├── main.py                          # 新增注册：agent_router、workspace_router
+├── models/mysql_models.py           # 新增：agent_* ORM 模型
+├── models/transaction.py            # 新增：AgentRequest、AgentEvent 等 Pydantic Schema
+├── infrastructure/ai/
+│   ├── llm_client.py               # 不动（旧版保持运行）
+│   └── model_runtime/              # 新增 P0：Pydantic AI 运行时
+│       ├── __init__.py
+│       ├── adapter.py              # OpenAI 提供商适配
+│       ├── schema.py               # 结构化输出 Schema（action/reasoning）
+│       └── recorder.py             # 复用 LLMCallRecorder 的 wrapper
+├── modules/
+│   ├── workspace/                   # 新增 P0：线程/产物管理
+│   │   ├── __init__.py
+│   │   ├── router.py               # POST /threads、GET /threads/{id}
+│   │   ├── service.py              # ThreadService、ArtifactService
+│   │   └── models.py               # Thread、Artifact ORM + Schema
+│   └── agent/                       # 新增 P0：核心 Runtime
+│       ├── __init__.py
+│       ├── router.py               # POST /runs、GET /runs/{id}、SSE /runs/{id}/events
+│       ├── service.py              # AgentService（业务入口，编排 run 创建）
+│       ├── models.py               # Run、Step、Event、Outbox ORM + Schema
+│       ├── worker.py               # Worker：租约获取 + 单节点执行循环
+│       ├── state_machine.py        # 基础状态转移（queued → running → completed/failed）
+│       ├── events.py               # 事件追加 + SSE 序列化
+│       ├── checkpoints.py          # 断点读写（context → JSON）
+│       ├── outbox.py               # Outbox 投递 + 扫描恢复
+│       ├── tools/                  # P0：注册表 + retrieve_knowledge 适配器
+│       │   ├── __init__.py
+│       │   ├── registry.py         # Tool 注册表（name → execute func）
+│       │   └── retrieve_knowledge.py # 调用 RetrievalService 的 adapter
+│       ├── model_runtime/          # P0：Pydantic AI 封装
+│       │   ├── __init__.py
+│       │   ├── adapter.py          # OpenAI 单提供商适配（含 timeout/retry）
+│       │   ├── schema.py           # Loop action Schema（Pydantic model）
+│       │   └── policy_gate.py      # 白名单校验（只允许 retrieve_knowledge）
+│       └── workflows/              # P0：仅 conversation + explain
+│           ├── __init__.py
+│           ├── contracts.py          # NodeResult、WorkflowDefinition 基类
+│           ├── registry.py           # 硬编码注册（后续迁移到 DB）
+│           ├── engine.py             # 单节点执行 + 状态转移
+│           ├── explain.py            # explain@v1 节点和图
+│           └── conversation.py       # conversation@v1 节点和图
+```
+
+### 0.5.5 关键复用策略
+
+| 能力 | 现有代码位置 | 复用方式 |
+|------|-------------|---------|
+| 用户认证 | `modules/identity/dependencies.py` → `get_current_user` | 作为所有 Agent API 的 `Depends` |
+| 数据库连接 | `db/mysql.py` → `mysql_client.session()` | 所有 Agent Service 注入 `AsyncSession` |
+| RAG 检索 | `modules/retrieval/service.py` → `RetrievalService` | Agent Tool adapter 调用（需要 `AsyncSession`） |
+| LLM 调用记录 | `modules/monitoring/llm_calls.py` → `LLMCallRecorder` | 在 `model_runtime/recorder.py` 中包装 Pydantic AI 调用 |
+| 向量 Embedding | `infrastructure/ai/embedding_service.py` | RetrievalService 内部已使用，Agent 不直接调用 |
+| Redis（Session） | `db/redis.py` | 旧 Chat 继续使用；Agent 不用 Redis（用 MySQL outbox） |
+
+### 0.5.6 边界约束
+
+1. **新旧 Chat 完全隔离**：
+   - 旧 Chat API（`POST /chat`）继续使用 `chat_sessions` 表和 Redis 缓存
+   - 新 Agent API（`POST /runs`）使用 `agent_threads` / `agent_runs` 表
+   - 两者不共享表、不共享 Redis key
+   - 最终（P2）旧 Chat 迁移由独立任务完成，不在 P0/P1 阻塞
+
+2. **模块单向依赖**：
+   - Agent 模块可以依赖 `identity`、`retrieval`、`monitoring`
+   - 现有模块**不允许**依赖 `agent` 模块
+   - 通过 Service 层接口而非直接 ORM 调用来交互
+
+3. **事务边界**：
+   - Agent 内部：Run 状态更新 + Event 写入 + Outbox 投递，在同一个 DB 事务内
+   - 跨模块：Agent 调用 RetrievalService 时，各自管理自己的事务边界
+   - 监控：LLM 调用记录与业务调用在同一 HTTP 请求内，但使用独立 session（现有 `LLMCallRecorder` 行为）
+
+4. **模型迁移路线**：
+   - P0：新增 `model_runtime/`（Pydantic AI），旧 `llm_client.py` 保持运行
+   - P1：逐步将旧 Chat 中的 `ChatLLMClient` 迁移到 `model_runtime`
+   - P2：完全移除 `llm_client.py`，统一走 `model_runtime`
+
+
  ## 1. P0：最小可用核心（MVP）
 
  ### 1.1 目标
