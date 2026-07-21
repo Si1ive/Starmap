@@ -159,6 +159,7 @@ class LoginService:
 
         locked_user = await self.db.scalar(
             select(User)
+            .options(selectinload(User.password_credential))
             .where(User.id == user.id)
             .with_for_update()
             .execution_options(populate_existing=True)
@@ -412,7 +413,10 @@ class SessionService:
 
         user = await self.db.scalar(
             select(User)
-            .options(selectinload(User.profile))
+            .options(
+                selectinload(User.profile),
+                selectinload(User.password_credential),
+            )
             .where(User.id == user_id)
             .with_for_update()
             .execution_options(populate_existing=True)
@@ -500,7 +504,10 @@ class SessionService:
             raise ValueError("invalid external authentication method")
         user = await self.db.scalar(
             select(User)
-            .options(selectinload(User.profile))
+            .options(
+                selectinload(User.profile),
+                selectinload(User.password_credential),
+            )
             .where(User.id == user_id)
             .with_for_update()
             .execution_options(populate_existing=True)
@@ -593,6 +600,7 @@ class SessionService:
             select(AuthSession)
             .options(
                 selectinload(AuthSession.user).selectinload(User.profile),
+                selectinload(AuthSession.user).selectinload(User.password_credential),
             )
             .where(AuthSession.token_hash == token_hash)
         )

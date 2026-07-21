@@ -41,6 +41,25 @@ def test_verification_email_renders_branded_text_and_escaped_html():
     assert "token=a&next=<profile>" not in rendered.html_body
 
 
+def test_email_link_message_requires_verification_before_claiming_binding():
+    rendered = render_auth_email(
+        AuthEmail(
+            template_id="link-email",
+            recipient="learner@example.com",
+            variables={
+                "code": "654321",
+                "verification_url": "https://learn.example.com/account?email_token=test",
+            },
+            idempotency_key="link-email:test",
+        )
+    )
+
+    assert rendered.subject == "确认绑定你的 408 学习工作台邮箱"
+    assert "654321" in rendered.text_body
+    assert "仅用于启用邮箱密码登录" in rendered.text_body
+    assert "确认绑定" in rendered.html_body
+
+
 @pytest.mark.asyncio
 async def test_smtp_sender_uses_starttls_auth_and_multipart_email(monkeypatch):
     smtp_sessions = []

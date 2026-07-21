@@ -259,6 +259,30 @@ def render_auth_email(message: AuthEmail) -> RenderedAuthEmail:
             ),
         )
 
+    if message.template_id == "link-email":
+        code = _required_variable(message, "code")
+        verification_url = _required_variable(message, "verification_url")
+        return RenderedAuthEmail(
+            subject="确认绑定你的 408 学习工作台邮箱",
+            text_body=(
+                "你好，\n\n"
+                f"你的邮箱绑定验证码是：{code}\n"
+                "验证码仅用于启用邮箱密码登录。\n\n"
+                "也可以打开下面的链接完成绑定：\n"
+                f"{verification_url}\n\n"
+                "如果不是你本人操作，请忽略这封邮件。"
+            ),
+            html_body=_auth_email_html(
+                eyebrow="EMAIL LOGIN / 邮箱登录",
+                title="确认绑定邮箱",
+                description="输入下面的 6 位数字码，或直接打开确认链接。",
+                code=code,
+                action_label="确认绑定",
+                action_url=verification_url,
+                footnote="验证通过后，该邮箱和你设置的密码才可用于登录。",
+            ),
+        )
+
     if message.template_id == "reset-password":
         reset_url = _required_variable(message, "reset_url")
         return RenderedAuthEmail(

@@ -332,7 +332,7 @@ async def test_new_verified_github_identity_creates_user_and_session(db_session)
     consents = (await db_session.scalars(select(UserConsent))).all()
     session = await db_session.scalar(select(AuthSession))
     assert outcome.new_user is True
-    assert outcome.return_path == "/onboarding"
+    assert outcome.return_path == "/agent/thread-1?focus=question"
     assert user.status == "active"
     assert user.email_normalized == "learner@example.com"
     assert user.email_verified_at == NOW

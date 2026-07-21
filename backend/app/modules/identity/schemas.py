@@ -82,6 +82,33 @@ class ConfirmEmailVerificationRequest(BaseModel):
         return self
 
 
+class StartEmailLinkRequest(BaseModel):
+    """Create an email-login credential after ownership verification."""
+
+    email: EmailStr
+    password: str = Field(min_length=1, max_length=128)
+    password_confirmation: str = Field(min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def validate_password_confirmation(self) -> "StartEmailLinkRequest":
+        if self.password != self.password_confirmation:
+            raise ValueError("两次输入的密码不一致")
+        return self
+
+
+class ConfirmEmailLinkRequest(BaseModel):
+    """Confirm an email-login binding with a link token or code."""
+
+    token: Optional[str] = Field(default=None, min_length=20, max_length=256)
+    code: Optional[str] = Field(default=None, pattern=r"^\d{6}$")
+
+    @model_validator(mode="after")
+    def require_exactly_one_credential(self) -> "ConfirmEmailLinkRequest":
+        if (self.token is None) == (self.code is None):
+            raise ValueError("必须且只能提交一种邮箱绑定凭据")
+        return self
+
+
 class ForgotPasswordRequest(BaseModel):
     """Request a generic password-reset response for one email."""
 

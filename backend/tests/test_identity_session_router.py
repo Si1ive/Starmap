@@ -10,8 +10,14 @@ from fastapi.testclient import TestClient
 from app.core.config import settings
 from app.middleware.error_handler import APIException, api_exception_handler
 from app.modules.identity.dependencies import get_session_service
+from app.modules.identity.email import get_email_sender
+from app.modules.identity.email_link import EmailLinkDelivery, EmailLinkOutcome
 from app.modules.identity.rate_limit import get_auth_rate_limiter
-from app.modules.identity.router import get_login_service, router
+from app.modules.identity.router import (
+    get_email_link_service,
+    get_login_service,
+    router,
+)
 from app.modules.identity.security import csrf_token_digest
 from app.modules.identity.session import (
     AuthenticatedSession,
@@ -112,12 +118,40 @@ class RecordingRateLimiter:
         self.calls.append((action, list(buckets)))
 
 
+class StubEmailLinkService:
+    def __init__(self):
+        self.calls = []
+        self.delivery = EmailLinkDelivery(
+            recipient="Bound.Email@example.com",
+            challenge_id=uuid.UUID("01981b38-2700-7000-8000-000000000024"),
+            link_token="email-link-secret-with-enough-entropy",
+            code="654321",
+        )
+
+    async def start(self, payload, current, context):
+        self.calls.append(("start", payload, current, context))
+        return self.delivery
+
+    async def confirm(self, payload, current, context):
+        self.calls.append(("confirm", payload, current, context))
+        return EmailLinkOutcome(email=self.delivery.recipient)
+
+
+class RecordingEmailSender:
+    def __init__(self):
+        self.messages = []
+
+    async def enqueue(self, message):
+        self.messages.append(message)
+
+
 def current_session():
     user = SimpleNamespace(
         id=uuid.UUID("01981b38-2700-7000-8000-000000000021"),
         email_display="Learner@example.com",
         email_normalized="learner@example.com",
         email_verified_at=NOW,
+        password_credential=SimpleNamespace(),
     )
     profile = SimpleNamespace(
         display_name="测试学习者",
@@ -155,6 +189,26 @@ def build_client():
     app.dependency_overrides[get_auth_rate_limiter] = lambda: limiter
     client = TestClient(app, headers={"Origin": TRUSTED_ORIGIN})
     return client, login_service, session_service, limiter
+
+
+def build_email_link_client():
+    app = FastAPI()
+    app.add_exception_handler(APIException, api_exception_handler)
+    app.include_router(router, prefix="/api/v1")
+    current = current_session()
+    current.user.password_credential = None
+    current.session.auth_method = "github"
+    session_service = StubSessionService(current)
+    email_link_service = StubEmailLinkService()
+    limiter = RecordingRateLimiter()
+    sender = RecordingEmailSender()
+    app.dependency_overrides[get_session_service] = lambda: session_service
+    app.dependency_overrides[get_email_link_service] = lambda: email_link_service
+    app.dependency_overrides[get_auth_rate_limiter] = lambda: limiter
+    app.dependency_overrides[get_email_sender] = lambda: sender
+    client = TestClient(app, headers={"Origin": TRUSTED_ORIGIN})
+    client.cookies.set(settings.AUTH_SESSION_COOKIE_NAME, SESSION_TOKEN)
+    return client, email_link_service, limiter, sender
 
 
 def login_body(**overrides):
@@ -247,9 +301,86 @@ def test_me_requires_server_session_and_returns_current_user():
 
     assert response.status_code == 200
     assert response.json()["data"]["user"]["email"] == "Learner@example.com"
+    assert response.json()["data"]["user"]["email_login_enabled"] is True
     assert response.json()["data"]["csrf_token"] == CSRF_TOKEN
     assert response.headers["cache-control"] == "no-store"
     assert session_service.authenticate_calls[-1][0] == SESSION_TOKEN
+
+
+def test_me_does_not_treat_a_github_contact_email_as_email_login():
+    client, _, session_service, _ = build_client()
+    session_service.current.user.password_credential = None
+    session_service.current.session.auth_method = "github"
+    client.cookies.set(settings.AUTH_SESSION_COOKIE_NAME, SESSION_TOKEN)
+
+    response = client.get("/api/v1/auth/me")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["user"]["email"] == "Learner@example.com"
+    assert response.json()["data"]["user"]["email_verified"] is True
+    assert response.json()["data"]["user"]["email_login_enabled"] is False
+
+
+def test_email_link_start_requires_csrf_and_only_sends_secrets_by_email():
+    client, service, limiter, sender = build_email_link_client()
+    body = {
+        "email": "Bound.Email@Example.com",
+        "password": "correct horse battery staple",
+        "password_confirmation": "correct horse battery staple",
+    }
+
+    missing_csrf = client.post("/api/v1/auth/email-link/start", json=body)
+    assert missing_csrf.status_code == 403
+    assert missing_csrf.json()["code"] == "CSRF_INVALID"
+    assert service.calls == []
+    assert sender.messages == []
+
+    response = client.post(
+        "/api/v1/auth/email-link/start",
+        json=body,
+        headers={"X-CSRF-Token": CSRF_TOKEN},
+    )
+
+    assert response.status_code == 202
+    assert response.json()["data"] == {
+        "verification_required": True,
+        "resend_after_seconds": 60,
+    }
+    assert service.delivery.code not in response.text
+    assert service.delivery.link_token not in response.text
+    assert len(sender.messages) == 1
+    message = sender.messages[0]
+    assert message.template_id == "link-email"
+    assert message.recipient == service.delivery.recipient
+    assert message.variables["code"] == service.delivery.code
+    assert service.delivery.link_token in message.variables["verification_url"]
+    assert limiter.calls[0][0] == "email-link-start"
+    assert {bucket.dimension for bucket in limiter.calls[0][1]} == {
+        "user",
+        "email",
+        "ip",
+    }
+    assert response_has_no_store(response)
+
+
+def test_email_link_confirm_requires_csrf_and_reports_verified_binding():
+    client, service, limiter, _ = build_email_link_client()
+
+    response = client.post(
+        "/api/v1/auth/email-link/confirm",
+        json={"code": service.delivery.code},
+        headers={"X-CSRF-Token": CSRF_TOKEN},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {
+        "linked": True,
+        "email": service.delivery.recipient,
+    }
+    assert service.calls[0][0] == "confirm"
+    assert service.calls[0][1].code == service.delivery.code
+    assert limiter.calls[0][0] == "email-link-confirm"
+    assert response_has_no_store(response)
 
 
 def test_logout_rejects_untrusted_origin_before_session_lookup():

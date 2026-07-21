@@ -20,12 +20,6 @@ from app.modules.identity.anti_bot import (
     AntiBotVerifier,
     get_anti_bot_verifier,
 )
-from app.modules.identity.email import (
-    AuthEmail,
-    EmailDeliveryUnavailable,
-    EmailSender,
-    get_email_sender,
-)
 from app.modules.identity.context import auth_request_context
 from app.modules.identity.dependencies import (
     AUTH_NO_STORE_HEADERS,
@@ -34,11 +28,21 @@ from app.modules.identity.dependencies import (
     require_current_session,
     validate_json_origin,
 )
-from app.modules.identity.rate_limit import (
-    AuthRateLimiter,
-    RateLimitBucket,
-    RateLimitExceeded,
-    get_auth_rate_limiter,
+from app.modules.identity.email import (
+    AuthEmail,
+    EmailDeliveryUnavailable,
+    EmailSender,
+    get_email_sender,
+)
+from app.modules.identity.email_link import (
+    EmailLinkDelivery,
+    EmailLinkFlowError,
+    EmailLinkService,
+)
+from app.modules.identity.github_oauth import (
+    GitHubOAuthClient,
+    GitHubOAuthFlowError,
+    GitHubOAuthService,
 )
 from app.modules.identity.password_reset import (
     PasswordResetFlowError,
@@ -46,10 +50,11 @@ from app.modules.identity.password_reset import (
     PasswordResetRequestOutcome,
     PasswordResetService,
 )
-from app.modules.identity.github_oauth import (
-    GitHubOAuthClient,
-    GitHubOAuthFlowError,
-    GitHubOAuthService,
+from app.modules.identity.rate_limit import (
+    AuthRateLimiter,
+    RateLimitBucket,
+    RateLimitExceeded,
+    get_auth_rate_limiter,
 )
 from app.modules.identity.registration import (
     RegistrationFlowError,
@@ -57,14 +62,16 @@ from app.modules.identity.registration import (
     RegistrationService,
 )
 from app.modules.identity.schemas import (
+    ConfirmEmailLinkRequest,
     ConfirmEmailVerificationRequest,
     ForgotPasswordRequest,
     GitHubOAuthLinkStartRequest,
     GitHubOAuthStartRequest,
     LoginRequest,
     RegisterRequest,
-    ResetPasswordRequest,
     ResendEmailVerificationRequest,
+    ResetPasswordRequest,
+    StartEmailLinkRequest,
 )
 from app.modules.identity.security import (
     PasswordService,
@@ -119,6 +126,15 @@ def get_password_reset_service(
     """Build the request-scoped password-reset service."""
 
     return PasswordResetService(db, password_service)
+
+
+def get_email_link_service(
+    db: AsyncSession = Depends(get_db),
+    password_service: PasswordService = Depends(get_password_service),
+) -> EmailLinkService:
+    """Build the request-scoped email-login binding service."""
+
+    return EmailLinkService(db, password_service)
 
 
 def get_github_oauth_service(
@@ -474,6 +490,98 @@ async def logout(
 
 
 @router.post(
+    "/email-link/start",
+    response_model=ApiResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def start_email_link(
+    payload: StartEmailLinkRequest,
+    request: Request,
+    response: Response,
+    current: AuthenticatedSession = Depends(require_csrf_session),
+    service: EmailLinkService = Depends(get_email_link_service),
+    rate_limiter: AuthRateLimiter = Depends(get_auth_rate_limiter),
+    email_sender: EmailSender = Depends(get_email_sender),
+) -> ApiResponse:
+    """Send a verification challenge before enabling email login."""
+
+    context = auth_request_context(request)
+    normalized_email, _ = normalize_email(str(payload.email))
+    await _enforce_rate_limits(
+        rate_limiter,
+        "email-link-start",
+        [
+            RateLimitBucket("user", str(current.user.id), 5, 3600),
+            RateLimitBucket("email", normalized_email, 3, 3600),
+            RateLimitBucket("ip", context.remote_ip or "unknown", 10, 3600),
+        ],
+    )
+    try:
+        delivery = await service.start(payload, current, context)
+    except EmailLinkFlowError as exc:
+        raise APIException(
+            message=str(exc),
+            status_code=exc.status_code,
+            code=exc.code,
+            headers=AUTH_NO_STORE_HEADERS,
+        ) from exc
+
+    _harden_auth_response(response)
+    await _enqueue_email_link(email_sender, delivery)
+    return ApiResponse(
+        code=status.HTTP_202_ACCEPTED,
+        message="邮箱确认邮件已发送",
+        data={
+            "verification_required": True,
+            "resend_after_seconds": 60,
+        },
+    )
+
+
+@router.post(
+    "/email-link/confirm",
+    response_model=ApiResponse,
+)
+async def confirm_email_link(
+    payload: ConfirmEmailLinkRequest,
+    request: Request,
+    response: Response,
+    current: AuthenticatedSession = Depends(require_csrf_session),
+    service: EmailLinkService = Depends(get_email_link_service),
+    rate_limiter: AuthRateLimiter = Depends(get_auth_rate_limiter),
+) -> ApiResponse:
+    """Consume a verification challenge and enable email-password login."""
+
+    context = auth_request_context(request)
+    await _enforce_rate_limits(
+        rate_limiter,
+        "email-link-confirm",
+        [
+            RateLimitBucket("user", str(current.user.id), 10, 3600),
+            RateLimitBucket("ip", context.remote_ip or "unknown", 20, 3600),
+        ],
+    )
+    try:
+        outcome = await service.confirm(payload, current, context)
+    except EmailLinkFlowError as exc:
+        raise APIException(
+            message=str(exc),
+            status_code=exc.status_code,
+            code=exc.code,
+            headers=AUTH_NO_STORE_HEADERS,
+        ) from exc
+
+    _harden_auth_response(response)
+    return ApiResponse(
+        message="邮箱登录已启用",
+        data={
+            "linked": True,
+            "email": outcome.email,
+        },
+    )
+
+
+@router.post(
     "/register",
     response_model=ApiResponse,
     status_code=status.HTTP_202_ACCEPTED,
@@ -760,6 +868,39 @@ async def _enqueue_verification(
         )
 
 
+async def _enqueue_email_link(
+    email_sender: EmailSender,
+    delivery: EmailLinkDelivery,
+) -> None:
+    verification_url = (
+        f"{settings.AUTH_FRONTEND_BASE_URL}/account"
+        f"?email_token={quote(delivery.link_token, safe='')}"
+    )
+    try:
+        await email_sender.enqueue(
+            AuthEmail(
+                template_id="link-email",
+                recipient=delivery.recipient,
+                variables={
+                    "code": delivery.code,
+                    "verification_url": verification_url,
+                },
+                idempotency_key=f"link-email:{delivery.challenge_id}",
+            )
+        )
+    except EmailDeliveryUnavailable:
+        logger.error(
+            "邮箱绑定邮件入队失败",
+            challenge_id=str(delivery.challenge_id),
+        )
+    except Exception as exc:
+        logger.error(
+            "邮箱绑定邮件入队出现未预期错误",
+            challenge_id=str(delivery.challenge_id),
+            error_type=type(exc).__name__,
+        )
+
+
 async def _enqueue_password_reset(
     email_sender: EmailSender,
     outcome: PasswordResetRequestOutcome,
@@ -950,6 +1091,7 @@ def _authenticated_data(user, profile, auth_session, csrf_token: str) -> dict:
             "id": str(user.id),
             "email": user.email_display or user.email_normalized,
             "email_verified": user.email_verified_at is not None,
+            "email_login_enabled": user.password_credential is not None,
             "display_name": profile.display_name if profile else "",
             "locale": profile.locale if profile else "zh-CN",
             "timezone": profile.timezone if profile else "Asia/Shanghai",

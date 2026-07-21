@@ -9,15 +9,15 @@ from fastapi.testclient import TestClient
 
 from app.core.config import settings
 from app.middleware.error_handler import APIException, api_exception_handler
-from app.modules.identity.github_oauth import (
-    GitHubOAuthCallbackOutcome,
-    GitHubOAuthFlowError,
-    GitHubIdentitySummary,
-    GitHubOAuthStartOutcome,
-)
 from app.modules.identity.dependencies import (
     require_csrf_session,
     require_current_session,
+)
+from app.modules.identity.github_oauth import (
+    GitHubIdentitySummary,
+    GitHubOAuthCallbackOutcome,
+    GitHubOAuthFlowError,
+    GitHubOAuthStartOutcome,
 )
 from app.modules.identity.rate_limit import get_auth_rate_limiter
 from app.modules.identity.router import get_github_oauth_service, router
@@ -81,6 +81,7 @@ class StubGitHubOAuthService:
             email_display="learner@example.com",
             email_normalized="learner@example.com",
             email_verified_at=NOW,
+            password_credential=None,
         )
         profile = SimpleNamespace(
             display_name="GitHub Learner",

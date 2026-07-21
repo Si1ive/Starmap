@@ -9,9 +9,9 @@ from fastapi.testclient import TestClient
 
 from app.core.config import settings
 from app.core.logging import clear_request_id, set_request_id
-from app.modules.identity.dependencies import get_session_service
 from app.middleware.error_handler import APIException, api_exception_handler
 from app.modules.identity.anti_bot import AntiBotDecision, get_anti_bot_verifier
+from app.modules.identity.dependencies import get_session_service
 from app.modules.identity.email import get_email_sender
 from app.modules.identity.rate_limit import (
     RateLimitExceeded,
@@ -22,11 +22,11 @@ from app.modules.identity.registration import (
     RegistrationOutcome,
     VerificationDelivery,
 )
-from app.modules.identity.session import LoginOutcome
 from app.modules.identity.router import (
     get_registration_service,
     router,
 )
+from app.modules.identity.session import LoginOutcome
 
 NOW = datetime(2026, 7, 17, 11, 0, 0)
 SESSION_TOKEN = "verification-session-token-with-enough-entropy"
@@ -73,6 +73,7 @@ class StubSessionService:
             email_display="Learner@example.com",
             email_normalized="learner@example.com",
             email_verified_at=NOW,
+            password_credential=SimpleNamespace(),
         )
         self.profile = SimpleNamespace(
             display_name="测试学习者",
@@ -251,6 +252,7 @@ def test_same_browser_confirmation_creates_authenticated_session():
     assert response.json()["data"]["authenticated"] is True
     assert response.json()["data"]["csrf_token"] == CSRF_TOKEN
     assert response.json()["data"]["user"]["email_verified"] is True
+    assert response.json()["data"]["user"]["email_login_enabled"] is True
     assert response.headers["cache-control"] == "no-store"
     cookies = response.headers.get_list("set-cookie")
     assert any(

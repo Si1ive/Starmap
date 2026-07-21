@@ -63,7 +63,6 @@ ALLOWED_RETURN_PATHS = (
     "/mistakes",
     "/sources",
     "/states",
-    "/onboarding",
     "/account",
 )
 
@@ -269,7 +268,7 @@ class GitHubOAuthService:
         verifier = _generate_pkce_verifier()
         return_path = validate_return_path(
             payload.return_path,
-            default="/onboarding" if payload.source == "register" else "/today",
+            default="/today",
         )
         expires_at = now + timedelta(minutes=settings.AUTH_GITHUB_TRANSACTION_MINUTES)
         metadata = {
@@ -554,7 +553,7 @@ class GitHubOAuthService:
 
         return GitHubOAuthCallbackOutcome(
             login=login,
-            return_path="/onboarding" if new_user else transaction.return_path,
+            return_path=transaction.return_path,
             new_user=new_user,
         )
 
