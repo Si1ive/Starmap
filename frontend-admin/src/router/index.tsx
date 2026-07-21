@@ -15,6 +15,7 @@ const CrawlerSchedules = lazy(() => import('@/pages/Crawler/Schedules'))
 const CrawlerLogs = lazy(() => import('@/pages/Crawler/Logs'))
 const ConversationList = lazy(() => import('@/pages/Conversation/List'))
 const ConversationDetail = lazy(() => import('@/pages/Conversation/Detail'))
+const AgentRunsPage = lazy(() => import('@/pages/AgentRunsPage'))
 const MonitorOverview = lazy(() => import('@/pages/Monitor/Overview'))
 const ApiMonitor = lazy(() => import('@/pages/Monitor/Api'))
 const DatabaseMonitor = lazy(() => import('@/pages/Monitor/Database'))
@@ -144,6 +145,10 @@ const AppRoutes = () => {
         {/* 对话管理 */}
         <Route path="conversations" element={<ConversationList />} />
         <Route path="conversations/:id" element={<ConversationDetail />} />
+
+        {/* Agent Runs 监控 */}
+        <Route path="agent-runs" element={<AgentRunsPage />} />
+        <Route path="agent-runs/:id" element={<AgentRunsPage />} />
 
         {/* 爬虫管理 */}
         <Route path="crawler" element={<CrawlerList />} />
