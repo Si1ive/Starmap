@@ -7,7 +7,11 @@
 ## 文档索引
 
 - [408 学习 Agent 主体 PRD](./408-agent-main-prd.md)
-  - 用户端、管理端、Agent Runtime、学习进度、资料入库、评测、安全和分阶段交付的研发主契约
+  - 用户端、管理端、学习进度、资料、评测、安全和分阶段交付的产品主契约
+- [408 学习 Agent 对话运行时技术设计](../tech/408-agent-conversation-runtime-design.md)
+  - Agent 线程与运行、数据模型、API/SSE、Worker、工具、恢复、评测和发布门禁的技术基线
+- [408 学习 Agent 工作流编排技术设计](../tech/408-agent-workflow-orchestration-design.md)
+  - Agent 路由、工作流图、节点契约、质量闸门、教学路径与轨迹评测
 - [用户认证与账户系统 PRD](./authentication-and-user-account-prd.md)
   - 注册、登录、GitHub OAuth、邮箱验证、会话、用户信息、数据归属和安全验收
 - [408 学习 Agent 文字原型](./408-agent-product-prototype.md)
@@ -21,7 +25,7 @@
 - [高保真设计执行简报](./408-agent-visual-design-brief.md)
   - 视觉方向、组件语言、D1-D5 可点击路径、真实样例映射和高保真交付门禁
 - [用户端 Agent 技术架构](../tech/user-agent-client-architecture.md)
-  - Web/桌面选型、Agent Runtime、客户端能力适配、数据模型和安全边界
+  - Web/桌面选型、客户端能力适配和安全边界
 - [用户认证技术方案与数据模型](../tech/authentication-architecture-options.md)
   - 主流身份方案对比、推荐架构、关系表设计、API 契约和迁移路线
 - [用户端实施路线](../roadmap/user-agent-delivery-plan.md)

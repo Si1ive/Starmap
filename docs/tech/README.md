@@ -6,6 +6,9 @@
 - [数据模型](./data-model.md) - 数据结构与检索模型
 - [架构设计](./architecture.md) - 系统架构
 - [后端模块化单体演进方案](./backend-modular-monolith.md) - 后端边界、依赖规则与分阶段重构路线
+- [408 学习 Agent 对话运行时技术设计](./408-agent-conversation-runtime-design.md) - Agent 线程与运行、Worker、数据模型、HTTP/SSE、恢复、工具、评测与发布门禁
+- [408 学习 Agent 工作流编排技术设计](./408-agent-workflow-orchestration-design.md) - 工作流图、节点契约、模型边界、质量闸门、核心学习路径与轨迹评测
+- [408 学习 Agent 工作流技术选型与风险分析](./408-agent-workflow-technology-selection-and-risk-analysis.md) - 主流方案对比、技术栈评价、生产风险、负责人决策清单与 PoC/ADR 验收
 - [用户端 Agent 技术架构](./user-agent-client-architecture.md) - Web-first 客户端、Agent Runtime、能力适配与安全边界
 - [用户认证技术方案与数据模型](./authentication-architecture-options.md) - 认证方案对比、关系表、API、安全基线与迁移路线
 - [多模态入库与检索设计](./multimodal-ingestion-retrieval-design.md) - 语料入库与检索方案
