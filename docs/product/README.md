@@ -1,11 +1,13 @@
 # 用户端产品设计
 
-> 最后更新：2026-07-15
+> 最后更新：2026-07-21
 
 本目录是 408 学习 Agent 用户端的产品基线。当前已确定产品结构、核心闭环、技术边界、页面状态和真实原型样例；视觉语言与高保真交互稿将在设计 Skill 接入后继续完成。
 
 ## 文档索引
 
+- [408 学习 Agent 主体 PRD](./408-agent-main-prd.md)
+  - 用户端、管理端、Agent Runtime、学习进度、资料入库、评测、安全和分阶段交付的研发主契约
 - [用户认证与账户系统 PRD](./authentication-and-user-account-prd.md)
   - 注册、登录、GitHub OAuth、邮箱验证、会话、用户信息、数据归属和安全验收
 - [408 学习 Agent 文字原型](./408-agent-product-prototype.md)
