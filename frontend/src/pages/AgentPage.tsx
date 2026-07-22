@@ -272,6 +272,9 @@ export default function AgentPage() {
     createRun,
     loadThreadRuns,
     submitInput,
+    loadApprovals,
+    approveApproval,
+    rejectApproval,
     connectSSE,
     disconnectSSE,
   } = useAgent()
@@ -321,6 +324,13 @@ export default function AgentPage() {
       if (runningStep) setExpandedStep(runningStep.id)
     }
   }, [uiState, events])
+
+  // Load pending approvals when run is waiting for approval
+  useEffect(() => {
+    if (runId && uiState === 'waiting_for_approval') {
+      void loadApprovals(runId)
+    }
+  }, [runId, uiState, loadApprovals])
 
   // Connect SSE when we have a running run
   useEffect(() => {
@@ -382,6 +392,9 @@ export default function AgentPage() {
   const lastMessage = useMemo(() => getLastMessage(events), [events])
   const steps = useMemo(() => buildStepsFromEvents(events), [events])
 
+  const approvals = runId ? agentState.approvals[runId] || [] : []
+  const pendingApproval = approvals.find((a) => a.status === 'pending')
+
   const title = useMemo(() => {
     if (currentThread?.title) return currentThread.title
     if (uiState === 'waiting_for_approval') return '调整巩固优先级'
@@ -437,6 +450,92 @@ export default function AgentPage() {
           <Search size={16} />
           <span>回答优先使用官方大纲、已审核知识与可靠原题；证据不足时会明确标记为模型推断。</span>
         </div>
+      </div>
+    )
+  }
+
+  // ==================== Waiting for User (input form) ====================
+  if (uiState === 'waiting_for_user') {
+    return (
+      <div className="page agent-page">
+        <section className="agent-thread" style={{ maxWidth: 720, margin: '0 auto', padding: '40px 20px' }}>
+          <article className="run-summary">
+            <span className="run-summary__icon"><MessageCircleMore size={19} /></span>
+            <div>
+              <p className="eyebrow">需要补充信息</p>
+              <h2>Agent 需要更多信息</h2>
+              <p>当前步骤需要您补充说明才能继续。请在下方提供所需信息。</p>
+            </div>
+          </article>
+
+          <div className="agent-composer agent-composer--thread" style={{ marginTop: 24 }}>
+            <textarea
+              aria-label="补充信息"
+              onChange={(event) => setMessage(event.target.value)}
+              onKeyDown={(event) => {
+                if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') void sendMessage()
+              }}
+              placeholder="请补充信息..."
+              rows={3}
+              value={message}
+            />
+            <div className="agent-composer__footer">
+              <IconButton label="添加题目或图片"><Paperclip size={18} /></IconButton>
+              <span>补充信息帮助 Agent 继续</span>
+              <IconButton label="发送" onClick={sendMessage}><Send size={18} /></IconButton>
+            </div>
+          </div>
+        </section>
+      </div>
+    )
+  }
+
+  // ==================== Waiting for Approval ====================
+  if (uiState === 'waiting_for_approval') {
+    return (
+      <div className="page agent-page">
+        <section className="approval-sheet" style={{ maxWidth: 720, margin: '0 auto', padding: '40px 20px' }}>
+          <div className="approval-sheet__why">
+            <span><Sparkles size={18} /></span>
+            <div>
+              <h2>Agent 建议调整</h2>
+              <p>
+                {pendingApproval
+                  ? `Agent 发起了 "${pendingApproval.action_key}" 调整，请确认是否采用。`
+                  : 'Agent 发现了可以优化的地方，请确认是否采用调整。'}
+              </p>
+            </div>
+          </div>
+
+          <div className="approval-diff">
+            <div className="approval-diff__column">
+              <span>当前优先级</span>
+              <div className="approval-diff__item approval-diff__item--remove">
+                <small>优先巩固</small>
+                <strong>原优先级内容</strong>
+                <em>下调</em>
+              </div>
+            </div>
+            <ArrowRight className="approval-diff__arrow" size={22} />
+            <div className="approval-diff__column">
+              <span>建议优先级</span>
+              <div className="approval-diff__item approval-diff__item--add">
+                <small>优先巩固</small>
+                <strong>新优先级内容</strong>
+                <em>上调</em>
+              </div>
+            </div>
+          </div>
+
+          <div className="approval-sheet__actions">
+            <Button tone="secondary" onClick={() => {
+              if (pendingApproval && runId) { void rejectApproval(runId, pendingApproval.id); }
+            }}>保持当前顺序</Button>
+            <Button icon={<Check size={16} />} onClick={() => {
+              if (pendingApproval && runId) { void approveApproval(runId, pendingApproval.id); }
+            }}>采用调整</Button>
+          </div>
+        </section>
       </div>
     )
   }
