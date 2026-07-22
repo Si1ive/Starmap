@@ -527,13 +527,27 @@ export default function AgentPage() {
 
         <div className="agent-timeline">
           {/* User message */}
-          <article className="user-entry">
-            <div className="avatar avatar--small">张</div>
-            <div>
-              <span>你 · 刚刚</span>
-              <p>{run?.input_message ?? '正在加载...'}</p>
-            </div>
-          </article>
+          {uiState !== 'ready' ? (
+            <article className="user-entry">
+              <div className="avatar avatar--small">张</div>
+              <div>
+                <span>你 · 刚刚</span>
+                <p>{run?.input_message ?? '正在加载...'}</p>
+              </div>
+            </article>
+          ) : null}
+
+          {/* Ready state */}
+          {uiState === 'ready' ? (
+            <article className="run-summary">
+              <span className="run-summary__icon"><Sparkles size={19} /></span>
+              <div>
+                <p className="eyebrow">新线程</p>
+                <h2>随时发送问题，Agent 会为你解答</h2>
+                <p>该线程暂无运行记录。你可以在下方输入问题开始对话。</p>
+              </div>
+            </article>
+          ) : null}
 
           {/* Failed state */}
           {uiState === 'failed' ? (
