@@ -29,13 +29,15 @@ class WorkflowEngine:
         workflow: WorkflowDefinition,
         context: ExecutionContext,
         run,
+        *,
+        resume_from: Optional[str] = None,
     ) -> NodeResult:
         """
         执行工作流
         
         从 entry_node 开始，按 edges 顺序执行，直到终止。
         """
-        current_node_name = workflow.entry_node
+        current_node_name = resume_from or workflow.entry_node
         visited = set()
         
         logger.info(
@@ -117,9 +119,26 @@ class WorkflowEngine:
 
             await self.db.flush()
 
-            # 检查是否失败
+            # 检查是否失败或等待
             if result.status == NodeStatus.FAILED:
                 return result
+            
+            # 检查是否等待状态（如 wait_for_approval）
+            if result.status == NodeStatus.WAITING:
+                # 保存断点：记录当前节点和下一个节点
+                await checkpoint_store.save(
+                    self.db,
+                    context.run_id,
+                    {
+                        "waiting_node": current_node_name,
+                        "next_node": result.next_node,
+                        "output": result.output,
+                        "context_variables": context.variables,
+                    },
+                    f"ckp_{context.run_id}_wait",
+                )
+                logger.info("工作流进入等待状态", run_id=context.run_id, node=current_node_name)
+                return result  # 返回 WAITING 状态，worker 会处理状态转移
 
             # 确定下一个节点
             if result.next_node:

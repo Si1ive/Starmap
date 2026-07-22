@@ -98,28 +98,35 @@ async def _plan_quality_gate_node(context: ExecutionContext, db: AsyncSession) -
 
 async def _create_approval_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
     """创建审批请求"""
+    from ..service import AgentService
+    
     plan_draft = context.get("plan_draft", {})
     
-    # 创建审批（简化版，直接进入等待状态）
-    approval_data = {
-        "id": f"aprv_{context.run_id}",
-        "action_key": "plan_approval",
-        "diff_ref": str(plan_draft),
-        "status": "pending",
-        "expires_at": (datetime.utcnow() + timedelta(hours=24)).isoformat(),
-    }
+    # 通过 AgentService 创建真实的审批记录
+    service = AgentService(db)
+    approval = await service.create_approval(
+        run_id=context.run_id,
+        action_key="plan_approval",
+        diff_ref=str(plan_draft),
+        expires_at=datetime.utcnow() + timedelta(hours=24),
+    )
     
-    context.set("approval_data", approval_data)
-    logger.info("审批请求创建", run_id=context.run_id, approval_id=approval_data["id"])
+    context.set("approval_data", {
+        "id": approval.id,
+        "action_key": approval.action_key,
+        "status": approval.status,
+        "diff_ref": approval.diff_ref,
+        "expires_at": approval.expires_at.isoformat() if approval.expires_at else None,
+    })
+    logger.info("审批请求创建", run_id=context.run_id, approval_id=approval.id)
     return NodeResult.success({"approval_created": True}, next_node="wait_for_approval")
 
 
 async def _wait_for_approval_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
     """等待用户审批"""
-    # 将运行状态设置为 waiting_for_approval
-    # 实际运行中由用户通过 API 提交审批决定
+    # 返回 WAITING 状态，引擎会保存断点并停止执行
     logger.info("等待用户审批", run_id=context.run_id)
-    return NodeResult.success({"waiting_for_approval": True}, next_node="apply_plan_change")
+    return NodeResult.waiting(next_node="apply_plan_change", output={"waiting_for_approval": True})
 
 
 async def _apply_plan_change_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:

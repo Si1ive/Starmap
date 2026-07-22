@@ -16,6 +16,7 @@ class NodeStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     SKIPPED = "skipped"
+    WAITING = "waiting"
 
 
 @dataclass
@@ -38,6 +39,10 @@ class NodeResult:
     @classmethod
     def skip(cls, next_node: Optional[str] = None) -> "NodeResult":
         return cls(status=NodeStatus.SKIPPED, next_node=next_node)
+
+    @classmethod
+    def waiting(cls, next_node: Optional[str] = None, output: Optional[Dict[str, Any]] = None) -> "NodeResult":
+        return cls(status=NodeStatus.WAITING, output=output, next_node=next_node)
 
 
 @dataclass

@@ -19,6 +19,8 @@ from .state_machine import RunStatus, state_machine
 from .events import event_store
 from .outbox import outbox_store
 from .service import AgentService
+from .checkpoints import checkpoint_store
+from .workflows.contracts import NodeStatus
 
 logger = get_logger(__name__)
 
@@ -134,25 +136,44 @@ class AgentWorker:
             # 延长租约
             await self.extend_lease(db, run)
 
+            # 尝试从断点恢复
+            resume_from = None
+            checkpoint = await checkpoint_store.load_latest(db, run.id)
+            if checkpoint:
+                # 如果有断点，从断点的下一个节点恢复
+                resume_from = checkpoint.get("next_node")
+                if resume_from:
+                    # 恢复上下文变量
+                    for key, value in checkpoint.get("context_variables", {}).items():
+                        context.set(key, value)
+                    logger.info("从断点恢复", run_id=run.id, resume_from=resume_from)
+                    # 删除已使用的断点
+                    await checkpoint_store.delete_by_run(db, run.id)
+
             # 构建执行上下文
             context = ExecutionContext(
                 run_id=run.id,
                 user_id=run.user_id,
                 db=db,
             )
+            
+            if checkpoint and not resume_from:
+                # 有断点但没有下一个节点，可能已经完成
+                for key, value in checkpoint.get("context_variables", {}).items():
+                    context.set(key, value)
             context.set("input_message", run.input_message)
             context.set("workflow", run.workflow_name)
             context.max_model_calls = run.max_model_calls
 
             # 执行工作流
             engine = WorkflowEngine(db)
-            result = await engine.execute(workflow, context, run)
+            result = await engine.execute(workflow, context, run, resume_from=resume_from)
 
             # 延长租约
             await self.extend_lease(db, run)
 
             # 处理结果
-            if result.status.value == "completed":
+            if result.status == NodeStatus.COMPLETED:
                 state_machine.transition(run, RunStatus.COMPLETED)
                 await event_store.append(db, run.id, "run.completed", {
                     "run_id": run.id,
@@ -168,6 +189,11 @@ class AgentWorker:
                         content=result.artifact,
                     )
                 
+            elif result.status == NodeStatus.WAITING:
+                # 等待状态：转移到 waiting_for_approval
+                state_machine.transition(run, RunStatus.WAITING_FOR_APPROVAL, reason="等待用户审批")
+                run.error_message = None
+                logger.info("Run 进入等待审批状态", run_id=run.id)
             else:
                 error_msg = result.error or "工作流执行失败"
                 state_machine.transition(run, RunStatus.FAILED, reason=error_msg)
