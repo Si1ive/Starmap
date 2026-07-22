@@ -5,17 +5,14 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
-  CircleStop,
   FileCheck2,
   FileText,
-  History,
   Lightbulb,
   ListChecks,
   MessageCircleMore,
   Paperclip,
   PanelRightOpen,
   RefreshCw,
-  RotateCcw,
   Search,
   Send,
   ShieldCheck,
@@ -28,7 +25,6 @@ import { agentSources, agentSteps as mockSteps, completedAgentSteps } from '../d
 import {
   Button,
   IconButton,
-  PageHeading,
   SourceBadge,
   StatusMark,
 } from '../components/Primitives'
@@ -37,7 +33,7 @@ import { useAgent, type AgentEvent } from '../store/agent-context'
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-type UIState = 'new' | 'ready' | 'running' | 'complete' | 'failed' | 'approval'
+type UIState = 'new' | 'ready' | 'running' | 'complete' | 'failed' | 'waiting_for_user' | 'waiting_for_approval'
 
 interface StepView {
   id: string
@@ -275,13 +271,13 @@ export default function AgentPage() {
     createThread,
     createRun,
     loadThreadRuns,
+    submitInput,
     connectSSE,
     disconnectSSE,
   } = useAgent()
 
   const [message, setMessage] = useState('')
   const [expandedStep, setExpandedStep] = useState<string | null>(null)
-  const [approvalRejected, setApprovalRejected] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [evidenceOpen, setEvidenceOpen] = useState(false)
 
@@ -313,7 +309,8 @@ export default function AgentPage() {
     if (!run) return 'ready'
     if (run.status === 'running' || run.status === 'queued') return 'running'
     if (run.status === 'failed') return 'failed'
-    if (run.status === 'waiting_for_user') return 'approval'
+    if (run.status === 'waiting_for_user') return 'waiting_for_user'
+    if (run.status === 'waiting_for_approval') return 'waiting_for_approval'
     return 'complete'
   }, [threadId, run])
 
@@ -347,6 +344,17 @@ export default function AgentPage() {
     if (!message.trim()) return
     const input = message.trim()
 
+    // If run is waiting for user input, submit instead of creating new run
+    if (run?.status === 'waiting_for_user' && runId) {
+      try {
+        await submitInput(runId, input)
+        setMessage('')
+      } catch (e) {
+        console.error('提交输入失败', e)
+      }
+      return
+    }
+
     let tid = threadId
     if (!tid) {
       try {
@@ -367,7 +375,7 @@ export default function AgentPage() {
     } catch (e) {
       console.error('创建运行失败', e)
     }
-  }, [message, threadId, createThread, navigate, createRun, dispatch, connectSSE])
+  }, [message, threadId, run, runId, submitInput, createThread, navigate, createRun, dispatch, connectSSE])
 
   // Derived data
   const currentThread = agentState.threads.find((t) => t.id === threadId)
@@ -376,7 +384,8 @@ export default function AgentPage() {
 
   const title = useMemo(() => {
     if (currentThread?.title) return currentThread.title
-    if (uiState === 'approval') return '调整巩固优先级'
+    if (uiState === 'waiting_for_approval') return '调整巩固优先级'
+    if (uiState === 'waiting_for_user') return '等待补充信息'
     if (uiState === 'failed') return '生成专项练习'
     if (uiState === 'new') return 'Agent'
     return '对话详情'
@@ -428,88 +437,6 @@ export default function AgentPage() {
           <Search size={16} />
           <span>回答优先使用官方大纲、已审核知识与可靠原题；证据不足时会明确标记为模型推断。</span>
         </div>
-      </div>
-    )
-  }
-
-  // ==================== Approval State ====================
-  if (uiState === 'approval') {
-    return (
-      <div className="page agent-page">
-        <PageHeading
-          actions={<StatusMark tone={approvalRejected ? 'neutral' : 'warning'}>{approvalRejected ? '已拒绝' : '等待确认'}</StatusMark>}
-          description="Agent 发现“操作系统 · 死锁”连续错误 3 次，建议提高该考点的巩固优先级。"
-          eyebrow="学习建议 · 内容调整"
-          title={title}
-        />
-
-        <section className="approval-sheet">
-          <div className="approval-sheet__why">
-            <span><Sparkles size={18} /></span>
-            <div>
-              <h2>{approvalRejected ? '原优先级保持不变' : '这次修改会改变什么'}</h2>
-              <p>
-                {approvalRejected
-                  ? '拒绝后没有改变内容优先级。你仍可重新打开差异并决定是否采用。'
-                  : '只调整两个考点的相对优先级，不创建学习时间表，也不会改变已有完成记录。'}
-              </p>
-            </div>
-          </div>
-
-          {!approvalRejected ? (
-            <div className="approval-diff">
-              <div className="approval-diff__column">
-                <span>当前优先级</span>
-                <div className="approval-diff__item approval-diff__item--remove">
-                  <small>优先巩固</small>
-                  <strong>数据结构排序练习</strong>
-                  <em>下调</em>
-                </div>
-              </div>
-              <ArrowRight className="approval-diff__arrow" size={22} />
-              <div className="approval-diff__column">
-                <span>建议优先级</span>
-                <div className="approval-diff__item approval-diff__item--add">
-                  <small>优先巩固</small>
-                  <strong>操作系统死锁专项</strong>
-                  <em>上调</em>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="approval-rejected">
-              <History size={20} />
-              <span>
-                <strong>内容顺序保持不变</strong>
-                <small>Agent 会继续根据后续对话和练习记录更新建议</small>
-              </span>
-            </div>
-          )}
-
-          <div className="approval-impact">
-            <span><ShieldCheck size={17} /> 不会删除历史记录</span>
-            <span><RotateCcw size={17} /> 可随时在对话中调整</span>
-            <span><CircleStop size={17} /> 拒绝不会中断当前线程</span>
-          </div>
-
-          <div className="approval-sheet__actions">
-            {approvalRejected ? (
-              <>
-                <Button onClick={() => navigate('/progress')} tone="quiet">查看学习进度</Button>
-                <Button icon={<RefreshCw size={16} />} onClick={() => setApprovalRejected(false)} tone="secondary">
-                  重新打开差异
-                </Button>
-              </>
-            ) : (
-              <>
-                <Button onClick={() => setApprovalRejected(true)} tone="secondary">保持当前顺序</Button>
-                <Button icon={<Check size={16} />} onClick={() => navigate('/progress')}>
-                  采用调整
-                </Button>
-              </>
-            )}
-          </div>
-        </section>
       </div>
     )
   }
