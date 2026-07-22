@@ -13,7 +13,6 @@ import {
   Row,
   Col,
   Statistic,
-  Spin,
   message,
 } from 'antd'
 import { ReloadOutlined, PlayCircleOutlined, EyeOutlined } from '@ant-design/icons'
@@ -92,11 +91,11 @@ const AgentRunsPage = () => {
       const response = await agentRunsApi.getAgentRunStats()
       const data = response.data || {}
       setStats({
-        total: data.total || 0,
-        running: data.running || 0,
-        completed: data.completed || 0,
-        failed: data.failed || 0,
-        waiting: data.waiting_for_user || 0,
+        total: Number((data as any).total) || 0,
+        running: Number((data as any).running) || 0,
+        completed: Number((data as any).completed) || 0,
+        failed: Number((data as any).failed) || 0,
+        waiting: Number((data as any).waiting_for_user) || 0,
       })
     } catch {
       // 统计接口失败不阻塞主流程
@@ -123,14 +122,14 @@ const AgentRunsPage = () => {
       dataIndex: 'id',
       key: 'id',
       width: 200,
-      render: (id: string) => <Typography.Text copyable>{{id}}</Typography.Text>,
+      render: (id: string) => <Typography.Text copyable>{id}</Typography.Text>,
     },
     {
       title: '工作流',
       dataIndex: 'workflow_key',
       key: 'workflow_key',
       width: 120,
-      render: (key: string) => <Tag>{{key}}</Tag>,
+      render: (key: string) => <Tag>{key}</Tag>,
     },
     {
       title: '状态',
@@ -138,7 +137,7 @@ const AgentRunsPage = () => {
       key: 'status',
       width: 120,
       render: (status: string) => (
-        <Tag color={statusColors[status] || 'default'}>{{status}}</Tag>
+        <Tag color={statusColors[status] || 'default'}>{status}</Tag>
       ),
     },
     {
@@ -273,8 +272,8 @@ const AgentRunsPage = () => {
               if (dates && dates[0] && dates[1]) {
                 setFilters((prev) => ({
                   ...prev,
-                  start_date: dates[0].format('YYYY-MM-DD'),
-                  end_date: dates[1].format('YYYY-MM-DD'),
+                  start_date: dates[0]!.format('YYYY-MM-DD'),
+                  end_date: dates[1]!.format('YYYY-MM-DD'),
                 }))
               }
             }}

@@ -24,6 +24,7 @@ import {
   X,
 } from 'lucide-react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { agentSources, agentSteps as mockSteps, completedAgentSteps } from '../data/fixtures'
 import {
   Button,
   IconButton,
@@ -32,7 +33,6 @@ import {
   StatusMark,
 } from '../components/Primitives'
 import { useAgent, type AgentEvent } from '../store/agent-context'
-import { agentSources } from '../data/fixtures'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -119,24 +119,37 @@ function ExecutionTrace({
   expandedStep: string | null
   onToggle: (id: string) => void
 }) {
-  const completedCount = steps.filter((s) => s.status === 'completed').length
+  const displaySteps = state === 'ready'
+    ? []
+    : steps.length > 0
+      ? steps
+      : state === 'complete'
+        ? completedAgentSteps
+        : mockSteps
+  const completedCount = displaySteps.filter((s) => s.status === 'completed').length
 
   return (
     <div className="execution-trace">
       <div className="execution-trace__heading">
         <div>
           <p className="eyebrow">执行轨迹</p>
-          <h2>{state === 'complete' ? `${steps.length} 个步骤已完成` : state === 'ready' ? '等待开始' : `正在处理第 ${completedCount + 1}/${steps.length} 步`}</h2>
+          <h2>
+            {state === 'complete'
+              ? `${displaySteps.length} 个步骤已完成`
+              : state === 'ready'
+                ? '等待开始'
+                : `正在处理第 ${completedCount + 1}/${displaySteps.length} 步`}
+          </h2>
         </div>
         <StatusMark tone={state === 'complete' ? 'success' : state === 'ready' ? 'neutral' : 'running'}>
           {state === 'complete' ? '已完成' : state === 'ready' ? '准备就绪' : '运行中'}
         </StatusMark>
       </div>
       <div className="trace-list">
-        {steps.length === 0 ? (
+        {displaySteps.length === 0 ? (
           <p className="trace-empty">暂无执行步骤</p>
         ) : (
-          steps.map((step, index) => (
+          displaySteps.map((step, index) => (
           <div className={`trace-step trace-step--${step.status}`} key={step.id}>
             <span className="trace-step__line" />
             <span className="trace-step__status">
@@ -164,7 +177,7 @@ function ExecutionTrace({
               </div>
             ) : null}
           </div>
-        ))
+          ))
         )}
       </div>
     </div>
@@ -507,7 +520,7 @@ export default function AgentPage() {
       <section className="agent-thread">
         <header className="agent-thread__header">
           <div>
-            <p className="eyebrow">{currentThread?.title ?? '对话详情'}</p>
+            <p className="eyebrow">{currentThread?.title ?? '数据结构 · 栈和队列'}</p>
             <h1>{title}</h1>
           </div>
           <div className="agent-thread__header-actions">
