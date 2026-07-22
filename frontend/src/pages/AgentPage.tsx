@@ -24,7 +24,6 @@ import {
   X,
 } from 'lucide-react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { agentSources, agentSteps as mockSteps, completedAgentSteps } from '../data/fixtures'
 import {
   Button,
   IconButton,
@@ -32,13 +31,13 @@ import {
   SourceBadge,
   StatusMark,
 } from '../components/Primitives'
-import { useAgent } from '../store/agentStore'
-import { type AgentEvent } from '../store/agentStore'
+import { useAgent, type AgentEvent } from '../store/agent-context'
+import { agentSources } from '../data/fixtures'
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-type UIState = 'new' | 'running' | 'complete' | 'failed' | 'approval'
+type UIState = 'new' | 'ready' | 'running' | 'complete' | 'failed' | 'approval'
 
 interface StepView {
   id: string
@@ -120,22 +119,24 @@ function ExecutionTrace({
   expandedStep: string | null
   onToggle: (id: string) => void
 }) {
-  const displaySteps = steps.length > 0 ? steps : state === 'complete' ? completedAgentSteps : mockSteps
-  const completedCount = displaySteps.filter((s) => s.status === 'completed').length
+  const completedCount = steps.filter((s) => s.status === 'completed').length
 
   return (
     <div className="execution-trace">
       <div className="execution-trace__heading">
         <div>
           <p className="eyebrow">执行轨迹</p>
-          <h2>{state === 'complete' ? `${displaySteps.length} 个步骤已完成` : `正在处理第 ${completedCount + 1}/${displaySteps.length} 步`}</h2>
+          <h2>{state === 'complete' ? `${steps.length} 个步骤已完成` : state === 'ready' ? '等待开始' : `正在处理第 ${completedCount + 1}/${steps.length} 步`}</h2>
         </div>
-        <StatusMark tone={state === 'complete' ? 'success' : 'running'}>
-          {state === 'complete' ? '已完成' : '运行中'}
+        <StatusMark tone={state === 'complete' ? 'success' : state === 'ready' ? 'neutral' : 'running'}>
+          {state === 'complete' ? '已完成' : state === 'ready' ? '准备就绪' : '运行中'}
         </StatusMark>
       </div>
       <div className="trace-list">
-        {displaySteps.map((step, index) => (
+        {steps.length === 0 ? (
+          <p className="trace-empty">暂无执行步骤</p>
+        ) : (
+          steps.map((step, index) => (
           <div className={`trace-step trace-step--${step.status}`} key={step.id}>
             <span className="trace-step__line" />
             <span className="trace-step__status">
@@ -163,7 +164,8 @@ function ExecutionTrace({
               </div>
             ) : null}
           </div>
-        ))}
+        ))
+        )}
       </div>
     </div>
   )
@@ -259,6 +261,7 @@ export default function AgentPage() {
     loadThreads,
     createThread,
     createRun,
+    loadThreadRuns,
     connectSSE,
     disconnectSSE,
   } = useAgent()
@@ -274,6 +277,19 @@ export default function AgentPage() {
     void loadThreads()
   }, [loadThreads])
 
+  // Load thread runs when threadId changes
+  useEffect(() => {
+    if (!threadId) return
+    loadThreadRuns(threadId).then((runs) => {
+      if (runs.length > 0) {
+        const latest = runs.reduce((a, b) =>
+          new Date(a.created_at) > new Date(b.created_at) ? a : b,
+        )
+        dispatch({ type: 'SET_CURRENT_RUN', payload: latest.id })
+      }
+    })
+  }, [threadId, loadThreadRuns, dispatch])
+
   // Determine UI state from run status
   const runId = agentState.currentRunId
   const run = runId ? agentState.runs[runId] : null
@@ -281,7 +297,7 @@ export default function AgentPage() {
 
   const uiState: UIState = useMemo(() => {
     if (!threadId) return 'new'
-    if (!run) return 'complete'
+    if (!run) return 'ready'
     if (run.status === 'running' || run.status === 'queued') return 'running'
     if (run.status === 'failed') return 'failed'
     if (run.status === 'waiting_for_user') return 'approval'
@@ -350,7 +366,7 @@ export default function AgentPage() {
     if (uiState === 'approval') return '调整巩固优先级'
     if (uiState === 'failed') return '生成专项练习'
     if (uiState === 'new') return 'Agent'
-    return '循环队列的 front 怎么算'
+    return '对话详情'
   }, [currentThread, uiState])
 
   // ==================== New State ====================
@@ -491,7 +507,7 @@ export default function AgentPage() {
       <section className="agent-thread">
         <header className="agent-thread__header">
           <div>
-            <p className="eyebrow">{currentThread?.title ?? '数据结构 · 栈和队列'}</p>
+            <p className="eyebrow">{currentThread?.title ?? '对话详情'}</p>
             <h1>{title}</h1>
           </div>
           <div className="agent-thread__header-actions">
@@ -503,8 +519,8 @@ export default function AgentPage() {
             >
               查看步骤
             </Button>
-            <StatusMark tone={uiState === 'complete' ? 'success' : uiState === 'failed' ? 'error' : 'running'}>
-              {uiState === 'complete' ? '已完成' : uiState === 'failed' ? '可恢复' : '运行中'}
+            <StatusMark tone={uiState === 'complete' ? 'success' : uiState === 'failed' ? 'error' : uiState === 'ready' ? 'neutral' : 'running'}>
+              {uiState === 'complete' ? '已完成' : uiState === 'failed' ? '可恢复' : uiState === 'ready' ? '准备就绪' : '运行中'}
             </StatusMark>
           </div>
         </header>

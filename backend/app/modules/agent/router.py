@@ -64,6 +64,37 @@ async def create_thread(
         )
 
 
+@router.get("/threads/{thread_id}/runs")
+async def list_thread_runs(
+    thread_id: str,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """列出线程的所有 Run"""
+    async with db:
+        service = AgentService(db)
+        runs = await service.list_runs(thread_id, user_id)
+        return {
+            "items": [
+                {
+                    "id": r.id,
+                    "thread_id": r.thread_id,
+                    "user_id": r.user_id,
+                    "workflow_name": r.workflow_name,
+                    "status": r.status,
+                    "input_message": r.input_message,
+                    "result_artifact_id": r.result_artifact_id,
+                    "error_message": r.error_message,
+                    "model_call_count": r.model_call_count,
+                    "created_at": r.created_at,
+                    "updated_at": r.updated_at,
+                }
+                for r in runs
+            ],
+            "total": len(runs),
+        }
+
+
 @router.get("/threads")
 async def list_threads(
     limit: int = Query(20, ge=1, le=100),

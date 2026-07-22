@@ -21,7 +21,7 @@ import { IconButton, StatusMark } from './Primitives'
 import PlatformBrand from './PlatformBrand'
 import useAuth from '../useAuth'
 import { activeTasks } from '../data/fixtures'
-import { useAgent } from '../store/agentStore'
+import { useAgent } from '../store/agent-context'
 
 const navItems = [
   { to: '/agent', label: 'Agent', icon: BotMessageSquare },

@@ -72,6 +72,7 @@ type AgentAction =
   | { type: 'SET_CURRENT_RUN'; payload: string | null }
   | { type: 'SET_RUN'; payload: Run }
   | { type: 'SET_RUNS'; payload: Record<string, Run> }
+  | { type: 'SET_THREAD_RUNS'; payload: { threadId: string; runs: Run[] } }
   | { type: 'APPEND_EVENTS'; payload: { runId: string; events: AgentEvent[] } }
   | { type: 'SET_ARTIFACTS'; payload: { runId: string; artifacts: Artifact[] } }
   | { type: 'SET_SSE_CONNECTED'; payload: boolean }
@@ -107,6 +108,14 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
       return { ...state, runs: { ...state.runs, [action.payload.id]: action.payload } }
     case 'SET_RUNS':
       return { ...state, runs: { ...state.runs, ...action.payload } }
+    case 'SET_THREAD_RUNS':
+      return {
+        ...state,
+        runs: {
+          ...state.runs,
+          ...action.payload.runs.reduce((acc, run) => ({ ...acc, [run.id]: run }), {} as Record<string, Run>),
+        },
+      }
     case 'APPEND_EVENTS':
       return {
         ...state,
@@ -145,6 +154,7 @@ export interface AgentContextValue {
   createThread: (title?: string) => Promise<Thread>
   createRun: (threadId: string, workflowName: string, inputMessage: string) => Promise<agentApi.Run>
   loadRun: (runId: string) => Promise<agentApi.Run>
+  loadThreadRuns: (threadId: string) => Promise<agentApi.Run[]>
   submitInput: (runId: string, inputText: string) => Promise<void>
   connectSSE: (runId: string, afterSequence?: number) => void
   disconnectSSE: () => void
@@ -202,6 +212,17 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
     const run = await agentApi.getRun(runId)
     dispatch({ type: 'SET_RUN', payload: run as Run })
     return run
+  }, [])
+
+  // Load thread runs
+  const loadThreadRuns = useCallback(async (threadId: string): Promise<agentApi.Run[]> => {
+    const response = await agentApi.listThreadRuns(threadId)
+    const runs = response.items
+    dispatch({
+      type: 'SET_THREAD_RUNS',
+      payload: { threadId, runs: runs as Run[] },
+    })
+    return runs
   }, [])
 
   // Submit input
@@ -270,6 +291,7 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
     createThread,
     createRun,
     loadRun,
+    loadThreadRuns,
     submitInput,
     connectSSE,
     disconnectSSE,

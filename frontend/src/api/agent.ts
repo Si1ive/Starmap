@@ -110,6 +110,13 @@ export async function getThread(threadId: string): Promise<Thread> {
   return apiRequest<Thread>(`/agent/threads/${threadId}`)
 }
 
+
+// ==================== Thread Runs API ====================
+
+export async function listThreadRuns(threadId: string): Promise<{ items: Run[]; total: number }> {
+  return apiRequest<{ items: Run[]; total: number }>(`/agent/threads/${threadId}/runs`)
+}
+
 // ==================== Run API ====================
 
 export async function createRun(req: CreateRunRequest): Promise<Run> {

@@ -4,7 +4,7 @@ import { BrowserRouter } from 'react-router-dom'
 import 'katex/dist/katex.min.css'
 import App from './App'
 import AuthProvider from './AuthProvider'
-import { AgentProvider } from './store/agentStore'
+import { AgentProvider } from './store/agent-context'
 import './index.css'
 
 const rootElement = document.getElementById('root')
