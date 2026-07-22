@@ -73,14 +73,14 @@ class AgentApiError extends Error {
   }
 }
 
-async function apiRequest<T>(path: string, init: RequestInit): Promise<T> {
+async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const url = `${API_BASE}${path}`
   const response = await fetch(url, {
-    ...init,
+    ...(init || {}),
     credentials: 'include',
     headers: {
-      ...init.headers,
-      ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+      ...(init?.headers || {}),
+      ...(init?.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
     },
   })
 
