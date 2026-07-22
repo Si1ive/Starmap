@@ -20,7 +20,8 @@ import {
 import { IconButton, StatusMark } from './Primitives'
 import PlatformBrand from './PlatformBrand'
 import useAuth from '../useAuth'
-import { activeTasks, agentHistory } from '../data/fixtures'
+import { activeTasks } from '../data/fixtures'
+import { useAgent } from '../store/agentStore'
 
 const navItems = [
   { to: '/agent', label: 'Agent', icon: BotMessageSquare },
@@ -39,6 +40,7 @@ const activeTaskIcons = {
 
 export default function AppShell() {
   const { logout, user } = useAuth()
+  const { state: agentState, loadThreads } = useAgent()
   const location = useLocation()
   const navigate = useNavigate()
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -57,6 +59,11 @@ export default function AppShell() {
     const item = navItems.find((nav) => location.pathname.startsWith(nav.to.split('?')[0]))
     return item?.label ?? '408 Agent'
   }, [location.pathname])
+
+  // Load real threads on mount
+  useEffect(() => {
+    void loadThreads()
+  }, [loadThreads])
 
   useEffect(() => {
     setAccountMenuOpen(false)
@@ -137,16 +144,20 @@ export default function AppShell() {
             <span>历史记录</span>
             <History size={15} />
           </div>
-          {agentHistory.map((thread) => (
-            <button
-              key={thread.id}
-              onClick={() => navigate(`/agent/${thread.id}?state=${thread.state}`)}
-              type="button"
-            >
-              <span>{thread.title}</span>
-              <small>{thread.time} · {thread.subject}</small>
-            </button>
-          ))}
+          {agentState.threads.length === 0 ? (
+            <p style={{ padding: '8px 16px', color: 'var(--ink-faint)', fontSize: 13 }}>暂无对话记录</p>
+          ) : (
+            agentState.threads.map((thread) => (
+              <button
+                key={thread.id}
+                onClick={() => navigate(`/agent/${thread.id}`)}
+                type="button"
+              >
+                <span>{thread.title || '新对话'}</span>
+                <small>{new Date(thread.updated_at).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</small>
+              </button>
+            ))
+          )}
         </div>
 
       </aside>
