@@ -1,168 +1,327 @@
-/**
- * Agent 对话页面
- *
- * 连接 backend/app/modules/agent 的 API：
- * - POST /api/v1/agent/threads     创建线程
- * - POST /api/v1/agent/runs        创建运行
- * - GET  /api/v1/agent/runs/{id}   查询运行状态
- * - GET  /api/v1/agent/runs/{id}/events  SSE 事件流
- */
-
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  ArrowRight, BookOpenCheck, Check, ChevronDown, ChevronRight,
-  CircleStop, FileCheck2, FileText, History, Lightbulb, ListChecks,
-  MessageCircleMore, Paperclip, PanelRightOpen, RefreshCw, RotateCcw,
-  Plus, Search, Send, ShieldCheck, Sparkles, TriangleAlert, X, Bot, User,
+  ArrowRight,
+  BookOpenCheck,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  CircleStop,
+  FileCheck2,
+  FileText,
+  History,
+  Lightbulb,
+  ListChecks,
+  MessageCircleMore,
+  Paperclip,
+  PanelRightOpen,
+  RefreshCw,
+  RotateCcw,
+  Search,
+  Send,
+  ShieldCheck,
+  Sparkles,
+  TriangleAlert,
+  X,
 } from 'lucide-react'
-import { Button, Formula, IconButton, PageHeading, SourceBadge, StatusMark } from '../components/Primitives'
+import { useNavigate, useParams } from 'react-router-dom'
+import { agentSources, agentSteps as mockSteps, completedAgentSteps } from '../data/fixtures'
+import {
+  Button,
+  IconButton,
+  PageHeading,
+  SourceBadge,
+  StatusMark,
+} from '../components/Primitives'
 import { useAgent } from '../store/agentStore'
-import { type AgentEvent } from '../api/agent'
+import { type AgentEvent } from '../store/agentStore'
 
-// ==================== Components ====================
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+type UIState = 'new' | 'running' | 'complete' | 'failed' | 'approval'
 
-function ThreadSidebar({ threads, currentThreadId, onSelect, onNewThread }: {
-  threads: { id: string; title: string | null; updated_at: string }[]
-  currentThreadId: string | null
-  onSelect: (id: string) => void
-  onNewThread: () => void
+interface StepView {
+  id: string
+  title: string
+  detail: string
+  duration: string
+  status: 'completed' | 'running' | 'failed' | 'waiting'
+}
+
+// ---------------------------------------------------------------------------
+// Helpers: map events → UI steps
+// ---------------------------------------------------------------------------
+function buildStepsFromEvents(events: AgentEvent[]): StepView[] {
+  const steps: StepView[] = []
+  const seen = new Set<string>()
+
+  for (const event of events) {
+    if (event.event_type === 'step.started') {
+      const payload = event.payload as { step_id?: string; node_name?: string }
+      const id = payload.step_id ?? String(event.sequence)
+      if (!seen.has(id)) {
+        seen.add(id)
+        steps.push({
+          id,
+          title: payload.node_name ?? '执行步骤',
+          detail: '正在执行...',
+          duration: '—',
+          status: 'running',
+        })
+      }
+    } else if (event.event_type === 'step.completed') {
+      const payload = event.payload as { step_id?: string; node_name?: string; output?: unknown }
+      const id = payload.step_id ?? String(event.sequence)
+      const idx = steps.findIndex((s) => s.id === id)
+      if (idx !== -1) {
+        steps[idx].status = 'completed'
+        steps[idx].detail = typeof payload.output === 'string' ? payload.output : '步骤完成'
+      }
+    } else if (event.event_type === 'step.failed') {
+      const payload = event.payload as { step_id?: string; node_name?: string; error?: string }
+      const id = payload.step_id ?? String(event.sequence)
+      const idx = steps.findIndex((s) => s.id === id)
+      if (idx !== -1) {
+        steps[idx].status = 'failed'
+        steps[idx].detail = payload.error ?? '步骤失败'
+      }
+    }
+  }
+  return steps
+}
+
+function getLastMessage(events: AgentEvent[]): string | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i]
+    if (event.event_type === 'message.completed') {
+      const payload = event.payload as { content?: string }
+      return payload.content ?? null
+    }
+    if (event.event_type === 'run.completed') {
+      const payload = event.payload as { result?: string }
+      if (payload.result) return payload.result
+    }
+  }
+  return null
+}
+
+// ---------------------------------------------------------------------------
+// Components
+// ---------------------------------------------------------------------------
+
+function ExecutionTrace({
+  steps,
+  state,
+  expandedStep,
+  onToggle,
+}: {
+  steps: StepView[]
+  state: UIState
+  expandedStep: string | null
+  onToggle: (id: string) => void
 }) {
+  const displaySteps = steps.length > 0 ? steps : state === 'complete' ? completedAgentSteps : mockSteps
+  const completedCount = displaySteps.filter((s) => s.status === 'completed').length
+
   return (
-    <aside className="thread-sidebar">
-      <div className="thread-sidebar__header">
-        <PageHeading>对话</PageHeading>
-        <Button onClick={onNewThread} variant="primary" size="sm">
-          <Plus size={14} /> 新对话
-        </Button>
+    <div className="execution-trace">
+      <div className="execution-trace__heading">
+        <div>
+          <p className="eyebrow">执行轨迹</p>
+          <h2>{state === 'complete' ? `${displaySteps.length} 个步骤已完成` : `正在处理第 ${completedCount + 1}/${displaySteps.length} 步`}</h2>
+        </div>
+        <StatusMark tone={state === 'complete' ? 'success' : 'running'}>
+          {state === 'complete' ? '已完成' : '运行中'}
+        </StatusMark>
       </div>
-      <div className="thread-list">
-        {threads.map((t) => (
-          <button
-            key={t.id}
-            className={`thread-item ${t.id === currentThreadId ? 'thread-item--active' : ''}`}
-            onClick={() => onSelect(t.id)}
-          >
-            <MessageCircleMore size={16} />
-            <span>{t.title || '新对话'}</span>
-          </button>
+      <div className="trace-list">
+        {displaySteps.map((step, index) => (
+          <div className={`trace-step trace-step--${step.status}`} key={step.id}>
+            <span className="trace-step__line" />
+            <span className="trace-step__status">
+              {step.status === 'completed' ? <Check size={14} /> : null}
+              {step.status === 'running' ? <Sparkles size={14} /> : null}
+              {step.status === 'waiting' || step.status === 'failed' ? <span /> : null}
+            </span>
+            <button onClick={() => onToggle(step.id)} type="button">
+              <span>
+                <small>{String(index + 1).padStart(2, '0')}</small>
+                <strong>{step.title}</strong>
+              </span>
+              <span>
+                <em>{step.duration}</em>
+                <ChevronDown className={expandedStep === step.id ? 'is-open' : ''} size={15} />
+              </span>
+            </button>
+            <p>{step.detail}</p>
+            {expandedStep === step.id ? (
+              <div className="trace-step__detail">
+                <span>输入范围</span>
+                <p>使用当前线程问题、关联考点和最近学习证据。</p>
+                <span>结果摘要</span>
+                <p>{step.detail}。此处只展示可核验的输入和结果，不展示模型私有推理。</p>
+              </div>
+            ) : null}
+          </div>
         ))}
+      </div>
+    </div>
+  )
+}
+
+function EvidencePanel({ onClose }: { onClose?: () => void }) {
+  return (
+    <aside className="agent-evidence">
+      <div className="agent-evidence__header">
+        <div>
+          <p className="eyebrow">回答依据</p>
+          <h2>3 条可核验证据</h2>
+        </div>
+        {onClose ? (
+          <IconButton label="关闭证据" onClick={onClose}>
+            <X size={18} />
+          </IconButton>
+        ) : null}
+      </div>
+
+      <div className="evidence-list">
+        {agentSources.map((source, index) => {
+          const Icon =
+            source.type === 'outline'
+              ? FileCheck2
+              : source.type === 'question'
+                ? FileText
+                : BookOpenCheck
+          return (
+            <button className={index === 1 ? 'is-active' : ''} key={source.title} type="button">
+              <span className="evidence-list__index">[{index + 1}]</span>
+              <span className="evidence-list__icon"><Icon size={16} /></span>
+              <span className="evidence-list__content">
+                <SourceBadge type={source.type}>{source.label}</SourceBadge>
+                <strong>{source.title}</strong>
+                <small>{source.detail}</small>
+              </span>
+              <ChevronRight size={16} />
+            </button>
+          )
+        })}
+      </div>
+
+      <div className="evidence-detail">
+        <div className="evidence-detail__title">
+          <FileText size={18} />
+          <span>
+            <strong>试卷4.pdf · 第 1 题</strong>
+            <small>第 1 页 · 平台已审核</small>
+          </span>
+        </div>
+        <blockquote>
+          “变量 rear 表示循环队列中队尾元素的实际位置，变量 length 表示当前循环队列中的元素个数……”
+        </blockquote>
+        <div className="evidence-detail__repair">
+          <ShieldCheck size={16} />
+          <span>
+            <strong>原文恢复记录</strong>
+            <small>选项 C、B、D 已从原始提取文本恢复，未使用 AI 生成内容。</small>
+          </span>
+        </div>
+        <button className="text-command" type="button">
+          打开原题
+          <ArrowRight size={15} />
+        </button>
+      </div>
+
+      <div className="agent-evidence__note">
+        <Lightbulb size={16} />
+        <span>结论中的公式由定义推导；资料用于核对题意与考点范围。</span>
       </div>
     </aside>
   )
 }
 
-function EventLog({ events }: { events: AgentEvent[] }) {
-  const ref = useRef<HTMLDivElement>(null)
-  useEffect(() => { ref.current?.scrollTo({ top: ref.current.scrollHeight, behavior: 'smooth' }) }, [events])
+// ---------------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------------
 
-  return (
-    <div ref={ref} className="event-log">
-      {events.map((e) => (
-        <div key={e.id} className={`event-item event-item--${e.event_type.split('.')[0]}`}>
-          <small>#{e.sequence}</small>
-          <span className="event-type">{e.event_type}</span>
-          <code>{JSON.stringify(e.payload, null, 2)}</code>
-        </div>
-      ))}
-    </div>
-  )
-}
+const suggestions = [
+  '讲清楚循环队列 front 的推导',
+  '根据错题生成一组专项练习',
+  '检查哪些内容需要优先巩固',
+]
 
-function RunTrace({ runId, events }: { runId: string; events: AgentEvent[] }) {
-  const steps = events.filter(e => e.event_type.startsWith('step.'))
-  return (
-    <div className="run-trace">
-      <div className="run-trace__header">
-        <p className="eyebrow">执行轨迹</p>
-        <h2>运行 {runId.slice(0, 8)}...</h2>
-      </div>
-      <div className="trace-list">
-        {steps.map((step, i) => (
-          <div key={step.id} className={`trace-step trace-step--${step.event_type.split('.')[1] || 'running'}`}>
-            <span className="trace-step__line" />
-            <span className="trace-step__status">
-              {step.event_type === 'step.completed' ? <Check size={14} /> : <Sparkles size={14} />}
-            </span>
-            <span><small>{String(i + 1).padStart(2, '0')}</small><strong>{step.event_type}</strong></span>
-          </div>
-        ))}
-        {steps.length === 0 && <p className="trace-empty">等待步骤...</p>}
-      </div>
-    </div>
-  )
-}
-
-function ChatMessage({ role, content }: { role: 'user' | 'assistant' | 'system'; content: string }) {
-  return (
-    <div className={`chat-message chat-message--${role}`}>
-      <div className="chat-message__avatar">
-        {role === 'user' ? <User size={20} /> : <Bot size={20} />}
-      </div>
-      <div className="chat-message__content">
-        <p>{content}</p>
-      </div>
-    </div>
-  )
-}
-
-// ==================== Page ====================
-
-function AgentPage() {
-  const { threadId } = useParams<{ threadId?: string }>()
+export default function AgentPage() {
   const navigate = useNavigate()
+  const { threadId } = useParams<{ threadId?: string }>()
+
   const {
-    state,
+    state: agentState,
     dispatch,
     loadThreads,
     createThread,
     createRun,
-    loadRun,
     connectSSE,
     disconnectSSE,
   } = useAgent()
 
-  const [input, setInput] = useState('')
+  const [message, setMessage] = useState('')
   const [expandedStep, setExpandedStep] = useState<string | null>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
+  const [approvalRejected, setApprovalRejected] = useState(false)
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  const [evidenceOpen, setEvidenceOpen] = useState(false)
 
   // Load threads on mount
   useEffect(() => {
     void loadThreads()
   }, [loadThreads])
 
-  // Auto-focus input
+  // Determine UI state from run status
+  const runId = agentState.currentRunId
+  const run = runId ? agentState.runs[runId] : null
+  const events: AgentEvent[] = runId ? agentState.events[runId] || [] : []
+
+  const uiState: UIState = useMemo(() => {
+    if (!threadId) return 'new'
+    if (!run) return 'complete'
+    if (run.status === 'running' || run.status === 'queued') return 'running'
+    if (run.status === 'failed') return 'failed'
+    if (run.status === 'waiting_for_user') return 'approval'
+    return 'complete'
+  }, [threadId, run])
+
+  // Auto-expand running step
   useEffect(() => {
-    inputRef.current?.focus()
-  }, [threadId])
-
-  // Handle thread selection
-  const handleSelectThread = useCallback((id: string) => {
-    navigate(`/agent/${id}`)
-  }, [navigate])
-
-  // Handle new thread
-  const handleNewThread = useCallback(async () => {
-    try {
-      const thread = await createThread('新对话')
-      navigate(`/agent/${thread.id}`)
-    } catch (e) {
-      console.error('创建线程失败', e)
+    if (uiState === 'running') {
+      const runningStep = buildStepsFromEvents(events).find((s) => s.status === 'running')
+      if (runningStep) setExpandedStep(runningStep.id)
     }
-  }, [createThread, navigate])
+  }, [uiState, events])
+
+  // Connect SSE when we have a running run
+  useEffect(() => {
+    if (runId && (run?.status === 'running' || run?.status === 'queued')) {
+      connectSSE(runId)
+    }
+    return () => {
+      if (runId && (run?.status !== 'running' && run?.status !== 'queued')) {
+        disconnectSSE()
+      }
+    }
+  }, [runId, run?.status, connectSSE, disconnectSSE])
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => { disconnectSSE() }
+  }, [disconnectSSE])
 
   // Handle send message
-  const handleSend = useCallback(async () => {
-    if (!input.trim()) return
+  const sendMessage = useCallback(async () => {
+    if (!message.trim()) return
+    const input = message.trim()
 
-    const currentThread = state.threads.find((t) => t.id === threadId)
-    if (!currentThread && threadId) return
-
-    // If no thread, create one
     let tid = threadId
     if (!tid) {
       try {
-        const thread = await createThread()
+        const thread = await createThread(input.slice(0, 50))
         tid = thread.id
         navigate(`/agent/${tid}`)
       } catch (e) {
@@ -171,88 +330,355 @@ function AgentPage() {
       }
     }
 
-    // Create run
     try {
-      const run = await createRun(tid!, 'explain@v1', input.trim())
-      dispatch({ type: 'SET_CURRENT_RUN', payload: run.id })
-      setInput('')
-      // Connect SSE
-      connectSSE(run.id)
+      const newRun = await createRun(tid!, 'explain@v1', input)
+      dispatch({ type: 'SET_CURRENT_RUN', payload: newRun.id })
+      setMessage('')
+      connectSSE(newRun.id)
     } catch (e) {
       console.error('创建运行失败', e)
     }
-  }, [input, threadId, state.threads, createThread, navigate, createRun, dispatch, connectSSE])
+  }, [message, threadId, createThread, navigate, createRun, dispatch, connectSSE])
 
-  // Cleanup SSE on unmount
-  useEffect(() => {
-    return () => { disconnectSSE() }
-  }, [disconnectSSE])
+  // Derived data
+  const currentThread = agentState.threads.find((t) => t.id === threadId)
+  const lastMessage = useMemo(() => getLastMessage(events), [events])
+  const steps = useMemo(() => buildStepsFromEvents(events), [events])
 
-  const currentRun = state.currentRunId ? state.runs[state.currentRunId] : null
-  const currentEvents = state.currentRunId ? state.events[state.currentRunId] || [] : []
+  const title = useMemo(() => {
+    if (currentThread?.title) return currentThread.title
+    if (uiState === 'approval') return '调整巩固优先级'
+    if (uiState === 'failed') return '生成专项练习'
+    if (uiState === 'new') return 'Agent'
+    return '循环队列的 front 怎么算'
+  }, [currentThread, uiState])
 
-  return (
-    <div className="agent-page">
-      <ThreadSidebar
-        threads={state.threads.map((t) => ({ id: t.id, title: t.title || '新对话', updated_at: t.updated_at }))}
-        currentThreadId={threadId || null}
-        onSelect={handleSelectThread}
-        onNewThread={handleNewThread}
-      />
-
-      <main className="agent-main">
-        {/* Messages */}
-        <div className="agent-messages">
-          {currentEvents.length === 0 && (
-            <div className="agent-empty">
-              <Sparkles size={32} />
-              <h2>开始学习</h2>
-              <p>输入你的问题，AI 助手会帮你解答。</p>
-            </div>
-          )}
-          {currentEvents.map((e) => {
-            if (e.event_type === 'message.completed') {
-              const payload = e.payload as { content?: string }
-              return <ChatMessage key={e.id} role="assistant" content={payload.content || ''} />
-            }
-            return null
-          })}
+  // ==================== New State ====================
+  if (uiState === 'new') {
+    return (
+      <div className="page agent-new">
+        <div className="agent-new__intro">
+          <span className="agent-new__mark"><Sparkles size={21} /></span>
+          <p className="eyebrow">新对话</p>
+          <h1>现在最想弄清哪件事？</h1>
+          <p>可以提问、粘贴题目，或直接描述你希望 Agent 完成的学习任务。</p>
         </div>
-
-        {/* Input */}
-        <div className="agent-input">
-          <div className="agent-input__box">
-            <input
-              ref={inputRef}
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-              placeholder="输入你的问题..."
-              disabled={state.loading}
-            />
-            <Button onClick={handleSend} disabled={state.loading || !input.trim()}>
-              <Send size={16} />
-              {state.loading ? '发送中...' : '发送'}
+        <div className="agent-composer agent-composer--large">
+          <textarea
+            aria-label="输入学习问题"
+            autoFocus
+            onChange={(event) => setMessage(event.target.value)}
+            onKeyDown={(event) => {
+              if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') void sendMessage()
+            }}
+            placeholder="例如：我总是记不住循环队列里已知 rear 和 length 时 front 怎么算，能不能不要让我死记公式？"
+            value={message}
+          />
+          <div className="agent-composer__footer">
+            <IconButton label="添加题目或图片">
+              <Paperclip size={18} />
+            </IconButton>
+            <span>⌘ Enter 发送</span>
+            <Button disabled={!message.trim()} icon={<Send size={16} />} onClick={sendMessage}>
+              开始
             </Button>
           </div>
-          {state.sseConnected && <span className="sse-indicator">● 实时连接中</span>}
         </div>
-      </main>
-
-      {/* Right panel: execution trace */}
-      <aside className="agent-trace-panel">
-        {currentRun ? (
-          <RunTrace runId={currentRun.id} events={currentEvents} />
-        ) : (
-          <div className="agent-trace-panel__empty">
-            <Lightbulb size={24} />
-            <p>选择一个运行以查看执行轨迹</p>
+        <div className="agent-suggestions">
+          <span>从常见任务开始</span>
+          <div>
+            {suggestions.map((suggestion) => (
+              <button key={suggestion} onClick={() => setMessage(suggestion)} type="button">
+                {suggestion}
+                <ArrowRight size={15} />
+              </button>
+            ))}
           </div>
-        )}
+        </div>
+        <div className="agent-new__boundary">
+          <Search size={16} />
+          <span>回答优先使用官方大纲、已审核知识与可靠原题；证据不足时会明确标记为模型推断。</span>
+        </div>
+      </div>
+    )
+  }
+
+  // ==================== Approval State ====================
+  if (uiState === 'approval') {
+    return (
+      <div className="page agent-page">
+        <PageHeading
+          actions={<StatusMark tone={approvalRejected ? 'neutral' : 'warning'}>{approvalRejected ? '已拒绝' : '等待确认'}</StatusMark>}
+          description="Agent 发现“操作系统 · 死锁”连续错误 3 次，建议提高该考点的巩固优先级。"
+          eyebrow="学习建议 · 内容调整"
+          title={title}
+        />
+
+        <section className="approval-sheet">
+          <div className="approval-sheet__why">
+            <span><Sparkles size={18} /></span>
+            <div>
+              <h2>{approvalRejected ? '原优先级保持不变' : '这次修改会改变什么'}</h2>
+              <p>
+                {approvalRejected
+                  ? '拒绝后没有改变内容优先级。你仍可重新打开差异并决定是否采用。'
+                  : '只调整两个考点的相对优先级，不创建学习时间表，也不会改变已有完成记录。'}
+              </p>
+            </div>
+          </div>
+
+          {!approvalRejected ? (
+            <div className="approval-diff">
+              <div className="approval-diff__column">
+                <span>当前优先级</span>
+                <div className="approval-diff__item approval-diff__item--remove">
+                  <small>优先巩固</small>
+                  <strong>数据结构排序练习</strong>
+                  <em>下调</em>
+                </div>
+              </div>
+              <ArrowRight className="approval-diff__arrow" size={22} />
+              <div className="approval-diff__column">
+                <span>建议优先级</span>
+                <div className="approval-diff__item approval-diff__item--add">
+                  <small>优先巩固</small>
+                  <strong>操作系统死锁专项</strong>
+                  <em>上调</em>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="approval-rejected">
+              <History size={20} />
+              <span>
+                <strong>内容顺序保持不变</strong>
+                <small>Agent 会继续根据后续对话和练习记录更新建议</small>
+              </span>
+            </div>
+          )}
+
+          <div className="approval-impact">
+            <span><ShieldCheck size={17} /> 不会删除历史记录</span>
+            <span><RotateCcw size={17} /> 可随时在对话中调整</span>
+            <span><CircleStop size={17} /> 拒绝不会中断当前线程</span>
+          </div>
+
+          <div className="approval-sheet__actions">
+            {approvalRejected ? (
+              <>
+                <Button onClick={() => navigate('/progress')} tone="quiet">查看学习进度</Button>
+                <Button icon={<RefreshCw size={16} />} onClick={() => setApprovalRejected(false)} tone="secondary">
+                  重新打开差异
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button onClick={() => setApprovalRejected(true)} tone="secondary">保持当前顺序</Button>
+                <Button icon={<Check size={16} />} onClick={() => navigate('/progress')}>
+                  采用调整
+                </Button>
+              </>
+            )}
+          </div>
+        </section>
+      </div>
+    )
+  }
+
+  // ==================== Running / Complete / Failed States ====================
+  return (
+    <div className="agent-workspace">
+      <section className="agent-thread">
+        <header className="agent-thread__header">
+          <div>
+            <p className="eyebrow">{currentThread?.title ?? '数据结构 · 栈和队列'}</p>
+            <h1>{title}</h1>
+          </div>
+          <div className="agent-thread__header-actions">
+            <Button
+              className="agent-mobile-context"
+              icon={<PanelRightOpen size={16} />}
+              onClick={() => setDetailsOpen(true)}
+              tone="quiet"
+            >
+              查看步骤
+            </Button>
+            <StatusMark tone={uiState === 'complete' ? 'success' : uiState === 'failed' ? 'error' : 'running'}>
+              {uiState === 'complete' ? '已完成' : uiState === 'failed' ? '可恢复' : '运行中'}
+            </StatusMark>
+          </div>
+        </header>
+
+        <div className="agent-timeline">
+          {/* User message */}
+          <article className="user-entry">
+            <div className="avatar avatar--small">张</div>
+            <div>
+              <span>你 · 刚刚</span>
+              <p>{run?.input_message ?? '正在加载...'}</p>
+            </div>
+          </article>
+
+          {/* Failed state */}
+          {uiState === 'failed' ? (
+            <>
+              <article className="run-summary run-summary--failed">
+                <span className="run-summary__icon"><TriangleAlert size={19} /></span>
+                <div>
+                  <p className="eyebrow">运行中断 · 结果已保留</p>
+                  <h2>生成逐题提示时响应超时</h2>
+                  <p>大纲检索、题目筛选和 3 道练习草稿已经完成。重试只会继续失败步骤，不会重复创建练习。</p>
+                  <div className="preserved-artifact">
+                    <ListChecks size={18} />
+                    <span>
+                      <strong>专项练习草稿 · 3 道题</strong>
+                      <small>已保存，可直接开始无提示练习</small>
+                    </span>
+                    <StatusMark tone="success">已保留</StatusMark>
+                  </div>
+                  <div className="run-summary__actions">
+                    <Button icon={<RefreshCw size={16} />} onClick={() => { /* TODO: retry */ }}>
+                      仅重试失败步骤
+                    </Button>
+                    <Button onClick={() => navigate('/practice/queue-check?question=1')} tone="secondary">
+                      直接开始练习
+                    </Button>
+                  </div>
+                </div>
+              </article>
+              <article className="agent-answer agent-answer--muted">
+                <p className="eyebrow">已完成的工作</p>
+                <h2>已从 18 道候选题中筛出 3 道可靠题目</h2>
+                <p>每道题都通过题目质量门禁，并已关联“循环队列下标关系”考点。</p>
+              </article>
+            </>
+          ) : null}
+
+          {/* Running state */}
+          {uiState === 'running' ? (
+            <article className="run-summary">
+              <span className="run-summary__icon"><Sparkles size={19} /></span>
+              <div>
+                <p className="eyebrow">Agent 正在工作</p>
+                <h2>正在处理你的问题...</h2>
+                <p>页面可以离开或刷新。该运行已保存为同一个 run，完成后会自动更新。</p>
+                <button className="run-summary__progress" onClick={() => setDetailsOpen(true)} type="button">
+                  <span><i style={{ width: `${Math.min(100, ((steps.filter(s => s.status === 'completed').length / Math.max(steps.length, 1)) * 100))}%` }} /></span>
+                  <strong>{steps.filter(s => s.status === 'completed').length}/{steps.length}</strong>
+                  <small>查看执行步骤</small>
+                </button>
+              </div>
+            </article>
+          ) : null}
+
+          {/* Complete state */}
+          {uiState === 'complete' ? (
+            <article className="agent-answer">
+              <div className="agent-answer__label">
+                <span><Sparkles size={17} /></span>
+                <strong>408 Agent</strong>
+                <small>已核验 {agentSources.length} 条来源</small>
+              </div>
+              <section>
+                <p className="eyebrow">直接结论</p>
+                <h2>{lastMessage ?? '回答已生成'}</h2>
+                <p>
+                  {lastMessage ? '详细解答请见上方。' : '正在加载回答内容...'}
+                  <button className="citation" onClick={() => setEvidenceOpen(true)} type="button">[1]</button>
+                </p>
+              </section>
+              <div className="answer-sources">
+                <span>依据</span>
+                <button onClick={() => setEvidenceOpen(true)} type="button">
+                  <SourceBadge type="outline">大纲</SourceBadge> 栈和队列的顺序存储
+                </button>
+                <button onClick={() => setEvidenceOpen(true)} type="button">
+                  <SourceBadge type="question">原题</SourceBadge> 试卷4.pdf 第 1 题
+                </button>
+                <button onClick={() => setEvidenceOpen(true)} type="button">
+                  <SourceBadge type="knowledge">知识</SourceBadge> 循环队列
+                </button>
+              </div>
+              <div className="agent-answer__actions">
+                <Button icon={<BookOpenCheck size={17} />} onClick={() => navigate('/practice/queue-check?question=1')}>
+                  用 2 道题验证
+                </Button>
+                <Button icon={<MessageCircleMore size={17} />} tone="secondary">
+                  换一种图示讲解
+                </Button>
+              </div>
+            </article>
+          ) : null}
+        </div>
+
+        {/* Composer */}
+        {uiState !== 'failed' ? (
+          <div className="agent-composer agent-composer--thread">
+            <textarea
+              aria-label="补充问题"
+              onChange={(event) => setMessage(event.target.value)}
+              onKeyDown={(event) => {
+                if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') void sendMessage()
+              }}
+              placeholder={uiState === 'running' ? '可补充条件，Agent 会在当前步骤后处理…' : '继续追问，或让 Agent 执行下一项学习任务…'}
+              rows={2}
+              value={message}
+            />
+            <div className="agent-composer__footer">
+              <IconButton label="添加题目或图片"><Paperclip size={18} /></IconButton>
+              <span>{uiState === 'running' ? '运行不会因离开页面而中断' : '引用当前线程上下文'}</span>
+              <IconButton label="发送消息" onClick={sendMessage}><Send size={18} /></IconButton>
+            </div>
+          </div>
+        ) : null}
+      </section>
+
+      {/* Right context panel */}
+      <aside className="agent-context">
+        <ExecutionTrace
+          expandedStep={expandedStep}
+          onToggle={(id) => setExpandedStep((current) => (current === id ? null : id))}
+          state={uiState}
+          steps={steps}
+        />
+        {uiState === 'complete' ? (
+          <button className="context-evidence-link" onClick={() => setEvidenceOpen(true)} type="button">
+            <span><FileCheck2 size={18} /></span>
+            <span>
+              <strong>查看回答证据</strong>
+              <small>3 条来源 · 1 条原题修复记录</small>
+            </span>
+            <ChevronRight size={16} />
+          </button>
+        ) : null}
       </aside>
+
+      {/* Evidence drawer */}
+      {evidenceOpen ? (
+        <>
+          <button aria-label="关闭证据遮罩" className="drawer-backdrop" onClick={() => setEvidenceOpen(false)} type="button" />
+          <div className="evidence-drawer"><EvidencePanel onClose={() => setEvidenceOpen(false)} /></div>
+        </>
+      ) : null}
+
+      {/* Steps drawer (mobile) */}
+      {detailsOpen ? (
+        <>
+          <button aria-label="关闭步骤遮罩" className="drawer-backdrop" onClick={() => setDetailsOpen(false)} type="button" />
+          <div className="context-drawer">
+            <div className="context-drawer__header">
+              <strong>执行步骤</strong>
+              <IconButton label="关闭步骤" onClick={() => setDetailsOpen(false)}><X size={18} /></IconButton>
+            </div>
+            <ExecutionTrace
+              expandedStep={expandedStep}
+              onToggle={(id) => setExpandedStep((current) => (current === id ? null : id))}
+              state={uiState}
+              steps={steps}
+            />
+          </div>
+        </>
+      ) : null}
     </div>
   )
 }
-
-export default AgentPage
