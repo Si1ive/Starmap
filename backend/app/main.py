@@ -60,6 +60,7 @@ from app.modules.operations.schema_guard import (
     verify_database_schema,
 )
 from app.modules.agent.router import router as agent_router
+from app.modules.agent.admin_router import router as agent_admin_router
 from app.modules.workspace.router import router as workspace_router
 from app.middleware.error_handler import (
     ErrorHandlerMiddleware,
@@ -369,6 +370,12 @@ app.include_router(
 )
 app.include_router(
     monitoring_router,
+    prefix="/api/v1",
+    dependencies=admin_dependencies,
+)
+
+app.include_router(
+    agent_admin_router,
     prefix="/api/v1",
     dependencies=admin_dependencies,
 )
