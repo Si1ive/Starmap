@@ -161,8 +161,7 @@ async def lifespan(app: FastAPI):
         from app.modules.agent.worker import start_worker
         from app.db.mysql import mysql_client
 
-        async with mysql_client.session() as db:
-            await start_worker(db, interval=5)
+        await start_worker(interval=5)
         logger.info("Agent Worker 启动成功")
     except Exception as e:
         logger.warning("Agent Worker 启动失败", error=str(e))

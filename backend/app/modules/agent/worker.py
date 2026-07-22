@@ -29,11 +29,10 @@ WORKER_ID = f"worker_{uuid.uuid4().hex[:16]}"
 class AgentWorker:
     """Agent 工作线程"""
 
-    def __init__(self, db: AsyncSession):
-        self.db = db
+    def __init__(self):
         self.running = False
 
-    async def acquire_lease(self, run: AgentRun, lease_duration: int = 300) -> bool:
+    async def acquire_lease(self, db: AsyncSession, run: AgentRun, lease_duration: int = 300) -> bool:
         """
         获取Run的租约
         
@@ -48,7 +47,7 @@ class AgentWorker:
         expires_at = now + timedelta(seconds=lease_duration)
         
         # 更新租约
-        result = await self.db.execute(
+        result = await db.execute(
             update(AgentRun)
             .where(AgentRun.id == run.id)
             .where(
@@ -60,7 +59,7 @@ class AgentWorker:
                 lease_expires_at=expires_at,
             )
         )
-        await self.db.flush()
+        await db.flush()
         
         if result.rowcount > 0:
             logger.info("租约获取成功", run_id=run.id, worker=WORKER_ID)
@@ -68,32 +67,32 @@ class AgentWorker:
         
         return False
 
-    async def extend_lease(self, run: AgentRun, lease_duration: int = 300) -> bool:
+    async def extend_lease(self, db: AsyncSession, run: AgentRun, lease_duration: int = 300) -> bool:
         """延长租约"""
         now = datetime.utcnow()
         expires_at = now + timedelta(seconds=lease_duration)
         
-        result = await self.db.execute(
+        result = await db.execute(
             update(AgentRun)
             .where(AgentRun.id == run.id)
             .where(AgentRun.lease_owner == WORKER_ID)
             .values(lease_expires_at=expires_at)
         )
-        await self.db.flush()
+        await db.flush()
         
         return result.rowcount > 0
 
-    async def release_lease(self, run: AgentRun) -> None:
+    async def release_lease(self, db: AsyncSession, run: AgentRun) -> None:
         """释放租约"""
-        await self.db.execute(
+        await db.execute(
             update(AgentRun)
             .where(AgentRun.id == run.id)
             .values(lease_owner=None, lease_expires_at=None)
         )
-        await self.db.flush()
+        await db.flush()
         logger.info("租约释放", run_id=run.id, worker=WORKER_ID)
 
-    async def process_run(self, run: AgentRun) -> bool:
+    async def process_run(self, db: AsyncSession, run: AgentRun) -> bool:
         """
         处理单个Run
         
@@ -108,7 +107,7 @@ class AgentWorker:
         from .workflows.contracts import ExecutionContext
 
         # 获取租约
-        if not await self.acquire_lease(run):
+        if not await self.acquire_lease(db, run):
             logger.info("无法获取租约，跳过", run_id=run.id)
             return False
 
@@ -116,11 +115,11 @@ class AgentWorker:
             # 状态转移：queued -> running
             if run.status == RunStatus.QUEUED.value:
                 state_machine.transition(run, RunStatus.RUNNING)
-                await event_store.append(self.db, run.id, "run.status_changed", {
+                await event_store.append(db, run.id, "run.status_changed", {
                     "from": "queued",
                     "to": "running",
                 })
-                await self.db.flush()
+                await db.flush()
 
             # 获取工作流
             workflow = workflow_registry.get(run.workflow_name)
@@ -129,40 +128,40 @@ class AgentWorker:
                 logger.error(error_msg, run_id=run.id)
                 state_machine.transition(run, RunStatus.FAILED, reason=error_msg)
                 run.error_message = error_msg
-                await self.db.flush()
+                await db.flush()
                 return False
 
             # 延长租约
-            await self.extend_lease(run)
+            await self.extend_lease(db, run)
 
             # 构建执行上下文
             context = ExecutionContext(
                 run_id=run.id,
                 user_id=run.user_id,
-                db=self.db,
+                db=db,
             )
             context.set("input_message", run.input_message)
             context.set("workflow", run.workflow_name)
             context.max_model_calls = run.max_model_calls
 
             # 执行工作流
-            engine = WorkflowEngine(self.db)
+            engine = WorkflowEngine(db)
             result = await engine.execute(workflow, context, run)
 
             # 延长租约
-            await self.extend_lease(run)
+            await self.extend_lease(db, run)
 
             # 处理结果
             if result.status.value == "completed":
                 state_machine.transition(run, RunStatus.COMPLETED)
-                await event_store.append(self.db, run.id, "run.completed", {
+                await event_store.append(db, run.id, "run.completed", {
                     "run_id": run.id,
                     "artifacts": result.output.get("artifacts", []) if result.output else [],
                 })
                 
                 # 如果有产物，创建产物记录
                 if result.artifact:
-                    service = AgentService(self.db)
+                    service = AgentService(db)
                     await service.create_artifact(
                         run_id=run.id,
                         artifact_type=result.artifact.get("type", "message"),
@@ -173,27 +172,27 @@ class AgentWorker:
                 error_msg = result.error or "工作流执行失败"
                 state_machine.transition(run, RunStatus.FAILED, reason=error_msg)
                 run.error_message = error_msg
-                await event_store.append(self.db, run.id, "error", {
+                await event_store.append(db, run.id, "error", {
                     "run_id": run.id,
                     "error": error_msg,
                 })
 
-            await self.db.flush()
+            await db.flush()
             return True
 
         except Exception as e:
             logger.error("Run 处理异常", run_id=run.id, error=str(e))
             state_machine.transition(run, RunStatus.FAILED, reason=str(e))
             run.error_message = str(e)
-            await event_store.append(self.db, run.id, "error", {
+            await event_store.append(db, run.id, "error", {
                 "run_id": run.id,
                 "error": str(e),
             })
-            await self.db.flush()
+            await db.flush()
             return False
 
         finally:
-            await self.release_lease(run)
+            await self.release_lease(db, run)
 
     async def scan_and_process(self, limit: int = 10) -> int:
         """
@@ -204,40 +203,41 @@ class AgentWorker:
         """
         processed = 0
         
-        # 扫描待处理的outbox
-        pending = await outbox_store.scan_pending(self.db, limit=limit)
+        async with mysql_client.session() as db:
+            # 扫描待处理的outbox
+            pending = await outbox_store.scan_pending(db, limit=limit)
         
         for outbox_item in pending:
             try:
                 # 获取run
-                result = await self.db.execute(
+                result = await db.execute(
                     select(AgentRun).where(AgentRun.id == outbox_item.run_id)
                 )
                 run = result.scalar_one_or_none()
                 
                 if not run:
                     logger.warning("Run 不存在", run_id=outbox_item.run_id)
-                    await outbox_store.complete(self.db, outbox_item.id)
+                    await outbox_store.complete(db, outbox_item.id)
                     continue
 
                 # 认领outbox
-                if not await outbox_store.claim(self.db, outbox_item.id, WORKER_ID):
+                if not await outbox_store.claim(db, outbox_item.id, WORKER_ID):
                     continue
 
                 # 处理run
-                success = await self.process_run(run)
+                success = await self.process_run(db, run)
                 
                 if success:
-                    await outbox_store.complete(self.db, outbox_item.id)
+                    await outbox_store.complete(db, outbox_item.id)
                 else:
-                    await outbox_store.fail(self.db, outbox_item.id)
+                    await outbox_store.fail(db, outbox_item.id)
                 
                 processed += 1
                 
             except Exception as e:
                 logger.error("处理outbox异常", outbox_id=outbox_item.id, error=str(e))
                 try:
-                    await outbox_store.fail(self.db, outbox_item.id)
+                    await outbox_store.fail(db, outbox_item.id)
                 except Exception:
                     pass
 
@@ -273,10 +273,10 @@ class AgentWorker:
 _worker_instance: Optional[AgentWorker] = None
 
 
-async def start_worker(db: AsyncSession, interval: int = 5):
+async def start_worker(interval: int = 5):
     """启动Worker（后台任务）"""
     global _worker_instance
-    _worker_instance = AgentWorker(db)
+    _worker_instance = AgentWorker()
     # Run in a background task so it doesn't block startup
     asyncio.create_task(_worker_instance.start(interval))
 
