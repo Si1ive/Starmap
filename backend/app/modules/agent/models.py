@@ -54,7 +54,7 @@ class AgentRun(Base):
     user_id: Mapped[str] = mapped_column(String(32), nullable=False, comment="用户ID")
     workflow_name: Mapped[str] = mapped_column(String(50), nullable=False, comment="工作流名称")
     status: Mapped[str] = mapped_column(
-        SAEnum("queued", "running", "completed", "failed", "waiting_for_user"),
+        SAEnum("queued", "running", "completed", "failed", "waiting_for_user", "waiting_for_approval"),
         default="queued",
         comment="运行状态"
     )
