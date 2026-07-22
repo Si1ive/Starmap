@@ -100,6 +100,16 @@ function getLastMessage(events: AgentEvent[]): string | null {
   return null
 }
 
+// 根据用户输入自动路由到对应工作流
+function detectWorkflow(input: string): string {
+  const lower = input.toLowerCase()
+  if (/练习|做题|刷题|验证|测试|题目|习题/.test(lower)) return 'validate@v1'
+  if (/批改|检查|评测|反馈|评分|打分/.test(lower)) return 'grade@v1'
+  if (/计划|安排|规划|学习|日程|时间|规划/.test(lower)) return 'plan@v1'
+  if (/讲解|解释|说明|什么是|为什么|怎么|如何|区别/.test(lower)) return 'explain@v1'
+  return 'explain@v1'
+}
+
 // ---------------------------------------------------------------------------
 // Components
 // ---------------------------------------------------------------------------
@@ -280,6 +290,7 @@ export default function AgentPage() {
   } = useAgent()
 
   const [message, setMessage] = useState('')
+  const [selectedWorkflow, setSelectedWorkflow] = useState<'auto' | 'explain@v1' | 'validate@v1' | 'grade@v1' | 'plan@v1'>('auto')
   const [expandedStep, setExpandedStep] = useState<string | null>(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [evidenceOpen, setEvidenceOpen] = useState(false)
@@ -378,7 +389,8 @@ export default function AgentPage() {
     }
 
     try {
-      const newRun = await createRun(tid!, 'explain@v1', input)
+      const workflow = selectedWorkflow === 'auto' ? detectWorkflow(input) : selectedWorkflow
+      const newRun = await createRun(tid!, workflow, input)
       dispatch({ type: 'SET_CURRENT_RUN', payload: newRun.id })
       setMessage('')
       connectSSE(newRun.id)
@@ -429,6 +441,18 @@ export default function AgentPage() {
             <IconButton label="添加题目或图片">
               <Paperclip size={18} />
             </IconButton>
+            <select
+              aria-label="选择工作流"
+              className="agent-workflow-select"
+              onChange={(e) => setSelectedWorkflow(e.target.value as typeof selectedWorkflow)}
+              value={selectedWorkflow}
+            >
+              <option value="auto">自动识别</option>
+              <option value="explain@v1">讲解</option>
+              <option value="validate@v1">练习</option>
+              <option value="grade@v1">批改</option>
+              <option value="plan@v1">计划</option>
+            </select>
             <span>⌘ Enter 发送</span>
             <Button disabled={!message.trim()} icon={<Send size={16} />} onClick={sendMessage}>
               开始
