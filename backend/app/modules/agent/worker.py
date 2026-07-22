@@ -277,7 +277,8 @@ async def start_worker(db: AsyncSession, interval: int = 5):
     """启动Worker（后台任务）"""
     global _worker_instance
     _worker_instance = AgentWorker(db)
-    await _worker_instance.start(interval)
+    # Run in a background task so it doesn't block startup
+    asyncio.create_task(_worker_instance.start(interval))
 
 
 async def stop_worker():
