@@ -14,6 +14,7 @@ import {
   useRef,
 } from 'react'
 import * as agentApi from '../api/agent'
+import type { Approval } from '../api/agent'
 
 // ==================== Types ====================
 
@@ -59,6 +60,7 @@ export interface AgentState {
   runs: Record<string, Run>
   events: Record<string, AgentEvent[]>
   artifacts: Record<string, Artifact[]>
+  approvals: Record<string, Approval[]>
   loading: boolean
   error: string | null
   sseConnected: boolean
@@ -75,6 +77,8 @@ type AgentAction =
   | { type: 'SET_THREAD_RUNS'; payload: { threadId: string; runs: Run[] } }
   | { type: 'APPEND_EVENTS'; payload: { runId: string; events: AgentEvent[] } }
   | { type: 'SET_ARTIFACTS'; payload: { runId: string; artifacts: Artifact[] } }
+  | { type: 'SET_APPROVALS'; payload: { runId: string; approvals: Approval[] } }
+  | { type: 'UPDATE_APPROVAL'; payload: { runId: string; approval: Approval } }
   | { type: 'SET_SSE_CONNECTED'; payload: boolean }
   | { type: 'CLEAR_ERROR' }
 
@@ -87,6 +91,7 @@ const initialState: AgentState = {
   runs: {},
   events: {},
   artifacts: {},
+  approvals: {},
   loading: false,
   error: null,
   sseConnected: false,
@@ -135,6 +140,24 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
           [action.payload.runId]: action.payload.artifacts,
         },
       }
+    case 'SET_APPROVALS':
+      return {
+        ...state,
+        approvals: {
+          ...state.approvals,
+          [action.payload.runId]: action.payload.approvals,
+        },
+      }
+    case 'UPDATE_APPROVAL':
+      return {
+        ...state,
+        approvals: {
+          ...state.approvals,
+          [action.payload.runId]: (state.approvals[action.payload.runId] || []).map((a) =>
+            a.id === action.payload.approval.id ? action.payload.approval : a
+          ),
+        },
+      }
     case 'SET_SSE_CONNECTED':
       return { ...state, sseConnected: action.payload }
     case 'CLEAR_ERROR':
@@ -156,6 +179,9 @@ export interface AgentContextValue {
   loadRun: (runId: string) => Promise<agentApi.Run>
   loadThreadRuns: (threadId: string) => Promise<agentApi.Run[]>
   submitInput: (runId: string, inputText: string) => Promise<void>
+  loadApprovals: (runId: string) => Promise<void>
+  approveApproval: (runId: string, approvalId: string) => Promise<void>
+  rejectApproval: (runId: string, approvalId: string) => Promise<void>
   connectSSE: (runId: string, afterSequence?: number) => void
   disconnectSSE: () => void
 }
@@ -232,6 +258,36 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
     await loadRun(runId)
   }, [loadRun])
 
+  // Load approvals
+  const loadApprovals = useCallback(async (runId: string) => {
+    try {
+      const response = await agentApi.getRunApprovals(runId)
+      dispatch({ type: 'SET_APPROVALS', payload: { runId, approvals: response.approvals } })
+    } catch (e) {
+      dispatch({ type: 'SET_ERROR', payload: e instanceof Error ? e.message : '加载审批失败' })
+    }
+  }, [])
+
+  // Approve approval
+  const approveApproval = useCallback(async (runId: string, approvalId: string) => {
+    try {
+      const approval = await agentApi.approveApproval(runId, approvalId)
+      dispatch({ type: 'UPDATE_APPROVAL', payload: { runId, approval } })
+    } catch (e) {
+      dispatch({ type: 'SET_ERROR', payload: e instanceof Error ? e.message : '审批操作失败' })
+    }
+  }, [])
+
+  // Reject approval
+  const rejectApproval = useCallback(async (runId: string, approvalId: string) => {
+    try {
+      const approval = await agentApi.rejectApproval(runId, approvalId)
+      dispatch({ type: 'UPDATE_APPROVAL', payload: { runId, approval } })
+    } catch (e) {
+      dispatch({ type: 'SET_ERROR', payload: e instanceof Error ? e.message : '审批操作失败' })
+    }
+  }, [])
+
   // SSE
   const connectSSE = useCallback((runId: string, afterSequence = 0) => {
     if (esRef.current) {
@@ -293,6 +349,9 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
     loadRun,
     loadThreadRuns,
     submitInput,
+    loadApprovals,
+    approveApproval,
+    rejectApproval,
     connectSSE,
     disconnectSSE,
   }
