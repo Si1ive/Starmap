@@ -20,7 +20,7 @@ export interface Run {
   id: string
   thread_id: string
   workflow_name: string
-  status: 'queued' | 'running' | 'completed' | 'failed' | 'waiting_for_user'
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'waiting_for_user' | 'waiting_for_approval'
   input_message: string
   result_artifact_id: string | null
   error_message: string | null
@@ -57,6 +57,19 @@ export interface CreateRunRequest {
   input_message: string
   client_idempotency_key?: string
   metadata?: Record<string, unknown>
+}
+
+export interface Approval {
+  id: string
+  run_id: string
+  action_key: string
+  status: 'pending' | 'approved' | 'rejected' | 'expired'
+  diff_ref: string | null
+  precondition_ref: string | null
+  decided_by: string | null
+  expires_at: string | null
+  created_at: string
+  updated_at: string
 }
 
 export interface SubmitInputRequest {
@@ -159,4 +172,22 @@ export function createEventSource(runId: string, afterSequence = 0): EventSource
 
 export async function getRunArtifacts(runId: string): Promise<{ run_id: string; artifacts: Artifact[] }> {
   return apiRequest<{ run_id: string; artifacts: Artifact[] }>(`/agent/runs/${runId}/artifacts`)
+}
+
+// ==================== Approval API ====================
+
+export async function getRunApprovals(runId: string): Promise<{ run_id: string; approvals: Approval[] }> {
+  return apiRequest<{ run_id: string; approvals: Approval[] }>(`/agent/runs/${runId}/approvals`)
+}
+
+export async function approveApproval(runId: string, approvalId: string): Promise<Approval> {
+  return apiRequest<Approval>(`/agent/runs/${runId}/approvals/${approvalId}/approve`, {
+    method: 'POST',
+  })
+}
+
+export async function rejectApproval(runId: string, approvalId: string): Promise<Approval> {
+  return apiRequest<Approval>(`/agent/runs/${runId}/approvals/${approvalId}/reject`, {
+    method: 'POST',
+  })
 }
