@@ -331,6 +331,16 @@ class AgentService:
         )
         return result.scalar_one_or_none()
 
+    async def get_run_approvals(self, run_id: str) -> list["AgentApproval"]:
+        """获取Run的所有审批请求（按创建时间降序）"""
+        from .models import AgentApproval
+        result = await self.db.execute(
+            select(AgentApproval)
+            .where(AgentApproval.run_id == run_id)
+            .order_by(desc(AgentApproval.created_at))
+        )
+        return result.scalars().all()
+
     async def decide_approval(
         self,
         run_id: str,

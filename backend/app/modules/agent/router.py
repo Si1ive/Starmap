@@ -9,10 +9,11 @@ from typing import AsyncGenerator, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from app.core.logging import get_logger
 from app.db.mysql import mysql_client
-from .models import AgentThread, AgentRun, AgentEvent, AgentArtifact
+from .models import AgentThread, AgentRun, AgentEvent, AgentArtifact, AgentApproval
 from .schemas import (
     ThreadCreateRequest, ThreadResponse, RunCreateRequest,
     RunStatusResponse, EventResponse, ArtifactResponse,
@@ -369,6 +370,40 @@ async def submit_input_answer(
 
 
 # ==================== Approval API ====================
+
+@router.get("/runs/{run_id}/approvals")
+async def list_run_approvals(
+    run_id: str,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """列出Run的所有审批请求"""
+    async with db:
+        service = AgentService(db)
+        # 先校验run权限
+        run = await service.get_run(run_id, user_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Run不存在")
+
+        approvals = await service.get_run_approvals(run_id)
+        return {
+            "run_id": run_id,
+            "approvals": [
+                {
+                    "id": a.id,
+                    "run_id": a.run_id,
+                    "action_key": a.action_key,
+                    "status": a.status,
+                    "diff_ref": a.diff_ref,
+                    "precondition_ref": a.precondition_ref,
+                    "decided_by": a.decided_by,
+                    "expires_at": a.expires_at.isoformat() if a.expires_at else None,
+                    "created_at": a.created_at.isoformat() if a.created_at else None,
+                    "updated_at": a.updated_at.isoformat() if a.updated_at else None,
+                }
+                for a in approvals
+            ],
+        }
 
 @router.post("/runs/{run_id}/approvals/{approval_id}/approve")
 async def approve_approval(
