@@ -1,8 +1,8 @@
 # 408 学习 Agent 对话运行时技术设计
 
-> 版本：v1.1
-> 日期：2026-07-21
-> 状态：目标设计，Phase 0 实施基线
+> 版本：v1.2
+> 日期：2026-07-23
+> 状态：目标设计，已补充统一 Agent 路由与 Pydantic AI 上下文实现边界
 > 上游产品契约：[408 学习 Agent 主体 PRD](../product/408-agent-main-prd.md)
 > 关联文档：[Agent 工作流编排技术设计](./408-agent-workflow-orchestration-design.md)、[Agent 工作流技术选型与风险分析](./408-agent-workflow-technology-selection-and-risk-analysis.md)、[用户端 Agent 技术架构](./user-agent-client-architecture.md)、[系统架构](./architecture.md)、[后端模块化单体演进方案](./backend-modular-monolith.md)、[多模态入库与检索设计](./multimodal-ingestion-retrieval-design.md)、[用户认证技术方案](./authentication-architecture-options.md)
 
@@ -24,9 +24,9 @@
 
 ### 1.1 当前实现与目标的差异
 
-当前代码已有 `backend/app/modules/chat`：`POST /api/v1/chat` 同步调用模型，以匿名 `session_id` 维护 Redis 缓存并将消息补写到 `ChatSession` / `ChatMessageRecord`。该接口不能表达已认证用户归属、运行状态、长任务恢复、工具审计或可靠副作用。
+当前代码同时存在旧 `backend/app/modules/chat` 和新 `backend/app/modules/agent`。新 Agent 模块已经落地 thread/run/message/timeline、outbox/lease/Worker、thread SSE 与部分 workflow，但动态路由仍固定到 explain，执行上下文只包含当前输入。
 
-本设计新增的 `agent`、`workspace`、`learning`、`practice`、`user_sources` 和 `evals` 模块在本文发布时尚未落地。实施时必须增量建设，不得把目标文件或表误认为现有能力。
+Pydantic AI 目前也尚未真正接入：依赖文件没有 `pydantic-ai`，现有 `agent/model_runtime/adapter.py` 虽以 Pydantic AI 命名，实际仍直接调用 OpenAI SDK。实施时必须先完成依赖 PoC、测试模型验证和渐进替换，不得把类名视为已经具备 Pydantic AI 能力。
 
 旧 Chat 接口保持为管理员调试和兼容入口；新用户端只通过 `/api/v1/app/*` 调用 Agent Runtime。旧接口不再新增 Agent 特性，完成迁移后再按数据保留策略下线。
 
@@ -50,9 +50,9 @@
 | 实时通道 | SSE | 对话运行主要是服务端单向状态和产物更新；双向命令仍走 HTTP。 |
 | 业务编排契约 | 外层版本化受限 Workflow + 内层有界 `agent_loop` | 外层图、节点输入输出、副作用边界和分支均在版本化代码中声明；模型仅可在指定 Loop 中按 Schema 从 action 白名单选择下一次只读探索。详见[工作流编排技术设计](./408-agent-workflow-orchestration-design.md)。 |
  | 图执行与持久执行实现 | P0 首发自建最小 durable kernel；LangGraph 做 PoC；Temporal 按触发条件评估 | 以 `WorkflowDefinition`、`AgentLoopPolicy`、`NodeResult`、MySQL outbox/lease/Worker 为基础，框架只替换执行层，不改变 MySQL 事实、领域命令与 API/SSE 契约。LangGraph 进入 PoC 但不预设进入生产；Temporal 在 timer/跨服务/SLO 触发后评估。详见[工作流技术选型与风险分析](./408-agent-workflow-technology-selection-and-risk-analysis.md)。 |
- | 模型交互 / Loop 层 | 服务端模型适配层 + Pydantic AI + Pydantic Schema | Pydantic AI 作为 Loop 决策协议的轻量实现：类型安全的工具注册、结构化输出解析和多提供商切换。它不承载 Workflow，外层持久化、审批和恢复仍由自建 kernel 或 Temporal 负责。TypeScript Agent SDK（如 `pi-agent-core`）因语言栈错位被排除。详见[工作流技术选型与风险分析](./408-agent-workflow-technology-selection-and-risk分析.md)。 |
+ | 模型交互 / Loop 层 | Pydantic AI Agent + Pydantic Schema + 项目上下文构建器 | Pydantic AI 承担 `message_history`、`RunContext/deps`、history processor、类型安全工具、结构化输出、多提供商和 usage limits；MySQL 和 durable kernel 仍承担 thread/workflow 事实、审批和恢复。详见[工作流技术选型与风险分析](./408-agent-workflow-technology-selection-and-risk-analysis.md)。 |
 
-首发不引入 MCP server、WebSocket、通用浏览器自动化、通用命令执行或 TypeScript Agent SDK（如 `pi-agent-core`）。Pydantic AI 用于 Loop 层的工具注册和结构化输出，但不承载 Workflow 持久化。LangGraph 适配层进入 PoC 但不预设进入生产；Temporal 在触发条件满足后评估。所有框架替换只能改变编排适配层，不能改变 MySQL 事实、领域命令与 API/SSE 契约。
+首发不引入 MCP server、WebSocket、通用浏览器自动化、通用命令执行或 TypeScript Agent SDK（如 `pi-agent-core`）。Pydantic AI 用于 Router、普通回答和 workflow 模型节点的消息历史、依赖注入、工具注册与结构化输出，但不自动成为业务事实源。LangGraph 适配层进入 PoC 但不预设进入生产；Temporal 或 Pydantic AI durable execution 集成在触发条件满足后单独评估。所有框架替换只能改变模型/编排适配层，不能改变 MySQL 事实、领域命令与 API/SSE 契约。
 
 ## 4. 总体拓扑
 
@@ -291,7 +291,9 @@ Worker 通过短事务获取 run：
 
 ### 8.1 模型适配层
 
-`model_runtime.py` 为每次调用记录：`model_config_id`、provider、模型名、Prompt bundle 版本、workflow 版本、`step_id`、可空的 `loop_turn_id`、输入/输出 token、延迟、供应商 request ID、结果状态和脱敏错误码。原始输入输出按照数据保留策略保存为受控引用，不进入常规日志。
+模型运行时使用 Pydantic AI `Agent` 作为 provider-neutral 调用边界。Router、普通回答和各 workflow 模型节点定义职责受限的独立 Agent，分别配置 `deps_type`、`output_type`、工具白名单、history processors 和 usage limits；不得创建可访问全部领域工具的全局 Agent。
+
+`model_runtime/` 为每次调用记录：`model_config_id`、provider、模型名、Prompt bundle 版本、workflow 版本、`step_id`、可空的 `loop_turn_id`、输入/输出 token、延迟、供应商 request ID、结果状态和脱敏错误码。原始输入输出按照数据保留策略保存为受控引用，不进入常规日志。
 
 每个模型节点定义 Pydantic 输出类型。例如解释生成最少包括：
 
@@ -304,17 +306,30 @@ Worker 通过短事务获取 run：
 }
 ```
 
-`next_actions` 仅是用户可见的后续操作建议；客户端点击后仍由服务端创建或恢复对应的已注册工作流，绝不把它解释为当前 run 的执行跳转。解析失败可在受限次数内以相同任务重试；仍失败则 run 以 `MODEL_OUTPUT_INVALID` 失败或给出不依赖模型结构的安全降级结果。严禁对不合规 JSON 做脆弱的字符串修补后直接执行工具。
+`next_actions` 仅是用户可见的后续自然语言建议；客户端点击后把建议文本作为新 turn 提交，仍由统一 Agent Router 决定直接回答、澄清或调度已注册 workflow，绝不把按钮值解释为 workflow key 或当前 run 的执行跳转。解析失败可在受限次数内以相同任务重试；仍失败则 run 以 `MODEL_OUTPUT_INVALID` 失败或给出不依赖模型结构的安全降级结果。严禁对不合规 JSON 做脆弱的字符串修补后直接执行工具。
 
 Loop decision 也经同一结构化输出适配层处理，但其 Prompt 只接收锁定 policy、当前允许 action 的参数 Schema、最小事实和已提交 observation 摘要。decision 的 `action`、`args`、`expected_outcome` 必须全部通过 policy gate 后才能执行；模型的自然语言理由不作为 action 依据，也不记录为隐藏思维链。格式修复不可以改变 action 集、资源范围或剩余预算。
 
 ### 8.2 上下文装配与压缩
 
-上下文按以下固定顺序装配：系统和安全规则、工作流状态、用户授权范围、不可变领域事实、当前用户消息、版本化线程摘要、最少量经排序的检索证据。原始资料正文一律标注为不可信内容。
+MySQL 是上下文事实源，Pydantic AI 是本轮上下文消费与处理运行时。不得把 Pydantic AI 内存中的 `all_messages()` 当成 thread 的唯一历史，也不得让前端提交的历史直接成为可信上下文。
+
+`ThreadContextBuilder` 先从 `agent_messages`、版本化 thread summary、公开 artifact/run summary、附件、`context_refs`、审批和结构化输入中构建 provider-neutral `AgentRunContext`，再映射为：
+
+- Pydantic AI `message_history`：经过权限过滤和预算裁剪的最近可见用户/Assistant 消息。
+- `RunContext/deps`：thread/run/turn 标识、权限范围、只读领域服务、附件与引用解析结果、预算和观测信息。
+- 动态 system instructions：只使用经过版本管理的策略和 deps 中的安全事实。
+- 结构化 `output_type`：RouterDecision、讲解、反馈、计划等节点输出类型。
+
+上下文按以下固定顺序装配：系统和安全规则、当前 workflow/turn 状态、用户授权范围、不可变领域事实、版本化线程摘要、最近相关消息、当前用户消息、显式引用的 artifact/附件、最少量经排序的检索证据。原始资料正文一律标注为不可信内容。
+
+Pydantic AI history processor 在模型调用前执行确定性过滤和压缩：保留当前输入、最近相关 turn、未完成交互和显式引用；移除较早且无关的工具结果；必要时使用版本化摘要替换旧消息。history processor 不能自行扩大权限范围、加载新资源或覆盖数据库事实。
 
 当预计下一次调用超过模型上下文预算的 60%、阶段性 step 完成、即将进入等待状态，或达到消息/工具结果数量阈值时，创建新的 `thread_summaries` 版本。摘要必须保留：当前目标和待办、已确认事实、审批状态、不可重复副作用、来源引用、已排除候选、用户纠正和未提交答案。身份授权、题目/答案快照、幂等键和计划版本必须从领域表/step 引用重建，不能只相信模型摘要。
 
 先缩减低相关检索片段，再压缩旧对话；不得截断当前用户指令、审批差异或未提交作答。
+
+每次上下文装配记录策略版本、选入的 message/artifact/ref id、摘要版本、裁剪原因、估算 token、Pydantic AI 实际 usage 和预算结果，但不记录隐藏思维链。完整落地契约见[Agent 对话界面实现逻辑与代码缺口](./408-agent-conversation-ui-implementation-gap.md#124-pydantic-ai-上下文与模型运行时)。
 
 ### 8.3 工具注册契约
 

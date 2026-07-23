@@ -1,50 +1,54 @@
 # 408 Agent 对话界面实现逻辑与代码缺口
 
-> 版本：v0.1
+> 版本：v0.2
 >
 > 日期：2026-07-23
 >
-> 状态：实施设计，需与运行时模型评审后进入开发
+> 状态：已完成动态路由与 Pydantic AI 上下文架构复审，按本文修订顺序继续实施
 >
 > 关联设计：[408 Agent 对话界面重设计](../product/408-agent-conversation-ui-redesign.md)
 
 ## 1. 结论
 
-当前代码已经具备 thread、run、step、event、artifact、input 和 approval 的部分骨架，但还不能实现真正的持续对话页。
+当前代码已经落地 thread 时间线、消息持久化、root/child run 聚合、thread SSE 和内嵌 workflow UI，但还没有实现真正的“统一 Agent 入口”。
 
-最关键的缺口不是 CSS，而是缺少一个稳定的 **thread 级对话时间线协议**：
+当前最关键的缺口已经从页面和时间线，转移为 **动态决策、上下文装配与线程内调度**：
 
-- 没有持久化用户消息与 Agent 消息的 `agent_messages` 实体。
-- 没有能够统一排序 message 与 workflow 的 thread 级时间线。
-- 前端只选取最新 run，无法恢复完整对话。
-- SSE 只绑定一个 run，没有 thread 级 cursor、消息增量和可靠重连。
-- 父 workflow 与子 workflow 缺少持久关联，前端不能正确合并展示。
-- 等待补充、审批、失败和产物没有统一嵌入 workflow 的视图模型。
+- 前端仍暴露 explain/validate/grade/plan 处理方式，并通过 `preferred_action` 传递用户预设。
+- `conversation@v1` 只识别少量意图，最终仍把所有输入固定调度到 `explain`。
+- 没有 `direct_answer` 普通问答路径；路由前澄清与 workflow 内结构化输入尚未区分。
+- Worker 只把当前 `input_message` 放入执行上下文，没有读取 thread 历史、已有 artifact、附件和 `context_refs`。
+- 每个 turn 都提前创建可见的 conversation workflow 块，内部路由过程会污染用户时间线。
+- 同一 thread 没有 root run tree 串行调度约束，连续发送可能产生上下文竞争和回复乱序。
+- 设计选定了 Pydantic AI 作为 Loop/模型运行时，但仓库未安装 `pydantic-ai`，现有 `ModelAdapter` 仍是直接调用 OpenAI SDK 的手写封装。
 
-因此实施顺序必须是：**先补对话契约和数据投影，再重构组件与样式。** 单独改 `AgentPage.tsx` 和 CSS 会得到一个“看起来像聊天、刷新后仍不是聊天”的页面。
+因此继续实施前必须先补齐：**统一入口 → thread 上下文构建 → Pydantic AI 类型安全路由 → 普通问答/澄清 → 业务 workflow 动态调度 → 线程内串行队列。** 在此之前继续增加取消、重试或消息操作，会把能力建立在错误的路由语义上。
 
 ## 2. 当前实现链路
 
 ```text
 AgentPage
-  ├─ 客户端 detectWorkflow(input)
-  ├─ POST /agent/threads（首条消息时）
-  ├─ POST /agent/runs
-  ├─ currentRunId = 最新 run
-  ├─ EventSource(/runs/{run_id}/events/stream)
-  └─ events -> buildStepsFromEvents -> 单次 run 页面
+  ├─ thread timeline + thread SSE
+  ├─ 用户选择 auto/explain/validate/grade/plan
+  └─ POST /threads/{thread_id}/turns(preferred_action)
 
 Backend
-  AgentThread
-    └─ AgentRun[]
-         ├─ AgentStep[]
-         ├─ AgentEvent[]
-         ├─ AgentArtifact[]
-         ├─ AgentInput[]
-         └─ AgentApproval[]
+  create_turn
+    ├─ 持久化 user message
+    ├─ 创建可见 conversation root run
+    ├─ 创建 message/workflow timeline item
+    └─ outbox -> Worker
+
+  conversation@v1
+    ├─ 仅用当前 input_message 做意图识别
+    ├─ 固定创建 explain child run
+    └─ 输出“意图识别完成”内部消息
+
+  explain@v1
+    └─ 仅用当前 input_message 调用手写 OpenAI ModelAdapter
 ```
 
-该结构能展示“一个 run 的运行页”，不能稳定生成“一个 thread 的聊天记录”。
+该结构已经能恢复一个 thread 的消息和多个 root run，但还不能根据完整对话上下文动态决定本轮行为。
 
 上图为前端 `API_BASE=/api/v1` 之后使用的相对路径；仓库当前公开接口实际为 `/api/v1/agent/*`。本文目标契约沿用既有运行时设计中的用户端命名空间 `/api/v1/app/agent/*`。实施时应在网关或 FastAPI 路由层一次性确定该前缀，并在迁移期为 `/api/v1/agent/*` 提供兼容，前端代码中不要同时硬编码两套前缀。
 
@@ -54,42 +58,31 @@ Backend
 
 | 缺口 | 当前代码 | 影响 | 优先级 |
 |------|----------|------|--------|
-| 只展示最新 run | `AgentPage` 在 `loadThreadRuns` 后选择最新 run | 历史消息和多次 workflow 消失 | P0 |
-| 无完整历史事件加载 | 有 `getRunEvents` API，但 context 没有加载动作，页面只连运行中 SSE | 刷新已完成 run 后拿不到步骤和回复 | P0 |
-| waiting 状态独立页面 | `waiting_for_user`、`waiting_for_approval` 提前 `return` | 对话上下文被切断 | P0 |
-| workflow 常驻右栏 | `ExecutionTrace` 放在 `agent-context` | workflow 与触发消息脱离 | P0 |
-| 客户端选择 workflow | `detectWorkflow` 和 `<select>` | 路由规则分散，客户端可能调用未发布 workflow | P0 |
-| 没有真实消息流 | 页面只显示 `run.input_message` 和 `lastMessage` | 无多轮对话、无 Agent 消息实体 | P0 |
-| 完成结果取值不匹配 | 前端等待 `message.completed.content` 或 `run.completed.result`；后端当前不发送这两个字段 | 完成态容易显示占位文案 | P0 |
-| artifact 字段不一致 | 前端类型使用 `artifact_type`，后端列表返回 `type` | 产物无法可靠归一化 | P0 |
-| SSE 不更新 run 状态 | reducer 追加事件，但不根据 `run.status_changed`、`run.completed` 更新 run | UI 可能长期停留在 `running` | P0 |
-| SSE 无补发和去重 | 默认从 0 连接，`APPEND_EVENTS` 不按 `(run_id, sequence)` 去重 | 重连后可能重复事件或遗漏 | P0 |
-| SSE 出错即关闭 | `onerror` 关闭连接，无退避重连、无 HTTP 补拉 | 网络波动后页面停止更新 | P0 |
-| 仅一个 EventSource | context 只保存一个 `esRef` | 多 run 或子 run 无法同时更新 | P0 |
-| 运行中发送语义不真实 | 非 waiting 状态直接创建新 run，但文案承诺“当前步骤后处理” | 可能并发执行，用户预期错误 | P0 |
-| 审批后未恢复订阅 | approve/reject 只更新 approval | run 继续后页面不一定收到后续事件 | P0 |
-| 重试未实现 | “仅重试失败步骤”为 TODO | 失败态无法闭环 | P1 |
-| 附件按钮无逻辑 | 仅有图标 | 输入能力与 UI 承诺不一致 | P1 |
-| 大量 mock 内容 | 证据、步骤、结果、失败产物混合 fixtures | 真实数据与示例可能同时出现 | P0 |
+| 用户仍可预设 workflow | `ChatComposer` 暴露 auto/explain/validate/grade/plan 下拉框 | 产品语义变成“选择执行模式”，而不是统一 Agent | P0 |
+| 仍发送 `preferred_action` | `AgentPage`、context 和 API 类型继续传递该字段 | 路由责任泄漏到客户端 | P0 |
+| 消息不是乐观插入 | 等待 `POST /turns` 成功后才刷新 timeline | 网络慢时缺少即时反馈，失败重试体验不完整 | P1 |
+| 运行中可再次发送但无真实队列 | composer 只在 HTTP 提交期间禁用 | 可能创建并发 root run，回复顺序不可预测 | P0 |
+| Assistant 正文仍是基础文本 | 尚未接入受控 Markdown、复制和反馈 | 完整对话能力未闭环 | P1 |
+| 取消和真正的失败步骤重试缺失 | UI 只有继续对话等降级动作 | workflow 无法完整恢复 | P1 |
+| 审批历史只投影 pending 项 | 决策后控件消失 | 无法回看批准或拒绝记录 | P1 |
 
 ### 3.2 后端模型与 API
 
 | 缺口 | 当前实现 | 目标 | 优先级 |
 |------|----------|------|--------|
-| 无 `agent_messages` 表 | 用户输入只存于 `agent_runs.input_message` | 消息独立持久化，支持多轮和流式状态 | P0 |
-| 无 thread 级顺序 | event sequence 只在单个 run 内单调递增 | message/workflow 在 thread 内稳定排序 | P0 |
-| 无 timeline API | 只有 thread、runs、单 run events | 一次返回可渲染 thread 时间线 | P0 |
-| 无 thread SSE | 只有 `/runs/{run_id}/events/stream` | 一个连接接收当前线程所有可见更新 | P0 |
-| 无消息流事件 | 只有 step、run、artifact 等事件 | `message.started/delta/completed/failed` | P0 |
-| 子 run 无关系字段 | `conversation` 会创建 explain 子 run，但 `AgentRun` 无 `parent_run_id` | 可恢复 run 树并归入同一 workflow 块 | P0 |
-| 子 run 无触发消息 | run 未绑定 `message_id` | 明确 workflow 属于哪条用户消息 | P0 |
-| workflow 公开展示元数据缺失 | 客户端直接显示 node/workflow 名 | 服务端提供公开名称、阶段和摘要 | P0 |
-| 结构化输入无查询协议 | 有 answer API，但没有完整可渲染 input 查询/事件 | 时间线可恢复澄清控件 | P0 |
+| Router 固定调度 explain | `conversation._route_node` 写死 `target_workflow = "explain"` | 根据结构化 RouterDecision 动态选择处理方式 | P0 |
+| 无普通问答路径 | conversation 只能创建业务 child run | `direct_answer` 直接产生 Assistant 消息且不显示 workflow | P0 |
+| 路由前澄清与 workflow 输入混淆 | clarify 会降级到 explain | 路由前澄清走普通消息，workflow 内输入继续绑定原 run | P0 |
+| 无 thread 上下文构建器 | Worker 只注入当前 `input_message` | 按预算装配历史消息、artifact、附件和 context refs | P0 |
+| Pydantic AI 未实际接入 | requirements 无 `pydantic-ai`；`ModelAdapter` 直接调用 OpenAI SDK | 用 Pydantic AI 承担模型运行、依赖注入、历史处理和结构化输出 | P0 |
+| conversation workflow 默认可见 | 每个 turn 预建 `presentation="workflow"` 时间线项 | 内部 router 静默，只有业务 workflow 被动态显现 | P0 |
+| conversation 消息被统一丢弃 | thread event projector 忽略 conversation 的消息事件 | 只过滤内部事件，允许公开 direct answer/clarify 消息 | P0 |
+| 无 thread 级执行互斥 | lease 只锁单 run | 每个 thread 同时最多运行一个 root run tree | P0 |
+| 附件和引用未传给 child | 只存在 root metadata 中 | Router 与 child workflow 使用同一受控上下文 | P0 |
+| 公开 `/runs` 可直接指定 workflow | 用户端仍可提交 `workflow_name` | 降为内部/管理端兼容接口，普通聊天只使用 turns | P0 |
 | 审批响应结构不统一 | 列表与 approve/reject 响应字段不同 | 返回完整 approval 或统一 envelope | P1 |
 | 状态枚举不完整 | 模型缺少 `planning`、`cancelled`、`expired` | 与运行时文档及 UI 状态一致 | P1 |
 | 无 cancel/retry API 实现 | 运行时文档已定义，当前路由缺失 | 停止、局部重试和谱系可用 | P1 |
-| SSE 终止条件不完整 | 仅 completed/failed 结束 | 支持 cancelled/expired；waiting 状态保持或可靠恢复 | P1 |
-| 无流式快照 | 断线后只能重放单 run event | timeline snapshot + cursor 恢复 | P0 |
 
 ## 4. 目标领域关系
 
@@ -215,8 +208,7 @@ POST /api/v1/app/agent/threads/{thread_id}/turns
   "content": "根据刚才的讲解给我出 3 道题",
   "attachments": [],
   "context_refs": [],
-  "client_message_id": "01K...",
-  "preferred_action": null
+  "client_message_id": "01K..."
 }
 ```
 
@@ -232,8 +224,8 @@ POST /api/v1/app/agent/threads/{thread_id}/turns
   "root_run": {
     "id": "run_1",
     "status": "queued",
-    "presentation": "workflow",
-    "public_title": "生成专项练习"
+    "presentation": "silent",
+    "public_title": null
   },
   "timeline_cursor": 18
 }
@@ -244,8 +236,9 @@ POST /api/v1/app/agent/threads/{thread_id}/turns
 1. 校验 thread 归属。
 2. 以 `client_message_id` 幂等创建用户消息。
 3. 服务端执行 `conversation@v1` 路由，不信任客户端 workflow key。
-4. 创建 root run 和 thread timeline items。
+4. 创建 `presentation=\"silent\"` 的 conversation root run、可见 user message item 和隐藏的 workflow 占位 item。
 5. 同一事务提交后投递 outbox。
+6. Router 决定启动业务 workflow 后，把占位 item 切为可见并投影业务 child run；direct answer/clarify 则保持隐藏。
 
 兼容期可保留现有 `POST /api/v1/agent/runs`，但用户端不再直接调用；管理端和测试工具可以继续使用显式 workflow。
 
@@ -426,7 +419,7 @@ UI 默认只显示一个 workflow 块：
 
 ### 8.2 多次 workflow
 
-每一次用户显式任务创建独立 root run 和独立 workflow timeline item。状态更新必须按 `root_run_id` 精确更新原位置，不能使用全局 `currentRunId`。
+每一次用户输入创建独立 conversation root run。只有 Agent Router 决定启动业务 workflow 时，对应的 workflow timeline item 才变为可见；状态更新必须按 `root_run_id` 精确更新原位置，不能使用全局 `currentRunId`。
 
 ### 8.3 重试
 
@@ -577,11 +570,40 @@ SSE error
 
 ### 12.2 workflow 路由
 
-删除用户端 `detectWorkflow`。所有普通输入进入 `conversation@v1`：
+删除用户端 workflow 选择器、`detectWorkflow` 和 `preferred_action`。所有普通输入只进入统一的 `conversation@v1`：
 
-- 服务端决定直接回答、澄清或调度 explain/validate/grade/plan。
-- 显式建议按钮可以传 `preferred_action`，但服务端仍校验工作流是否发布、输入是否完整和用户是否有权限。
+- 服务端结合当前输入、thread 历史、附件、上下文引用和最近 artifact，决定直接回答、澄清或调度 explain/validate/grade/plan。
+- 建议按钮只能提交自然语言，例如“根据刚才的内容给我出三道题”，不能传 workflow key 或绕过 RouterDecision。
 - workflow key 不在普通 UI 中暴露。
+- 路由前 `clarify` 产生普通 Assistant 消息；workflow 已启动后的补充输入继续使用 `AgentInput` 并绑定原 run。
+- `conversation` root 默认是 `silent`，只有决定启动业务 workflow 后才显现对应的 workflow timeline item。
+
+结构化路由契约：
+
+```python
+class RouterDecision(BaseModel):
+    action: Literal[
+        "direct_answer",
+        "clarify",
+        "explain",
+        "validate",
+        "grade",
+        "plan",
+    ]
+    confidence: float = Field(ge=0, le=1)
+    reason_code: str
+    public_summary: str | None = None
+    clarification_question: str | None = None
+```
+
+选择标准不是简单关键词映射：
+
+- `direct_answer`：当前上下文足以完成的普通问答、追问和轻量解释。
+- `clarify`：缺少题目、作答、目标或必要引用，无法安全继续判断。
+- `explain`：需要检索证据、组织结构化讲解或生成可复用讲解产物。
+- `validate`：用户要求出题、验证理解或生成练习。
+- `grade`：用户提供作答并要求评分、分析或反馈。
+- `plan`：用户要求根据学习证据生成或修改计划。
 
 ### 12.3 运行中继续发送
 
@@ -595,6 +617,114 @@ SSE error
 - 用户可以取消尚未开始的 turn。
 
 只读且互不影响的 run 以后可以并行，但不能由前端无条件创建并发 run。
+
+### 12.4 Pydantic AI 上下文与模型运行时
+
+#### 12.4.1 选型结论
+
+Pydantic AI 继续作为本项目的模型 Loop/Agent 运行时，但不作为 thread、message、run 或 workflow 的持久化事实源。
+
+职责边界：
+
+| 层 | 负责内容 | 不负责内容 |
+|----|----------|------------|
+| MySQL + Agent kernel | thread/message/run/workflow 状态、队列、审批、幂等、恢复、权限和公开时间线 | 模型 provider 细节和 prompt 内消息编排 |
+| `ThreadContextBuilder` | 从持久化事实中选择、裁剪、摘要并组装本轮上下文 | 执行业务 workflow 或直接调用模型 |
+| Pydantic AI | `message_history`、`RunContext/deps`、history processor、工具注册、结构化输出、输出校验和 usage limits | 自动决定哪些数据库事实应进入上下文；替代 durable workflow 状态机 |
+| workflow definitions | explain/validate/grade/plan 的确定性步骤、等待、审批和副作用边界 | 保存完整聊天历史或自行拼接 provider 私有消息格式 |
+
+官方能力参考：
+
+- [Message History](https://ai.pydantic.dev/message-history/)
+- [Dependencies / RunContext](https://ai.pydantic.dev/dependencies/)
+- [History Processors](https://ai.pydantic.dev/message-history/#processing-message-history)
+- [Output](https://ai.pydantic.dev/output/)
+- [Usage Limits](https://ai.pydantic.dev/agents/#usage-limits)
+- [Durable Execution](https://ai.pydantic.dev/durable_execution/)
+
+Pydantic AI 提供 durable execution 集成能力，不等于只安装 SDK 就自动获得本项目需要的持久化。当前仍使用 MySQL outbox/lease/Worker 作为生产事实和恢复边界；未来若评估 Temporal、DBOS、Prefect 或 Restate，必须通过独立 PoC 迁移，不能让模型运行时直接接管现有业务状态。
+
+#### 12.4.2 上下文事实源
+
+每次 turn 执行前由 `ThreadContextBuilder` 读取并生成 `AgentRunContext`：
+
+```python
+class AgentRunContext(BaseModel):
+    thread_id: str
+    user_id: str
+    turn_id: str
+    current_message_id: str
+    current_input: str
+    recent_messages: list[ConversationMessage]
+    conversation_summary: str | None
+    recent_artifacts: list[ArtifactContext]
+    attachments: list[AttachmentContext]
+    context_refs: list[ContextReference]
+    pending_interactions: list[PendingInteraction]
+    permission_scope: PermissionScope
+    token_budget: int
+```
+
+数据来源与用途：
+
+| 数据 | 来源 | 进入模型的形式 |
+|------|------|----------------|
+| 最近用户/Assistant 对话 | `agent_messages` | 转换为 Pydantic AI `message_history` |
+| 较早对话 | thread summary 或摘要 artifact | 一条受控摘要消息，不无限回放原文 |
+| workflow 结果 | `agent_artifacts` 和公开 run summary | 结构化短摘要与稳定 artifact id |
+| 当前附件 | root run metadata/附件表 | 经权限和类型校验后的文本或引用 |
+| `context_refs` | 业务资源解析器 | 解析后的只读领域对象摘要 |
+| 待审批/待输入 | `agent_approvals`、`agent_inputs` | 仅提供当前公开状态和可执行动作 |
+
+禁止直接进入上下文：
+
+- 隐藏思维链、内部 prompt 和未经裁剪的工具返回。
+- 其他用户或无权限资源。
+- 已过期的审批 token、秘密字段和 provider 凭据。
+- 整个 thread 的无限原文历史。
+
+#### 12.4.3 Pydantic AI 的具体使用方式
+
+Router、普通回答和需要模型参与的 workflow 节点分别定义独立 Agent，不使用一个无限能力的全局 Agent：
+
+```python
+router_agent = Agent(
+    model=router_model,
+    deps_type=RouterDeps,
+    output_type=RouterDecision,
+    history_processors=[context_history_processor],
+)
+
+result = await router_agent.run(
+    current_input,
+    deps=router_deps,
+    message_history=context.message_history,
+    usage_limits=router_usage_limits,
+)
+```
+
+实现约束：
+
+- `deps` 注入本轮只读服务、权限范围、thread/turn 标识和经过校验的领域上下文；不得把全局可写数据库能力无边界暴露给 Router。
+- `message_history` 由 `ThreadContextBuilder` 生成，不把前端提交的任意历史当作事实。
+- history processor 在调用模型前执行预算裁剪：保留最近相关消息、当前任务所依赖的 artifact 和未完成交互，压缩较早历史。
+- `output_type=RouterDecision` 取代手写字符串解析；验证失败按稳定策略重试或降级为安全澄清，不能默认降级到 explain。
+- `UsageLimits` 与现有 `max_model_calls`、token 预算和工具调用预算映射，超限后返回可恢复错误。
+- Pydantic AI 的 `new_messages()` 可用于运行时审计和调试，但用户可见事实仍写入 `agent_messages`、`agent_events` 和 artifact；不能把 provider 私有消息对象直接作为唯一持久化格式。
+
+#### 12.4.4 上下文裁剪策略
+
+P0 使用确定性预算策略，不让模型自由决定是否遗忘关键业务状态：
+
+1. 永远保留当前用户输入、权限范围和 system instructions。
+2. 永远保留未完成的审批、结构化输入和当前引用对象。
+3. 保留最近 6 至 12 个可见 turn，最终数量由 token 预算决定而不是固定条数决定。
+4. 保留被当前输入显式引用的 artifact、题目、作答和计划摘要。
+5. 较早对话压缩成版本化 thread summary；摘要必须能追溯到覆盖的 message sequence。
+6. 工具大结果只保留摘要和稳定引用，需要时由受控工具再次读取。
+7. Router 使用较小上下文预算；业务 workflow 可以按任务需要加载更窄、更深的领域上下文。
+
+上下文构建结果应记录可观测元数据：选入的 message/artifact id、裁剪原因、摘要版本、估算 token、实际 usage 和策略版本，但不记录隐藏思维链。
 
 ## 13. waiting、approval、artifact 的恢复
 
@@ -701,6 +831,19 @@ Agent 新组件统一使用 `agent-chat-*` 或 CSS module，避免继续与全�
 
 ## 16. 分阶段实施
 
+### Phase 0：统一 Agent 路由与上下文，当前 P0
+
+该阶段必须先于原操作闭环继续实施，并按独立中文提交拆分：
+
+1. 移除前端 workflow 模式选择、`preferred_action` 请求字段和用户端直接创建 workflow 的入口。
+2. 引入并固定 Pydantic AI 依赖，使用测试模型完成 RouterDecision、依赖注入、消息历史和 usage limits 的最小 PoC。
+3. 新增 `ThreadContextBuilder`，从 MySQL 装配受控 `message_history`、artifact、附件和引用。
+4. 实现 `direct_answer` 与路由前 `clarify`，内部 conversation workflow 保持静默。
+5. 实现 explain/validate/grade/plan 的动态 child run 调度和 workflow 可见性切换。
+6. 实现同 thread root run tree 串行队列，保证上下文提交顺序与回复顺序一致。
+
+验收：同一 thread 依次完成“普通回答 → validate workflow → grade workflow → 普通追问 → plan workflow”，每一轮都能引用此前消息或 artifact，且用户从未指定 workflow key。
+
 ### Phase A：契约与持久化，P0
 
 1. 新增 `agent_messages`、`agent_thread_items` 迁移。
@@ -752,9 +895,10 @@ Agent 新组件统一使用 `agent-chat-*` 或 CSS module，避免继续与全�
 
 | 文件 | 改造 |
 |------|------|
-| `frontend/src/pages/AgentPage.tsx` | 拆分为新对话页和 thread 对话页；移除单 run 分支页面 |
+| `frontend/src/pages/AgentPage.tsx` | 移除 action 状态和 `preferredAction` 发送；始终提交自然语言 turn |
+| `frontend/src/features/agent/ChatComposer.tsx` | 移除 workflow 模式下拉框，只保留消息、附件、引用和发送动作 |
 | `frontend/src/store/agent-context.tsx` | 改为 thread timeline 状态；支持 cursor、去重、snapshot 和重连 |
-| `frontend/src/api/agent.ts` | 增加 turn、timeline、thread SSE、cancel、retry；统一响应字段 |
+| `frontend/src/api/agent.ts` | 删除 `preferred_action`，增加 turn、timeline、thread SSE、cancel、retry；统一响应字段 |
 | `frontend/src/index.css` | 新增 chat token 和组件样式；停用 Agent 区衬线与两栏 workflow |
 | `frontend/src/data/fixtures.ts` | fixtures 仅保留 Story/测试，不参与生产 fallback |
 | `frontend/src/components/AppShell.tsx` | 最近线程按 `updated_at`；展示轻量活动状态 |
@@ -763,13 +907,17 @@ Agent 新组件统一使用 `agent-chat-*` 或 CSS module，避免继续与全�
 
 | 文件/模块 | 改造 |
 |-----------|------|
+| `backend/requirements.txt` | 引入并锁定经过 PoC 验证的 `pydantic-ai` 版本，升级/移除不兼容的旧 OpenAI SDK 依赖 |
 | `backend/app/modules/agent/models.py` | 新增 message/timeline model，扩展 run 关系字段 |
-| `backend/app/modules/agent/schemas.py` | 新增 turn、timeline、message、workflow view schema |
-| `backend/app/modules/agent/router.py` | 新增 turn/timeline/thread stream/cancel/retry 接口 |
-| `backend/app/modules/agent/service.py` | 实现原子创建 turn、sequence 分配、timeline projection |
+| `backend/app/modules/agent/schemas.py` | 删除 `preferred_action`；新增 RouterDecision、上下文审计和公开 view schema |
+| `backend/app/modules/agent/router.py` | 普通用户只通过 turns 进入 Router；收口显式 `/runs` 创建入口 |
+| `backend/app/modules/agent/context_builder.py` | 新增 thread 历史、摘要、artifact、附件、引用和权限上下文装配 |
+| `backend/app/modules/agent/model_runtime/` | 用真实 Pydantic AI Agent 替换伪命名 adapter；实现 deps、history processors、output 和 usage limits |
+| `backend/app/modules/agent/service.py` | 实现原子创建 turn、sequence、隐藏 workflow 占位和 timeline projection |
 | `backend/app/modules/agent/events.py` | 增加 thread 级事件与 snapshot |
-| `backend/app/modules/agent/worker.py` | 维护公开 workflow 状态和 assistant message 生命周期 |
-| `backend/app/modules/agent/workflows/*` | 提供 public step 元数据；建立 parent/root run 关系 |
+| `backend/app/modules/agent/worker.py` | 注入 AgentRunContext；实现 thread root tree 串行领取和 Assistant 消息生命周期 |
+| `backend/app/modules/agent/workflows/conversation.py` | Pydantic AI 动态路由、direct answer、clarify 和 child workflow 显现 |
+| `backend/app/modules/agent/workflows/*` | 接收受控上下文；提供 public step 元数据和 parent/root run 关系 |
 | Alembic migration | 新表、字段、索引、旧数据兼容回填 |
 
 ## 18. 测试矩阵
@@ -784,6 +932,13 @@ Agent 新组件统一使用 `agent-chat-*` 或 CSS module，避免继续与全�
 - 消息流中断后 timeline 返回已持久化部分。
 - approval/input 过期、重复提交和越权返回稳定错误。
 - retry 不重复执行已提交的副作用。
+- RouterDecision 六种 action 均有确定性测试，结构校验失败不会默认进入 explain。
+- direct answer 和路由前 clarify 不创建可见 workflow item。
+- validate/grade/plan child run 正确继承 trigger/root 和受控上下文引用。
+- 上下文构建不会读取其他用户消息或无权限 artifact。
+- history processor 在 token 预算内保留当前输入、未完成交互和显式引用，较早历史进入可追溯摘要。
+- Pydantic AI 测试使用 TestModel/FunctionModel 或等价测试模型，不依赖真实外部模型网络。
+- 同 thread 连续 turn 只能按 root run tree 顺序领取，后续 Router 能读到前一轮已提交结果。
 
 ### 18.2 前端
 
@@ -823,7 +978,10 @@ Agent 新组件统一使用 `agent-chat-*` 或 CSS module，避免继续与全�
 - 完成消息仍来自硬编码 fixture。
 - SSE 重连会重复消息或丢失状态。
 - 运行中发送会无提示创建并发 run。
-- 前端继续用关键词选择 workflow 作为生产路由。
+- 前端继续显示模式下拉框、传 `preferred_action` 或直接指定 workflow。
+- Router 仍只读取当前 `input_message`，没有 thread 历史、artifact、附件和引用。
+- 代码仍把手写 OpenAI SDK 封装标记为 Pydantic AI，而未实际使用其 Agent、deps、message history 和结构化 output。
+- 普通问答或路由前澄清仍显示“处理请求”workflow 块。
 - workflow 展示内部 node 名、prompt、隐藏推理或未裁剪工具数据。
 - 审批、重试或取消可能重复执行持久化副作用。
 
@@ -835,4 +993,7 @@ Agent 新组件统一使用 `agent-chat-*` 或 CSS module，避免继续与全�
 4. 第一阶段采用同 thread 串行 turn 队列，暂不允许无约束并发 root run。
 5. assistant message 必须有持久化流式快照和 `message.delta` 协议。
 6. 证据抽屉保留，workflow 右栏取消。
-7. 数据契约完成后再进行 Agent 页面 CSS 重构。
+7. MySQL 持有完整、可恢复的对话与 workflow 事实；Pydantic AI 只消费 `ThreadContextBuilder` 生成的本轮上下文。
+8. Router、普通回答和各业务 workflow 使用职责受限的独立 Pydantic AI Agent，不创建拥有全部工具权限的全局 Agent。
+9. Pydantic AI history processor 负责调用前裁剪和摘要，但裁剪策略、摘要版本和选入资源必须由项目记录并可审计。
+10. 当前继续使用 MySQL durable kernel；Pydantic AI durable execution 集成只作为后续独立 PoC，不与本轮 UI 重构捆绑。
