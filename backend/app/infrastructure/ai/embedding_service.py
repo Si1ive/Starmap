@@ -7,7 +7,6 @@ Embedding 服务
 - 简单的文本预处理
 """
 
-import asyncio
 from typing import Any, Dict, List, Optional
 
 from app.core.config import settings
@@ -63,24 +62,31 @@ class EmbeddingService:
             self.api_key = str(config.get("api_key") or settings.OPENAI_API_KEY or "").strip()
         self.timeout_seconds = int(config.get("timeout_seconds") or 60)
 
-    def _create_embedding(self, inputs: List[str]):
-        """同步调用，save-restore openai 全局变量。"""
+    async def _create_embedding(self, inputs: List[str]):
+        """通过独立的 openai>=1.x 客户端调用兼容向量接口。"""
         import openai
 
-        previous_api_key = getattr(openai, "api_key", None)
-        previous_api_base = getattr(openai, "api_base", None)
-        openai.api_key = self.api_key
+        client_options: Dict[str, Any] = {
+            "api_key": self.api_key,
+            "timeout": self.timeout_seconds,
+        }
         if self.base_url:
-            openai.api_base = self.base_url.rstrip("/")
+            client_options["base_url"] = self.base_url.rstrip("/")
+
+        client = openai.AsyncOpenAI(**client_options)
         try:
-            return openai.Embedding.create(
+            return await client.embeddings.create(
                 input=inputs,
                 model=self.model,
-                request_timeout=self.timeout_seconds,
             )
         finally:
-            openai.api_key = previous_api_key
-            openai.api_base = previous_api_base
+            await client.close()
+
+    @staticmethod
+    def _extract_embeddings(response: Any) -> List[List[float]]:
+        if hasattr(response, "data"):
+            return [list(item.embedding) for item in response.data]
+        return [list(item["embedding"]) for item in response["data"]]
 
     async def embed_text(self, text: str) -> List[float]:
         text = self._preprocess(text)
@@ -95,12 +101,12 @@ class EmbeddingService:
             request_messages=[{"role": "input", "content": text}],
             request_params={"batch_size": 1},
         ) as rec:
-            response = await asyncio.to_thread(self._create_embedding, [text])
+            response = await self._create_embedding([text])
             rec.record_response(
                 response_text=f"<embedding: {self.dimension}d>",
                 response_obj=response,
             )
-            return response["data"][0]["embedding"]
+            return self._extract_embeddings(response)[0]
 
     async def embed_batch(self, texts: List[str]) -> List[List[float]]:
         preprocessed = [self._preprocess(t) for t in texts]
@@ -120,12 +126,12 @@ class EmbeddingService:
                 request_messages=[{"role": "input", "content": f"<{len(batch)} texts>"}],
                 request_params={"batch_size": len(batch), "batch_index": i // MAX_BATCH_SIZE},
             ) as rec:
-                response = await asyncio.to_thread(self._create_embedding, batch)
+                response = await self._create_embedding(batch)
                 rec.record_response(
                     response_text=f"<{len(batch)} embeddings @{self.dimension}d>",
                     response_obj=response,
                 )
-                embeddings = [item["embedding"] for item in response["data"]]
+                embeddings = self._extract_embeddings(response)
                 for j, has_content in enumerate(placeholders):
                     if not has_content:
                         embeddings[j] = [0.0] * self.dimension

@@ -109,6 +109,47 @@ conversation 工作流先构建历史和学习上下文，再由模型路由决�
 多模型功能应统一抽象为“模型配置记录 + 上线状态 + 能力用途 + 运行时解析”，避免管理员
 测试连接使用一套客户端、Agent 回答又读取另一套配置。
 
+### 5.1 为什么会出现 `openai.ChatCompletion` 报错
+
+项目当前安装 `openai==2.46.0`，但原实现仍按 0.x SDK 调用
+`openai.ChatCompletion.create()` 和 `openai.Embedding.create()`。OpenAI Python SDK 从
+1.0 开始移除了这些模块级旧接口，改为先创建 `OpenAI` 或 `AsyncOpenAI` 客户端，再通过
+`client.chat.completions.create()`、`client.embeddings.create()` 发起请求。因此管理员保存
+配置没有失败，但点击“测试连通性”真正执行旧调用时才会立即报接口不再支持。
+
+不采用固定 `openai==0.28` 的方式规避：降级只能暂时保留旧接口，会阻碍安全更新和后续
+依赖升级，而且仍保留全局配置带来的并发串线风险。正确做法是让应用代码适配当前 SDK。
+
+### 5.2 独立异步客户端
+
+共享 `BaseLLMClient` 和 `EmbeddingService` 现在按一次调用创建一个 `AsyncOpenAI` 实例：
+
+```text
+当前业务配置
+  ├─ api_key
+  ├─ base_url
+  ├─ model
+  └─ timeout
+       │
+       ▼
+独立 AsyncOpenAI 实例
+       │
+       ├─ chat.completions.create(...)
+       └─ embeddings.create(...)
+```
+
+旧实现先修改 `openai.api_key` 和 `openai.api_base` 全局变量，调用完成后再恢复。两个异步请求
+交错执行时，请求 A 可能在发出前读到请求 B 的配置；保存和恢复无法消除这个竞态。独立客户
+端把配置封装在实例中，不共享可变全局状态，才能安全支撑多个供应商和多个模型并发使用。
+
+聊天服务中的 RAG 回答、直接回答和建议问题也统一经过 `ChatLLMClient`。环境变量回退仍然
+保留，但只负责构造配置，同样走共享客户端和统一 LLM 调用记录。Embedding 返回值提取同时
+兼容 SDK 1.x/2.x 的类型化对象以及测试中的字典响应。
+
+这一步只解决“客户端接口过期”和共享调用路径问题。Agent 工作流当前如何读取管理员保存的
+配置仍需单独打通；如果配置测试成功但 Agent 无响应，应继续检查 run、outbox、Worker 和
+`model_runtime` 配置解析链路，不能据此认定 Agent 已经使用了该配置。
+
 ## 6. 时间处理
 
 数据库时间应使用统一 UTC 语义存储，API 返回带明确时区的 ISO 8601 时间，前端再根据用户

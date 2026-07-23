@@ -18,6 +18,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.mysql import mysql_client
 from app.db.redis import RedisClient, get_redis_client
+from app.infrastructure.ai.llm_client import ChatLLMClient
 from app.modules.chat.retrieval_context import build_retrieval_context
 from app.models.transaction import (
     ChatHistory,
@@ -56,6 +57,24 @@ class ChatService:
     
     def __init__(self, redis: Optional[RedisClient] = None):
         self._redis = redis
+
+    @staticmethod
+    def _environment_llm_client(
+        *,
+        max_tokens: int,
+        temperature: float,
+    ) -> ChatLLMClient:
+        """将环境变量回退路径也收敛到 OpenAI 1.x 共享客户端。"""
+        return ChatLLMClient(
+            {
+                "enabled": True,
+                "provider": "openai_compatible",
+                "api_key": settings.OPENAI_API_KEY,
+                "model": settings.OPENAI_MODEL,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+            }
+        )
     
     async def _get_redis(self) -> Optional[RedisClient]:
         """获取Redis客户端（延迟初始化，支持降级）"""
@@ -422,29 +441,14 @@ class ChatService:
                 logger.warning("配置的问答 LLM 调用失败，回退环境变量", error=str(e))
 
         try:
-            import openai
-            import asyncio
-            from app.modules.monitoring.llm_calls import LLMCallRecorder
-
-            async with LLMCallRecorder(
-                model=settings.OPENAI_MODEL,
-                called_by="chat_service",
+            fallback_client = self._environment_llm_client(
+                max_tokens=1500,
+                temperature=0.3,
+            )
+            return await fallback_client.chat_messages(
+                messages,
                 purpose="RAG 增强回答",
-                request_messages=messages,
-                request_params={"max_tokens": 1500, "temperature": 0.3},
-            ) as rec:
-                def _call():
-                    openai.api_key = settings.OPENAI_API_KEY
-                    return openai.ChatCompletion.create(
-                        model=settings.OPENAI_MODEL,
-                        messages=messages,
-                        max_tokens=1500,
-                        temperature=0.3,
-                    )
-                response = await asyncio.to_thread(_call)
-                text = response.choices[0].message.content.strip()
-                rec.record_response(response_text=text, response_obj=response)
-                return text
+            )
         except Exception as e:
             logger.error("LLM调用失败", error=str(e))
             # 降级：返回检索到的内容摘要
@@ -465,29 +469,14 @@ class ChatService:
                 logger.warning("配置的问答 LLM 调用失败，回退环境变量", error=str(e))
 
         try:
-            import openai
-            import asyncio
-            from app.modules.monitoring.llm_calls import LLMCallRecorder
-
-            async with LLMCallRecorder(
-                model=settings.OPENAI_MODEL,
-                called_by="chat_service",
+            fallback_client = self._environment_llm_client(
+                max_tokens=1000,
+                temperature=0.5,
+            )
+            return await fallback_client.chat_messages(
+                messages,
                 purpose="直接问答（无 RAG）",
-                request_messages=messages,
-                request_params={"max_tokens": 1000, "temperature": 0.5},
-            ) as rec:
-                def _call():
-                    openai.api_key = settings.OPENAI_API_KEY
-                    return openai.ChatCompletion.create(
-                        model=settings.OPENAI_MODEL,
-                        messages=messages,
-                        max_tokens=1000,
-                        temperature=0.5,
-                    )
-                response = await asyncio.to_thread(_call)
-                text = response.choices[0].message.content.strip()
-                rec.record_response(response_text=text, response_obj=response)
-                return text
+            )
         except Exception as e:
             logger.error("LLM调用失败", error=str(e))
             return "抱歉，AI服务暂时不可用。请稍后再试。"
@@ -536,31 +525,17 @@ class ChatService:
                     return suggestions
 
             try:
-                import openai
-                import asyncio
-                from app.modules.monitoring.llm_calls import LLMCallRecorder
-
-                async with LLMCallRecorder(
-                    model=settings.OPENAI_MODEL,
-                    called_by="chat_service",
+                fallback_client = self._environment_llm_client(
+                    max_tokens=200,
+                    temperature=0.7,
+                )
+                content = await fallback_client.chat_messages(
+                    messages,
                     purpose="生成建议问题",
-                    request_messages=messages,
-                    request_params={"max_tokens": 200, "temperature": 0.7},
-                ) as rec:
-                    def _call():
-                        openai.api_key = settings.OPENAI_API_KEY
-                        return openai.ChatCompletion.create(
-                            model=settings.OPENAI_MODEL,
-                            messages=messages,
-                            max_tokens=200,
-                            temperature=0.7,
-                        )
-                    response = await asyncio.to_thread(_call)
-                    content = response.choices[0].message.content.strip()
-                    rec.record_response(response_text=content, response_obj=response)
-                    llm_suggestions = [s.strip() for s in content.split("\n") if s.strip()]
-                    if len(llm_suggestions) >= 2:
-                        return llm_suggestions[:3]
+                )
+                llm_suggestions = [s.strip() for s in content.split("\n") if s.strip()]
+                if len(llm_suggestions) >= 2:
+                    return llm_suggestions[:3]
             except Exception:
                 pass
 

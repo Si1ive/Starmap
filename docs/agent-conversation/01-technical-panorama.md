@@ -49,7 +49,7 @@ Agent Worker
 
 管理员端
   ├─ /api/v1/admin/agent-runs ──► agent_runs / agent_events / artifacts
-  ├─ LLM 配置与连通性测试 ──► 配置存储 / LLM Provider
+  ├─ LLM 配置与连通性测试 ──► 独立 AsyncOpenAI 客户端 ──► LLM Provider
   └─ 基础设施状态 ──► MySQL / Redis / Qdrant
 ```
 
@@ -101,6 +101,11 @@ Redis 在当前 Agent 核心执行链路中不是事实来源。Agent 的可靠�
 - `agent_thread_events.sequence` 和 `agent_threads.last_item_sequence` 提供 thread 级统一 cursor。
 - SSE 是传输优化，不是唯一数据来源；断线后客户端通过时间线快照或事件补拉恢复。
 - `agent_run_outbox` 是任务唤醒事实，Worker 通过数据库扫描提供 Redis 故障时的兜底。
+
+模型调用不使用 OpenAI Python SDK 的全局配置。每次请求根据当前配置创建独立的
+`AsyncOpenAI` 客户端，并在请求结束后关闭。这样管理员测试不同配置、后台任务和用户问答
+并发发生时，各自的 API Key、Base URL、模型与超时时间不会互相覆盖，也为后续多模型选择
+提供了安全的客户端基础。
 
 ## 6. 当前重点演进方向
 

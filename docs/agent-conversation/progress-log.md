@@ -68,3 +68,34 @@
 ### 提交信息
 
 `修复管理员 Agent Runs 监控接口与数据契约`
+
+## 2026-07-23：升级 OpenAI Python SDK 调用方式
+
+### 目标
+
+解决管理员测试 ChatLLM 连通性时调用已移除的 `openai.ChatCompletion` 接口，并消除多个
+模型配置通过 OpenAI 全局变量相互覆盖的风险。
+
+### 实现
+
+- ChatLLM 统一使用 `openai.AsyncOpenAI().chat.completions.create()`。
+- Embedding 统一使用 `openai.AsyncOpenAI().embeddings.create()`。
+- 每次调用使用独立客户端并可靠关闭，不再写入 `openai.api_key/api_base` 全局变量。
+- ChatService 的 RAG、直接回答、建议问题及环境变量回退统一复用 `ChatLLMClient`。
+- 增加 ChatLLM、Embedding 和 ChatService 回退路径的 SDK 兼容测试。
+
+### 教学文档
+
+- 全景图补充独立异步客户端在管理员配置和模型供应商之间的位置。
+- 细致讲解补充 OpenAI 0.x 到 1.x/2.x 的接口变化、降级方案缺陷和并发配置隔离原理。
+- 明确本次修复尚未代替 Agent 工作流配置链路修复。
+
+### 验证
+
+- OpenAI 客户端、LLM 默认值、ChatService 和系统设置规则测试：19 项通过。
+- 代码中不存在旧 `ChatCompletion`、`Embedding.create` 或 `openai.api_*` 调用。
+- `git diff --check` 通过。
+
+### 提交信息
+
+`升级 ChatLLM 与向量服务到 OpenAI 1.x 客户端`

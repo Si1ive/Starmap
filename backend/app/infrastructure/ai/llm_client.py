@@ -5,11 +5,10 @@
 - BaseLLMClient：统一 config 解析、is_available 判断、chat/chat_messages 调用与日志记录
 - PDFStructureLLMClient / OutlineLLMClient / ChatLLMClient：各自默认 system_prompt 与 called_by
 
-注意：沿用老版 openai 全局变量（openai.api_key / api_base）的 save-restore 方案，
-多配置并存时非线程安全，仅作缓解；彻底修复需迁移到 openai v1 client，另起任务。
+每次调用创建独立的 openai>=1.x AsyncOpenAI 客户端，因此多配置并存时不会互相覆盖
+api_key 或 base_url。
 """
 
-import asyncio
 import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -99,31 +98,35 @@ class BaseLLMClient:
             request_messages=messages,
             request_params=params,
         ) as rec:
-            response_obj, text = await asyncio.to_thread(self._chat_sync, messages)
+            response_obj, text = await self._chat(messages)
             rec.record_response(response_text=text, response_obj=response_obj)
             return text
 
-    def _chat_sync(self, messages) -> Tuple[Any, str]:
+    async def _chat(self, messages) -> Tuple[Any, str]:
         import openai
 
-        previous_api_key = getattr(openai, "api_key", None)
-        previous_api_base = getattr(openai, "api_base", None)
-        openai.api_key = self.api_key
+        client_options: Dict[str, Any] = {
+            "api_key": self.api_key,
+            "timeout": self.timeout_seconds,
+        }
         if self.base_url:
-            openai.api_base = self.base_url.rstrip("/")
+            client_options["base_url"] = self.base_url.rstrip("/")
+
+        client = openai.AsyncOpenAI(**client_options)
         try:
-            response = openai.ChatCompletion.create(
+            response = await client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 max_tokens=self.max_tokens,
                 temperature=self.temperature,
-                request_timeout=self.timeout_seconds,
             )
-            text = response.choices[0].message.content.strip()
+            content = response.choices[0].message.content
+            if not content:
+                raise RuntimeError("LLM 返回为空")
+            text = content.strip()
             return response, text
         finally:
-            openai.api_key = previous_api_key
-            openai.api_base = previous_api_base
+            await client.close()
 
 
 class PDFStructureLLMClient(BaseLLMClient):
