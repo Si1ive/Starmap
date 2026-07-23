@@ -298,6 +298,84 @@ async def test_workflow_interactions_emit_thread_events(db_session):
 
 
 @pytest.mark.asyncio
+async def test_input_answer_emits_running_status_to_thread(db_session):
+    await _create_thread(db_session)
+    creation = await _create_turn(db_session)
+    child = await AgentService(db_session).create_run(
+        user_id="user_001",
+        thread_id="thread_001",
+        workflow_name="explain",
+        input_message="整理讲解",
+        workflow_key="explain",
+        workflow_version="v1",
+        trigger_message_id=creation.message.id,
+        parent_run_id=creation.run.id,
+        root_run_id=creation.run.id,
+        presentation="compact",
+        public_title="整理讲解",
+    )
+    child.status = "waiting_for_user"
+    await AgentTimelineService(db_session).ensure_workflow_item(
+        thread_id="thread_001",
+        root_run_id=creation.run.id,
+        run_id=child.id,
+    )
+    service = AgentService(db_session)
+    agent_input = await service.create_input(
+        child.id,
+        "scope",
+        "请补充需要讲解的范围",
+    )
+    input_events = await thread_event_store.get_events(
+        db_session,
+        "thread_001",
+        after_sequence=creation.timeline_cursor,
+        limit=20,
+    )
+    cursor_before_answer = input_events[-1].sequence
+
+    answered = await service.submit_input_answer(
+        child.id,
+        "scope",
+        "第二章",
+        "user_001",
+    )
+
+    assert answered is agent_input
+    assert answered.status == "answered"
+    assert child.status == "running"
+    run_events = list(
+        (
+            await db_session.execute(
+                select(AgentEvent)
+                .where(AgentEvent.run_id == child.id)
+                .order_by(AgentEvent.sequence)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert run_events[-1].event_type == "run.status_changed"
+    assert run_events[-1].payload == {
+        "from": "waiting_for_user",
+        "to": "running",
+        "reason": "用户输入已提交",
+    }
+
+    thread_events = await thread_event_store.get_events(
+        db_session,
+        "thread_001",
+        after_sequence=cursor_before_answer,
+        limit=20,
+    )
+    assert [event.event_type for event in thread_events] == ["workflow.updated"]
+    assert thread_events[0].payload["root_run_id"] == creation.run.id
+    assert thread_events[0].payload["run_id"] == child.id
+    assert thread_events[0].payload["status"] == "running"
+    assert thread_events[0].payload["reason"] == "用户输入已提交"
+
+
+@pytest.mark.asyncio
 async def test_timeline_uses_sequence_cursor_for_pagination(db_session):
     await _create_thread(db_session)
     await _create_turn(db_session)

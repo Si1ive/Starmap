@@ -346,6 +346,16 @@ class AgentService:
         if run and run.status == RunStatus.WAITING_FOR_USER.value:
             state_machine.transition(run, RunStatus.RUNNING, reason="用户输入已提交")
             await outbox_store.enqueue(self.db, run_id)
+            await event_store.append(
+                self.db,
+                run_id,
+                "run.status_changed",
+                {
+                    "from": "waiting_for_user",
+                    "to": "running",
+                    "reason": "用户输入已提交",
+                },
+            )
         logger.info("用户答案提交", run_id=run_id, input_key=input_key, user_id=user_id)
         return agent_input
 
