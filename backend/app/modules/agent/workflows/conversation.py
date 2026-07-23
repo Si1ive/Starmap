@@ -71,9 +71,9 @@ async def _route_node(context: ExecutionContext, db: AsyncSession) -> NodeResult
             next_node="completed"
         )
     elif intent == "clarify":
-        logger.info("路由到澄清", run_id=context.run_id)
+        logger.info("路由到澄清，降级为 explain", run_id=context.run_id)
         return NodeResult.success(
-            {"target_workflow": "clarify", "reason": "需要澄清"},
+            {"target_workflow": "explain@v1", "reason": "需要澄清，降级处理"},
             next_node="completed"
         )
     else:
