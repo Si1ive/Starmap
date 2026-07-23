@@ -353,6 +353,15 @@ export default function AgentPage() {
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [evidenceOpen, setEvidenceOpen] = useState(false)
 
+  // Auto-dismiss error after 5 seconds
+  useEffect(() => {
+    if (!agentState.error) return
+    const timer = setTimeout(() => {
+      dispatch({ type: 'CLEAR_ERROR' })
+    }, 5000)
+    return () => clearTimeout(timer)
+  }, [agentState.error, dispatch])
+
   // Load threads on mount
   useEffect(() => {
     void loadThreads()
@@ -473,6 +482,31 @@ export default function AgentPage() {
   const approvals = runId ? agentState.approvals[runId] || [] : []
   const pendingApproval = approvals.find((a) => a.status === 'pending')
 
+  // Error banner component
+  const errorBanner = agentState.error ? (
+    <div style={{
+      position: 'fixed',
+      top: 12,
+      left: '50%',
+      transform: 'translateX(-50%)',
+      zIndex: 9999,
+      background: '#fef2f2',
+      border: '1px solid #fecaca',
+      borderRadius: 8,
+      padding: '12px 20px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+      maxWidth: 480,
+    }}>
+      <span style={{ color: '#dc2626', fontSize: 13 }}>{agentState.error}</span>
+      <button onClick={() => dispatch({ type: 'CLEAR_ERROR' })} type="button" style={{ color: '#991b1b', fontSize: 12, cursor: 'pointer', background: 'none', border: 'none' }}>
+        关闭
+      </button>
+    </div>
+  ) : null
+
   const title = useMemo(() => {
     if (currentThread?.title) return currentThread.title
     if (uiState === 'waiting_for_approval') return '调整巩固优先级'
@@ -486,6 +520,7 @@ export default function AgentPage() {
   if (uiState === 'new') {
     return (
       <div className="page agent-new">
+        {errorBanner}
         <div className="agent-new__intro">
           <span className="agent-new__mark"><Sparkles size={21} /></span>
           <p className="eyebrow">新对话</p>
@@ -548,6 +583,7 @@ export default function AgentPage() {
   if (uiState === 'waiting_for_user') {
     return (
       <div className="page agent-page">
+        {errorBanner}
         <section className="agent-thread" style={{ maxWidth: 720, margin: '0 auto', padding: '40px 20px' }}>
           <article className="run-summary">
             <span className="run-summary__icon"><MessageCircleMore size={19} /></span>
@@ -584,6 +620,7 @@ export default function AgentPage() {
   if (uiState === 'waiting_for_approval') {
     return (
       <div className="page agent-page">
+        {errorBanner}
         <section className="approval-sheet" style={{ maxWidth: 720, margin: '0 auto', padding: '40px 20px' }}>
           <div className="approval-sheet__why">
             <span><Sparkles size={18} /></span>
@@ -640,6 +677,7 @@ export default function AgentPage() {
   // ==================== Running / Complete / Failed States ====================
   return (
     <div className="agent-workspace">
+      {errorBanner}
       <section className="agent-thread">
         <header className="agent-thread__header">
           <div>
