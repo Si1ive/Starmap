@@ -63,7 +63,7 @@ Redis 在当前 Agent 核心执行链路中不是事实来源。Agent 的可靠�
 | 层次 | 主要位置 | 职责 |
 | --- | --- | --- |
 | 用户端页面 | `frontend/src/pages/AgentPage.tsx` | thread 选择、消息提交、时间线加载和 SSE 生命周期 |
-| 用户端组件 | `frontend/src/features/agent/` | 消息流、输入框、内嵌工作流和时间线状态归并 |
+| 用户端组件 | `frontend/src/features/agent/` | 消息流、输入框、内嵌工作流、时间线状态归并，并复用全局设计 token |
 | 用户端 API | `frontend/src/api/agent.ts` | Agent HTTP/SSE 契约和前端类型 |
 | HTTP 接口 | `backend/app/modules/agent/router.py` | 认证、参数校验、thread/run/timeline/event API |
 | 对话时间线 | `timeline.py`、`thread_events.py` | 原子创建一轮对话、公开投影和统一事件 cursor |
@@ -118,6 +118,11 @@ Redis 在当前 Agent 核心执行链路中不是事实来源。Agent 的可靠�
 Agent 时间采用“两段式 UTC 契约”：MySQL `DATETIME` 继续保存无时区的 UTC 值，避免改变现有
 表结构和 SQL 比较行为；HTTP JSON 与 SSE 一旦把时间发送给浏览器，就统一序列化为带 `Z` 的
 ISO 8601 字符串。前端 `new Date(...)` 因此能先识别 UTC，再按用户设备时区显示。
+
+Agent 对话保留消息流、工作流卡片和底部输入区等专有布局，但不维护独立品牌主题。
+`agent-chat.css` 的页面级变量只是语义别名，实际颜色、字体和表面层级来自 `index.css` 的
+`--canvas`、`--paper`、`--ink`、`--blue`、`--jade`、`--amber`、`--red`、`--serif` 和
+`--mono`。因此全站调整主题时，Agent 页面会跟随更新，而不会再次产生蓝紫色孤岛。
 
 ## 6. 当前重点演进方向
 

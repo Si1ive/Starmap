@@ -1,18 +1,17 @@
 .agent-chat-page {
-  --chat-canvas: #f7f8fa;
-  --chat-surface: #ffffff;
-  --chat-ink: #20242b;
-  --chat-muted: #667085;
-  --chat-line: #e6e9ee;
-  --chat-accent: #4059d8;
-  --chat-success: #2e7d5b;
-  --chat-warning: #a46616;
-  --chat-danger: #b54747;
+  --chat-canvas: var(--canvas);
+  --chat-surface: var(--paper);
+  --chat-ink: var(--ink);
+  --chat-muted: var(--ink-faint);
+  --chat-line: var(--line);
+  --chat-accent: var(--blue);
+  --chat-success: var(--jade);
+  --chat-warning: var(--amber);
+  --chat-danger: var(--red);
   background: var(--chat-canvas);
   color: var(--chat-ink);
   display: flex;
   flex-direction: column;
-  font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif;
   height: calc(100vh - 58px);
   min-height: 560px;
   overflow: hidden;
@@ -21,7 +20,7 @@
 
 .agent-chat-header {
   align-items: center;
-  background: rgba(247, 248, 250, 0.94);
+  background: rgba(244, 247, 245, 0.94);
   border-bottom: 1px solid var(--chat-line);
   display: flex;
   flex: 0 0 54px;
@@ -39,6 +38,7 @@
 }
 
 .agent-chat-header h1 {
+  font-family: var(--serif);
   font-size: 15px;
   font-weight: 600;
   line-height: 1.4;
@@ -135,8 +135,9 @@ button.agent-chat-connection:hover {
 }
 
 .agent-message__bubble {
-  background: #eff1f4;
-  border-radius: 16px 16px 6px 16px;
+  background: var(--blue-soft);
+  border: 1px solid var(--line);
+  border-radius: 12px 12px 4px 12px;
   max-width: min(78%, 610px);
   overflow-wrap: anywhere;
   padding: 10px 14px;
@@ -171,9 +172,9 @@ button.agent-chat-connection:hover {
 }
 
 .inline-workflow {
-  background: rgba(255, 255, 255, 0.72);
+  background: rgba(255, 255, 255, 0.78);
   border: 1px solid var(--chat-line);
-  border-radius: 12px;
+  border-radius: 10px;
   margin: -4px 0;
   overflow: hidden;
   padding-left: 2px;
@@ -181,7 +182,7 @@ button.agent-chat-connection:hover {
 }
 
 .inline-workflow__rail {
-  background: #aab5e9;
+  background: var(--line-strong);
   bottom: 0;
   left: 0;
   position: absolute;
@@ -191,7 +192,7 @@ button.agent-chat-connection:hover {
 
 .inline-workflow--running .inline-workflow__rail,
 .inline-workflow--queued .inline-workflow__rail {
-  background: linear-gradient(to bottom, var(--chat-accent), #d9def7 72%);
+  background: linear-gradient(to bottom, var(--chat-accent), var(--blue-soft) 72%);
 }
 
 .inline-workflow--running .inline-workflow__rail::after,
@@ -199,7 +200,7 @@ button.agent-chat-connection:hover {
   animation: agent-workflow-pulse 2.2s ease-in-out infinite;
   background: var(--chat-accent);
   border-radius: 50%;
-  box-shadow: 0 0 0 4px rgba(64, 89, 216, 0.12);
+  box-shadow: 0 0 0 4px rgba(49, 89, 78, 0.14);
   content: "";
   height: 6px;
   left: -2px;
@@ -234,7 +235,7 @@ button.agent-chat-connection:hover {
 }
 
 .inline-workflow__summary:hover {
-  background: rgba(247, 248, 250, 0.82);
+  background: var(--paper-soft);
 }
 
 .inline-workflow__heading {
@@ -263,7 +264,7 @@ button.agent-chat-connection:hover {
   color: var(--chat-muted);
   display: flex;
   flex: 0 0 auto;
-  font-family: "SFMono-Regular", Consolas, monospace;
+  font-family: var(--mono);
   font-size: 11px;
   gap: 9px;
 }
@@ -277,7 +278,7 @@ button.agent-chat-connection:hover {
 }
 
 .inline-workflow__details {
-  background: #fafbfc;
+  background: var(--paper-soft);
   border-top: 1px solid var(--chat-line);
   color: var(--chat-muted);
   font-size: 13px;
@@ -319,9 +320,9 @@ button.agent-chat-connection:hover {
 }
 
 .inline-workflow__interaction {
-  background: #fffaf0;
-  border: 1px solid #f1dfbd;
-  border-radius: 9px;
+  background: var(--amber-soft);
+  border: 1px solid #ead6b7;
+  border-radius: 8px;
   color: var(--chat-ink);
   display: grid;
   gap: 8px;
@@ -344,8 +345,8 @@ button.agent-chat-connection:hover {
 
 .inline-workflow__interaction textarea {
   background: var(--chat-surface);
-  border: 1px solid #ded7c9;
-  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
   color: var(--chat-ink);
   font: inherit;
   line-height: 1.55;
@@ -357,8 +358,8 @@ button.agent-chat-connection:hover {
 }
 
 .inline-workflow__interaction textarea:focus {
-  border-color: #b9a57c;
-  box-shadow: 0 0 0 3px rgba(164, 102, 22, 0.08);
+  border-color: var(--chat-warning);
+  box-shadow: 0 0 0 3px rgba(184, 121, 34, 0.1);
 }
 
 .inline-workflow__actions {
@@ -369,10 +370,10 @@ button.agent-chat-connection:hover {
 
 .inline-workflow__actions button {
   align-items: center;
-  background: var(--chat-ink);
-  border: 1px solid var(--chat-ink);
-  border-radius: 8px;
-  color: white;
+  background: var(--chat-accent);
+  border: 1px solid var(--chat-accent);
+  border-radius: 6px;
+  color: #f8f5ed;
   display: inline-flex;
   font-size: 12px;
   font-weight: 600;
@@ -384,7 +385,7 @@ button.agent-chat-connection:hover {
 
 .inline-workflow__actions button.is-secondary {
   background: var(--chat-surface);
-  border-color: #d7dbe2;
+  border-color: var(--line-strong);
   color: var(--chat-muted);
 }
 
@@ -406,9 +407,9 @@ button.agent-chat-connection:hover {
 }
 
 .inline-workflow__failure {
-  background: #fff5f4;
-  border: 1px solid #f0d1ce;
-  border-radius: 9px;
+  background: var(--red-soft);
+  border: 1px solid #ecc8c5;
+  border-radius: 8px;
   color: var(--chat-danger);
   display: grid;
   gap: 6px;
@@ -449,7 +450,7 @@ button.agent-chat-connection:hover {
 .inline-workflow__artifact {
   background: var(--chat-surface);
   border: 1px solid var(--chat-line);
-  border-radius: 9px;
+  border-radius: 8px;
   color: var(--chat-ink);
   padding: 10px 11px;
 }
@@ -509,7 +510,7 @@ button.agent-chat-connection:hover {
 }
 
 .agent-chat-composer-dock {
-  background: linear-gradient(to top, var(--chat-canvas) 72%, rgba(247, 248, 250, 0));
+  background: linear-gradient(to top, var(--chat-canvas) 72%, rgba(244, 247, 245, 0));
   bottom: 0;
   left: 0;
   padding: 32px 24px 13px;
@@ -527,16 +528,16 @@ button.agent-chat-connection:hover {
 
 .agent-composer {
   background: var(--chat-surface);
-  border: 1px solid #d9dde5;
-  border-radius: 18px;
-  box-shadow: 0 8px 28px rgba(24, 32, 56, 0.08);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(30, 48, 39, 0.08);
   padding: 11px 11px 9px 14px;
   transition: border-color 160ms ease, box-shadow 160ms ease;
 }
 
 .agent-composer:focus-within {
-  border-color: #aeb9eb;
-  box-shadow: 0 9px 30px rgba(24, 32, 56, 0.1), 0 0 0 3px rgba(64, 89, 216, 0.08);
+  border-color: var(--chat-accent);
+  box-shadow: 0 9px 30px rgba(30, 48, 39, 0.1), 0 0 0 3px rgba(49, 89, 78, 0.1);
 }
 
 .agent-composer textarea {
@@ -555,7 +556,7 @@ button.agent-chat-connection:hover {
 }
 
 .agent-composer textarea::placeholder {
-  color: #9299a5;
+  color: var(--ink-faint);
 }
 
 .agent-composer__footer {
@@ -566,16 +567,16 @@ button.agent-chat-connection:hover {
 }
 
 .agent-composer__hint {
-  color: #989faa;
+  color: var(--ink-faint);
   font-size: 11px;
   margin-left: auto;
 }
 
 .agent-composer__send {
   align-items: center;
-  background: var(--chat-ink);
-  border-radius: 10px;
-  color: white;
+  background: var(--chat-accent);
+  border-radius: 6px;
+  color: #f8f5ed;
   display: inline-flex;
   flex: 0 0 34px;
   height: 34px;
@@ -585,6 +586,7 @@ button.agent-chat-connection:hover {
 }
 
 .agent-composer__send:hover:not(:disabled) {
+  background: var(--blue-dark);
   transform: translateY(-1px);
 }
 
@@ -593,7 +595,7 @@ button.agent-chat-connection:hover {
 }
 
 .agent-chat-disclaimer {
-  color: #9299a5;
+  color: var(--ink-faint);
   font-size: 10px;
   line-height: 1.4;
   margin-top: 7px;
@@ -632,6 +634,7 @@ button.agent-chat-connection:hover {
 }
 
 .agent-chat-empty__intro h2 {
+  font-family: var(--serif);
   font-size: clamp(22px, 3vw, 28px);
   font-weight: 600;
   letter-spacing: -0.02em;
@@ -658,9 +661,9 @@ button.agent-chat-connection:hover {
 
 .agent-chat-error {
   align-items: center;
-  background: #fff4f3;
-  border: 1px solid #f2ceca;
-  border-radius: 10px;
+  background: var(--red-soft);
+  border: 1px solid #ecc8c5;
+  border-radius: 8px;
   box-shadow: 0 8px 24px rgba(78, 32, 28, 0.1);
   color: var(--chat-danger);
   display: flex;

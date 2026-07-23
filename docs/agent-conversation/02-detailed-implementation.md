@@ -236,3 +236,38 @@ Python 3.14 标记弃用的 `datetime.utcnow()`；`utc_isoformat()` 给响应时
 Agent 页面应复用用户端全局颜色、字体、间距、边框和表面层级变量，避免在
 `agent-chat.css` 中形成独立主题。对话特有组件可以保留布局差异，但视觉 token 应来自全局
 设计系统。
+
+### 7.1 为什么原页面看起来像另一个产品
+
+原来的 `agent-chat.css` 在页面根节点重新定义了灰白画布、蓝紫强调色和自己的字体栈，输入框、
+发送按钮、用户气泡、工作流轨道和 focus ring 又继续硬编码同一套蓝紫色。即使组件结构本身
+没有问题，只要基础 token 与全局 `index.css` 不同，用户在侧边栏和 Agent 页面之间切换时就会
+明显感到颜色、字体、圆角和阴影来自两套设计系统。
+
+### 7.2 当前复用方式
+
+Agent 页面仍保留 `--chat-*` 语义变量，目的是让组件样式能表达“对话画布”“状态强调色”等
+局部含义；但这些变量不再保存自己的颜色值，而是映射到全局 token：
+
+```css
+.agent-chat-page {
+  --chat-canvas: var(--canvas);
+  --chat-surface: var(--paper);
+  --chat-ink: var(--ink);
+  --chat-muted: var(--ink-faint);
+  --chat-line: var(--line);
+  --chat-accent: var(--blue);
+  --chat-success: var(--jade);
+  --chat-warning: var(--amber);
+  --chat-danger: var(--red);
+}
+```
+
+页面不再声明局部字体栈，正文直接继承全��无衬线字体；页面标题和空状态标题使用全局
+`--serif`，运行元信息使用 `--mono`。用户气泡改用 `--blue-soft`，发送按钮与 focus 状态使用
+绿色系 `--blue` / `--blue-dark`，等待交互和错误区域分别使用 `--amber-soft`、`--red-soft`。
+边框统一来自 `--line` / `--line-strong`，控件圆角收敛到项目常见的 6–10px。
+
+这种“全局 token + Agent 语义别名”的两层方式保留了组件可读性，也避免复制颜色常量。
+以后修改全站品牌色时应优先修改 `index.css`；只有某个 Agent 状态需要新的业务语义时，才在
+全局设计系统增加 token，再由 `--chat-*` 映射使用。
