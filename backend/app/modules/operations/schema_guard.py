@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[3]
+AGENT_RUN_WORKER_COLUMNS = frozenset({"parent_run_id", "root_run_id"})
 
 
 class DatabaseSchemaError(RuntimeError):
@@ -47,6 +48,31 @@ async def verify_database_schema(
         raise DatabaseSchemaError(
             "数据库结构版本与当前应用不一致："
             f"current=[{current_label}], expected=[{expected_label}]；"
+            "请先在 backend 目录执行 `alembic upgrade head`。"
+        )
+
+    try:
+        result = await session.execute(
+            text(
+                "SELECT column_name "
+                "FROM information_schema.columns "
+                "WHERE table_schema = DATABASE() "
+                "AND table_name = 'agent_runs'"
+            )
+        )
+        agent_run_columns = frozenset(result.scalars().all())
+    except Exception as exc:
+        raise DatabaseSchemaError(
+            "无法校验 agent_runs 表结构；"
+            "请先在 backend 目录执行 `alembic upgrade head`。"
+        ) from exc
+
+    missing_columns = AGENT_RUN_WORKER_COLUMNS - agent_run_columns
+    if missing_columns:
+        missing_label = ", ".join(sorted(missing_columns))
+        raise DatabaseSchemaError(
+            "数据库结构与 Alembic 版本记录不一致："
+            f"agent_runs 缺少列 [{missing_label}]；"
             "请先在 backend 目录执行 `alembic upgrade head`。"
         )
 

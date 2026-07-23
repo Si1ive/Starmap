@@ -1,6 +1,7 @@
 import importlib.util
 import io
 from pathlib import Path
+from unittest.mock import Mock
 
 from alembic.config import Config
 from alembic.migration import MigrationContext
@@ -30,7 +31,7 @@ def test_migration_graph_has_single_head():
     config.set_main_option("script_location", str(backend_dir / "alembic"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_heads() == ["20260723_agent_thread_events"]
+    assert scripts.get_heads() == ["20260723_repair_agent_parent"]
 
 
 def test_user_identity_migration_renders_mysql_ddl():
@@ -122,3 +123,86 @@ def test_agent_thread_events_migration_renders_mysql_ddl():
     assert "CREATE TABLE agent_thread_events" in ddl
     assert "timeline.item.created" in ddl
     assert "workflow.updated" in ddl
+
+
+def _load_agent_parent_repair_migration():
+    backend_dir = Path(__file__).resolve().parents[1]
+    migration_path = (
+        backend_dir
+        / "alembic"
+        / "versions"
+        / "20260723_repair_agent_parent.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "agent_parent_repair_migration",
+        migration_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
+def test_agent_parent_repair_migration_restores_missing_schema(monkeypatch):
+    migration = _load_agent_parent_repair_migration()
+    migration.op = Mock()
+    bind = Mock()
+    migration.op.get_bind.return_value = bind
+
+    initial_inspector = Mock()
+    initial_inspector.get_columns.return_value = [{"name": "root_run_id"}]
+    refreshed_inspector = Mock()
+    refreshed_inspector.get_indexes.return_value = []
+    refreshed_inspector.get_foreign_keys.return_value = []
+    monkeypatch.setattr(
+        migration.sa,
+        "inspect",
+        Mock(side_effect=[initial_inspector, refreshed_inspector]),
+    )
+
+    migration.upgrade()
+
+    migration.op.add_column.assert_called_once()
+    migration.op.create_index.assert_called_once_with(
+        "idx_agent_run_parent",
+        "agent_runs",
+        ["parent_run_id"],
+    )
+    migration.op.create_foreign_key.assert_called_once_with(
+        "fk_agent_run_parent",
+        "agent_runs",
+        "agent_runs",
+        ["parent_run_id"],
+        ["id"],
+        ondelete="SET NULL",
+    )
+
+
+def test_agent_parent_repair_migration_is_idempotent(monkeypatch):
+    migration = _load_agent_parent_repair_migration()
+    migration.op = Mock()
+    bind = Mock()
+    migration.op.get_bind.return_value = bind
+
+    initial_inspector = Mock()
+    initial_inspector.get_columns.return_value = [{"name": "parent_run_id"}]
+    refreshed_inspector = Mock()
+    refreshed_inspector.get_indexes.return_value = [
+        {"name": "idx_agent_run_parent"}
+    ]
+    refreshed_inspector.get_foreign_keys.return_value = [
+        {"name": "fk_agent_run_parent"}
+    ]
+    monkeypatch.setattr(
+        migration.sa,
+        "inspect",
+        Mock(side_effect=[initial_inspector, refreshed_inspector]),
+    )
+
+    migration.upgrade()
+
+    migration.op.add_column.assert_not_called()
+    migration.op.create_index.assert_not_called()
+    migration.op.create_foreign_key.assert_not_called()
