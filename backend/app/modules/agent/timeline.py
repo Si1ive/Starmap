@@ -543,6 +543,7 @@ class AgentTimelineService:
     def _input_view(agent_input: AgentInput) -> dict[str, Any]:
         return {
             "id": agent_input.id,
+            "run_id": agent_input.run_id,
             "input_key": agent_input.input_key,
             "status": agent_input.status,
             "question": agent_input.prompt_ref or "请补充所需信息",
@@ -554,6 +555,7 @@ class AgentTimelineService:
     def _approval_view(approval: AgentApproval) -> dict[str, Any]:
         return {
             "id": approval.id,
+            "run_id": approval.run_id,
             "action_key": approval.action_key,
             "status": approval.status,
             "change": AgentTimelineService._safe_json(approval.diff_ref),

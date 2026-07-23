@@ -183,6 +183,13 @@ async def test_timeline_aggregates_child_workflow_into_root_item(db_session):
                 prompt_ref="你希望讲解到什么深度？",
                 status="pending",
             ),
+            AgentApproval(
+                id="approval_001",
+                run_id=child.id,
+                action_key="apply_learning_plan",
+                diff_ref='{"summary": "把循环队列加入本周复习计划"}',
+                status="pending",
+            ),
             AgentArtifact(
                 id="artifact_001",
                 run_id=child.id,
@@ -208,6 +215,9 @@ async def test_timeline_aggregates_child_workflow_into_root_item(db_session):
     assert workflow["current_step"] == "组织讲解"
     assert workflow["steps"][0]["label"] == "组织讲解"
     assert workflow["pending_input"]["input_key"] == "scope"
+    assert workflow["pending_input"]["run_id"] == child.id
+    assert workflow["pending_approval"]["id"] == "approval_001"
+    assert workflow["pending_approval"]["run_id"] == child.id
     assert workflow["artifacts"][0]["type"] == "message"
 
 
