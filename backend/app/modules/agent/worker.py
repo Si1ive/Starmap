@@ -215,10 +215,27 @@ class AgentWorker:
                 })
 
             elif result.status == NodeStatus.WAITING:
-                # 等待状态：转移到 waiting_for_approval
-                state_machine.transition(run, RunStatus.WAITING_FOR_APPROVAL, reason="等待用户审批")
+                waiting_output = result.output or {}
+                if waiting_output.get("waiting_for_user") is True:
+                    waiting_status = RunStatus.WAITING_FOR_USER
+                    waiting_reason = "等待用户补充信息"
+                else:
+                    # 兼容未显式声明等待类型的旧工作流：历史 WAITING 语义为等待审批。
+                    waiting_status = RunStatus.WAITING_FOR_APPROVAL
+                    waiting_reason = "等待用户审批"
+
+                state_machine.transition(run, waiting_status, reason=waiting_reason)
                 run.error_message = None
-                logger.info("Run 进入等待审批状态", run_id=run.id)
+                await event_store.append(db, run.id, "run.status_changed", {
+                    "from": RunStatus.RUNNING.value,
+                    "to": waiting_status.value,
+                    "reason": waiting_reason,
+                })
+                logger.info(
+                    "Run 进入等待状态",
+                    run_id=run.id,
+                    status=waiting_status.value,
+                )
             else:
                 error_msg = result.error or "工作流执行失败"
                 state_machine.transition(run, RunStatus.FAILED, reason=error_msg)
