@@ -348,6 +348,7 @@ export default function AgentPage() {
 
   const [message, setMessage] = useState('')
   const [selectedWorkflow, setSelectedWorkflow] = useState<'auto' | 'explain@v1' | 'validate@v1' | 'grade@v1' | 'plan@v1'>('auto')
+  const [isSubmitting, setIsSubmitting] = useState(false)
   const [expandedStep, setExpandedStep] = useState<string | null>(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [evidenceOpen, setEvidenceOpen] = useState(false)
@@ -419,8 +420,9 @@ export default function AgentPage() {
 
   // Handle send message
   const sendMessage = useCallback(async () => {
-    if (!message.trim()) return
+    if (!message.trim() || isSubmitting) return
     const input = message.trim()
+    setIsSubmitting(true)
 
     // If run is waiting for user input, submit instead of creating new run
     if (run?.status === 'waiting_for_user' && runId) {
@@ -431,6 +433,8 @@ export default function AgentPage() {
         connectSSE(runId)
       } catch (e) {
         console.error('提交输入失败', e)
+      } finally {
+        setIsSubmitting(false)
       }
       return
     }
@@ -443,6 +447,7 @@ export default function AgentPage() {
         navigate(`/agent/${tid}`)
       } catch (e) {
         console.error('创建线程失败', e)
+        setIsSubmitting(false)
         return
       }
     }
@@ -455,8 +460,10 @@ export default function AgentPage() {
       connectSSE(newRun.id)
     } catch (e) {
       console.error('创建运行失败', e)
+    } finally {
+      setIsSubmitting(false)
     }
-  }, [message, threadId, run, runId, submitInput, createThread, navigate, createRun, dispatch, connectSSE])
+  }, [message, threadId, run, runId, submitInput, createThread, navigate, createRun, dispatch, connectSSE, isSubmitting, selectedWorkflow])
 
   // Derived data
   const currentThread = agentState.threads.find((t) => t.id === threadId)
