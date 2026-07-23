@@ -61,10 +61,14 @@ def test_agent_conversation_routes_keep_legacy_and_app_namespaces():
     for prefix in ("/api/v1/agent", "/api/v1/app/agent"):
         turns = routes[f"{prefix}/threads/{{thread_id}}/turns"]
         timeline = routes[f"{prefix}/threads/{{thread_id}}/timeline"]
+        events = routes[f"{prefix}/threads/{{thread_id}}/events"]
+        stream = routes[f"{prefix}/threads/{{thread_id}}/events/stream"]
         assert turns.endpoint.__module__ == "app.modules.agent.router"
         assert timeline.endpoint.__module__ == "app.modules.agent.router"
         assert "POST" in turns.methods
         assert "GET" in timeline.methods
+        assert "GET" in events.methods
+        assert "GET" in stream.methods
 
 
 def test_learning_user_registration_routes_are_owned_by_identity_module():

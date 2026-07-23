@@ -1,0 +1,244 @@
+"""Thread 级事件存储与 run 事件公开投影。"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+from typing import Any, Optional
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from .models import (
+    AgentMessage,
+    AgentRun,
+    AgentThread,
+    AgentThreadEvent,
+    AgentThreadItem,
+)
+
+RUN_EVENT_TYPES = {
+    "run.created": "workflow.updated",
+    "run.status_changed": "workflow.updated",
+    "run.completed": "workflow.completed",
+    "run.failed": "workflow.failed",
+    "error": "workflow.failed",
+    "step.started": "workflow.step.updated",
+    "step.completed": "workflow.step.updated",
+    "step.failed": "workflow.step.updated",
+    "artifact.rendered": "workflow.artifact.created",
+}
+
+PUBLIC_STEP_LABELS = {
+    "intent": "理解需求",
+    "route": "选择处理方式",
+    "load_scope": "确认学习范围",
+    "evidence_loop": "查找相关资料",
+    "evidence_gate": "检查资料质量",
+    "generate_explanation": "组织讲解",
+    "citation_gate": "检查引用",
+    "question_discovery": "查找候选题",
+    "question_gate": "检查题目质量",
+    "create_draft": "生成练习草稿",
+    "generate_feedback": "生成反馈",
+    "propose_plan_delta": "生成调整方案",
+    "wait_for_approval": "等待你的确认",
+    "completed": "完成",
+}
+
+
+class ThreadEventStore:
+    async def append(
+        self,
+        session: AsyncSession,
+        thread_id: str,
+        event_type: str,
+        payload: Optional[dict[str, Any]] = None,
+    ) -> AgentThreadEvent:
+        thread = await self._lock_thread(session, thread_id)
+        sequence = thread.last_item_sequence + 1
+        thread.last_item_sequence = sequence
+        thread.updated_at = datetime.utcnow()
+        return await self.append_at(session, thread_id, sequence, event_type, payload)
+
+    async def append_at(
+        self,
+        session: AsyncSession,
+        thread_id: str,
+        sequence: int,
+        event_type: str,
+        payload: Optional[dict[str, Any]] = None,
+    ) -> AgentThreadEvent:
+        event = AgentThreadEvent(
+            thread_id=thread_id,
+            sequence=sequence,
+            event_type=event_type,
+            payload={"sequence": sequence, **(payload or {})},
+        )
+        session.add(event)
+        await session.flush()
+        return event
+
+    async def get_events(
+        self,
+        session: AsyncSession,
+        thread_id: str,
+        after_sequence: int,
+        limit: int,
+    ) -> list[AgentThreadEvent]:
+        result = await session.execute(
+            select(AgentThreadEvent)
+            .where(
+                AgentThreadEvent.thread_id == thread_id,
+                AgentThreadEvent.sequence > after_sequence,
+            )
+            .order_by(AgentThreadEvent.sequence)
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def project_run_event(
+        self,
+        session: AsyncSession,
+        run_id: str,
+        run_event_type: str,
+        payload: Optional[dict[str, Any]],
+    ) -> None:
+        result = await session.execute(select(AgentRun).where(AgentRun.id == run_id))
+        run = result.scalar_one_or_none()
+        if not run:
+            return
+        root_run_id = run.root_run_id or run.id
+        public_payload: dict[str, Any] = {
+            "root_run_id": root_run_id,
+            "run_id": run.id,
+            "status": run.status,
+        }
+
+        if run_event_type in {"message.delta", "message.completed"}:
+            if (run.workflow_key or run.workflow_name) == "conversation":
+                return
+            source = payload or {}
+            if run_event_type == "message.delta":
+                public_payload["delta"] = source.get("delta", "")
+            else:
+                public_payload["content"] = source.get("content", "")
+            await self._project_message_event(
+                session, run, root_run_id, run_event_type, public_payload
+            )
+            return
+
+        thread_event_type = RUN_EVENT_TYPES.get(run_event_type)
+        if thread_event_type:
+            source = payload or {}
+            if run_event_type.startswith("step."):
+                public_payload.update(
+                    {
+                        "step_id": source.get("step_id"),
+                        "label": PUBLIC_STEP_LABELS.get(
+                            source.get("node_name"), "执行步骤"
+                        ),
+                        "step_status": run_event_type.removeprefix("step."),
+                    }
+                )
+            elif run_event_type == "artifact.rendered":
+                public_payload.update(
+                    {
+                        "artifact_id": source.get("artifact_id"),
+                        "artifact_type": source.get("artifact_type"),
+                    }
+                )
+            elif run_event_type in {"run.failed", "error"}:
+                public_payload["error"] = source.get("error") or run.error_message
+            elif run_event_type == "run.status_changed":
+                public_payload["reason"] = source.get("reason")
+            await self.append(session, run.thread_id, thread_event_type, public_payload)
+
+    async def _project_message_event(
+        self,
+        session: AsyncSession,
+        run: AgentRun,
+        root_run_id: str,
+        event_type: str,
+        payload: dict[str, Any],
+    ) -> None:
+        result = await session.execute(
+            select(AgentMessage)
+            .where(AgentMessage.run_id == run.id, AgentMessage.role == "assistant")
+            .order_by(AgentMessage.created_at.desc())
+            .limit(1)
+        )
+        message = result.scalar_one_or_none()
+        if not message:
+            message = AgentMessage(
+                id=f"msg_{uuid.uuid4().hex[:20]}",
+                thread_id=run.thread_id,
+                user_id=run.user_id,
+                run_id=run.id,
+                role="assistant",
+                status="streaming",
+                content_text="",
+                content_blocks_json=[],
+            )
+            session.add(message)
+            await session.flush()
+            thread = await self._lock_thread(session, run.thread_id)
+            item_sequence = thread.last_item_sequence + 1
+            thread.last_item_sequence = item_sequence
+            thread.updated_at = datetime.utcnow()
+            item = AgentThreadItem(
+                id=f"item_{uuid.uuid4().hex[:20]}",
+                thread_id=run.thread_id,
+                sequence=item_sequence,
+                item_type="message",
+                ref_id=message.id,
+                run_id=run.id,
+            )
+            session.add(item)
+            await self.append_at(
+                session,
+                run.thread_id,
+                item_sequence,
+                "timeline.item.created",
+                {"item_id": item.id, "item_type": "message", "ref_id": message.id},
+            )
+
+        if event_type == "message.delta":
+            message.content_text = (message.content_text or "") + str(
+                payload.get("delta", "")
+            )
+            message.status = "streaming"
+            public_type = "message.delta"
+            public_payload = {
+                "message_id": message.id,
+                "delta": payload.get("delta", ""),
+            }
+        else:
+            message.content_text = str(
+                payload.get("content") or message.content_text or ""
+            )
+            message.status = "completed"
+            message.completed_at = datetime.utcnow()
+            public_type = "message.completed"
+            public_payload = {
+                "message_id": message.id,
+                "root_run_id": root_run_id,
+                "message": {
+                    "id": message.id,
+                    "role": message.role,
+                    "status": message.status,
+                    "content": message.content_text,
+                },
+            }
+        message.updated_at = datetime.utcnow()
+        await self.append(session, run.thread_id, public_type, public_payload)
+
+    @staticmethod
+    async def _lock_thread(session: AsyncSession, thread_id: str) -> AgentThread:
+        result = await session.execute(
+            select(AgentThread).where(AgentThread.id == thread_id).with_for_update()
+        )
+        return result.scalar_one()
+
+
+thread_event_store = ThreadEventStore()

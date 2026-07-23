@@ -30,7 +30,7 @@ def test_migration_graph_has_single_head():
     config.set_main_option("script_location", str(backend_dir / "alembic"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_heads() == ["20260723_agent_timeline"]
+    assert scripts.get_heads() == ["20260723_agent_thread_events"]
 
 
 def test_user_identity_migration_renders_mysql_ddl():
@@ -93,3 +93,32 @@ def test_agent_timeline_migration_renders_mysql_ddl():
     assert "CREATE TABLE agent_thread_items" in ddl
     assert "ADD COLUMN last_item_sequence BIGINT" in ddl
     assert "run.failed" in ddl
+
+
+def test_agent_thread_events_migration_renders_mysql_ddl():
+    backend_dir = Path(__file__).resolve().parents[1]
+    migration_path = (
+        backend_dir / "alembic" / "versions" / "20260723_agent_thread_events.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "agent_thread_events_migration",
+        migration_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    output = io.StringIO()
+    context = MigrationContext.configure(
+        dialect=mysql.dialect(),
+        opts={"as_sql": True, "output_buffer": output},
+    )
+    migration.op = Operations(context)
+    migration.upgrade()
+    ddl = output.getvalue()
+
+    assert "CREATE TABLE agent_thread_events" in ddl
+    assert "timeline.item.created" in ddl
+    assert "workflow.updated" in ddl

@@ -51,6 +51,13 @@ class EventStore:
         session.add(event)
         await session.flush()
         await session.refresh(event)
+
+        # 同事务生成 thread 级公开投影，供完整对话订阅和断线恢复。
+        from .thread_events import thread_event_store
+
+        await thread_event_store.project_run_event(
+            session, run_id, event_type, payload or {}
+        )
         
         logger.debug(
             "事件追加",

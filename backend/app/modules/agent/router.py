@@ -6,7 +6,8 @@ P0 核心 API 路由。
 
 from typing import AsyncGenerator, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -19,12 +20,13 @@ from .models import AgentThread, AgentRun, AgentEvent, AgentArtifact, AgentAppro
 from .schemas import (
     ThreadCreateRequest, ThreadResponse, RunCreateRequest,
     RunStatusResponse, EventResponse, ArtifactResponse,
-    TimelineResponse, TurnCreateRequest, TurnCreateResponse,
+    ThreadEventsResponse, TimelineResponse, TurnCreateRequest, TurnCreateResponse,
 )
 from .service import AgentService
 from .timeline import AgentTimelineService, ThreadNotFoundError, TurnConflictError
-from .events import event_store, serialize_sse
+from .events import event_store, serialize_sse, serialize_sse_from_dict
 from .state_machine import RunStatus
+from .thread_events import thread_event_store
 
 logger = get_logger(__name__)
 
@@ -218,6 +220,114 @@ async def get_thread_timeline(
         previous_cursor=page.previous_cursor,
         latest_cursor=page.latest_cursor,
         has_more=page.has_more,
+    )
+
+
+@router.get("/threads/{thread_id}/events", response_model=ThreadEventsResponse)
+async def get_thread_events(
+    thread_id: str,
+    after_sequence: int = Query(default=0, ge=0),
+    limit: int = Query(default=200, ge=1, le=1000),
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """按统一 cursor 补拉 thread 事件。"""
+    agent_service = AgentService(db)
+    thread = await agent_service.get_thread(thread_id, user_id)
+    if not thread:
+        raise HTTPException(status_code=404, detail="线程不存在")
+    events = await thread_event_store.get_events(
+        db, thread_id, after_sequence=after_sequence, limit=limit
+    )
+    return ThreadEventsResponse(
+        thread_id=thread_id,
+        events=[
+            {
+                "id": event.id,
+                "sequence": event.sequence,
+                "event_type": event.event_type,
+                "payload": event.payload or {},
+                "created_at": event.created_at,
+            }
+            for event in events
+        ],
+        latest_cursor=thread.last_item_sequence,
+    )
+
+
+@router.get("/threads/{thread_id}/events/stream")
+async def stream_thread_events(
+    thread_id: str,
+    after_sequence: int = Query(default=0, ge=0),
+    last_event_id: Optional[int] = Header(default=None, alias="Last-Event-ID"),
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """发送 thread snapshot，并持续推送 cursor 之后的公开事件。"""
+    thread = await AgentService(db).get_thread(thread_id, user_id)
+    if not thread:
+        raise HTTPException(status_code=404, detail="线程不存在")
+    requested_cursor = max(after_sequence, last_event_id or 0)
+
+    async def event_generator() -> AsyncGenerator[str, None]:
+        import asyncio
+
+        last_sequence = requested_cursor
+        idle_polls = 0
+        try:
+            async with mysql_client.session() as session:
+                page = await AgentTimelineService(session).get_timeline(
+                    user_id=user_id,
+                    thread_id=thread_id,
+                    before=None,
+                    limit=100,
+                )
+                snapshot = {
+                    "latest_sequence": page.latest_cursor,
+                    "items": page.items,
+                    "has_more": page.has_more,
+                }
+                yield serialize_sse_from_dict(
+                    page.latest_cursor,
+                    "timeline.snapshot",
+                    jsonable_encoder(snapshot),
+                )
+                last_sequence = page.latest_cursor
+
+            while True:
+                async with mysql_client.session() as session:
+                    events = await thread_event_store.get_events(
+                        session,
+                        thread_id,
+                        after_sequence=last_sequence,
+                        limit=200,
+                    )
+                    for event in events:
+                        yield serialize_sse(event)
+                        last_sequence = event.sequence
+
+                if events:
+                    idle_polls = 0
+                else:
+                    idle_polls += 1
+                    if idle_polls >= 15:
+                        yield ": keep-alive\n\n"
+                        idle_polls = 0
+                await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            logger.info("thread SSE 客户端断开", thread_id=thread_id)
+            raise
+        except Exception as exc:
+            logger.error("thread SSE 推送异常", thread_id=thread_id, error=str(exc))
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 

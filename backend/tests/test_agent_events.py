@@ -17,13 +17,20 @@ from app.modules.agent.events import (
     serialize_sse,
     serialize_sse_from_dict,
 )
-from app.modules.agent.models import AgentEvent, AgentMessage, AgentRun, AgentThread
+from app.modules.agent.models import (
+    AgentEvent,
+    AgentMessage,
+    AgentRun,
+    AgentThread,
+    AgentThreadEvent,
+)
 
 # Agent tables needed for tests
 AGENT_TABLES = [
     AgentThread.__table__,
     AgentRun.__table__,
     AgentMessage.__table__,
+    AgentThreadEvent.__table__,
     AgentEvent.__table__,
 ]
 

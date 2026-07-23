@@ -192,6 +192,36 @@ class AgentThreadItem(Base):
     )
 
 
+class AgentThreadEvent(Base):
+    """thread 级实时事件：为完整对话提供统一 cursor。"""
+    __tablename__ = "agent_thread_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    thread_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("agent_threads.id", ondelete="CASCADE"),
+        nullable=False, comment="所属线程ID"
+    )
+    sequence: Mapped[int] = mapped_column(BigInteger, nullable=False, comment="线程内单调序号")
+    event_type: Mapped[str] = mapped_column(
+        SAEnum(
+            "timeline.item.created", "message.started", "message.delta",
+            "message.completed", "message.failed", "workflow.updated",
+            "workflow.step.updated", "workflow.input.required",
+            "workflow.approval.required", "workflow.artifact.created",
+            "workflow.completed", "workflow.failed", "workflow.cancelled",
+        ),
+        nullable=False, comment="公开事件类型"
+    )
+    payload: Mapped[Optional[dict]] = mapped_column(JSON, comment="公开事件负载")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_agent_thread_event_thread", "thread_id", "sequence"),
+        UniqueConstraint("thread_id", "sequence", name="uk_agent_thread_event_sequence"),
+        {"comment": "Agent thread 实时事件表"}
+    )
+
+
 class AgentStep(Base):
     """步骤表：工作流中的节点执行记录"""
     __tablename__ = "agent_steps"

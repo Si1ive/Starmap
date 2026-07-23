@@ -19,9 +19,12 @@ from app.modules.agent.models import (
     AgentRunOutbox,
     AgentStep,
     AgentThread,
+    AgentThreadEvent,
     AgentThreadItem,
 )
 from app.modules.agent.service import AgentService
+from app.modules.agent.events import event_store
+from app.modules.agent.thread_events import thread_event_store
 from app.modules.agent.timeline import AgentTimelineService, TurnConflictError
 
 TIMELINE_SERVICE_TABLES = [
@@ -29,6 +32,7 @@ TIMELINE_SERVICE_TABLES = [
     AgentRun.__table__,
     AgentMessage.__table__,
     AgentThreadItem.__table__,
+    AgentThreadEvent.__table__,
     AgentStep.__table__,
     AgentEvent.__table__,
     AgentRunOutbox.__table__,
@@ -90,12 +94,12 @@ async def test_create_turn_writes_message_run_timeline_event_and_outbox(db_sessi
 
     creation = await _create_turn(db_session)
 
-    assert creation.timeline_cursor == 2
+    assert creation.timeline_cursor == 3
     assert creation.message.status == "completed"
     assert creation.message.run_id == creation.run.id
     assert creation.run.root_run_id == creation.run.id
     assert creation.run.workflow_key == "conversation"
-    assert thread.last_item_sequence == 2
+    assert thread.last_item_sequence == 3
     assert thread.title == "解释循环队列"
 
     items = list(
@@ -122,7 +126,7 @@ async def test_create_turn_is_idempotent_by_client_message_id(db_session):
 
     assert second.message.id == first.message.id
     assert second.run.id == first.run.id
-    assert second.timeline_cursor == 2
+    assert second.timeline_cursor == 3
     assert await db_session.scalar(select(func.count(AgentMessage.id))) == 1
     assert await db_session.scalar(select(func.count(AgentRun.id))) == 1
     assert await db_session.scalar(select(func.count(AgentThreadItem.id))) == 2
@@ -231,10 +235,82 @@ async def test_timeline_uses_sequence_cursor_for_pagination(db_session):
         limit=2,
     )
 
-    assert [item["sequence"] for item in latest.items] == [3, 4]
-    assert latest.previous_cursor == 3
-    assert latest.latest_cursor == 4
+    assert [item["sequence"] for item in latest.items] == [4, 5]
+    assert latest.previous_cursor == 4
+    assert latest.latest_cursor == 6
     assert latest.has_more is True
     assert [item["sequence"] for item in earlier.items] == [1, 2]
     assert earlier.previous_cursor is None
     assert earlier.has_more is False
+
+
+@pytest.mark.asyncio
+async def test_run_events_project_to_thread_cursor_and_assistant_message(db_session):
+    await _create_thread(db_session)
+    creation = await _create_turn(db_session)
+    child = await AgentService(db_session).create_run(
+        user_id="user_001",
+        thread_id="thread_001",
+        workflow_name="explain",
+        input_message="解释循环队列",
+        workflow_key="explain",
+        workflow_version="v1",
+        trigger_message_id=creation.message.id,
+        parent_run_id=creation.run.id,
+        root_run_id=creation.run.id,
+        presentation="compact",
+        public_title="整理讲解",
+    )
+
+    await event_store.append(
+        db_session,
+        child.id,
+        "step.started",
+        {"step_id": "step_public", "node_name": "generate_explanation"},
+    )
+    await event_store.append(
+        db_session,
+        child.id,
+        "message.completed",
+        {"content": "循环队列通过取模复用数组空间。"},
+    )
+
+    events = await thread_event_store.get_events(
+        db_session,
+        "thread_001",
+        after_sequence=creation.timeline_cursor,
+        limit=20,
+    )
+    assert [event.event_type for event in events] == [
+        "workflow.updated",
+        "workflow.step.updated",
+        "timeline.item.created",
+        "message.completed",
+    ]
+    assert events[1].payload["label"] == "组织讲解"
+    assert "node_name" not in events[1].payload
+    assert [event.sequence for event in events] == [4, 5, 6, 7]
+
+    assistant = await db_session.scalar(
+        select(AgentMessage).where(
+            AgentMessage.run_id == child.id,
+            AgentMessage.role == "assistant",
+        )
+    )
+    assert assistant is not None
+    assert assistant.status == "completed"
+    assert assistant.content_text == "循环队列通过取模复用数组空间。"
+
+    page = await AgentTimelineService(db_session).get_timeline(
+        user_id="user_001",
+        thread_id="thread_001",
+        before=None,
+        limit=50,
+    )
+    assert [item["type"] for item in page.items] == [
+        "message",
+        "workflow",
+        "message",
+    ]
+    assert page.items[-1]["message"]["role"] == "assistant"
+    assert page.latest_cursor == 7

@@ -188,3 +188,19 @@ class TimelineResponse(BaseModel):
     previous_cursor: Optional[int]
     latest_cursor: int
     has_more: bool
+
+
+class ThreadEventView(BaseModel):
+    """thread 级可重放事件。"""
+
+    id: int
+    sequence: int
+    event_type: str
+    payload: Dict[str, Any]
+    created_at: datetime
+
+
+class ThreadEventsResponse(BaseModel):
+    thread_id: str
+    events: List[ThreadEventView]
+    latest_cursor: int

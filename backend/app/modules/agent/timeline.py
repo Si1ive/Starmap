@@ -26,6 +26,7 @@ from .models import (
 )
 from .outbox import outbox_store
 from .state_machine import RunStatus
+from .thread_events import thread_event_store
 
 logger = get_logger(__name__)
 
@@ -227,6 +228,29 @@ class AgentTimelineService:
         if thread.title == "新会话":
             thread.title = self._derive_thread_title(content)
 
+        await thread_event_store.append_at(
+            self.db,
+            thread.id,
+            message_sequence,
+            "timeline.item.created",
+            {
+                "item_type": "message",
+                "ref_id": message.id,
+                "run_id": run.id,
+            },
+        )
+        await thread_event_store.append_at(
+            self.db,
+            thread.id,
+            workflow_sequence,
+            "timeline.item.created",
+            {
+                "item_type": "workflow",
+                "ref_id": run.id,
+                "root_run_id": run.id,
+            },
+        )
+
         await event_store.append(
             self.db,
             run.id,
@@ -252,7 +276,7 @@ class AgentTimelineService:
         return TurnCreation(
             message=message,
             run=run,
-            timeline_cursor=workflow_sequence,
+            timeline_cursor=thread.last_item_sequence,
         )
 
     async def get_timeline(
