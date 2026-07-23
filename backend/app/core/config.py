@@ -2,6 +2,31 @@ from pydantic_settings import BaseSettings
 from typing import List
 import os
 from pathlib import Path
+import os
+
+def _patch_ssl_cert_file_env():
+    """修复 Homebrew 更新后 SSL_CERT_FILE 指向失效证书路径的问题"""
+    cert_file = os.environ.get("SSL_CERT_FILE")
+    if not cert_file:
+        return
+    if os.path.isfile(cert_file):
+        return
+    fallback_paths = [
+        "/opt/homebrew/etc/ca-certificates/cert.pem",
+        "/usr/local/etc/openssl@3/cert.pem",
+        "/usr/local/etc/openssl/cert.pem",
+        "/usr/local/etc/ca-certificates/cert.pem",
+        "/etc/ssl/cert.pem",
+    ]
+    for p in fallback_paths:
+        if os.path.isfile(p):
+            os.environ["SSL_CERT_FILE"] = p
+            os.environ["SSL_CERT_DIR"] = os.path.dirname(p)
+            return
+    os.environ.pop("SSL_CERT_FILE", None)
+    os.environ.pop("SSL_CERT_DIR", None)
+
+_patch_ssl_cert_file_env()
 
 class Settings(BaseSettings):
     # 应用配置
