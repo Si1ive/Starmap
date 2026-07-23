@@ -92,9 +92,10 @@ class AgentService:
                     AgentRun.client_idempotency_key == client_idempotency_key,
                 )
             )
-            if existing.scalar_one_or_none():
+            existing_run = existing.scalar_one_or_none()
+            if existing_run:
                 logger.info("幂等命中，返回已有Run", user_id=user_id, key=client_idempotency_key)
-                return existing.scalar_one_or_none()
+                return existing_run
 
         run_id = f"run_{uuid.uuid4().hex[:20]}"
         run = AgentRun(

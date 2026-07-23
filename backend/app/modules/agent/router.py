@@ -6,13 +6,15 @@ P0 核心 API 路由。
 
 from typing import AsyncGenerator, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.core.logging import get_logger
 from app.db.mysql import mysql_client
+from app.modules.identity.dependencies import require_current_user
+from app.modules.identity.models import User
 from .models import AgentThread, AgentRun, AgentEvent, AgentArtifact, AgentApproval
 from .schemas import (
     ThreadCreateRequest, ThreadResponse, RunCreateRequest,
@@ -33,14 +35,9 @@ async def get_db():
         yield session
 
 
-async def get_current_user_id(request: Request) -> str:
-    """获取当前用户ID（简化版，实际应使用identity模块）"""
-    # 从header获取用户ID（简化）
-    user_id = request.headers.get("x-user-id")
-    if user_id:
-        return user_id
-    # 默认返回测试用户
-    return "user_test"
+async def get_current_user_id(user: User = Depends(require_current_user)) -> str:
+    """获取当前认证用户ID（identity 的 UUID → 32 位 hex，匹配 agent_* 表的 String(32)）"""
+    return user.id.hex
 
 
 # ==================== Thread API ====================

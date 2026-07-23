@@ -9,6 +9,11 @@ from typing import Optional, Dict, Any, List, Callable, Awaitable
 from enum import Enum
 
 
+class ModelBudgetExceeded(Exception):
+    """模型调用预算耗尽"""
+    pass
+
+
 class NodeStatus(str, Enum):
     """节点状态"""
     PENDING = "pending"
@@ -95,3 +100,11 @@ class ExecutionContext:
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.variables.get(key, default)
+
+    def charge_model_call(self, count: int = 1) -> None:
+        """在调用模型前扣减预算，超限则抛 ModelBudgetExceeded。"""
+        if self.model_call_count + count > self.max_model_calls:
+            raise ModelBudgetExceeded(
+                f"模型调用预算耗尽（已用 {self.model_call_count} / 上限 {self.max_model_calls}）"
+            )
+        self.model_call_count += count

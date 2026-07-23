@@ -136,34 +136,30 @@ class AgentWorker:
             # 延长租约
             await self.extend_lease(db, run)
 
-            # 尝试从断点恢复
-            resume_from = None
-            checkpoint = await checkpoint_store.load_latest(db, run.id)
-            if checkpoint:
-                # 如果有断点，从断点的下一个节点恢复
-                resume_from = checkpoint.get("next_node")
-                if resume_from:
-                    # 恢复上下文变量
-                    for key, value in checkpoint.get("context_variables", {}).items():
-                        context.set(key, value)
-                    logger.info("从断点恢复", run_id=run.id, resume_from=resume_from)
-                    # 删除已使用的断点
-                    await checkpoint_store.delete_by_run(db, run.id)
-
-            # 构建执行上下文
+            # 构建执行上下文（必须先创建，才能恢复断点变量）
             context = ExecutionContext(
                 run_id=run.id,
                 user_id=run.user_id,
                 db=db,
             )
-            
-            if checkpoint and not resume_from:
-                # 有断点但没有下一个节点，可能已经完成
+
+            # 尝试从断点恢复
+            resume_from = None
+            checkpoint = await checkpoint_store.load_latest(db, run.id)
+            if checkpoint:
+                # 恢复上下文变量（无论是否有 next_node 都要恢复）
                 for key, value in checkpoint.get("context_variables", {}).items():
                     context.set(key, value)
+                resume_from = checkpoint.get("next_node")
+                if resume_from:
+                    logger.info("从断点恢复", run_id=run.id, resume_from=resume_from)
+                # 删除已使用的断点
+                await checkpoint_store.delete_by_run(db, run.id)
+
             context.set("input_message", run.input_message)
             context.set("workflow", run.workflow_name)
             context.max_model_calls = run.max_model_calls
+            context.model_call_count = run.model_call_count
 
             # 执行工作流
             engine = WorkflowEngine(db)
@@ -183,11 +179,17 @@ class AgentWorker:
                 # 如果有产物，创建产物记录
                 if result.artifact:
                     service = AgentService(db)
-                    await service.create_artifact(
+                    artifact = await service.create_artifact(
                         run_id=run.id,
                         artifact_type=result.artifact.get("type", "message"),
                         content=result.artifact,
                     )
+                    run.result_artifact_id = artifact.id
+                    await event_store.append(db, run.id, "artifact.rendered", {
+                        "run_id": run.id,
+                        "artifact_id": artifact.id,
+                        "type": artifact.artifact_type,
+                    })
                 
             elif result.status == NodeStatus.WAITING:
                 # 等待状态：转移到 waiting_for_approval
@@ -228,42 +230,45 @@ class AgentWorker:
             int: 处理的数量
         """
         processed = 0
-        
+
+        # 先在独立事务里扫描出待处理的 outbox id 列表（read-only，提交后连接释放）
         async with mysql_client.session() as db:
-            # 扫描待处理的outbox
             pending = await outbox_store.scan_pending(db, limit=limit)
-        
-        for outbox_item in pending:
+            pending_ids = [(item.id, item.run_id) for item in pending]
+
+        # 每个 run 用独立 session 处理，保证 process_run 内的写入随该事务提交落库
+        for outbox_id, run_id in pending_ids:
             try:
-                # 获取run
-                result = await db.execute(
-                    select(AgentRun).where(AgentRun.id == outbox_item.run_id)
-                )
-                run = result.scalar_one_or_none()
-                
-                if not run:
-                    logger.warning("Run 不存在", run_id=outbox_item.run_id)
-                    await outbox_store.complete(db, outbox_item.id)
-                    continue
+                async with mysql_client.session() as db:
+                    # 认领 outbox（原子更新，防止多 Worker 竞争）
+                    if not await outbox_store.claim(db, outbox_id, WORKER_ID):
+                        continue
 
-                # 认领outbox
-                if not await outbox_store.claim(db, outbox_item.id, WORKER_ID):
-                    continue
+                    result = await db.execute(
+                        select(AgentRun).where(AgentRun.id == run_id)
+                    )
+                    run = result.scalar_one_or_none()
 
-                # 处理run
-                success = await self.process_run(db, run)
-                
-                if success:
-                    await outbox_store.complete(db, outbox_item.id)
-                else:
-                    await outbox_store.fail(db, outbox_item.id)
-                
+                    if not run:
+                        logger.warning("Run 不存在", run_id=run_id)
+                        await outbox_store.complete(db, outbox_id)
+                        continue
+
+                    success = await self.process_run(db, run)
+
+                    if success:
+                        await outbox_store.complete(db, outbox_id)
+                    else:
+                        await outbox_store.fail(db, outbox_id)
+
                 processed += 1
-                
+
             except Exception as e:
-                logger.error("处理outbox异常", outbox_id=outbox_item.id, error=str(e))
+                logger.error("处理outbox异常", outbox_id=outbox_id, error=str(e))
+                # 失败标记单独用一个 session，避免复用已回滚的事务
                 try:
-                    await outbox_store.fail(db, outbox_item.id)
+                    async with mysql_client.session() as db:
+                        await outbox_store.fail(db, outbox_id)
                 except Exception:
                     pass
 

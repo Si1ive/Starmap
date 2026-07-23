@@ -14,6 +14,7 @@ from .contracts import WorkflowDefinition, NodeResult, NodeStatus, ExecutionCont
 from ..models import AgentStep
 from ..state_machine import RunStatus, state_machine
 from ..events import event_store
+from ..checkpoints import checkpoint_store
 
 logger = get_logger(__name__)
 
@@ -34,12 +35,12 @@ class WorkflowEngine:
     ) -> NodeResult:
         """
         执行工作流
-        
+
         从 entry_node 开始，按 edges 顺序执行，直到终止。
         """
         current_node_name = resume_from or workflow.entry_node
         visited = set()
-        
+
         logger.info(
             "工作流开始执行",
             run_id=context.run_id,
@@ -81,7 +82,15 @@ class WorkflowEngine:
                 step.status = result.status.value
                 step.output_data = result.output
                 step.completed_at = datetime.utcnow()
-                
+
+                # 将节点输出写回 context，供后续节点消费
+                if result.output:
+                    for key, value in result.output.items():
+                        context.set(key, value)
+
+                # 同步模型调用计数到 run（预算可观测/可追溯）
+                run.model_call_count = context.model_call_count
+
                 # 发布事件
                 if result.status == NodeStatus.COMPLETED:
                     await event_store.append(
@@ -103,18 +112,19 @@ class WorkflowEngine:
                 step.status = "failed"
                 step.error_info = {"error": str(e)}
                 step.completed_at = datetime.utcnow()
-                
+
                 await event_store.append(
                     self.db, context.run_id, "step.failed",
                     {"step_id": step.id, "node_name": node.name, "error": str(e)}
                 )
-                
+
                 # 失败时尝试重试
                 if node.max_retries > 0:
                     node.max_retries -= 1
                     logger.info("节点重试", node=node.name, remaining=node.max_retries)
+                    visited.discard(current_node_name)
                     continue
-                
+
                 return NodeResult.failure(str(e))
 
             await self.db.flush()
@@ -122,7 +132,7 @@ class WorkflowEngine:
             # 检查是否失败或等待
             if result.status == NodeStatus.FAILED:
                 return result
-            
+
             # 检查是否等待状态（如 wait_for_approval）
             if result.status == NodeStatus.WAITING:
                 # 保存断点：记录当前节点和下一个节点
@@ -151,4 +161,10 @@ class WorkflowEngine:
                     current_node_name = None
 
         logger.info("工作流执行完成", run_id=context.run_id, workflow=workflow.name)
-        return NodeResult.success({"artifacts": context.artifacts})
+        # 把最终产物挂到 NodeResult.artifact，供 worker 落库
+        final_artifact = context.artifacts[-1] if context.artifacts else None
+        return NodeResult(
+            status=NodeStatus.COMPLETED,
+            output={"artifacts": context.artifacts},
+            artifact=final_artifact,
+        )

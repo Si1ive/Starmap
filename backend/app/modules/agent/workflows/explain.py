@@ -37,15 +37,20 @@ async def _load_scope_node(context: ExecutionContext, db: AsyncSession) -> NodeR
 
 async def _evidence_loop_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
     """证据探索循环（有界 Agent Loop）"""
+    import json
+    import re
+
     from ..tools.retrieve_knowledge import retrieve_knowledge
-    
+    from ..loop_turns import loop_turn_store
+    from .contracts import ModelBudgetExceeded
+
     input_msg = context.get("input_message", "")
     scope = context.get("scope", {})
-    
+
     # P0: 最多3轮决策
-    max_turns = 3
+    max_turns = min(3, context.max_loop_turns)
     collected_evidence = []
-    
+
     for turn in range(max_turns):
         # 构建决策prompt
         system_prompt = "你是一位考研408专家。请决定下一步动作。"
@@ -65,29 +70,47 @@ async def _evidence_loop_node(context: ExecutionContext, db: AsyncSession) -> No
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
-        
+
+        # 预算校验：模型调用前扣减，超限则结束 Loop（用已收集证据降级）
+        try:
+            context.charge_model_call()
+        except ModelBudgetExceeded as e:
+            logger.warning("Loop 预算耗尽，提前结束", run_id=context.run_id, error=str(e))
+            break
+
         try:
             response = await model_adapter.chat_completion(messages, temperature=0.2, max_tokens=500)
-            
-            import json
+
             try:
                 data = json.loads(response)
             except json.JSONDecodeError:
                 # 尝试从文本中提取JSON
-                import re
                 json_match = re.search(r'\{.*\}', response, re.DOTALL)
                 if json_match:
                     data = json.loads(json_match.group())
                 else:
+                    await loop_turn_store.record(
+                        db, context.run_id, turn,
+                        decision={"raw": response[:1000]},
+                        action_key=None,
+                        observation={"error": "无法解析决策 JSON"},
+                    )
                     break
-            
+
             action = data.get("action", "")
-            
+
             # 白名单校验
             if not policy_gate.validate(action):
                 logger.warning("Action 未通过白名单", action=action)
+                await loop_turn_store.record(
+                    db, context.run_id, turn,
+                    decision=data,
+                    action_key=action,
+                    observation={"error": "action 未通过白名单"},
+                )
                 break
-            
+
+            observation: Dict[str, Any] = {}
             if action == "retrieve_knowledge":
                 params = data.get("parameters", {})
                 result = await retrieve_knowledge(
@@ -97,29 +120,48 @@ async def _evidence_loop_node(context: ExecutionContext, db: AsyncSession) -> No
                     chapter_ids=params.get("chapter_ids"),
                     limit=params.get("limit", 5),
                 )
+                observation = {"total": result.get("total", 0), "status": result.get("status")}
                 collected_evidence.append({
                     "turn": turn,
                     "action": action,
                     "result": result,
                     "reasoning": data.get("reasoning", ""),
                 })
-                
-                # 如果证据足够，提前结束
-                if len(collected_evidence) >= 2:
-                    break
-                    
+
             elif action == "finish":
-                break
-                
+                observation = {"decision": "finish"}
             elif action == "need_scope":
                 # P0 简化：降级处理，继续用已有范围
+                observation = {"decision": "need_scope", "handling": "降级继续"}
                 logger.info("用户需要补充范围，降级处理", run_id=context.run_id)
-                continue
-                
+
+            # 持久化本轮决策与 observation（#9）
+            await loop_turn_store.record(
+                db, context.run_id, turn,
+                decision=data,
+                action_key=action,
+                observation=observation,
+            )
+
+            if action == "finish":
+                break
+            if action == "retrieve_knowledge" and len(collected_evidence) >= 2:
+                # 证据足够，提前结束
+                break
+
         except Exception as e:
             logger.error("Loop 执行异常", turn=turn, error=str(e))
+            try:
+                await loop_turn_store.record(
+                    db, context.run_id, turn,
+                    decision={"error": str(e)},
+                    action_key=None,
+                    observation={"error": str(e)},
+                )
+            except Exception:
+                pass
             break
-    
+
     context.set("evidence", collected_evidence)
     logger.info("证据收集完成", run_id=context.run_id, evidence_count=len(collected_evidence))
     return NodeResult.success({"evidence_count": len(collected_evidence)}, next_node="evidence_gate")
@@ -176,7 +218,16 @@ async def _generate_explanation_node(context: ExecutionContext, db: AsyncSession
         {"role": "system", "content": "你是考研408专家，请提供结构化的知识点讲解。"},
         {"role": "user", "content": prompt},
     ]
-    
+
+    from .contracts import ModelBudgetExceeded
+
+    # 预算校验：讲解生成是核心产物，预算耗尽直接失败（不降级出空讲解）
+    try:
+        context.charge_model_call()
+    except ModelBudgetExceeded as e:
+        logger.warning("讲解生成预算耗尽", run_id=context.run_id, error=str(e))
+        return NodeResult.failure(str(e))
+
     try:
         response = await model_adapter.chat_completion(messages, temperature=0.3, max_tokens=3000)
         

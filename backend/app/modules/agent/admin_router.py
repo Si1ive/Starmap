@@ -143,6 +143,7 @@ async def get_run_detail(
 ):
     """获取 Run 详情（管理员视图）"""
     from sqlalchemy import select as sa_select
+    from .models import AgentRun
     result = await db.execute(
         sa_select(AgentRun).where(AgentRun.id == run_id)
     )

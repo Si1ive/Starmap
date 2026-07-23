@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from .contracts import WorkflowDefinition, Node, NodeResult, ExecutionContext
+from .contracts import WorkflowDefinition, Node, NodeResult, NodeStatus, ExecutionContext
 from .registry import workflow_registry
 from ..model_runtime.adapter import model_adapter
 from ..state_machine import RunStatus, state_machine
@@ -187,7 +187,12 @@ async def _render_plan_result_node(context: ExecutionContext, db: AsyncSession) 
     }
     
     logger.info("计划产物渲染完成", run_id=context.run_id)
-    return NodeResult.success({"artifact": artifact}, next_node="completed")
+    return NodeResult(
+        status=NodeStatus.COMPLETED,
+        output={"artifact": artifact},
+        next_node="completed",
+        artifact=artifact,
+    )
 
 
 async def _completed_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:

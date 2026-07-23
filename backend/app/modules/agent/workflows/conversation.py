@@ -60,45 +60,72 @@ async def _intent_node(context: ExecutionContext, db: AsyncSession) -> NodeResul
 
 
 async def _route_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
-    """路由调度节点"""
-    intent_result = context.get("intent_result", {})
-    intent = intent_result.get("intent", "explain")
-    
-    if intent == "explain":
-        logger.info("路由到 explain 工作流", run_id=context.run_id)
-        return NodeResult.success(
-            {"target_workflow": "explain@v1", "reason": "学习查询"},
-            next_node="completed"
-        )
-    elif intent == "clarify":
-        logger.info("路由到澄清，降级为 explain", run_id=context.run_id)
-        return NodeResult.success(
-            {"target_workflow": "explain@v1", "reason": "需要澄清，降级处理"},
-            next_node="completed"
-        )
-    else:
-        return NodeResult.success(
-            {"target_workflow": "explain@v1", "reason": "默认路由"},
-            next_node="completed"
-        )
+    """路由调度节点：创建 explain 子 run 并调度执行（路线图 1.3.1）"""
+    from sqlalchemy import select
+    from ..models import AgentRun
+    from ..service import AgentService
+
+    # engine 已将 intent 节点的 output 写回 context，直接读 intent
+    intent = context.get("intent", "explain")
+    reason = {
+        "explain": "学习查询",
+        "clarify": "需要澄清，降级处理",
+    }.get(intent, "默认路由")
+
+    # 目标 workflow：P0 只有 explain，clarify/其他都降级到 explain
+    target_workflow = "explain"
+
+    # 需要 thread_id 才能创建子 run —— 从当前 conversation run 读取
+    result = await db.execute(
+        select(AgentRun).where(AgentRun.id == context.run_id)
+    )
+    parent_run = result.scalar_one_or_none()
+    if not parent_run:
+        logger.error("conversation run 不存在，无法调度", run_id=context.run_id)
+        return NodeResult.failure("父 run 不存在，无法调度子工作流")
+
+    service = AgentService(db)
+    child_run = await service.create_run(
+        user_id=parent_run.user_id,
+        thread_id=parent_run.thread_id,
+        workflow_name=target_workflow,
+        input_message=parent_run.input_message or context.get("input_message", ""),
+    )
+
+    logger.info(
+        "已创建 explain 子 run 并调度",
+        run_id=context.run_id,
+        child_run_id=child_run.id,
+        intent=intent,
+    )
+    return NodeResult.success(
+        {
+            "target_workflow": f"{target_workflow}@v1",
+            "child_run_id": child_run.id,
+            "reason": reason,
+        },
+        next_node="completed",
+    )
 
 
 async def _completed_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
     """完成节点"""
-    intent_result = context.get("intent_result", {})
-    target = intent_result.get("target_workflow", "explain@v1")
-    
+    target = context.get("target_workflow", "explain@v1")
+    child_run_id = context.get("child_run_id")
+
     return NodeResult.success(
         {
             "workflow": "conversation@v1",
             "target_workflow": target,
-            "message": f"已识别意图，准备执行 {target}",
+            "child_run_id": child_run_id,
+            "message": f"已识别意图，已调度 {target}",
         },
         artifact={
             "type": "message",
             "title": "意图识别完成",
-            "content": f"已识别您的学习需求，正在为您准备讲解...",
-        }
+            "content": "已识别您的学习需求，正在为您准备讲解...",
+            "child_run_id": child_run_id,
+        },
     )
 
 
