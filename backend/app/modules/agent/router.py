@@ -19,8 +19,10 @@ from .models import AgentThread, AgentRun, AgentEvent, AgentArtifact, AgentAppro
 from .schemas import (
     ThreadCreateRequest, ThreadResponse, RunCreateRequest,
     RunStatusResponse, EventResponse, ArtifactResponse,
+    TimelineResponse, TurnCreateRequest, TurnCreateResponse,
 )
 from .service import AgentService
+from .timeline import AgentTimelineService, ThreadNotFoundError, TurnConflictError
 from .events import event_store, serialize_sse
 from .state_machine import RunStatus
 
@@ -140,6 +142,82 @@ async def get_thread(
         metadata=thread.metadata_json,
         created_at=thread.created_at,
         updated_at=thread.updated_at,
+    )
+
+
+@router.post(
+    "/threads/{thread_id}/turns",
+    response_model=TurnCreateResponse,
+    status_code=201,
+)
+async def create_turn(
+    thread_id: str,
+    request: TurnCreateRequest,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """创建一轮用户对话，并原子写入消息、workflow 与时间线。"""
+    service = AgentTimelineService(db)
+    try:
+        creation = await service.create_turn(
+            user_id=user_id,
+            thread_id=thread_id,
+            content=request.content,
+            client_message_id=request.client_message_id,
+            attachments=request.attachments,
+            context_refs=request.context_refs,
+            preferred_action=request.preferred_action,
+        )
+    except ThreadNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="线程不存在") from exc
+    except TurnConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="client_message_id 已被其他消息使用",
+        ) from exc
+
+    return TurnCreateResponse(
+        user_message=AgentTimelineService.message_view(creation.message),
+        root_run={
+            "id": creation.run.id,
+            "status": creation.run.status,
+            "presentation": creation.run.presentation,
+            "public_title": creation.run.public_title,
+        },
+        timeline_cursor=creation.timeline_cursor,
+    )
+
+
+@router.get("/threads/{thread_id}/timeline", response_model=TimelineResponse)
+async def get_thread_timeline(
+    thread_id: str,
+    before: Optional[int] = Query(default=None, ge=1),
+    limit: int = Query(default=50, ge=1, le=100),
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """获取经过权限过滤和公开字段裁剪的 thread 时间线。"""
+    service = AgentTimelineService(db)
+    try:
+        page = await service.get_timeline(
+            user_id=user_id,
+            thread_id=thread_id,
+            before=before,
+            limit=limit,
+        )
+    except ThreadNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="线程不存在") from exc
+
+    return TimelineResponse(
+        thread={
+            "id": page.thread.id,
+            "title": page.thread.title,
+            "updated_at": page.thread.updated_at,
+        },
+        items=page.items,
+        previous_cursor=page.previous_cursor,
+        latest_cursor=page.latest_cursor,
+        has_more=page.has_more,
     )
 
 

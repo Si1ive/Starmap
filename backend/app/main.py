@@ -395,6 +395,10 @@ app.include_router(
     prefix="/api/v1",
 )
 app.include_router(
+    agent_router,
+    prefix="/api/v1/app",
+)
+app.include_router(
     workspace_router,
     prefix="/api/v1",
 )

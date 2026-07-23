@@ -82,6 +82,14 @@ class AgentService:
         workflow_name: str,
         input_message: str,
         client_idempotency_key: Optional[str] = None,
+        *,
+        workflow_key: Optional[str] = None,
+        workflow_version: Optional[str] = None,
+        trigger_message_id: Optional[str] = None,
+        parent_run_id: Optional[str] = None,
+        root_run_id: Optional[str] = None,
+        presentation: str = "workflow",
+        public_title: Optional[str] = None,
     ) -> AgentRun:
         """创建 Run"""
         # 幂等性检查
@@ -103,12 +111,22 @@ class AgentService:
             thread_id=thread_id,
             user_id=user_id,
             workflow_name=workflow_name,
+            workflow_key=workflow_key or workflow_name.split("@", 1)[0],
+            workflow_version=workflow_version,
             status=RunStatus.QUEUED.value,
             input_message=input_message,
+            trigger_message_id=trigger_message_id,
+            parent_run_id=parent_run_id,
+            root_run_id=root_run_id,
+            presentation=presentation,
+            public_title=public_title,
             client_idempotency_key=client_idempotency_key,
         )
         self.db.add(run)
         await self.db.flush()
+        if not run.root_run_id:
+            run.root_run_id = run.id
+            await self.db.flush()
         await self.db.refresh(run)
 
         # 记录事件
@@ -116,6 +134,8 @@ class AgentService:
             "run_id": run_id,
             "thread_id": thread_id,
             "workflow": workflow_name,
+            "root_run_id": run.root_run_id,
+            "parent_run_id": run.parent_run_id,
         })
 
         # 投递到outbox

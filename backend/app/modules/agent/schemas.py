@@ -5,7 +5,7 @@ P0 请求/响应模型。
 """
 
 from datetime import datetime
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Literal
 
 from pydantic import BaseModel, Field
 
@@ -87,3 +87,104 @@ class SubmitInputResponse(BaseModel):
     run_id: str
     status: str
     message: str
+
+
+class TurnCreateRequest(BaseModel):
+    """用户端创建一轮对话请求。"""
+
+    content: str = Field(..., min_length=1, max_length=5000)
+    attachments: List[Dict[str, Any]] = Field(default_factory=list, max_length=20)
+    context_refs: List[Dict[str, Any]] = Field(default_factory=list, max_length=50)
+    client_message_id: str = Field(..., min_length=1, max_length=128)
+    preferred_action: Optional[str] = Field(default=None, max_length=64)
+
+
+class MessageView(BaseModel):
+    """时间线中的公开消息投影。"""
+
+    id: str
+    role: Literal["user", "assistant", "system"]
+    status: Literal["pending", "streaming", "completed", "failed"]
+    content: Optional[str]
+    content_blocks: List[Dict[str, Any]] = Field(default_factory=list)
+    error_code: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: Optional[datetime] = None
+
+
+class WorkflowRunView(BaseModel):
+    """创建 turn 后返回的根运行摘要。"""
+
+    id: str
+    status: str
+    presentation: str
+    public_title: Optional[str]
+
+
+class TurnCreateResponse(BaseModel):
+    """创建一轮对话响应。"""
+
+    user_message: MessageView
+    root_run: WorkflowRunView
+    timeline_cursor: int
+
+
+class TimelineThreadView(BaseModel):
+    """时间线所属 thread 摘要。"""
+
+    id: str
+    title: Optional[str]
+    updated_at: datetime
+
+
+class WorkflowProgressView(BaseModel):
+    completed: int
+    total: int
+
+
+class WorkflowStepView(BaseModel):
+    id: str
+    label: str
+    status: str
+    started_at: Optional[datetime]
+    completed_at: Optional[datetime]
+
+
+class WorkflowView(BaseModel):
+    """供聊天界面直接渲染的 workflow 投影。"""
+
+    root_run_id: str
+    status: str
+    title: str
+    summary: Optional[str]
+    current_step: Optional[str]
+    progress: WorkflowProgressView
+    steps: List[WorkflowStepView] = Field(default_factory=list)
+    pending_input: Optional[Dict[str, Any]] = None
+    pending_approval: Optional[Dict[str, Any]] = None
+    artifacts: List[Dict[str, Any]] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class TimelineItemView(BaseModel):
+    """统一排序的 thread 时间线项。"""
+
+    id: str
+    sequence: int
+    type: Literal["message", "workflow", "notice"]
+    message: Optional[MessageView] = None
+    workflow: Optional[WorkflowView] = None
+    notice: Optional[Dict[str, Any]] = None
+    created_at: datetime
+
+
+class TimelineResponse(BaseModel):
+    """thread 时间线分页响应。"""
+
+    thread: TimelineThreadView
+    items: List[TimelineItemView]
+    previous_cursor: Optional[int]
+    latest_cursor: int
+    has_more: bool

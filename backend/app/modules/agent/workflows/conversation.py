@@ -90,6 +90,13 @@ async def _route_node(context: ExecutionContext, db: AsyncSession) -> NodeResult
         thread_id=parent_run.thread_id,
         workflow_name=target_workflow,
         input_message=parent_run.input_message or context.get("input_message", ""),
+        workflow_key=target_workflow,
+        workflow_version="v1",
+        trigger_message_id=parent_run.trigger_message_id,
+        parent_run_id=parent_run.id,
+        root_run_id=parent_run.root_run_id or parent_run.id,
+        presentation="compact",
+        public_title="整理讲解",
     )
 
     logger.info(

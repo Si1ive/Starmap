@@ -55,6 +55,18 @@ def test_public_chat_routes_are_owned_by_chat_module():
         assert routes[path].endpoint.__module__ == "app.modules.chat.router"
 
 
+def test_agent_conversation_routes_keep_legacy_and_app_namespaces():
+    routes = _routes_by_path()
+
+    for prefix in ("/api/v1/agent", "/api/v1/app/agent"):
+        turns = routes[f"{prefix}/threads/{{thread_id}}/turns"]
+        timeline = routes[f"{prefix}/threads/{{thread_id}}/timeline"]
+        assert turns.endpoint.__module__ == "app.modules.agent.router"
+        assert timeline.endpoint.__module__ == "app.modules.agent.router"
+        assert "POST" in turns.methods
+        assert "GET" in timeline.methods
+
+
 def test_learning_user_registration_routes_are_owned_by_identity_module():
     routes = _routes_by_path()
 
