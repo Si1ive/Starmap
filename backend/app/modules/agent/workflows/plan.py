@@ -5,6 +5,8 @@ aggregate_learning_evidence -> planning_precondition_gate -> propose_plan_delta 
 plan_quality_gate -> create_approval -> wait_for_approval -> apply_plan_change -> render_plan_result -> completed
 """
 
+import json as _json
+
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 
@@ -102,12 +104,42 @@ async def _create_approval_node(context: ExecutionContext, db: AsyncSession) -> 
     
     plan_draft = context.get("plan_draft", {})
     
+    # 构建结构化的 diff 内容
+    weak_areas = plan_draft.get("goals", [])
+    schedule = plan_draft.get("schedule", [])
+    
+    diff_content = {
+        "action_key": "plan_approval",
+        "title": plan_draft.get("title", "学习计划"),
+        "before": {
+            "label": "当前计划",
+            "items": [
+                {"label": "学习周期", "value": "未设置"},
+                {"label": "薄弱科目", "value": "未设定"},
+                {"label": "每日目标", "value": "未设定"},
+            ]
+        },
+        "after": {
+            "label": "建议计划",
+            "items": [
+                {"label": "学习周期", "value": plan_draft.get("period", "7天")},
+                {"label": "薄弱科目", "value": ", ".join([g.get("subject", "") for g in weak_areas]) if weak_areas else "未设定"},
+                {"label": "每日目标", "value": f"{sum(g.get('daily_minutes', 0) for g in weak_areas)} 分钟" if weak_areas else "未设定"},
+            ]
+        },
+        "summary": f"新增 {len(weak_areas)} 个学习目标，周期 {plan_draft.get('period', '7天')}",
+        "details": [
+            {"day": s.get("day"), "focus": s.get("focus", "")}
+            for s in schedule
+        ]
+    }
+    
     # 通过 AgentService 创建真实的审批记录
     service = AgentService(db)
     approval = await service.create_approval(
         run_id=context.run_id,
         action_key="plan_approval",
-        diff_ref=str(plan_draft),
+        diff_ref=_json.dumps(diff_content, ensure_ascii=False),
         expires_at=datetime.utcnow() + timedelta(hours=24),
     )
     
