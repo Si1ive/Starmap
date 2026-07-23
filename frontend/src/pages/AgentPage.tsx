@@ -383,7 +383,10 @@ export default function AgentPage() {
   // Determine UI state from run status
   const runId = agentState.currentRunId
   const run = runId ? agentState.runs[runId] : null
-  const events: AgentEvent[] = runId ? agentState.events[runId] || [] : []
+  const events: AgentEvent[] = useMemo(
+    () => (runId ? agentState.events[runId] || [] : []),
+    [agentState.events, runId],
+  )
 
   const uiState: UIState = useMemo(() => {
     if (!threadId) return 'new'
@@ -463,7 +466,8 @@ export default function AgentPage() {
 
     try {
       const workflow = selectedWorkflow === 'auto' ? detectWorkflow(input) : selectedWorkflow
-      const newRun = await createRun(tid!, workflow, input)
+      if (!tid) return
+      const newRun = await createRun(tid, workflow, input)
       dispatch({ type: 'SET_CURRENT_RUN', payload: newRun.id })
       setMessage('')
       connectSSE(newRun.id)

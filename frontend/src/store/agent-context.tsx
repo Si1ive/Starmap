@@ -1,8 +1,8 @@
 /**
  * Agent 状态管理
  *
- * 使用 React Context + useReducer 管理 Agent 对话状态。
- * 支持：线程列表、当前线程、运行状态、事件流、SSE连接。
+ * 旧页面仍可使用 run 级状态；新版聊天页通过 normalized thread timeline、
+ * thread SSE 与统一 cursor 恢复对话。
  */
 
 import {
@@ -15,6 +15,12 @@ import {
 } from 'react'
 import * as agentApi from '../api/agent'
 import type { Approval } from '../api/agent'
+import {
+  initialThreadTimelineState,
+  threadTimelineReducer,
+  type ThreadTimelineAction,
+  type ThreadTimelineState,
+} from '../features/agent/timeline-state'
 
 // ==================== Types ====================
 
@@ -63,12 +69,13 @@ export interface AgentState {
   events: Record<string, AgentEvent[]>
   artifacts: Record<string, Artifact[]>
   approvals: Record<string, Approval[]>
+  timeline: ThreadTimelineState
   loading: boolean
   error: string | null
   sseConnected: boolean
 }
 
-type AgentAction =
+export type AgentAction =
   | { type: 'SET_LOADING'; payload: boolean }
   | { type: 'SET_ERROR'; payload: string | null }
   | { type: 'SET_THREADS'; payload: Thread[] }
@@ -82,7 +89,15 @@ type AgentAction =
   | { type: 'SET_APPROVALS'; payload: { runId: string; approvals: Approval[] } }
   | { type: 'UPDATE_APPROVAL'; payload: { runId: string; approval: Approval } }
   | { type: 'SET_SSE_CONNECTED'; payload: boolean }
+  | { type: 'TIMELINE'; payload: ThreadTimelineAction }
   | { type: 'CLEAR_ERROR' }
+
+export interface SendTurnOptions {
+  attachments?: Record<string, unknown>[]
+  contextRefs?: Record<string, unknown>[]
+  preferredAction?: string
+  clientMessageId?: string
+}
 
 // ==================== Reducer ====================
 
@@ -94,6 +109,7 @@ const initialState: AgentState = {
   events: {},
   artifacts: {},
   approvals: {},
+  timeline: initialThreadTimelineState,
   loading: false,
   error: null,
   sseConnected: false,
@@ -112,7 +128,10 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
     case 'SET_CURRENT_RUN':
       return { ...state, currentRunId: action.payload }
     case 'SET_RUN':
-      return { ...state, runs: { ...state.runs, [action.payload.id]: action.payload } }
+      return {
+        ...state,
+        runs: { ...state.runs, [action.payload.id]: action.payload },
+      }
     case 'SET_RUNS':
       return { ...state, runs: { ...state.runs, ...action.payload } }
     case 'SET_THREAD_RUNS':
@@ -120,24 +139,38 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
         ...state,
         runs: {
           ...state.runs,
-          ...action.payload.runs.reduce((acc, run) => ({ ...acc, [run.id]: run }), {} as Record<string, Run>),
+          ...action.payload.runs.reduce(
+            (acc, run) => ({ ...acc, [run.id]: run }),
+            {} as Record<string, Run>,
+          ),
         },
       }
     case 'APPEND_EVENTS': {
       const currentEvents = state.events[action.payload.runId] || []
       const eventsBySequence = new Map<number, AgentEvent>()
-      for (const event of currentEvents) eventsBySequence.set(event.sequence, event)
-      for (const event of action.payload.events) eventsBySequence.set(event.sequence, event)
+      for (const event of currentEvents)
+        eventsBySequence.set(event.sequence, event)
+      for (const event of action.payload.events)
+        eventsBySequence.set(event.sequence, event)
 
-      const nextEvents = [...eventsBySequence.values()].sort((a, b) => a.sequence - b.sequence)
+      const nextEvents = [...eventsBySequence.values()].sort(
+        (a, b) => a.sequence - b.sequence,
+      )
       const currentRun = state.runs[action.payload.runId]
       let nextRun = currentRun
 
       if (currentRun) {
         for (const event of action.payload.events) {
-          const payload = event.payload as { to?: unknown; error?: unknown; result_artifact_id?: unknown }
+          const payload = event.payload as {
+            to?: unknown
+            error?: unknown
+            result_artifact_id?: unknown
+          }
           let status: string | null = null
-          if (event.event_type === 'run.status_changed' && typeof payload.to === 'string') {
+          if (
+            event.event_type === 'run.status_changed' &&
+            typeof payload.to === 'string'
+          ) {
             status = payload.to
           } else if (event.event_type === 'run.completed') {
             status = 'completed'
@@ -149,12 +182,15 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
             nextRun = {
               ...nextRun,
               status,
-              error_message: event.event_type === 'run.failed' && typeof payload.error === 'string'
-                ? payload.error
-                : nextRun.error_message,
-              result_artifact_id: typeof payload.result_artifact_id === 'string'
-                ? payload.result_artifact_id
-                : nextRun.result_artifact_id,
+              error_message:
+                event.event_type === 'run.failed' &&
+                typeof payload.error === 'string'
+                  ? payload.error
+                  : nextRun.error_message,
+              result_artifact_id:
+                typeof payload.result_artifact_id === 'string'
+                  ? payload.result_artifact_id
+                  : nextRun.result_artifact_id,
             }
           }
         }
@@ -165,10 +201,7 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
         runs: nextRun
           ? { ...state.runs, [action.payload.runId]: nextRun }
           : state.runs,
-        events: {
-          ...state.events,
-          [action.payload.runId]: nextEvents,
-        },
+        events: { ...state.events, [action.payload.runId]: nextEvents },
       }
     }
     case 'SET_ARTIFACTS':
@@ -192,13 +225,22 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
         ...state,
         approvals: {
           ...state.approvals,
-          [action.payload.runId]: (state.approvals[action.payload.runId] || []).map((a) =>
-            a.id === action.payload.approval.id ? action.payload.approval : a
+          [action.payload.runId]: (
+            state.approvals[action.payload.runId] || []
+          ).map((approval) =>
+            approval.id === action.payload.approval.id
+              ? action.payload.approval
+              : approval,
           ),
         },
       }
     case 'SET_SSE_CONNECTED':
       return { ...state, sseConnected: action.payload }
+    case 'TIMELINE':
+      return {
+        ...state,
+        timeline: threadTimelineReducer(state.timeline, action.payload),
+      }
     case 'CLEAR_ERROR':
       return { ...state, error: null }
     default:
@@ -211,10 +253,13 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
 export interface AgentContextValue {
   state: AgentState
   dispatch: React.Dispatch<AgentAction>
-  // Actions
   loadThreads: () => Promise<void>
   createThread: (title?: string) => Promise<Thread>
-  createRun: (threadId: string, workflowName: string, inputMessage: string) => Promise<agentApi.Run>
+  createRun: (
+    threadId: string,
+    workflowName: string,
+    inputMessage: string,
+  ) => Promise<agentApi.Run>
   loadRun: (runId: string) => Promise<agentApi.Run>
   loadThreadRuns: (threadId: string) => Promise<agentApi.Run[]>
   submitInput: (runId: string, inputText: string) => Promise<void>
@@ -223,156 +268,471 @@ export interface AgentContextValue {
   rejectApproval: (runId: string, approvalId: string) => Promise<void>
   connectSSE: (runId: string, afterSequence?: number) => void
   disconnectSSE: () => void
+  openThread: (threadId: string) => Promise<void>
+  refreshThreadTimeline: (
+    threadId: string,
+  ) => Promise<agentApi.TimelineResponse>
+  loadEarlierTimeline: () => Promise<void>
+  sendTurn: (
+    threadId: string,
+    content: string,
+    options?: SendTurnOptions,
+  ) => Promise<agentApi.TurnCreateResponse>
+  connectThreadStream: (threadId: string, afterSequence?: number) => void
+  disconnectThreadStream: () => void
 }
 
 const AgentContext = createContext<AgentContextValue | undefined>(undefined)
 
+function createClientMessageId(): string {
+  if (
+    typeof crypto !== 'undefined' &&
+    typeof crypto.randomUUID === 'function'
+  ) {
+    return crypto.randomUUID()
+  }
+  return `client_${Date.now()}_${Math.random().toString(16).slice(2)}`
+}
+
+const PROJECTION_REFRESH_EVENTS = new Set([
+  'timeline.item.created',
+  'message.completed',
+  'message.failed',
+  'workflow.updated',
+  'workflow.completed',
+  'workflow.failed',
+  'workflow.step.updated',
+  'workflow.artifact.created',
+])
+
 export function AgentProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(agentReducer, initialState)
-  const esRef = useRef<EventSource | null>(null)
-  const removeEventListenersRef = useRef<(() => void) | null>(null)
+  const stateRef = useRef(state)
 
-  // Load threads
+  const runEventSourceRef = useRef<EventSource | null>(null)
+  const removeRunEventListenersRef = useRef<(() => void) | null>(null)
+
+  const threadEventSourceRef = useRef<EventSource | null>(null)
+  const removeThreadEventListenersRef = useRef<(() => void) | null>(null)
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const timelineRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  )
+  const reconnectAttemptRef = useRef(0)
+  const activeThreadIdRef = useRef<string | null>(null)
+  const intentionalThreadCloseRef = useRef(false)
+  const connectThreadStreamRef = useRef<
+    AgentContextValue['connectThreadStream'] | null
+  >(null)
+
+  useEffect(() => {
+    stateRef.current = state
+  }, [state])
+
   const loadThreads = useCallback(async () => {
     dispatch({ type: 'SET_LOADING', payload: true })
     try {
       const response = await agentApi.listThreads()
       dispatch({ type: 'SET_THREADS', payload: response.items })
-    } catch (e) {
-      dispatch({ type: 'SET_ERROR', payload: e instanceof Error ? e.message : '加载失败' })
-    } finally {
-      dispatch({ type: 'SET_LOADING', payload: false })
-    }
-  }, [])
-
-  // Create thread
-  const createThread = useCallback(async (title?: string): Promise<Thread> => {
-    dispatch({ type: 'SET_LOADING', payload: true })
-    try {
-      const thread = await agentApi.createThread({ title })
-      await loadThreads()
-      return thread as Thread
-    } finally {
-      dispatch({ type: 'SET_LOADING', payload: false })
-    }
-  }, [loadThreads])
-
-  // Create run
-  const createRun = useCallback(async (threadId: string, workflowName: string, inputMessage: string): Promise<agentApi.Run> => {
-    dispatch({ type: 'SET_LOADING', payload: true })
-    try {
-      const run = await agentApi.createRun({
-        thread_id: threadId,
-        workflow_name: workflowName,
-        input_message: inputMessage,
+    } catch (error) {
+      dispatch({
+        type: 'SET_ERROR',
+        payload: error instanceof Error ? error.message : '加载失败',
       })
-      dispatch({ type: 'SET_RUN', payload: run as Run })
-      return run
     } finally {
       dispatch({ type: 'SET_LOADING', payload: false })
     }
   }, [])
 
-  // Load run
+  const createThread = useCallback(
+    async (title?: string): Promise<Thread> => {
+      dispatch({ type: 'SET_LOADING', payload: true })
+      try {
+        const thread = await agentApi.createThread({ title })
+        await loadThreads()
+        return thread as Thread
+      } finally {
+        dispatch({ type: 'SET_LOADING', payload: false })
+      }
+    },
+    [loadThreads],
+  )
+
+  const createRun = useCallback(
+    async (
+      threadId: string,
+      workflowName: string,
+      inputMessage: string,
+    ): Promise<agentApi.Run> => {
+      dispatch({ type: 'SET_LOADING', payload: true })
+      try {
+        const run = await agentApi.createRun({
+          thread_id: threadId,
+          workflow_name: workflowName,
+          input_message: inputMessage,
+        })
+        dispatch({ type: 'SET_RUN', payload: run as Run })
+        return run
+      } finally {
+        dispatch({ type: 'SET_LOADING', payload: false })
+      }
+    },
+    [],
+  )
+
   const loadRun = useCallback(async (runId: string): Promise<agentApi.Run> => {
     const run = await agentApi.getRun(runId)
     dispatch({ type: 'SET_RUN', payload: run as Run })
     return run
   }, [])
 
-  // Load thread runs
-  const loadThreadRuns = useCallback(async (threadId: string): Promise<agentApi.Run[]> => {
-    const response = await agentApi.listThreadRuns(threadId)
-    const runs = response.items
-    dispatch({
-      type: 'SET_THREAD_RUNS',
-      payload: { threadId, runs: runs as Run[] },
-    })
-    return runs
-  }, [])
+  const loadThreadRuns = useCallback(
+    async (threadId: string): Promise<agentApi.Run[]> => {
+      const response = await agentApi.listThreadRuns(threadId)
+      dispatch({
+        type: 'SET_THREAD_RUNS',
+        payload: { threadId, runs: response.items as Run[] },
+      })
+      return response.items
+    },
+    [],
+  )
 
-  // Submit input
-  const submitInput = useCallback(async (runId: string, inputText: string) => {
-    await agentApi.submitInput(runId, inputText)
-    // Refresh run status
-    await loadRun(runId)
-  }, [loadRun])
+  const submitInput = useCallback(
+    async (runId: string, inputText: string) => {
+      await agentApi.submitInput(runId, inputText)
+      await loadRun(runId)
+    },
+    [loadRun],
+  )
 
-  // Load approvals
   const loadApprovals = useCallback(async (runId: string) => {
     try {
       const response = await agentApi.getRunApprovals(runId)
-      dispatch({ type: 'SET_APPROVALS', payload: { runId, approvals: response.approvals } })
-    } catch (e) {
-      dispatch({ type: 'SET_ERROR', payload: e instanceof Error ? e.message : '加载审批失败' })
+      dispatch({
+        type: 'SET_APPROVALS',
+        payload: { runId, approvals: response.approvals },
+      })
+    } catch (error) {
+      dispatch({
+        type: 'SET_ERROR',
+        payload: error instanceof Error ? error.message : '加载审批失败',
+      })
     }
   }, [])
 
-  // Approve approval
-  const approveApproval = useCallback(async (runId: string, approvalId: string) => {
-    try {
-      const approval = await agentApi.approveApproval(runId, approvalId)
-      dispatch({ type: 'UPDATE_APPROVAL', payload: { runId, approval } })
-    } catch (e) {
-      dispatch({ type: 'SET_ERROR', payload: e instanceof Error ? e.message : '审批操作失败' })
-    }
-  }, [])
+  const approveApproval = useCallback(
+    async (runId: string, approvalId: string) => {
+      try {
+        const approval = await agentApi.approveApproval(runId, approvalId)
+        dispatch({ type: 'UPDATE_APPROVAL', payload: { runId, approval } })
+      } catch (error) {
+        dispatch({
+          type: 'SET_ERROR',
+          payload: error instanceof Error ? error.message : '审批操作失败',
+        })
+      }
+    },
+    [],
+  )
 
-  // Reject approval
-  const rejectApproval = useCallback(async (runId: string, approvalId: string) => {
-    try {
-      const approval = await agentApi.rejectApproval(runId, approvalId)
-      dispatch({ type: 'UPDATE_APPROVAL', payload: { runId, approval } })
-    } catch (e) {
-      dispatch({ type: 'SET_ERROR', payload: e instanceof Error ? e.message : '审批操作失败' })
-    }
-  }, [])
+  const rejectApproval = useCallback(
+    async (runId: string, approvalId: string) => {
+      try {
+        const approval = await agentApi.rejectApproval(runId, approvalId)
+        dispatch({ type: 'UPDATE_APPROVAL', payload: { runId, approval } })
+      } catch (error) {
+        dispatch({
+          type: 'SET_ERROR',
+          payload: error instanceof Error ? error.message : '审批操作失败',
+        })
+      }
+    },
+    [],
+  )
 
-  // SSE
   const connectSSE = useCallback((runId: string, afterSequence = 0) => {
-    if (esRef.current) {
-      removeEventListenersRef.current?.()
-      esRef.current.close()
-    }
+    removeRunEventListenersRef.current?.()
+    runEventSourceRef.current?.close()
 
     dispatch({ type: 'SET_SSE_CONNECTED', payload: false })
-    const es = agentApi.createEventSource(runId, afterSequence)
-    esRef.current = es
-
-    es.onopen = () => {
-      dispatch({ type: 'SET_SSE_CONNECTED', payload: true })
-    }
-
-    removeEventListenersRef.current = agentApi.listenToRunEvents(es, runId, (event) => {
-      dispatch({
-        type: 'APPEND_EVENTS',
-        payload: { runId, events: [event as AgentEvent] },
-      })
-    })
-
-    es.onerror = () => {
+    const source = agentApi.createEventSource(runId, afterSequence)
+    runEventSourceRef.current = source
+    source.onopen = () => dispatch({ type: 'SET_SSE_CONNECTED', payload: true })
+    removeRunEventListenersRef.current = agentApi.listenToRunEvents(
+      source,
+      runId,
+      (event) => {
+        dispatch({
+          type: 'APPEND_EVENTS',
+          payload: { runId, events: [event as AgentEvent] },
+        })
+      },
+    )
+    source.onerror = () => {
       dispatch({ type: 'SET_SSE_CONNECTED', payload: false })
-      es.close()
+      source.close()
     }
   }, [])
 
   const disconnectSSE = useCallback(() => {
-    if (esRef.current) {
-      removeEventListenersRef.current?.()
-      removeEventListenersRef.current = null
-      esRef.current.close()
-      esRef.current = null
-    }
+    removeRunEventListenersRef.current?.()
+    removeRunEventListenersRef.current = null
+    runEventSourceRef.current?.close()
+    runEventSourceRef.current = null
     dispatch({ type: 'SET_SSE_CONNECTED', payload: false })
   }, [])
 
-  // Cleanup on unmount
+  const refreshThreadTimeline = useCallback(async (threadId: string) => {
+    const page = await agentApi.getThreadTimeline(threadId)
+    if (activeThreadIdRef.current === threadId) {
+      dispatch({
+        type: 'TIMELINE',
+        payload: { type: 'timeline/pageReceived', page },
+      })
+    }
+    return page
+  }, [])
+
+  const scheduleTimelineRefresh = useCallback(
+    (threadId: string) => {
+      if (timelineRefreshTimerRef.current)
+        clearTimeout(timelineRefreshTimerRef.current)
+      timelineRefreshTimerRef.current = setTimeout(() => {
+        timelineRefreshTimerRef.current = null
+        if (activeThreadIdRef.current !== threadId) return
+        void refreshThreadTimeline(threadId).catch((error) => {
+          dispatch({
+            type: 'SET_ERROR',
+            payload: error instanceof Error ? error.message : '刷新对话失败',
+          })
+        })
+      }, 80)
+    },
+    [refreshThreadTimeline],
+  )
+
+  const disconnectThreadStream = useCallback(() => {
+    intentionalThreadCloseRef.current = true
+    if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current)
+    reconnectTimerRef.current = null
+    if (timelineRefreshTimerRef.current)
+      clearTimeout(timelineRefreshTimerRef.current)
+    timelineRefreshTimerRef.current = null
+    removeThreadEventListenersRef.current?.()
+    removeThreadEventListenersRef.current = null
+    threadEventSourceRef.current?.close()
+    threadEventSourceRef.current = null
+    activeThreadIdRef.current = null
+    reconnectAttemptRef.current = 0
+    dispatch({
+      type: 'TIMELINE',
+      payload: { type: 'timeline/connectionChanged', connection: 'offline' },
+    })
+  }, [])
+
+  const connectThreadStream = useCallback(
+    (threadId: string, afterSequence?: number) => {
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current)
+      removeThreadEventListenersRef.current?.()
+      threadEventSourceRef.current?.close()
+
+      intentionalThreadCloseRef.current = false
+      activeThreadIdRef.current = threadId
+      const cursor = afterSequence ?? stateRef.current.timeline.latestCursor
+      const connection =
+        reconnectAttemptRef.current > 0 ? 'reconnecting' : 'connecting'
+      dispatch({
+        type: 'TIMELINE',
+        payload: { type: 'timeline/connectionChanged', connection },
+      })
+
+      const source = agentApi.createThreadEventSource(threadId, cursor)
+      threadEventSourceRef.current = source
+      source.onopen = () => {
+        reconnectAttemptRef.current = 0
+        dispatch({
+          type: 'TIMELINE',
+          payload: {
+            type: 'timeline/connectionChanged',
+            connection: 'connected',
+          },
+        })
+      }
+      removeThreadEventListenersRef.current = agentApi.listenToThreadEvents(
+        source,
+        (event) => {
+          dispatch({
+            type: 'TIMELINE',
+            payload: { type: 'timeline/eventReceived', threadId, event },
+          })
+          if (PROJECTION_REFRESH_EVENTS.has(event.event_type))
+            scheduleTimelineRefresh(threadId)
+        },
+      )
+
+      source.onerror = () => {
+        if (
+          intentionalThreadCloseRef.current ||
+          activeThreadIdRef.current !== threadId
+        )
+          return
+        removeThreadEventListenersRef.current?.()
+        removeThreadEventListenersRef.current = null
+        source.close()
+        if (threadEventSourceRef.current === source)
+          threadEventSourceRef.current = null
+
+        reconnectAttemptRef.current += 1
+        dispatch({
+          type: 'TIMELINE',
+          payload: {
+            type: 'timeline/connectionChanged',
+            connection: 'reconnecting',
+          },
+        })
+        const delay = Math.min(
+          1000 * 2 ** (reconnectAttemptRef.current - 1),
+          15000,
+        )
+        reconnectTimerRef.current = setTimeout(() => {
+          reconnectTimerRef.current = null
+          const recover = async () => {
+            let recoveredCursor = stateRef.current.timeline.latestCursor
+            const response = await agentApi.getThreadEvents(
+              threadId,
+              recoveredCursor,
+              1000,
+            )
+            for (const event of response.events) {
+              dispatch({
+                type: 'TIMELINE',
+                payload: { type: 'timeline/eventReceived', threadId, event },
+              })
+              recoveredCursor = Math.max(recoveredCursor, event.sequence)
+            }
+            if (response.latest_cursor > recoveredCursor) {
+              await refreshThreadTimeline(threadId)
+              recoveredCursor = response.latest_cursor
+            }
+            if (
+              !intentionalThreadCloseRef.current &&
+              activeThreadIdRef.current === threadId
+            ) {
+              connectThreadStreamRef.current?.(threadId, recoveredCursor)
+            }
+          }
+          void recover().catch(() => {
+            if (
+              !intentionalThreadCloseRef.current &&
+              activeThreadIdRef.current === threadId
+            ) {
+              connectThreadStreamRef.current?.(
+                threadId,
+                stateRef.current.timeline.latestCursor,
+              )
+            }
+          })
+        }, delay)
+      }
+    },
+    [refreshThreadTimeline, scheduleTimelineRefresh],
+  )
+
+  useEffect(() => {
+    connectThreadStreamRef.current = connectThreadStream
+  }, [connectThreadStream])
+
+  const openThread = useCallback(
+    async (threadId: string) => {
+      disconnectThreadStream()
+      activeThreadIdRef.current = threadId
+      intentionalThreadCloseRef.current = false
+      dispatch({ type: 'SET_CURRENT_THREAD', payload: threadId })
+      dispatch({
+        type: 'TIMELINE',
+        payload: { type: 'timeline/reset', threadId },
+      })
+      dispatch({ type: 'SET_LOADING', payload: true })
+      try {
+        const page = await agentApi.getThreadTimeline(threadId)
+        if (activeThreadIdRef.current !== threadId) return
+        dispatch({
+          type: 'TIMELINE',
+          payload: { type: 'timeline/pageReceived', page },
+        })
+        connectThreadStream(threadId, page.latest_cursor)
+      } catch (error) {
+        dispatch({
+          type: 'SET_ERROR',
+          payload: error instanceof Error ? error.message : '加载对话失败',
+        })
+        dispatch({
+          type: 'TIMELINE',
+          payload: {
+            type: 'timeline/connectionChanged',
+            connection: 'offline',
+          },
+        })
+      } finally {
+        dispatch({ type: 'SET_LOADING', payload: false })
+      }
+    },
+    [connectThreadStream, disconnectThreadStream],
+  )
+
+  const loadEarlierTimeline = useCallback(async () => {
+    const timeline = stateRef.current.timeline
+    if (
+      !timeline.threadId ||
+      !timeline.hasMore ||
+      timeline.previousCursor === null
+    )
+      return
+    const page = await agentApi.getThreadTimeline(
+      timeline.threadId,
+      timeline.previousCursor,
+    )
+    if (activeThreadIdRef.current !== timeline.threadId) return
+    dispatch({
+      type: 'TIMELINE',
+      payload: { type: 'timeline/pageReceived', page, prepend: true },
+    })
+  }, [])
+
+  const sendTurn = useCallback(
+    async (
+      threadId: string,
+      content: string,
+      options: SendTurnOptions = {},
+    ) => {
+      const response = await agentApi.createTurn(threadId, {
+        content,
+        attachments: options.attachments ?? [],
+        context_refs: options.contextRefs ?? [],
+        client_message_id: options.clientMessageId ?? createClientMessageId(),
+        preferred_action: options.preferredAction,
+      })
+      if (activeThreadIdRef.current === threadId) {
+        await refreshThreadTimeline(threadId)
+        if (!threadEventSourceRef.current)
+          connectThreadStream(threadId, response.timeline_cursor)
+      }
+      return response
+    },
+    [connectThreadStream, refreshThreadTimeline],
+  )
+
   useEffect(() => {
     return () => {
-      if (esRef.current) {
-        removeEventListenersRef.current?.()
-        esRef.current.close()
-      }
+      removeRunEventListenersRef.current?.()
+      runEventSourceRef.current?.close()
+      intentionalThreadCloseRef.current = true
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current)
+      if (timelineRefreshTimerRef.current)
+        clearTimeout(timelineRefreshTimerRef.current)
+      removeThreadEventListenersRef.current?.()
+      threadEventSourceRef.current?.close()
     }
   }, [])
 
@@ -390,11 +750,19 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
     rejectApproval,
     connectSSE,
     disconnectSSE,
+    openThread,
+    refreshThreadTimeline,
+    loadEarlierTimeline,
+    sendTurn,
+    connectThreadStream,
+    disconnectThreadStream,
   }
 
   return <AgentContext.Provider value={value}>{children}</AgentContext.Provider>
 }
 
+// Context 与 hook 暂时共置，页面组件拆分时再迁移到独立模块。
+// eslint-disable-next-line react-refresh/only-export-components
 export function useAgent(): AgentContextValue {
   const context = useContext(AgentContext)
   if (context === undefined) {

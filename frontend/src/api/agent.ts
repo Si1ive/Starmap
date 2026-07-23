@@ -5,6 +5,7 @@
  */
 
 const API_BASE = '/api/v1'
+const APP_AGENT_BASE = '/app/agent'
 
 export interface Thread {
   id: string
@@ -20,7 +21,13 @@ export interface Run {
   id: string
   thread_id: string
   workflow_name: string
-  status: 'queued' | 'running' | 'completed' | 'failed' | 'waiting_for_user' | 'waiting_for_approval'
+  status:
+    | 'queued'
+    | 'running'
+    | 'completed'
+    | 'failed'
+    | 'waiting_for_user'
+    | 'waiting_for_approval'
   input_message: string
   result_artifact_id: string | null
   error_message: string | null
@@ -95,6 +102,131 @@ export interface SubmitInputRequest {
   input_text: string
 }
 
+export type MessageRole = 'user' | 'assistant' | 'system'
+export type MessageStatus = 'pending' | 'streaming' | 'completed' | 'failed'
+export type TimelineItemType = 'message' | 'workflow' | 'notice'
+
+export interface MessageView {
+  id: string
+  role: MessageRole
+  status: MessageStatus
+  content: string | null
+  content_blocks: Record<string, unknown>[]
+  error_code: string | null
+  created_at: string
+  updated_at: string
+  completed_at: string | null
+}
+
+export interface WorkflowProgressView {
+  completed: number
+  total: number
+}
+
+export interface WorkflowStepView {
+  id: string
+  label: string
+  status: string
+  started_at: string | null
+  completed_at: string | null
+}
+
+export interface WorkflowView {
+  root_run_id: string
+  status: string
+  title: string
+  summary: string | null
+  current_step: string | null
+  progress: WorkflowProgressView
+  steps: WorkflowStepView[]
+  pending_input: Record<string, unknown> | null
+  pending_approval: Record<string, unknown> | null
+  artifacts: Record<string, unknown>[]
+  created_at: string
+  updated_at: string
+}
+
+export interface TimelineItem {
+  id: string
+  sequence: number
+  type: TimelineItemType
+  message: MessageView | null
+  workflow: WorkflowView | null
+  notice: Record<string, unknown> | null
+  created_at: string
+}
+
+export interface TimelineThreadView {
+  id: string
+  title: string | null
+  updated_at: string
+}
+
+export interface TimelineResponse {
+  thread: TimelineThreadView
+  items: TimelineItem[]
+  previous_cursor: number | null
+  latest_cursor: number
+  has_more: boolean
+}
+
+export interface TurnCreateRequest {
+  content: string
+  attachments?: Record<string, unknown>[]
+  context_refs?: Record<string, unknown>[]
+  client_message_id: string
+  preferred_action?: string
+}
+
+export interface WorkflowRunView {
+  id: string
+  status: string
+  presentation: string
+  public_title: string | null
+}
+
+export interface TurnCreateResponse {
+  user_message: MessageView
+  root_run: WorkflowRunView
+  timeline_cursor: number
+}
+
+export const THREAD_EVENT_TYPES = [
+  'timeline.snapshot',
+  'timeline.item.created',
+  'message.started',
+  'message.delta',
+  'message.completed',
+  'message.failed',
+  'workflow.updated',
+  'workflow.completed',
+  'workflow.failed',
+  'workflow.step.updated',
+  'workflow.artifact.created',
+] as const
+
+export type ThreadEventType = (typeof THREAD_EVENT_TYPES)[number]
+
+export interface ThreadEvent {
+  id: number
+  sequence: number
+  event_type: ThreadEventType | string
+  payload: Record<string, unknown>
+  created_at: string
+}
+
+export interface ThreadEventsResponse {
+  thread_id: string
+  events: ThreadEvent[]
+  latest_cursor: number
+}
+
+export interface ThreadSnapshot {
+  latest_sequence: number
+  items: TimelineItem[]
+  has_more: boolean
+}
+
 class AgentApiError extends Error {
   readonly status: number
   constructor(message: string, status: number) {
@@ -111,7 +243,9 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
     credentials: 'include',
     headers: {
       ...(init?.headers || {}),
-      ...(init?.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+      ...(init?.body !== undefined
+        ? { 'Content-Type': 'application/json' }
+        : {}),
     },
   })
 
@@ -133,19 +267,113 @@ export async function createThread(req: CreateThreadRequest): Promise<Thread> {
   })
 }
 
-export async function listThreads(limit = 20, offset = 0): Promise<{ items: Thread[]; total: number }> {
-  return apiRequest<{ items: Thread[]; total: number }>(`/agent/threads?limit=${limit}&offset=${offset}`)
+export async function listThreads(
+  limit = 20,
+  offset = 0,
+): Promise<{ items: Thread[]; total: number }> {
+  return apiRequest<{ items: Thread[]; total: number }>(
+    `/agent/threads?limit=${limit}&offset=${offset}`,
+  )
 }
 
 export async function getThread(threadId: string): Promise<Thread> {
   return apiRequest<Thread>(`/agent/threads/${threadId}`)
 }
 
+// ==================== App Thread Timeline API ====================
+
+export async function createTurn(
+  threadId: string,
+  req: TurnCreateRequest,
+): Promise<TurnCreateResponse> {
+  return apiRequest<TurnCreateResponse>(
+    `${APP_AGENT_BASE}/threads/${encodeURIComponent(threadId)}/turns`,
+    {
+      method: 'POST',
+      body: JSON.stringify(req),
+    },
+  )
+}
+
+export async function getThreadTimeline(
+  threadId: string,
+  before?: number,
+  limit = 50,
+): Promise<TimelineResponse> {
+  const params = new URLSearchParams({ limit: String(limit) })
+  if (before !== undefined) params.set('before', String(before))
+  return apiRequest<TimelineResponse>(
+    `${APP_AGENT_BASE}/threads/${encodeURIComponent(threadId)}/timeline?${params.toString()}`,
+  )
+}
+
+export async function getThreadEvents(
+  threadId: string,
+  afterSequence = 0,
+  limit = 200,
+): Promise<ThreadEventsResponse> {
+  const params = new URLSearchParams({
+    after_sequence: String(afterSequence),
+    limit: String(limit),
+  })
+  return apiRequest<ThreadEventsResponse>(
+    `${APP_AGENT_BASE}/threads/${encodeURIComponent(threadId)}/events?${params.toString()}`,
+  )
+}
+
+export function createThreadEventSource(
+  threadId: string,
+  afterSequence = 0,
+): EventSource {
+  const params = new URLSearchParams({ after_sequence: String(afterSequence) })
+  return new EventSource(
+    `${API_BASE}${APP_AGENT_BASE}/threads/${encodeURIComponent(threadId)}/events/stream?${params.toString()}`,
+    { withCredentials: true },
+  )
+}
+
+export function listenToThreadEvents(
+  source: EventSource,
+  onEvent: (event: ThreadEvent) => void,
+): () => void {
+  const listeners = THREAD_EVENT_TYPES.map((eventType) => {
+    const listener = (event: Event) => {
+      const message = event as MessageEvent<string>
+      if (!message.data) return
+
+      try {
+        const sequence = Number(message.lastEventId)
+        if (!Number.isFinite(sequence) || sequence < 0) return
+        onEvent({
+          id: sequence,
+          sequence,
+          event_type: eventType,
+          payload: JSON.parse(message.data) as Record<string, unknown>,
+          created_at: new Date().toISOString(),
+        })
+      } catch {
+        // 单条非法事件不应中断后续 thread 事件流。
+      }
+    }
+    source.addEventListener(eventType, listener)
+    return { eventType, listener }
+  })
+
+  return () => {
+    for (const { eventType, listener } of listeners) {
+      source.removeEventListener(eventType, listener)
+    }
+  }
+}
 
 // ==================== Thread Runs API ====================
 
-export async function listThreadRuns(threadId: string): Promise<{ items: Run[]; total: number }> {
-  return apiRequest<{ items: Run[]; total: number }>(`/agent/threads/${threadId}/runs`)
+export async function listThreadRuns(
+  threadId: string,
+): Promise<{ items: Run[]; total: number }> {
+  return apiRequest<{ items: Run[]; total: number }>(
+    `/agent/threads/${threadId}/runs`,
+  )
 }
 
 // ==================== Run API ====================
@@ -161,7 +389,10 @@ export async function getRun(runId: string): Promise<Run> {
   return apiRequest<Run>(`/agent/runs/${runId}`)
 }
 
-export async function submitInput(runId: string, inputText: string): Promise<SubmitInputRequest> {
+export async function submitInput(
+  runId: string,
+  inputText: string,
+): Promise<SubmitInputRequest> {
   return apiRequest<SubmitInputRequest>(`/agent/runs/${runId}/submit`, {
     method: 'POST',
     body: JSON.stringify({ input_text: inputText }),
@@ -180,10 +411,16 @@ export async function getRunEvents(
   )
 }
 
-export function createEventSource(runId: string, afterSequence = 0): EventSource {
-  return new EventSource(`${API_BASE}/agent/runs/${runId}/events/stream?after_sequence=${afterSequence}`, {
-    withCredentials: true,
-  })
+export function createEventSource(
+  runId: string,
+  afterSequence = 0,
+): EventSource {
+  return new EventSource(
+    `${API_BASE}/agent/runs/${runId}/events/stream?after_sequence=${afterSequence}`,
+    {
+      withCredentials: true,
+    },
+  )
 }
 
 export function listenToRunEvents(
@@ -224,24 +461,44 @@ export function listenToRunEvents(
 
 // ==================== Artifacts API ====================
 
-export async function getRunArtifacts(runId: string): Promise<{ run_id: string; artifacts: Artifact[] }> {
-  return apiRequest<{ run_id: string; artifacts: Artifact[] }>(`/agent/runs/${runId}/artifacts`)
+export async function getRunArtifacts(
+  runId: string,
+): Promise<{ run_id: string; artifacts: Artifact[] }> {
+  return apiRequest<{ run_id: string; artifacts: Artifact[] }>(
+    `/agent/runs/${runId}/artifacts`,
+  )
 }
 
 // ==================== Approval API ====================
 
-export async function getRunApprovals(runId: string): Promise<{ run_id: string; approvals: Approval[] }> {
-  return apiRequest<{ run_id: string; approvals: Approval[] }>(`/agent/runs/${runId}/approvals`)
+export async function getRunApprovals(
+  runId: string,
+): Promise<{ run_id: string; approvals: Approval[] }> {
+  return apiRequest<{ run_id: string; approvals: Approval[] }>(
+    `/agent/runs/${runId}/approvals`,
+  )
 }
 
-export async function approveApproval(runId: string, approvalId: string): Promise<Approval> {
-  return apiRequest<Approval>(`/agent/runs/${runId}/approvals/${approvalId}/approve`, {
-    method: 'POST',
-  })
+export async function approveApproval(
+  runId: string,
+  approvalId: string,
+): Promise<Approval> {
+  return apiRequest<Approval>(
+    `/agent/runs/${runId}/approvals/${approvalId}/approve`,
+    {
+      method: 'POST',
+    },
+  )
 }
 
-export async function rejectApproval(runId: string, approvalId: string): Promise<Approval> {
-  return apiRequest<Approval>(`/agent/runs/${runId}/approvals/${approvalId}/reject`, {
-    method: 'POST',
-  })
+export async function rejectApproval(
+  runId: string,
+  approvalId: string,
+): Promise<Approval> {
+  return apiRequest<Approval>(
+    `/agent/runs/${runId}/approvals/${approvalId}/reject`,
+    {
+      method: 'POST',
+    },
+  )
 }
