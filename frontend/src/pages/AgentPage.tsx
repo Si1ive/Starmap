@@ -43,6 +43,25 @@ interface StepView {
   status: 'completed' | 'running' | 'failed' | 'waiting'
 }
 
+interface DiffItem {
+  label: string
+  value: string
+}
+
+interface DiffSection {
+  label: string
+  items: DiffItem[]
+}
+
+interface ApprovalDiffData {
+  action_key: string
+  title: string
+  before: DiffSection
+  after: DiffSection
+  summary: string
+  details?: Array<{ day?: number; focus?: string }>
+}
+
 // ---------------------------------------------------------------------------
 // Helpers: map events → UI steps
 // ---------------------------------------------------------------------------
@@ -98,6 +117,44 @@ function getLastMessage(events: AgentEvent[]): string | null {
     }
   }
   return null
+}
+
+
+function parseApprovalDiff(diffRef: string | null): ApprovalDiffData | null {
+  if (!diffRef) return null
+  try {
+    const data = JSON.parse(diffRef) as ApprovalDiffData
+    if (data.before && data.after) return data
+    return null
+  } catch {
+    return null
+  }
+}
+
+function renderApprovalDiff(diff: ApprovalDiffData) {
+  return (
+    <div className="approval-diff">
+      <div className="approval-diff__column">
+        <span>{diff.before.label}</span>
+        {diff.before.items.map((item, idx) => (
+          <div className="approval-diff__item approval-diff__item--remove" key={`before-${idx}`}>
+            <small>{item.label}</small>
+            <strong>{item.value}</strong>
+          </div>
+        ))}
+      </div>
+      <ArrowRight className="approval-diff__arrow" size={22} />
+      <div className="approval-diff__column">
+        <span>{diff.after.label}</span>
+        {diff.after.items.map((item, idx) => (
+          <div className="approval-diff__item approval-diff__item--add" key={`after-${idx}`}>
+            <small>{item.label}</small>
+            <strong>{item.value}</strong>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 // 根据用户输入自动路由到对应工作流
@@ -531,25 +588,32 @@ export default function AgentPage() {
             </div>
           </div>
 
-          <div className="approval-diff">
-            <div className="approval-diff__column">
-              <span>当前优先级</span>
-              <div className="approval-diff__item approval-diff__item--remove">
-                <small>优先巩固</small>
-                <strong>原优先级内容</strong>
-                <em>下调</em>
+          {(() => {
+            const diff = pendingApproval ? parseApprovalDiff(pendingApproval.diff_ref) : null
+            if (diff) {
+              return renderApprovalDiff(diff)
+            }
+            // fallback for non-structured diffs
+            return (
+              <div className="approval-diff">
+                <div className="approval-diff__column">
+                  <span>当前状态</span>
+                  <div className="approval-diff__item approval-diff__item--remove">
+                    <small>未变更</small>
+                    <strong>无调整</strong>
+                  </div>
+                </div>
+                <ArrowRight className="approval-diff__arrow" size={22} />
+                <div className="approval-diff__column">
+                  <span>建议变更</span>
+                  <div className="approval-diff__item approval-diff__item--add">
+                    <small>{pendingApproval?.action_key ?? '调整'}</small>
+                    <strong>{pendingApproval?.diff_ref ?? '待确认'}</strong>
+                  </div>
+                </div>
               </div>
-            </div>
-            <ArrowRight className="approval-diff__arrow" size={22} />
-            <div className="approval-diff__column">
-              <span>建议优先级</span>
-              <div className="approval-diff__item approval-diff__item--add">
-                <small>优先巩固</small>
-                <strong>新优先级内容</strong>
-                <em>上调</em>
-              </div>
-            </div>
-          </div>
+            )
+          })()}
 
           <div className="approval-sheet__actions">
             <Button tone="secondary" onClick={() => {
