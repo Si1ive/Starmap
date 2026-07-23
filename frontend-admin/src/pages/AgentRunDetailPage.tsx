@@ -12,10 +12,10 @@ import {
   message,
   Empty,
 } from 'antd'
-import { ArrowLeftOutlined, PlayCircleOutlined, ReloadOutlined } from '@ant-design/icons'
+import { ArrowLeftOutlined, CheckCircleOutlined, CloseCircleOutlined, PlayCircleOutlined, ReloadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import * as agentRunsApi from '@/api/agentRuns'
-import type { AdminAgentRun, AdminAgentRunEvent } from '@/api/agentRuns'
+import type { AdminAgentRun, AdminAgentRunEvent, AdminAgentRunApproval } from '@/api/agentRuns'
 
 const { Title } = Typography
 
@@ -25,6 +25,7 @@ const statusColors: Record<string, string> = {
   completed: 'green',
   failed: 'red',
   waiting_for_user: 'orange',
+  waiting_for_approval: 'purple',
 }
 
 const AgentRunDetailPage = () => {
@@ -32,8 +33,10 @@ const AgentRunDetailPage = () => {
   const { id } = useParams() as { id: string }
   const [run, setRun] = useState<AdminAgentRun | null>(null)
   const [events, setEvents] = useState<AdminAgentRunEvent[]>([])
+  const [approvals, setApprovals] = useState<AdminAgentRunApproval[]>([])
   const [loading, setLoading] = useState(false)
   const [eventsLoading, setEventsLoading] = useState(false)
+  const [approvalsLoading, setApprovalsLoading] = useState(false)
 
   const fetchRun = async () => {
     if (!id) return
@@ -61,6 +64,19 @@ const AgentRunDetailPage = () => {
     }
   }
 
+  const fetchApprovals = async () => {
+    if (!id) return
+    setApprovalsLoading(true)
+    try {
+      const response = await agentRunsApi.getAgentRunApprovals(id)
+      setApprovals(response.data?.approvals || [])
+    } catch {
+      // 审批接口失败不阻塞主流程
+    } finally {
+      setApprovalsLoading(false)
+    }
+  }
+
   const handleReplay = async () => {
     if (!id) return
     try {
@@ -71,9 +87,34 @@ const AgentRunDetailPage = () => {
     }
   }
 
+  const handleApprove = async (approvalId: string) => {
+    if (!id) return
+    try {
+      const response = await agentRunsApi.approveApproval(id, approvalId)
+      message.success(response.data?.message || '已批准')
+      void fetchApprovals()
+      void fetchRun()
+    } catch {
+      message.error('审批失败')
+    }
+  }
+
+  const handleReject = async (approvalId: string) => {
+    if (!id) return
+    try {
+      const response = await agentRunsApi.rejectApproval(id, approvalId)
+      message.success(response.data?.message || '已拒绝')
+      void fetchApprovals()
+      void fetchRun()
+    } catch {
+      message.error('拒绝失败')
+    }
+  }
+
   useEffect(() => {
     void fetchRun()
     void fetchEvents()
+    void fetchApprovals()
   }, [id])
 
   if (loading) {
@@ -139,6 +180,89 @@ const AgentRunDetailPage = () => {
         {run.safe_error_summary && (
           <Card title="错误摘要" style={{ borderColor: '#ff4d4f' }}>
             <Typography.Text type="danger">{run.safe_error_summary}</Typography.Text>
+          </Card>
+        )}
+
+        {/* 审批请求 */}
+        {run.status === 'waiting_for_approval' && (
+          <Card
+            title="审批请求"
+            extra={
+              <Button icon={<ReloadOutlined />} onClick={fetchApprovals}>
+                刷新
+              </Button>
+            }
+          >
+            <Spin spinning={approvalsLoading}>
+              {approvals.length === 0 ? (
+                <Empty description="暂无审批请求" />
+              ) : (
+                <Space direction="vertical" style={{ width: '100%' }}>
+                  {approvals.map((approval) => (
+                    <Card
+                      key={approval.id}
+                      size="small"
+                      title={
+                        <Space>
+                          <Tag color={approval.status === 'pending' ? 'blue' : approval.status === 'approved' ? 'green' : 'red'}>
+                            {approval.status}
+                          </Tag>
+                          <span>{approval.action_key}</span>
+                        </Space>
+                      }
+                      extra={
+                        approval.status === 'pending' ? (
+                          <Space>
+                            <Button
+                              size="small"
+                              danger
+                              icon={<CloseCircleOutlined />}
+                              onClick={() => handleReject(approval.id)}
+                            >
+                              拒绝
+                            </Button>
+                            <Button
+                              size="small"
+                              type="primary"
+                              icon={<CheckCircleOutlined />}
+                              onClick={() => handleApprove(approval.id)}
+                            >
+                              批准
+                            </Button>
+                          </Space>
+                        ) : null
+                      }
+                    >
+                      <Descriptions size="small" column={1}>
+                        <Descriptions.Item label="审批 ID">{approval.id}</Descriptions.Item>
+                        {approval.diff_ref && (
+                          <Descriptions.Item label="变更内容">
+                            <pre style={{ fontSize: 12, background: '#f5f5f5', padding: 8, borderRadius: 4, maxHeight: 200, overflow: 'auto' }}>
+                              {(() => {
+                                try {
+                                  const diff = JSON.parse(approval.diff_ref)
+                                  return JSON.stringify(diff, null, 2)
+                                } catch {
+                                  return approval.diff_ref
+                                }
+                              })()}
+                            </pre>
+                          </Descriptions.Item>
+                        )}
+                        {approval.expires_at && (
+                          <Descriptions.Item label="过期时间">
+                            {dayjs(approval.expires_at).format('YYYY-MM-DD HH:mm:ss')}
+                          </Descriptions.Item>
+                        )}
+                        {approval.decided_by && (
+                          <Descriptions.Item label="审批人">{approval.decided_by}</Descriptions.Item>
+                        )}
+                      </Descriptions>
+                    </Card>
+                  ))}
+                </Space>
+              )}
+            </Spin>
           </Card>
         )}
 

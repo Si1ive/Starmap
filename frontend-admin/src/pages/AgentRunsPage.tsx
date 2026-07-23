@@ -29,7 +29,8 @@ interface RunStats {
   running: number
   completed: number
   failed: number
-  waiting: number
+  waiting_for_user: number
+  waiting_for_approval: number
 }
 
 const statusColors: Record<string, string> = {
@@ -38,6 +39,7 @@ const statusColors: Record<string, string> = {
   completed: 'green',
   failed: 'red',
   waiting_for_user: 'orange',
+  waiting_for_approval: 'purple',
 }
 
 const AgentRunsPage = () => {
@@ -49,7 +51,8 @@ const AgentRunsPage = () => {
     running: 0,
     completed: 0,
     failed: 0,
-    waiting: 0,
+    waiting_for_user: 0,
+    waiting_for_approval: 0,
   })
   const [pagination, setPagination] = useState({
     current: 1,
@@ -95,7 +98,8 @@ const AgentRunsPage = () => {
         running: Number((data as any).running) || 0,
         completed: Number((data as any).completed) || 0,
         failed: Number((data as any).failed) || 0,
-        waiting: Number((data as any).waiting_for_user) || 0,
+        waiting_for_user: Number((data as any).waiting_for_user) || 0,
+        waiting_for_approval: Number((data as any).waiting_for_approval) || 0,
       })
     } catch {
       // 统计接口失败不阻塞主流程
@@ -222,12 +226,12 @@ const AgentRunsPage = () => {
         </Col>
         <Col span={4}>
           <Card>
-            <Statistic title="等待用户" value={stats.waiting} valueStyle={{ color: '#faad14' }} />
+            <Statistic title="等待用户" value={stats.waiting_for_user} valueStyle={{ color: '#faad14' }} />
           </Card>
         </Col>
         <Col span={4}>
           <Card>
-            <Statistic title="队列中" value={stats.total - stats.running - stats.completed - stats.failed - stats.waiting} />
+            <Statistic title="等待审批" value={stats.waiting_for_approval} valueStyle={{ color: '#722ed1' }} />
           </Card>
         </Col>
       </Row>
@@ -246,6 +250,7 @@ const AgentRunsPage = () => {
               { label: '已完成', value: 'completed' },
               { label: '失败', value: 'failed' },
               { label: '等待用户', value: 'waiting_for_user' },
+              { label: '等待审批', value: 'waiting_for_approval' },
             ]}
           />
           <Select

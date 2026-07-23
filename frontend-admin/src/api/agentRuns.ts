@@ -7,7 +7,7 @@ export interface AdminAgentRun {
   user_id: string
   workflow_key: string
   workflow_version: string
-  status: 'queued' | 'running' | 'completed' | 'failed' | 'waiting_for_user'
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'waiting_for_user' | 'waiting_for_approval'
   request_id: string
   current_step_key: string | null
   last_event_sequence: number
@@ -39,6 +39,32 @@ export interface AgentRunsParams {
   start_date?: string
   end_date?: string
   user_id?: string
+}
+
+
+export interface AdminAgentRunApproval {
+  id: string
+  run_id: string
+  action_key: string
+  status: 'pending' | 'approved' | 'rejected' | 'expired'
+  diff_ref: string | null
+  precondition_ref: string | null
+  decided_by: string | null
+  expires_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export const getAgentRunApprovals = (runId: string): Promise<ApiResponse<{ run_id: string; approvals: AdminAgentRunApproval[] }>> => {
+  return adminClient.get(`/agent-runs/${runId}/approvals`)
+}
+
+export const approveApproval = (runId: string, approvalId: string): Promise<ApiResponse<{ id: string; status: string; message: string }>> => {
+  return adminClient.post(`/agent-runs/${runId}/approvals/${approvalId}/approve`)
+}
+
+export const rejectApproval = (runId: string, approvalId: string): Promise<ApiResponse<{ id: string; status: string; message: string }>> => {
+  return adminClient.post(`/agent-runs/${runId}/approvals/${approvalId}/reject`)
 }
 
 export const getAgentRuns = (
