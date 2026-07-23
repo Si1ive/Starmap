@@ -96,7 +96,6 @@ class TurnCreateRequest(BaseModel):
     attachments: List[Dict[str, Any]] = Field(default_factory=list, max_length=20)
     context_refs: List[Dict[str, Any]] = Field(default_factory=list, max_length=50)
     client_message_id: str = Field(..., min_length=1, max_length=128)
-    preferred_action: Optional[str] = Field(default=None, max_length=64)
 
 
 class MessageView(BaseModel):

@@ -1,26 +1,20 @@
 import { KeyboardEvent, useEffect, useRef } from 'react'
 import { LoaderCircle, Send } from 'lucide-react'
 
-export type AgentActionPreference = 'auto' | 'explain' | 'validate' | 'grade' | 'plan'
-
 interface ChatComposerProps {
   value: string
-  action: AgentActionPreference
   disabled?: boolean
   autofocus?: boolean
   focusRequestKey?: number
-  onActionChange: (action: AgentActionPreference) => void
   onChange: (value: string) => void
   onSubmit: () => void
 }
 
 export default function ChatComposer({
   value,
-  action,
   disabled = false,
   autofocus = false,
   focusRequestKey = 0,
-  onActionChange,
   onChange,
   onSubmit,
 }: ChatComposerProps) {
@@ -57,20 +51,6 @@ export default function ChatComposer({
         value={value}
       />
       <div className="agent-composer__footer">
-        <label className="agent-composer__mode">
-          <span className="sr-only">处理方式</span>
-          <select
-            disabled={disabled}
-            onChange={(event) => onActionChange(event.target.value as AgentActionPreference)}
-            value={action}
-          >
-            <option value="auto">自动处理</option>
-            <option value="explain">讲解</option>
-            <option value="validate">验证理解</option>
-            <option value="grade">批改反馈</option>
-            <option value="plan">调整计划</option>
-          </select>
-        </label>
         <span className="agent-composer__hint">Enter 发送 · Shift + Enter 换行</span>
         <button
           aria-label="发送消息"

@@ -84,7 +84,6 @@ async def _create_turn(
         client_message_id=client_message_id,
         attachments=[],
         context_refs=[],
-        preferred_action=None,
     )
 
 

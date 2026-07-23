@@ -204,7 +204,6 @@ export interface TurnCreateRequest {
   attachments?: Record<string, unknown>[]
   context_refs?: Record<string, unknown>[]
   client_message_id: string
-  preferred_action?: string
 }
 
 export interface WorkflowRunView {

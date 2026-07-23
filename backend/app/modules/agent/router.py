@@ -168,7 +168,6 @@ async def create_turn(
             client_message_id=request.client_message_id,
             attachments=request.attachments,
             context_refs=request.context_refs,
-            preferred_action=request.preferred_action,
         )
     except ThreadNotFoundError as exc:
         raise HTTPException(status_code=404, detail="线程不存在") from exc

@@ -95,7 +95,6 @@ export type AgentAction =
 export interface SendTurnOptions {
   attachments?: Record<string, unknown>[]
   contextRefs?: Record<string, unknown>[]
-  preferredAction?: string
   clientMessageId?: string
 }
 
@@ -732,7 +731,6 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
         attachments: options.attachments ?? [],
         context_refs: options.contextRefs ?? [],
         client_message_id: options.clientMessageId ?? createClientMessageId(),
-        preferred_action: options.preferredAction,
       })
       if (activeThreadIdRef.current === threadId) {
         await refreshThreadTimeline(threadId)

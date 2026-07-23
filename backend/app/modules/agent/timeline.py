@@ -118,7 +118,6 @@ class AgentTimelineService:
         client_message_id: str,
         attachments: list[dict[str, Any]],
         context_refs: list[dict[str, Any]],
-        preferred_action: Optional[str],
     ) -> TurnCreation:
         """原子创建用户消息、根 run、时间线项和 outbox 任务。"""
         thread_result = await self.db.execute(
@@ -191,7 +190,6 @@ class AgentTimelineService:
             public_title=WORKFLOW_TITLES["conversation"],
             public_summary=STATUS_SUMMARIES[RunStatus.QUEUED.value],
             metadata_json={
-                "preferred_action": preferred_action,
                 "attachments": attachments,
                 "context_refs": context_refs,
             },

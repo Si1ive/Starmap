@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AlertCircle, CheckCircle2, LoaderCircle, WifiOff } from 'lucide-react'
 import { useNavigate, useParams } from 'react-router-dom'
-import ChatComposer, {
-  type AgentActionPreference,
-} from '../features/agent/ChatComposer'
+import ChatComposer from '../features/agent/ChatComposer'
 import ConversationStream from '../features/agent/ConversationStream'
 import { selectTimelineItems } from '../features/agent/timeline-state'
 import { useAgent } from '../store/agent-context'
@@ -34,7 +32,6 @@ export default function AgentPage() {
     sendTurn,
   } = useAgent()
   const [message, setMessage] = useState('')
-  const [action, setAction] = useState<AgentActionPreference>('auto')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isLoadingEarlier, setIsLoadingEarlier] = useState(false)
   const [composerFocusKey, setComposerFocusKey] = useState(0)
@@ -83,9 +80,7 @@ export default function AgentPage() {
         navigate(`/agent/${thread.id}`)
       }
 
-      await sendTurn(targetThreadId, content, {
-        preferredAction: action === 'auto' ? undefined : action,
-      })
+      await sendTurn(targetThreadId, content)
       setMessage('')
       void loadThreads()
     } catch (error) {
@@ -97,7 +92,6 @@ export default function AgentPage() {
       setIsSubmitting(false)
     }
   }, [
-    action,
     createThread,
     dispatch,
     isSubmitting,
@@ -184,10 +178,8 @@ export default function AgentPage() {
           </div>
           <div className="agent-chat-composer-wrap">
             <ChatComposer
-              action={action}
               autofocus
               disabled={isSubmitting}
-              onActionChange={setAction}
               onChange={setMessage}
               onSubmit={() => void handleSend()}
               value={message}
@@ -224,10 +216,8 @@ export default function AgentPage() {
           <div className="agent-chat-composer-dock">
             <div className="agent-chat-composer-wrap">
               <ChatComposer
-                action={action}
                 disabled={isSubmitting}
                 focusRequestKey={composerFocusKey}
-                onActionChange={setAction}
                 onChange={setMessage}
                 onSubmit={() => void handleSend()}
                 value={message}

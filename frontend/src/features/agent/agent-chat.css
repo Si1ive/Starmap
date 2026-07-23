@@ -565,36 +565,6 @@ button.agent-chat-connection:hover {
   margin-top: 6px;
 }
 
-.agent-composer__mode select {
-  appearance: none;
-  background: #f4f5f7;
-  border: 0;
-  border-radius: 8px;
-  color: var(--chat-muted);
-  cursor: pointer;
-  font-size: 12px;
-  height: 30px;
-  outline: none;
-  padding: 0 24px 0 10px;
-}
-
-.agent-composer__mode {
-  position: relative;
-}
-
-.agent-composer__mode::after {
-  border: solid var(--chat-muted);
-  border-width: 0 1px 1px 0;
-  content: "";
-  height: 5px;
-  pointer-events: none;
-  position: absolute;
-  right: 10px;
-  top: 10px;
-  transform: rotate(45deg);
-  width: 5px;
-}
-
 .agent-composer__hint {
   color: #989faa;
   font-size: 11px;
