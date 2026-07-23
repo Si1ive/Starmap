@@ -174,7 +174,7 @@ export default function AgentPage() {
           <div className="agent-chat-empty__intro">
             <span>Agent</span>
             <h2>今天想一起解决什么？</h2>
-            <p>直接描述你的问题。需要执行预设流程时，过程会自然出现在对话中。</p>
+            <p>直接描述你的问题。Agent 判断需要执行任务链路时，过程会自然出现在对话中。</p>
           </div>
           <div className="agent-chat-composer-wrap">
             <ChatComposer
