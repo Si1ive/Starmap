@@ -131,6 +131,35 @@ export interface WorkflowStepView {
   completed_at: string | null
 }
 
+export interface WorkflowInputView {
+  id: string
+  run_id: string
+  input_key: string
+  status: 'pending' | 'answered' | 'expired'
+  question: string
+  schema: Record<string, unknown>
+  expires_at: string | null
+}
+
+export interface WorkflowApprovalView {
+  id: string
+  run_id: string
+  action_key: string
+  status: 'pending' | 'approved' | 'rejected' | 'expired'
+  change: Record<string, unknown>
+  expires_at: string | null
+}
+
+export interface WorkflowArtifactView {
+  id: string
+  type: string
+  title: string
+  summary: unknown
+  content: Record<string, unknown>
+  actions: Record<string, unknown>[]
+  created_at: string
+}
+
 export interface WorkflowView {
   root_run_id: string
   status: string
@@ -139,9 +168,9 @@ export interface WorkflowView {
   current_step: string | null
   progress: WorkflowProgressView
   steps: WorkflowStepView[]
-  pending_input: Record<string, unknown> | null
-  pending_approval: Record<string, unknown> | null
-  artifacts: Record<string, unknown>[]
+  pending_input: WorkflowInputView | null
+  pending_approval: WorkflowApprovalView | null
+  artifacts: WorkflowArtifactView[]
   created_at: string
   updated_at: string
 }
@@ -225,6 +254,20 @@ export interface ThreadSnapshot {
   latest_sequence: number
   items: TimelineItem[]
   has_more: boolean
+}
+
+export interface InputAnswerResponse {
+  id: string
+  run_id: string
+  input_key: string
+  status: 'answered'
+  message: string
+}
+
+export interface ApprovalDecisionResponse {
+  id: string
+  status: 'approved' | 'rejected'
+  message: string
 }
 
 class AgentApiError extends Error {
@@ -399,6 +442,20 @@ export async function submitInput(
   })
 }
 
+export async function submitInputAnswer(
+  runId: string,
+  inputKey: string,
+  answer: string,
+): Promise<InputAnswerResponse> {
+  return apiRequest<InputAnswerResponse>(
+    `${APP_AGENT_BASE}/runs/${encodeURIComponent(runId)}/inputs/${encodeURIComponent(inputKey)}/answer`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ answer }),
+    },
+  )
+}
+
 // ==================== Events API ====================
 
 export async function getRunEvents(
@@ -482,9 +539,9 @@ export async function getRunApprovals(
 export async function approveApproval(
   runId: string,
   approvalId: string,
-): Promise<Approval> {
-  return apiRequest<Approval>(
-    `/agent/runs/${runId}/approvals/${approvalId}/approve`,
+): Promise<ApprovalDecisionResponse> {
+  return apiRequest<ApprovalDecisionResponse>(
+    `${APP_AGENT_BASE}/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}/approve`,
     {
       method: 'POST',
     },
@@ -494,9 +551,9 @@ export async function approveApproval(
 export async function rejectApproval(
   runId: string,
   approvalId: string,
-): Promise<Approval> {
-  return apiRequest<Approval>(
-    `/agent/runs/${runId}/approvals/${approvalId}/reject`,
+): Promise<ApprovalDecisionResponse> {
+  return apiRequest<ApprovalDecisionResponse>(
+    `${APP_AGENT_BASE}/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}/reject`,
     {
       method: 'POST',
     },

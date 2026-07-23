@@ -266,6 +266,16 @@ export interface AgentContextValue {
   loadApprovals: (runId: string) => Promise<void>
   approveApproval: (runId: string, approvalId: string) => Promise<void>
   rejectApproval: (runId: string, approvalId: string) => Promise<void>
+  answerWorkflowInput: (
+    runId: string,
+    inputKey: string,
+    answer: string,
+  ) => Promise<agentApi.InputAnswerResponse>
+  decideWorkflowApproval: (
+    runId: string,
+    approvalId: string,
+    decision: 'approve' | 'reject',
+  ) => Promise<agentApi.ApprovalDecisionResponse>
   connectSSE: (runId: string, afterSequence?: number) => void
   disconnectSSE: () => void
   openThread: (threadId: string) => Promise<void>
@@ -424,8 +434,8 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
   const approveApproval = useCallback(
     async (runId: string, approvalId: string) => {
       try {
-        const approval = await agentApi.approveApproval(runId, approvalId)
-        dispatch({ type: 'UPDATE_APPROVAL', payload: { runId, approval } })
+        await agentApi.approveApproval(runId, approvalId)
+        await loadApprovals(runId)
       } catch (error) {
         dispatch({
           type: 'SET_ERROR',
@@ -433,14 +443,14 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
         })
       }
     },
-    [],
+    [loadApprovals],
   )
 
   const rejectApproval = useCallback(
     async (runId: string, approvalId: string) => {
       try {
-        const approval = await agentApi.rejectApproval(runId, approvalId)
-        dispatch({ type: 'UPDATE_APPROVAL', payload: { runId, approval } })
+        await agentApi.rejectApproval(runId, approvalId)
+        await loadApprovals(runId)
       } catch (error) {
         dispatch({
           type: 'SET_ERROR',
@@ -448,7 +458,7 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
         })
       }
     },
-    [],
+    [loadApprovals],
   )
 
   const connectSSE = useCallback((runId: string, afterSequence = 0) => {
@@ -723,6 +733,39 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
     [connectThreadStream, refreshThreadTimeline],
   )
 
+  const syncActiveWorkflow = useCallback(async () => {
+    const threadId = activeThreadIdRef.current
+    if (!threadId) return
+    await refreshThreadTimeline(threadId)
+    if (!threadEventSourceRef.current) {
+      connectThreadStream(threadId, stateRef.current.timeline.latestCursor)
+    }
+  }, [connectThreadStream, refreshThreadTimeline])
+
+  const answerWorkflowInput = useCallback(
+    async (runId: string, inputKey: string, answer: string) => {
+      const response = await agentApi.submitInputAnswer(runId, inputKey, answer)
+      await syncActiveWorkflow()
+      return response
+    },
+    [syncActiveWorkflow],
+  )
+
+  const decideWorkflowApproval = useCallback(
+    async (
+      runId: string,
+      approvalId: string,
+      decision: 'approve' | 'reject',
+    ) => {
+      const response = decision === 'approve'
+        ? await agentApi.approveApproval(runId, approvalId)
+        : await agentApi.rejectApproval(runId, approvalId)
+      await syncActiveWorkflow()
+      return response
+    },
+    [syncActiveWorkflow],
+  )
+
   useEffect(() => {
     return () => {
       removeRunEventListenersRef.current?.()
@@ -748,6 +791,8 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
     loadApprovals,
     approveApproval,
     rejectApproval,
+    answerWorkflowInput,
+    decideWorkflowApproval,
     connectSSE,
     disconnectSSE,
     openThread,

@@ -24,6 +24,8 @@ export default function AgentPage() {
     state,
     dispatch,
     createThread,
+    answerWorkflowInput,
+    decideWorkflowApproval,
     disconnectThreadStream,
     loadEarlierTimeline,
     loadThreads,
@@ -187,7 +189,16 @@ export default function AgentPage() {
               items={timelineItems}
               latestCursor={state.timeline.latestCursor}
               loading={isLoadingEarlier}
+              onAnswerInput={async (runId, inputKey, answer) => {
+                await answerWorkflowInput(runId, inputKey, answer)
+              }}
+              onApprove={async (runId, approvalId) => {
+                await decideWorkflowApproval(runId, approvalId, 'approve')
+              }}
               onLoadEarlier={() => void handleLoadEarlier()}
+              onReject={async (runId, approvalId) => {
+                await decideWorkflowApproval(runId, approvalId, 'reject')
+              }}
             />
           )}
           <div className="agent-chat-composer-dock">
