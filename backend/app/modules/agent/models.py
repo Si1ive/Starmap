@@ -8,7 +8,8 @@ from datetime import datetime
 from typing import Optional, Dict, Any
 
 from sqlalchemy import (
-    String, Text, DateTime, Integer, ForeignKey, Index, UniqueConstraint, Enum as SAEnum, JSON,
+    BigInteger, String, Text, DateTime, Integer, ForeignKey, Index,
+    UniqueConstraint, Enum as SAEnum, JSON,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -30,6 +31,9 @@ class AgentThread(Base):
         comment="线程状态"
     )
     metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, comment="扩展元数据")
+    last_item_sequence: Mapped[int] = mapped_column(
+        BigInteger, default=0, comment="线程时间线最后序号"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
@@ -53,12 +57,39 @@ class AgentRun(Base):
     )
     user_id: Mapped[str] = mapped_column(String(32), nullable=False, comment="用户ID")
     workflow_name: Mapped[str] = mapped_column(String(50), nullable=False, comment="工作流名称")
+    workflow_key: Mapped[Optional[str]] = mapped_column(String(50), comment="工作流稳定标识")
+    workflow_version: Mapped[Optional[str]] = mapped_column(String(20), comment="工作流版本")
     status: Mapped[str] = mapped_column(
         SAEnum("queued", "running", "completed", "failed", "waiting_for_user", "waiting_for_approval"),
         default="queued",
         comment="运行状态"
     )
     input_message: Mapped[Optional[str]] = mapped_column(Text, comment="用户输入")
+    trigger_message_id: Mapped[Optional[str]] = mapped_column(
+        String(32), ForeignKey("agent_messages.id", ondelete="SET NULL"),
+        comment="触发本次运行的用户消息ID"
+    )
+    parent_run_id: Mapped[Optional[str]] = mapped_column(
+        String(32), ForeignKey("agent_runs.id", ondelete="SET NULL"),
+        comment="父运行ID"
+    )
+    root_run_id: Mapped[Optional[str]] = mapped_column(
+        String(32), ForeignKey("agent_runs.id", ondelete="SET NULL"),
+        comment="UI聚合使用的根运行ID"
+    )
+    retry_of_run_id: Mapped[Optional[str]] = mapped_column(
+        String(32), ForeignKey("agent_runs.id", ondelete="SET NULL"),
+        comment="被重试的运行ID"
+    )
+    presentation: Mapped[str] = mapped_column(
+        SAEnum("silent", "compact", "workflow"),
+        default="workflow", comment="对话时间线展示方式"
+    )
+    public_title: Mapped[Optional[str]] = mapped_column(String(255), comment="公开展示名称")
+    public_summary: Mapped[Optional[str]] = mapped_column(Text, comment="公开状态摘要")
+    current_public_step: Mapped[Optional[str]] = mapped_column(
+        String(100), comment="当前公开步骤标识"
+    )
     result_artifact_id: Mapped[Optional[str]] = mapped_column(String(32), comment="产物ID")
     error_message: Mapped[Optional[str]] = mapped_column(Text, comment="错误信息")
     model_call_count: Mapped[int] = mapped_column(Integer, default=0, comment="模型调用次数")
@@ -69,6 +100,8 @@ class AgentRun(Base):
         String(64), comment="客户端幂等键"
     )
     metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, comment="扩展元数据")
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, comment="开始时间")
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, comment="完成时间")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
@@ -78,9 +111,84 @@ class AgentRun(Base):
         Index("idx_agent_run_thread", "thread_id"),
         Index("idx_agent_run_user", "user_id"),
         Index("idx_agent_run_status", "status"),
+        Index("idx_agent_run_trigger_message", "trigger_message_id"),
+        Index("idx_agent_run_parent", "parent_run_id"),
+        Index("idx_agent_run_root", "root_run_id"),
         Index("idx_agent_run_lease", "lease_owner", "lease_expires_at"),
         UniqueConstraint("user_id", "client_idempotency_key", name="uk_agent_run_idempotency"),
         {"comment": "Agent 执行记录表"}
+    )
+
+
+class AgentMessage(Base):
+    """对话消息表：持久化用户与 Agent 的可见消息。"""
+    __tablename__ = "agent_messages"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    thread_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("agent_threads.id", ondelete="CASCADE"),
+        nullable=False, comment="所属线程ID"
+    )
+    user_id: Mapped[str] = mapped_column(String(32), nullable=False, comment="用户ID")
+    run_id: Mapped[Optional[str]] = mapped_column(
+        String(32), ForeignKey("agent_runs.id", ondelete="SET NULL"),
+        comment="生成或消费该消息的运行ID"
+    )
+    role: Mapped[str] = mapped_column(
+        SAEnum("user", "assistant", "system"), nullable=False, comment="消息角色"
+    )
+    status: Mapped[str] = mapped_column(
+        SAEnum("pending", "streaming", "completed", "failed"),
+        default="pending", comment="消息状态"
+    )
+    content_text: Mapped[Optional[str]] = mapped_column(Text, comment="可恢复文本快照")
+    content_blocks_json: Mapped[Optional[list]] = mapped_column(JSON, comment="结构化内容块")
+    client_message_id: Mapped[Optional[str]] = mapped_column(
+        String(128), comment="客户端幂等消息ID"
+    )
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), comment="稳定错误码")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, comment="完成时间")
+
+    __table_args__ = (
+        Index("idx_agent_message_thread", "thread_id", "created_at"),
+        Index("idx_agent_message_run", "run_id"),
+        UniqueConstraint("user_id", "client_message_id", name="uk_agent_message_client_id"),
+        {"comment": "Agent 对话消息表"}
+    )
+
+
+class AgentThreadItem(Base):
+    """线程时间线投影：统一排序消息、workflow 与系统提示。"""
+    __tablename__ = "agent_thread_items"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    thread_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("agent_threads.id", ondelete="CASCADE"),
+        nullable=False, comment="所属线程ID"
+    )
+    sequence: Mapped[int] = mapped_column(BigInteger, nullable=False, comment="线程内单调序号")
+    item_type: Mapped[str] = mapped_column(
+        SAEnum("message", "workflow", "notice"), nullable=False, comment="时间线项类型"
+    )
+    ref_id: Mapped[str] = mapped_column(String(32), nullable=False, comment="业务实体ID")
+    run_id: Mapped[Optional[str]] = mapped_column(
+        String(32), ForeignKey("agent_runs.id", ondelete="SET NULL"),
+        comment="关联运行ID"
+    )
+    visibility: Mapped[str] = mapped_column(
+        SAEnum("visible", "hidden"), default="visible", comment="用户可见性"
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_agent_thread_item_thread", "thread_id", "sequence"),
+        Index("idx_agent_thread_item_run", "run_id"),
+        UniqueConstraint("thread_id", "sequence", name="uk_agent_thread_item_sequence"),
+        {"comment": "Agent 线程时间线投影表"}
     )
 
 
@@ -137,7 +245,7 @@ class AgentEvent(Base):
             "step.started", "step.completed", "step.failed",
             "tool.called", "tool.result",
             "message.delta", "message.completed",
-            "artifact.rendered", "error"
+            "artifact.rendered", "run.failed", "error"
         ),
         nullable=False, comment="事件类型"
     )

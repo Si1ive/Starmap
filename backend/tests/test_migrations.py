@@ -30,7 +30,7 @@ def test_migration_graph_has_single_head():
     config.set_main_option("script_location", str(backend_dir / "alembic"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_heads() == ["20260716_user_identity"]
+    assert scripts.get_heads() == ["20260723_agent_timeline"]
 
 
 def test_user_identity_migration_renders_mysql_ddl():
@@ -60,3 +60,36 @@ def test_user_identity_migration_renders_mysql_ddl():
     assert "CREATE TABLE users" in ddl
     assert "CREATE TABLE auth_sessions" in ddl
     assert "DATETIME(6)" in ddl
+
+
+def test_agent_timeline_migration_renders_mysql_ddl():
+    backend_dir = Path(__file__).resolve().parents[1]
+    migration_path = (
+        backend_dir
+        / "alembic"
+        / "versions"
+        / "20260723_agent_conversation_timeline.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "agent_conversation_timeline_migration",
+        migration_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    output = io.StringIO()
+    context = MigrationContext.configure(
+        dialect=mysql.dialect(),
+        opts={"as_sql": True, "output_buffer": output},
+    )
+    migration.op = Operations(context)
+    migration.upgrade()
+    ddl = output.getvalue()
+
+    assert "CREATE TABLE agent_messages" in ddl
+    assert "CREATE TABLE agent_thread_items" in ddl
+    assert "ADD COLUMN last_item_sequence BIGINT" in ddl
+    assert "run.failed" in ddl
