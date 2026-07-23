@@ -427,6 +427,8 @@ export default function AgentPage() {
       try {
         await submitInput(runId, input)
         setMessage('')
+        // 重新连接 SSE 接收新事件
+        connectSSE(runId)
       } catch (e) {
         console.error('提交输入失败', e)
       }
