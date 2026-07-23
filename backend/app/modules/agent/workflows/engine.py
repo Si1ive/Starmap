@@ -59,6 +59,11 @@ class WorkflowEngine:
                 logger.error("节点不存在", node=current_node_name)
                 return NodeResult.failure(f"节点不存在: {current_node_name}")
 
+            # 当前公开步骤必须落到 run 上，timeline snapshot 才能与实时
+            # workflow.step.updated 事件保持一致，刷新后不会回退为空。
+            run.current_public_step = node.name
+            run.updated_at = datetime.utcnow()
+
             # 创建步骤记录
             step = AgentStep(
                 id=f"step_{uuid.uuid4().hex[:20]}",
