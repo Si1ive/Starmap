@@ -186,9 +186,7 @@ class AgentTimelineService:
             status=RunStatus.QUEUED.value,
             input_message=content,
             trigger_message_id=message.id,
-            presentation="workflow",
-            public_title=WORKFLOW_TITLES["conversation"],
-            public_summary=STATUS_SUMMARIES[RunStatus.QUEUED.value],
+            presentation="silent",
             metadata_json={
                 "attachments": attachments,
                 "context_refs": context_refs,
@@ -200,28 +198,17 @@ class AgentTimelineService:
         message.run_id = run.id
 
         message_sequence = thread.last_item_sequence + 1
-        workflow_sequence = message_sequence + 1
-        self.db.add_all(
-            [
-                AgentThreadItem(
-                    id=f"item_{uuid.uuid4().hex[:20]}",
-                    thread_id=thread.id,
-                    sequence=message_sequence,
-                    item_type="message",
-                    ref_id=message.id,
-                    run_id=run.id,
-                ),
-                AgentThreadItem(
-                    id=f"item_{uuid.uuid4().hex[:20]}",
-                    thread_id=thread.id,
-                    sequence=workflow_sequence,
-                    item_type="workflow",
-                    ref_id=run.id,
-                    run_id=run.id,
-                ),
-            ]
+        self.db.add(
+            AgentThreadItem(
+                id=f"item_{uuid.uuid4().hex[:20]}",
+                thread_id=thread.id,
+                sequence=message_sequence,
+                item_type="message",
+                ref_id=message.id,
+                run_id=run.id,
+            )
         )
-        thread.last_item_sequence = workflow_sequence
+        thread.last_item_sequence = message_sequence
         thread.updated_at = now
         if thread.title == "新会话":
             thread.title = self._derive_thread_title(content)
@@ -237,18 +224,6 @@ class AgentTimelineService:
                 "run_id": run.id,
             },
         )
-        await thread_event_store.append_at(
-            self.db,
-            thread.id,
-            workflow_sequence,
-            "timeline.item.created",
-            {
-                "item_type": "workflow",
-                "ref_id": run.id,
-                "root_run_id": run.id,
-            },
-        )
-
         await event_store.append(
             self.db,
             run.id,
@@ -269,7 +244,7 @@ class AgentTimelineService:
             thread_id=thread.id,
             message_id=message.id,
             run_id=run.id,
-            sequence=workflow_sequence,
+            sequence=message_sequence,
         )
         return TurnCreation(
             message=message,

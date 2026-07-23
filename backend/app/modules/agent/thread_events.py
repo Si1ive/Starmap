@@ -116,8 +116,6 @@ class ThreadEventStore:
         }
 
         if run_event_type in {"message.delta", "message.completed"}:
-            if (run.workflow_key or run.workflow_name) == "conversation":
-                return
             source = payload or {}
             if run_event_type == "message.delta":
                 public_payload["delta"] = source.get("delta", "")
@@ -126,6 +124,9 @@ class ThreadEventStore:
             await self._project_message_event(
                 session, run, root_run_id, run_event_type, public_payload
             )
+            return
+
+        if run.presentation == "silent":
             return
 
         thread_event_type = RUN_EVENT_TYPES.get(run_event_type)

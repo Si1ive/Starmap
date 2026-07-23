@@ -4,7 +4,8 @@
 工作流引擎：按定义顺序执行节点，处理状态转移。
 """
 
-from typing import Optional, Dict, Any
+import uuid
+from typing import Optional
 from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,7 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.logging import get_logger
 from .contracts import WorkflowDefinition, NodeResult, NodeStatus, ExecutionContext
 from ..models import AgentStep
-from ..state_machine import RunStatus, state_machine
 from ..events import event_store
 from ..checkpoints import checkpoint_store
 
@@ -61,6 +61,7 @@ class WorkflowEngine:
 
             # 创建步骤记录
             step = AgentStep(
+                id=f"step_{uuid.uuid4().hex[:20]}",
                 run_id=context.run_id,
                 node_name=node.name,
                 node_type=node.node_type,
@@ -72,8 +73,14 @@ class WorkflowEngine:
 
             # 发布 step.started 事件
             await event_store.append(
-                self.db, context.run_id, "step.started",
-                {"step_id": step.id, "node_name": node.name, "node_type": node.node_type}
+                self.db,
+                context.run_id,
+                "step.started",
+                {
+                    "step_id": step.id,
+                    "node_name": node.name,
+                    "node_type": node.node_type,
+                },
             )
 
             # 执行节点
@@ -94,13 +101,25 @@ class WorkflowEngine:
                 # 发布事件
                 if result.status == NodeStatus.COMPLETED:
                     await event_store.append(
-                        self.db, context.run_id, "step.completed",
-                        {"step_id": step.id, "node_name": node.name, "output": result.output}
+                        self.db,
+                        context.run_id,
+                        "step.completed",
+                        {
+                            "step_id": step.id,
+                            "node_name": node.name,
+                            "output": result.output,
+                        },
                     )
                 elif result.status == NodeStatus.FAILED:
                     await event_store.append(
-                        self.db, context.run_id, "step.failed",
-                        {"step_id": step.id, "node_name": node.name, "error": result.error}
+                        self.db,
+                        context.run_id,
+                        "step.failed",
+                        {
+                            "step_id": step.id,
+                            "node_name": node.name,
+                            "error": result.error,
+                        },
                     )
 
                 # 如果有产物，保存
@@ -114,8 +133,10 @@ class WorkflowEngine:
                 step.completed_at = datetime.utcnow()
 
                 await event_store.append(
-                    self.db, context.run_id, "step.failed",
-                    {"step_id": step.id, "node_name": node.name, "error": str(e)}
+                    self.db,
+                    context.run_id,
+                    "step.failed",
+                    {"step_id": step.id, "node_name": node.name, "error": str(e)},
                 )
 
                 # 失败时尝试重试
@@ -147,7 +168,9 @@ class WorkflowEngine:
                     },
                     f"ckp_{context.run_id}_wait",
                 )
-                logger.info("工作流进入等待状态", run_id=context.run_id, node=current_node_name)
+                logger.info(
+                    "工作流进入等待状态", run_id=context.run_id, node=current_node_name
+                )
                 return result  # 返回 WAITING 状态，worker 会处理状态转移
 
             # 确定下一个节点

@@ -93,12 +93,12 @@ async def test_create_turn_writes_message_run_timeline_event_and_outbox(db_sessi
 
     creation = await _create_turn(db_session)
 
-    assert creation.timeline_cursor == 3
+    assert creation.timeline_cursor == 1
     assert creation.message.status == "completed"
     assert creation.message.run_id == creation.run.id
     assert creation.run.root_run_id == creation.run.id
     assert creation.run.workflow_key == "conversation"
-    assert thread.last_item_sequence == 3
+    assert thread.last_item_sequence == 1
     assert thread.title == "解释循环队列"
 
     items = list(
@@ -108,10 +108,8 @@ async def test_create_turn_writes_message_run_timeline_event_and_outbox(db_sessi
             )
         ).scalars()
     )
-    assert [(item.sequence, item.item_type) for item in items] == [
-        (1, "message"),
-        (2, "workflow"),
-    ]
+    assert [(item.sequence, item.item_type) for item in items] == [(1, "message")]
+    assert creation.run.presentation == "silent"
     assert await db_session.scalar(select(func.count(AgentEvent.id))) == 1
     assert await db_session.scalar(select(func.count(AgentRunOutbox.id))) == 1
 
@@ -125,10 +123,10 @@ async def test_create_turn_is_idempotent_by_client_message_id(db_session):
 
     assert second.message.id == first.message.id
     assert second.run.id == first.run.id
-    assert second.timeline_cursor == 3
+    assert second.timeline_cursor == 1
     assert await db_session.scalar(select(func.count(AgentMessage.id))) == 1
     assert await db_session.scalar(select(func.count(AgentRun.id))) == 1
-    assert await db_session.scalar(select(func.count(AgentThreadItem.id))) == 2
+    assert await db_session.scalar(select(func.count(AgentThreadItem.id))) == 1
     assert await db_session.scalar(select(func.count(AgentRunOutbox.id))) == 1
 
 
@@ -164,8 +162,18 @@ async def test_timeline_aggregates_child_workflow_into_root_item(db_session):
     child.public_summary = "需要确认讲解范围"
     child.current_public_step = "generate_explanation"
     now = datetime.utcnow()
+    thread = await db_session.get(AgentThread, "thread_001")
+    thread.last_item_sequence += 1
     db_session.add_all(
         [
+            AgentThreadItem(
+                id="item_workflow_001",
+                thread_id="thread_001",
+                sequence=thread.last_item_sequence,
+                item_type="workflow",
+                ref_id=creation.run.id,
+                run_id=creation.run.id,
+            ),
             AgentStep(
                 id="step_001",
                 run_id=child.id,
@@ -229,6 +237,11 @@ async def test_timeline_uses_sequence_cursor_for_pagination(db_session):
         content="再给我三道练习题",
         client_message_id="client_002",
     )
+    await _create_turn(
+        db_session,
+        content="再解释一下时间复杂度",
+        client_message_id="client_003",
+    )
     service = AgentTimelineService(db_session)
 
     latest = await service.get_timeline(
@@ -244,11 +257,11 @@ async def test_timeline_uses_sequence_cursor_for_pagination(db_session):
         limit=2,
     )
 
-    assert [item["sequence"] for item in latest.items] == [4, 5]
-    assert latest.previous_cursor == 4
-    assert latest.latest_cursor == 6
+    assert [item["sequence"] for item in latest.items] == [2, 3]
+    assert latest.previous_cursor == 2
+    assert latest.latest_cursor == 3
     assert latest.has_more is True
-    assert [item["sequence"] for item in earlier.items] == [1, 2]
+    assert [item["sequence"] for item in earlier.items] == [1]
     assert earlier.previous_cursor is None
     assert earlier.has_more is False
 
@@ -298,7 +311,7 @@ async def test_run_events_project_to_thread_cursor_and_assistant_message(db_sess
     ]
     assert events[1].payload["label"] == "组织讲解"
     assert "node_name" not in events[1].payload
-    assert [event.sequence for event in events] == [4, 5, 6, 7]
+    assert [event.sequence for event in events] == [2, 3, 4, 5]
 
     assistant = await db_session.scalar(
         select(AgentMessage).where(
@@ -316,10 +329,6 @@ async def test_run_events_project_to_thread_cursor_and_assistant_message(db_sess
         before=None,
         limit=50,
     )
-    assert [item["type"] for item in page.items] == [
-        "message",
-        "workflow",
-        "message",
-    ]
+    assert [item["type"] for item in page.items] == ["message", "message"]
     assert page.items[-1]["message"]["role"] == "assistant"
-    assert page.latest_cursor == 7
+    assert page.latest_cursor == 5

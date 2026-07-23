@@ -75,6 +75,13 @@ class RouterDecision(BaseModel):
     )
 
 
+class DirectAnswerOutput(BaseModel):
+    """普通问答 Agent 的类型安全输出。"""
+
+    content: str = Field(..., min_length=1, max_length=20000)
+    public_summary: Optional[str] = Field(default=None, max_length=500)
+
+
 class ExplanationOutput(BaseModel):
     """讲解产物输出"""
 
