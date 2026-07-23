@@ -6,6 +6,7 @@ import {
   Tag,
   Button,
   Space,
+  Select,
   Timeline,
   Spin,
   Typography,
@@ -35,8 +36,11 @@ const AgentRunDetailPage = () => {
   const [events, setEvents] = useState<AdminAgentRunEvent[]>([])
   const [approvals, setApprovals] = useState<AdminAgentRunApproval[]>([])
   const [loading, setLoading] = useState(false)
+  const [selectedEventTypes, setSelectedEventTypes] = useState<string[]>([])
   const [eventsLoading, setEventsLoading] = useState(false)
   const [approvalsLoading, setApprovalsLoading] = useState(false)
+  const [artifacts, setArtifacts] = useState<agentRunsApi.AdminAgentRunArtifact[]>([])
+  const [artifactsLoading, setArtifactsLoading] = useState(false)
 
   const fetchRun = async () => {
     if (!id) return
@@ -99,6 +103,19 @@ const AgentRunDetailPage = () => {
     }
   }
 
+  const fetchArtifacts = async () => {
+    if (!id) return
+    setArtifactsLoading(true)
+    try {
+      const response = await agentRunsApi.getAgentRunArtifacts(id)
+      setArtifacts(response.data?.artifacts || [])
+    } catch {
+      // 产物接口失败不阻塞主流程
+    } finally {
+      setArtifactsLoading(false)
+    }
+  }
+
   const handleReject = async (approvalId: string) => {
     if (!id) return
     try {
@@ -115,6 +132,7 @@ const AgentRunDetailPage = () => {
     void fetchRun()
     void fetchEvents()
     void fetchApprovals()
+    void fetchArtifacts()
   }, [id])
 
   if (loading) {
@@ -266,21 +284,64 @@ const AgentRunDetailPage = () => {
           </Card>
         )}
 
-        {/* 事件流 */}
+        {/* 产物 */}
         <Card
-          title="事件流"
+          title="产物"
           extra={
-            <Button icon={<ReloadOutlined />} onClick={fetchEvents}>
+            <Button icon={<ReloadOutlined />} onClick={fetchArtifacts}>
               刷新
             </Button>
           }
         >
+          <Spin spinning={artifactsLoading}>
+            {artifacts.length === 0 ? (
+              <Empty description="暂无产物" />
+            ) : (
+              <Space direction="vertical" style={{ width: '100%' }}>
+                {artifacts.map((artifact) => (
+                  <Card key={artifact.id} size="small" title={`${artifact.type} · ${artifact.id.slice(0, 8)}`}>
+                    <pre style={{ fontSize: 12, background: '#f5f5f5', padding: 8, borderRadius: 4, maxHeight: 300, overflow: 'auto' }}>
+                      {JSON.stringify(artifact.content, null, 2)}
+                    </pre>
+                  </Card>
+                ))}
+              </Space>
+            )}
+          </Spin>
+        </Card>
+
+        {/* 事件流 */}
+        <Card
+          title="事件流"
+          extra={
+            <Space>
+              <Select
+                mode="multiple"
+                placeholder="筛选事件类型"
+                allowClear
+                style={{ width: 200 }}
+                onChange={(values) => setSelectedEventTypes(values as string[])}
+                options={[
+                  { label: 'step.started', value: 'step.started' },
+                  { label: 'step.completed', value: 'step.completed' },
+                  { label: 'step.failed', value: 'step.failed' },
+                  { label: 'message.completed', value: 'message.completed' },
+                  { label: 'run.status_changed', value: 'run.status_changed' },
+                  { label: 'error', value: 'error' },
+                ]}
+              />
+              <Button icon={<ReloadOutlined />} onClick={fetchEvents}>
+                刷新
+              </Button>
+            </Space>
+          }
+        >
           <Spin spinning={eventsLoading}>
-            {events.length === 0 ? (
+            {events.filter((e) => selectedEventTypes.length === 0 || selectedEventTypes.includes(e.event_type)).length === 0 ? (
               <Empty description="暂无事件" />
             ) : (
               <Timeline mode="left">
-                {events.map((event) => (
+                {events.filter((e) => selectedEventTypes.length === 0 || selectedEventTypes.includes(e.event_type)).map((event) => (
                   <Timeline.Item
                     key={event.id}
                     label={dayjs(event.created_at).format('HH:mm:ss')}

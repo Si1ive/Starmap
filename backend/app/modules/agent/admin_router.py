@@ -204,6 +204,38 @@ async def get_run_events_admin(
         }
 
 
+@router.get("/{run_id}/artifacts")
+async def get_run_artifacts_admin(
+    run_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """获取 Run 产物（管理员视图）"""
+    from sqlalchemy import select as sa_select
+    from .models import AgentArtifact
+
+    async with db:
+        result = await db.execute(
+            sa_select(AgentArtifact).where(AgentArtifact.run_id == run_id).order_by(AgentArtifact.created_at.desc())
+        )
+        artifacts = result.scalars().all()
+        return {
+            "data": {
+                "run_id": run_id,
+                "artifacts": [
+                    {
+                        "id": a.id,
+                        "type": a.artifact_type,
+                        "content": a.content_json,
+                        "metadata": a.metadata_json,
+                        "created_at": a.created_at.isoformat() if a.created_at else None,
+                    }
+                    for a in artifacts
+                ],
+                "total": len(artifacts),
+            }
+        }
+
+
 @router.post("/{run_id}/replay")
 async def replay_run(
     run_id: str,

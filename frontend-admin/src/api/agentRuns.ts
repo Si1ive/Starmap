@@ -55,6 +55,14 @@ export interface AdminAgentRunApproval {
   updated_at: string
 }
 
+export interface AdminAgentRunArtifact {
+  id: string
+  type: string
+  content: Record<string, unknown>
+  metadata: Record<string, unknown>
+  created_at: string
+}
+
 export const getAgentRunApprovals = (runId: string): Promise<ApiResponse<{ run_id: string; approvals: AdminAgentRunApproval[] }>> => {
   return adminClient.get(`/agent-runs/${runId}/approvals`)
 }
@@ -65,6 +73,10 @@ export const approveApproval = (runId: string, approvalId: string): Promise<ApiR
 
 export const rejectApproval = (runId: string, approvalId: string): Promise<ApiResponse<{ id: string; status: string; message: string }>> => {
   return adminClient.post(`/agent-runs/${runId}/approvals/${approvalId}/reject`)
+}
+
+export const getAgentRunArtifacts = (runId: string): Promise<ApiResponse<{ run_id: string; artifacts: AdminAgentRunArtifact[]; total: number }>> => {
+  return adminClient.get(`/agent-runs/${runId}/artifacts`)
 }
 
 export const getAgentRuns = (
