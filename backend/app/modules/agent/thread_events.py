@@ -115,18 +115,45 @@ class ThreadEventStore:
             "status": run.status,
         }
 
-        if run_event_type in {"message.delta", "message.completed"}:
+        if run_event_type in {"message.delta", "message.completed", "message.failed"}:
             source = payload or {}
             if run_event_type == "message.delta":
                 public_payload["delta"] = source.get("delta", "")
-            else:
+            elif run_event_type == "message.completed":
                 public_payload["content"] = source.get("content", "")
+            else:
+                public_payload.update(
+                    {
+                        "content": source.get("content", ""),
+                        "error_code": source.get("error_code", "agent_run_failed"),
+                    }
+                )
             await self._project_message_event(
                 session, run, root_run_id, run_event_type, public_payload
             )
             return
 
         if run.presentation == "silent":
+            if run.workflow_name == "conversation" and run_event_type in {
+                "run.failed",
+                "error",
+            }:
+                source = payload or {}
+                error_code = source.get("error_code") or "agent_run_failed"
+                await self._project_message_event(
+                    session,
+                    run,
+                    root_run_id,
+                    "message.failed",
+                    {
+                        "error_code": error_code,
+                        "content": (
+                            "Agent 模型尚未配置好，请联系管理员检查问答 LLM。"
+                            if error_code == "agent_model_unavailable"
+                            else "这条回复生成失败，请稍后重试。"
+                        ),
+                    },
+                )
             return
 
         thread_event_type = RUN_EVENT_TYPES.get(run_event_type)
@@ -240,7 +267,7 @@ class ThreadEventStore:
                 "message_id": message.id,
                 "delta": payload.get("delta", ""),
             }
-        else:
+        elif event_type == "message.completed":
             message.content_text = str(
                 payload.get("content") or message.content_text or ""
             )
@@ -255,6 +282,28 @@ class ThreadEventStore:
                     "role": message.role,
                     "status": message.status,
                     "content": message.content_text,
+                },
+            }
+        else:
+            message.content_text = str(
+                payload.get("content") or "这条回复生成失败，请稍后重试。"
+            )
+            message.status = "failed"
+            message.error_code = str(
+                payload.get("error_code") or "agent_run_failed"
+            )
+            message.completed_at = datetime.utcnow()
+            public_type = "message.failed"
+            public_payload = {
+                "message_id": message.id,
+                "root_run_id": root_run_id,
+                "error_code": message.error_code,
+                "message": {
+                    "id": message.id,
+                    "role": message.role,
+                    "status": message.status,
+                    "content": message.content_text,
+                    "error_code": message.error_code,
                 },
             }
         message.updated_at = datetime.utcnow()

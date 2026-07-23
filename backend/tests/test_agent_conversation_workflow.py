@@ -12,6 +12,7 @@ from app.modules.agent.model_runtime.schema import (
     DirectAnswerOutput,
     RouterDecision,
 )
+from app.modules.agent.model_runtime.config import AgentModelConfigurationError
 from app.modules.agent.models import (
     AgentApproval,
     AgentArtifact,
@@ -69,7 +70,7 @@ class RouterStub:
         self.decisions = list(decisions)
         self.histories = []
 
-    async def decide(self, current_input, *, deps, message_history=()):
+    async def decide(self, current_input, *, deps, message_history=(), db=None):
         self.histories.append(list(message_history))
         return self.decisions.pop(0)
 
@@ -79,9 +80,16 @@ class AnswerStub:
         self.answers = list(answers)
         self.histories = []
 
-    async def answer(self, current_input, *, deps, message_history=()):
+    async def answer(self, current_input, *, deps, message_history=(), db=None):
         self.histories.append(list(message_history))
         return self.answers.pop(0)
+
+
+class FailingRouterStub:
+    async def decide(self, current_input, *, deps, message_history=(), db=None):
+        raise AgentModelConfigurationError(
+            "Agent 没有可用模型：请在管理员端启用问答 LLM"
+        )
 
 
 async def _create_thread(db_session):
@@ -385,3 +393,44 @@ async def test_thread_continues_with_answer_and_another_workflow_after_completio
         "调整学习计划",
     ]
     assert page.thread.status == "active"
+
+
+@pytest.mark.asyncio
+async def test_model_configuration_failure_creates_visible_failed_message(
+    db_session,
+    monkeypatch,
+):
+    await _create_thread(db_session)
+    monkeypatch.setattr(conversation, "router_runtime", FailingRouterStub())
+    creation = await _create_turn(
+        db_session,
+        content="为什么 Agent 没有回复？",
+        client_message_id="client_failed",
+    )
+
+    assert await AgentWorker().process_run(db_session, creation.run) is True
+    assert creation.run.status == "failed"
+    assert creation.run.metadata_json["error_code"] == "agent_model_unavailable"
+
+    page = await AgentTimelineService(db_session).get_timeline(
+        user_id="user_001",
+        thread_id="thread_001",
+        before=None,
+        limit=20,
+    )
+    assert [item["type"] for item in page.items] == ["message", "message"]
+    failed_message = page.items[1]["message"]
+    assert failed_message["status"] == "failed"
+    assert failed_message["error_code"] == "agent_model_unavailable"
+    assert "问答 LLM" in failed_message["content"]
+
+    events = await thread_event_store.get_events(
+        db_session,
+        "thread_001",
+        after_sequence=creation.timeline_cursor,
+        limit=20,
+    )
+    assert [event.event_type for event in events] == [
+        "timeline.item.created",
+        "message.failed",
+    ]

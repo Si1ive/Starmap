@@ -6,6 +6,7 @@ P0 简化版：单Worker执行，通过租约防止重复执行。
 
 import uuid
 import asyncio
+from contextlib import suppress
 from datetime import datetime, timedelta
 from typing import Optional, List
 
@@ -21,6 +22,7 @@ from .outbox import outbox_store
 from .service import AgentService
 from .checkpoints import checkpoint_store
 from .workflows.contracts import NodeStatus
+from .model_runtime.config import AgentModelConfigurationError
 
 logger = get_logger(__name__)
 
@@ -114,6 +116,13 @@ class AgentWorker:
             return False
 
         try:
+            logger.info(
+                "Run 开始处理",
+                run_id=run.id,
+                thread_id=run.thread_id,
+                workflow=run.workflow_name,
+                worker_id=WORKER_ID,
+            )
             # 状态转移：queued -> running
             if run.status == RunStatus.QUEUED.value:
                 state_machine.transition(run, RunStatus.RUNNING)
@@ -128,12 +137,7 @@ class AgentWorker:
             if not workflow:
                 error_msg = f"工作流不存在: {run.workflow_name}"
                 logger.error(error_msg, run_id=run.id)
-                state_machine.transition(run, RunStatus.FAILED, reason=error_msg)
-                run.error_message = error_msg
-                await event_store.append(db, run.id, "run.failed", {
-                    "run_id": run.id,
-                    "error": error_msg,
-                })
+                await self._record_failure(db, run, error_msg)
                 await db.flush()
                 return False
 
@@ -238,29 +242,64 @@ class AgentWorker:
                 )
             else:
                 error_msg = result.error or "工作流执行失败"
-                state_machine.transition(run, RunStatus.FAILED, reason=error_msg)
-                run.error_message = error_msg
-                await event_store.append(db, run.id, "run.failed", {
-                    "run_id": run.id,
-                    "error": error_msg,
-                })
+                await self._record_failure(db, run, error_msg)
 
             await db.flush()
             return True
 
         except Exception as e:
-            logger.error("Run 处理异常", run_id=run.id, error=str(e))
-            state_machine.transition(run, RunStatus.FAILED, reason=str(e))
-            run.error_message = str(e)
-            await event_store.append(db, run.id, "run.failed", {
-                "run_id": run.id,
-                "error": str(e),
-            })
+            logger.error(
+                "Run 处理异常",
+                run_id=run.id,
+                thread_id=run.thread_id,
+                workflow=run.workflow_name,
+                error=str(e),
+                exc_info=True,
+            )
+            await self._record_failure(db, run, str(e), exception=e)
             await db.flush()
             return False
 
         finally:
             await self.release_lease(db, run)
+
+    async def _record_failure(
+        self,
+        db: AsyncSession,
+        run: AgentRun,
+        error: str,
+        *,
+        exception: Exception | None = None,
+    ) -> None:
+        """持久化失败事实，并给静默 conversation run 创建用户可见失败消息。"""
+        error_code = (
+            "agent_model_unavailable"
+            if isinstance(exception, AgentModelConfigurationError)
+            or "Agent 没有可用模型" in error
+            or "管理员问答 LLM" in error
+            else "agent_run_failed"
+        )
+        current_status = RunStatus(run.status)
+        if current_status != RunStatus.FAILED:
+            if not state_machine.can_transition(current_status, RunStatus.FAILED):
+                logger.error(
+                    "Run 已处于终态，无法再次记录失败状态",
+                    run_id=run.id,
+                    status=current_status.value,
+                    error=error,
+                )
+                return
+            state_machine.transition(run, RunStatus.FAILED, reason=error)
+        run.error_message = error
+        metadata = dict(run.metadata_json or {})
+        metadata["error_code"] = error_code
+        run.metadata_json = metadata
+        await event_store.append(
+            db,
+            run.id,
+            "run.failed",
+            {"run_id": run.id, "error": error, "error_code": error_code},
+        )
 
     async def scan_and_process(self, limit: int = 10) -> int:
         """
@@ -275,6 +314,13 @@ class AgentWorker:
         async with mysql_client.session() as db:
             pending = await outbox_store.scan_pending(db, limit=limit)
             pending_ids = [(item.id, item.run_id) for item in pending]
+        if pending_ids:
+            logger.info(
+                "Worker 扫描到待执行任务",
+                worker_id=WORKER_ID,
+                count=len(pending_ids),
+                run_ids=[run_id for _, run_id in pending_ids],
+            )
 
         # 每个 run 用独立 session 处理，保证 process_run 内的写入随该事务提交落库
         for outbox_id, run_id in pending_ids:
@@ -342,22 +388,51 @@ class AgentWorker:
 
 # 全局Worker实例（单例）
 _worker_instance: Optional[AgentWorker] = None
+_worker_task: Optional[asyncio.Task] = None
 
 
 async def start_worker(interval: int = 5):
     """启动Worker（后台任务）"""
-    global _worker_instance
+    global _worker_instance, _worker_task
+    if _worker_task and not _worker_task.done():
+        logger.info("Agent Worker 已在运行", worker_id=WORKER_ID)
+        return
     _worker_instance = AgentWorker()
-    # Run in a background task so it doesn't block startup
-    asyncio.create_task(_worker_instance.start(interval))
+    _worker_task = asyncio.create_task(
+        _worker_instance.start(interval),
+        name="agent-worker",
+    )
+
+    def _report_worker_exit(task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error:
+            logger.critical(
+                "Agent Worker 后台任务异常退出",
+                error=str(error),
+                exc_info=(type(error), error, error.__traceback__),
+            )
+        else:
+            logger.info("Agent Worker 后台任务已退出", worker_id=WORKER_ID)
+
+    _worker_task.add_done_callback(_report_worker_exit)
 
 
 async def stop_worker():
     """停止Worker"""
-    global _worker_instance
+    global _worker_instance, _worker_task
     if _worker_instance:
         await _worker_instance.stop()
-        _worker_instance = None
+    if _worker_task:
+        with suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(_worker_task, timeout=10)
+        if not _worker_task.done():
+            _worker_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await _worker_task
+    _worker_instance = None
+    _worker_task = None
 
 
 def get_worker() -> Optional[AgentWorker]:

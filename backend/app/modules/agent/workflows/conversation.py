@@ -62,6 +62,7 @@ async def _route_node(context: ExecutionContext, db: AsyncSession) -> NodeResult
             token_budget=agent_context.token_budget,
         ),
         message_history=agent_context.to_message_history(),
+        db=db,
     )
     context.set("agent_run_context", agent_context)
     context.set("router_decision", decision)
@@ -112,6 +113,7 @@ async def _direct_answer_node(
         agent_context.current_input,
         deps=DirectAnswerDeps.from_context(agent_context),
         message_history=agent_context.to_message_history(),
+        db=db,
     )
     return NodeResult(
         status=NodeStatus.COMPLETED,

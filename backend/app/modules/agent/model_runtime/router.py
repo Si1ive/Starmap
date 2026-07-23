@@ -8,6 +8,9 @@ from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models import Model
 
 from app.core.config import settings
+from app.core.logging import get_logger
+
+from .config import open_agent_model
 
 from .schema import RouterAction, RouterDecision
 
@@ -19,6 +22,8 @@ ROUTER_ACTIONS: tuple[RouterAction, ...] = (
     "grade",
     "plan",
 )
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -60,7 +65,7 @@ class RouterRuntime:
     """封装 Pydantic AI Agent，支持生产模型和测试模型替换。"""
 
     def __init__(self, model: Model | str | None = None):
-        self.model = model or settings.AGENT_ROUTER_MODEL
+        self.model = model
 
     async def decide(
         self,
@@ -68,17 +73,38 @@ class RouterRuntime:
         *,
         deps: RouterDeps,
         message_history: Sequence[ModelMessage] = (),
+        db=None,
     ) -> RouterDecision:
-        result = await router_agent.run(
-            current_input,
-            deps=deps,
-            message_history=message_history,
-            model=self.model,
-            usage_limits=UsageLimits(
-                request_limit=2,
-                total_tokens_limit=deps.token_budget,
-            ),
-        )
+        if self.model is not None:
+            result = await self._run(
+                current_input,
+                deps=deps,
+                message_history=message_history,
+                model=self.model,
+            )
+        elif db is not None:
+            async with open_agent_model(db, run_id=deps.turn_id) as session:
+                logger.info(
+                    "Agent 路由模型调用开始",
+                    thread_id=deps.thread_id,
+                    run_id=deps.turn_id,
+                    model=session.config.model_name,
+                    config_source=session.config.source,
+                )
+                result = await self._run(
+                    current_input,
+                    deps=deps,
+                    message_history=message_history,
+                    model=session.model,
+                    model_settings=session.config.model_settings,
+                )
+        else:
+            result = await self._run(
+                current_input,
+                deps=deps,
+                message_history=message_history,
+                model=settings.AGENT_ROUTER_MODEL,
+            )
         decision = result.output
         if decision.action not in deps.allowed_actions:
             raise ValueError(f"Router 返回了未授权 action: {decision.action}")
@@ -86,7 +112,34 @@ class RouterRuntime:
         has_question = bool(decision.clarification_question)
         if is_clarify and not has_question:
             raise ValueError("clarify 路由必须提供 clarification_question")
+        logger.info(
+            "Agent 路由模型调用完成",
+            thread_id=deps.thread_id,
+            run_id=deps.turn_id,
+            action=decision.action,
+        )
         return decision
+
+    @staticmethod
+    async def _run(
+        current_input: str,
+        *,
+        deps: RouterDeps,
+        message_history: Sequence[ModelMessage],
+        model: Model | str,
+        model_settings=None,
+    ):
+        return await router_agent.run(
+            current_input,
+            deps=deps,
+            message_history=message_history,
+            model=model,
+            model_settings=model_settings,
+            usage_limits=UsageLimits(
+                request_limit=2,
+                total_tokens_limit=deps.token_budget,
+            ),
+        )
 
 
 router_runtime = RouterRuntime()

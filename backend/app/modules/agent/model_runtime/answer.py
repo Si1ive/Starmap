@@ -8,9 +8,13 @@ from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models import Model
 
 from app.core.config import settings
+from app.core.logging import get_logger
 
 from ..context_builder import AgentRunContext
+from .config import open_agent_model
 from .schema import DirectAnswerOutput
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -80,7 +84,7 @@ class DirectAnswerRuntime:
     """封装普通问答 Agent，支持生产模型与测试模型替换。"""
 
     def __init__(self, model: Model | str | None = None):
-        self.model = model or settings.AGENT_ROUTER_MODEL
+        self.model = model
 
     async def answer(
         self,
@@ -88,18 +92,65 @@ class DirectAnswerRuntime:
         *,
         deps: DirectAnswerDeps,
         message_history: Sequence[ModelMessage] = (),
+        db=None,
     ) -> DirectAnswerOutput:
-        result = await direct_answer_agent.run(
+        if self.model is not None:
+            result = await self._run(
+                current_input,
+                deps=deps,
+                message_history=message_history,
+                model=self.model,
+            )
+        elif db is not None:
+            async with open_agent_model(db, run_id=deps.turn_id) as session:
+                logger.info(
+                    "Agent 回答模型调用开始",
+                    thread_id=deps.thread_id,
+                    run_id=deps.turn_id,
+                    model=session.config.model_name,
+                    config_source=session.config.source,
+                )
+                result = await self._run(
+                    current_input,
+                    deps=deps,
+                    message_history=message_history,
+                    model=session.model,
+                    model_settings=session.config.model_settings,
+                )
+        else:
+            result = await self._run(
+                current_input,
+                deps=deps,
+                message_history=message_history,
+                model=settings.AGENT_ROUTER_MODEL,
+            )
+        logger.info(
+            "Agent 回答模型调用完成",
+            thread_id=deps.thread_id,
+            run_id=deps.turn_id,
+        )
+        return result.output
+
+    @staticmethod
+    async def _run(
+        current_input: str,
+        *,
+        deps: DirectAnswerDeps,
+        message_history: Sequence[ModelMessage],
+        model: Model | str,
+        model_settings=None,
+    ):
+        return await direct_answer_agent.run(
             current_input,
             deps=deps,
             message_history=message_history,
-            model=self.model,
+            model=model,
+            model_settings=model_settings,
             usage_limits=UsageLimits(
                 request_limit=2,
                 total_tokens_limit=deps.token_budget,
             ),
         )
-        return result.output
 
 
 direct_answer_runtime = DirectAnswerRuntime()

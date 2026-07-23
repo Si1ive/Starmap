@@ -172,6 +172,14 @@ async def lifespan(app: FastAPI):
     logger.info("408考研学习平台 API 关闭中...")
 
     try:
+        from app.modules.agent.worker import stop_worker
+
+        await stop_worker()
+        logger.info("Agent Worker 已关闭")
+    except Exception as e:
+        logger.error("Agent Worker 关闭失败", error=str(e))
+
+    try:
         await redis_client.close()
         logger.info("Redis连接已关闭")
     except Exception as e:

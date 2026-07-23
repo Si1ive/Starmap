@@ -139,13 +139,20 @@ function applyMessageEvent(
   }
 
   if (event.event_type === 'message.failed') {
+    const message = event.payload.message
+    const publicMessage =
+      message && typeof message === 'object'
+        ? (message as Record<string, unknown>)
+        : {}
     return {
       ...state.messagesById,
       [messageId]: {
         ...base,
         status: 'failed',
+        content: stringValue(publicMessage.content) ?? base.content,
         error_code: stringValue(event.payload.error_code),
         updated_at: now,
+        completed_at: now,
       },
     }
   }

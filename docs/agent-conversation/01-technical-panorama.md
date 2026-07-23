@@ -41,6 +41,7 @@ Agent Worker
   ├─ 扫描并认领 outbox
   ├─ 获取 run 租约
   ├─ 调用 Workflow Registry / Engine
+  ├─ 读取管理员问答 LLM 配置
   ├─ 调用模型运行时与领域工具
   └─ 持久化状态、消息、事件和产物
           │
@@ -84,6 +85,7 @@ Redis 在当前 Agent 核心执行链路中不是事实来源。Agent 的可靠�
   -> 创建 pending outbox
   -> 提交事务并立即返回
   -> Worker 扫描 outbox
+  -> 读取 system_configs.llm，创建独立 AsyncOpenAI
   -> conversation workflow 判断 direct answer / clarify / business action
   -> 生成 assistant message 或 child workflow
   -> 持久化公开事件
@@ -106,6 +108,12 @@ Redis 在当前 Agent 核心执行链路中不是事实来源。Agent 的可靠�
 `AsyncOpenAI` 客户端，并在请求结束后关闭。这样管理员测试不同配置、后台任务和用户问答
 并发发生时，各自的 API Key、Base URL、模型与超时时间不会互相覆盖，也为后续多模型选择
 提供了安全的客户端基础。
+
+当前 Agent 生产执行优先读取 MySQL `system_configs.llm` 中管理员启用的“问答 LLM”；只有
+该配置未启用时才回退 `OPENAI_API_KEY` 与 `OPENAI_MODEL` 环境变量。解析出的配置来源、模型
+名称和供应商会写入 Run 元数据，便于管理员追踪实际使用了哪一套运行时配置。管理员连通性
+测试和 Agent 回答因此使用同一个配置事实来源，不再出现“测试成功但 Agent 实际没用”的
+割裂状态。
 
 ## 6. 当前重点演进方向
 

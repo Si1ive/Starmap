@@ -99,3 +99,36 @@
 ### 提交信息
 
 `升级 ChatLLM 与向量服务到 OpenAI 1.x 客户端`
+
+## 2026-07-23：打通管理员 LLM 配置与 Agent 回答
+
+### 目标
+
+解决管理员已保存并测试问答 LLM，但用户发送消息后 Agent 没有回复、后台也缺少有效诊断
+日志的问题。
+
+### 实现
+
+- Agent Router 和 DirectAnswer 优先读取 MySQL `system_configs.llm`，未启用时才回退环境变量。
+- 每次调用创建独立 `AsyncOpenAI`、`OpenAIProvider` 和 `OpenAIChatModel`，并在调用后关闭。
+- Run 元数据记录配置来源、模型名称、供应商和稳定错误码，不记录 API Key。
+- Worker 保存后台 Task 强引用，防止重复启动，记录异常退出，并在应用关闭时有序停止。
+- 增加 Worker 扫描、Run 处理、配置解析和模型调用关键日志。
+- 静默 conversation run 失败时投影用户可见的 assistant `message.failed`，前端同步失败内容。
+- 对重复失败记录增加终态保护，避免二次非法状态转换掩盖原始异常。
+
+### 教学文档
+
+- 全景图补充管理员问答 LLM 到 Worker 模型运行时的真实配置流。
+- 细致讲解补充配置链路割裂原因、独立客户端、Worker 生命周期、失败投影与日志排查顺序。
+- 明确当前仍是单模型兼容阶段，多模型配置 ID 将在后续功能中实现。
+
+### 验证
+
+- 后端全部 Agent 测试：71 项通过。
+- 前端 `npm run build` 通过。
+- `git diff --check` 通过。
+
+### 提交信息
+
+`打通管理员 LLM 配置与 Agent 回答执行链路`

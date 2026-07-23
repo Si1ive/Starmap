@@ -146,9 +146,56 @@ conversation 工作流先构建历史和学习上下文，再由模型路由决�
 保留，但只负责构造配置，同样走共享客户端和统一 LLM 调用记录。Embedding 返回值提取同时
 兼容 SDK 1.x/2.x 的类型化对象以及测试中的字典响应。
 
-这一步只解决“客户端接口过期”和共享调用路径问题。Agent 工作流当前如何读取管理员保存的
-配置仍需单独打通；如果配置测试成功但 Agent 无响应，应继续检查 run、outbox、Worker 和
-`model_runtime` 配置解析链路，不能据此认定 Agent 已经使用了该配置。
+### 5.3 为什么管理员保存成功，Agent 仍然无响应
+
+修复前存在两条互不相连的配置链路：管理员页面把问答模型保存到 MySQL
+`system_configs.llm`，连通性测试也读取这份数据；Pydantic AI 的 Router 和 DirectAnswer
+却只读取 `OPENAI_API_KEY`、`OPENAI_MODEL`、`AGENT_ROUTER_MODEL` 环境变量。因此管理员侧
+测试成功只证明保存的配置可用，并不代表 Agent Worker 会使用它。环境变量没有配置时，
+conversation run 会在后台失败；又因为普通问答 run 的 `presentation` 是 `silent`，原来的
+事件投影会直接忽略失败，用户端最终只留下自己发出的消息。
+
+现在生产调用链统一为：
+
+```text
+用户消息
+  -> conversation run / outbox
+  -> Agent Worker
+  -> SystemSettingsService.load()["llm"]
+  -> AgentModelConfig 不可变配置快照
+  -> 独立 AsyncOpenAI
+  -> OpenAIProvider / OpenAIChatModel
+  -> RouterRuntime / DirectAnswerRuntime
+  -> assistant message
+```
+
+管理员配置已启用时，运行时会校验供应商、模型名称和 API Key；配置未启用时才回退环境变量。
+两处都不可用会抛出 `AgentModelConfigurationError`，Run 元数据记录稳定错误码
+`agent_model_unavailable`。模型调用前还会记录配置来源、供应商和模型名，但不会记录 API Key。
+调用结束后关闭客户端，防止连接泄漏。
+
+### 5.4 Worker 为什么要保留后台任务引用
+
+FastAPI 启动时通过 `asyncio.create_task()` 启动 Worker。只创建 Task 而不保存强引用，会让
+生命周期不可管理：应用无法判断是否重复启动，也无法在关闭数据库连接前等待 Worker 退出，
+后台异常还可能只成为“无人读取的 Task 异常”。现在模块保存 `_worker_task`，给 Task 命名，
+注册异常退出回调，并在 FastAPI lifespan 关闭阶段先调用 `stop_worker()`，再关闭 Redis 和
+MySQL。这样停机时不会让 Worker 拿着已关闭的数据库连接继续扫描。
+
+### 5.5 静默普通问答失败如何对用户可见
+
+`silent` 的含义是“不展示内部工作流卡片”，不是“隐藏所有错误”。对于 conversation run，
+`run.failed` 现在会被 `ThreadEventStore` 特判并投影成 assistant `message.failed`：如果模型未
+配置，用户看到“Agent 模型尚未配置好”；其他执行异常显示可重试的通用提示。前端时间线
+reducer 会使用事件中的公开内容更新失败消息并标记完成时间。
+
+排查“发消息后无响应”时，可以按日志顺序检查：turn/run/outbox 创建、Worker 扫描到任务、
+Run 开始处理、模型配置解析完成、Router 调用开始与完成、回答调用开始与完成、Run 完成或
+失败。如果连“Worker 扫描到待执行任务”都没有，应先检查 Worker 是否启动和 outbox 状态；
+如果停在配置解析，应检查管理员问答 LLM 是否启用以及模型名、API Key、Base URL。
+
+当前这一阶段只打通原有单个 `system_configs.llm` 配置。后台多模型记录、上线/下线和用户选择
+属于后续独立演进，不能把 `model_config_source` 误当成未来真实的模型配置 ID。
 
 ## 6. 时间处理
 
