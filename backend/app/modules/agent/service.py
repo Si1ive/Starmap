@@ -163,6 +163,13 @@ class AgentService:
         # 投递到outbox
         await outbox_store.enqueue(self.db, run_id)
 
+        # 发送即时状态变更事件
+        await event_store.append(self.db, run_id, "run.status_changed", {
+            "from": "waiting_for_user",
+            "to": "running",
+            "reason": "用户输入提交",
+        })
+
         logger.info("用户输入提交", run_id=run_id, user_id=user_id)
         return run
 
@@ -368,5 +375,11 @@ class AgentService:
         if run and run.status == RunStatus.WAITING_FOR_APPROVAL.value:
             state_machine.transition(run, RunStatus.RUNNING, reason=f"审批已{decision}")
             await outbox_store.enqueue(self.db, run_id)
+            # 发送即时状态变更事件
+            await event_store.append(self.db, run_id, "run.status_changed", {
+                "from": "waiting_for_approval",
+                "to": "running",
+                "reason": f"审批已{decision}",
+            })
         logger.info("审批决定", run_id=run_id, approval_id=approval_id, decision=decision)
         return approval
