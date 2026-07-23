@@ -165,6 +165,7 @@ function applyWorkflowEvent(
   let status = stringValue(event.payload.status) ?? current.status
   if (event.event_type === 'workflow.completed') status = 'completed'
   if (event.event_type === 'workflow.failed') status = 'failed'
+  if (event.event_type === 'workflow.cancelled') status = 'cancelled'
 
   const currentStep =
     event.event_type === 'workflow.step.updated'

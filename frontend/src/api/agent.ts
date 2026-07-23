@@ -227,8 +227,11 @@ export const THREAD_EVENT_TYPES = [
   'message.completed',
   'message.failed',
   'workflow.updated',
+  'workflow.input.required',
+  'workflow.approval.required',
   'workflow.completed',
   'workflow.failed',
+  'workflow.cancelled',
   'workflow.step.updated',
   'workflow.artifact.created',
 ] as const

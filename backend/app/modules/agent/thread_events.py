@@ -155,6 +155,32 @@ class ThreadEventStore:
                 public_payload["reason"] = source.get("reason")
             await self.append(session, run.thread_id, thread_event_type, public_payload)
 
+    async def project_workflow_interaction(
+        self,
+        session: AsyncSession,
+        run_id: str,
+        event_type: str,
+        *,
+        status: str,
+        payload: Optional[dict[str, Any]] = None,
+    ) -> None:
+        """把待输入或待审批事实投影到 thread 事件流。"""
+        result = await session.execute(select(AgentRun).where(AgentRun.id == run_id))
+        run = result.scalar_one_or_none()
+        if not run or run.presentation == "silent":
+            return
+        await self.append(
+            session,
+            run.thread_id,
+            event_type,
+            {
+                "root_run_id": run.root_run_id or run.id,
+                "run_id": run.id,
+                "status": status,
+                **(payload or {}),
+            },
+        )
+
     async def _project_message_event(
         self,
         session: AsyncSession,

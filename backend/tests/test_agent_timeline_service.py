@@ -229,6 +229,75 @@ async def test_timeline_aggregates_child_workflow_into_root_item(db_session):
 
 
 @pytest.mark.asyncio
+async def test_workflow_interactions_emit_thread_events(db_session):
+    await _create_thread(db_session)
+    creation = await _create_turn(db_session)
+    child = await AgentService(db_session).create_run(
+        user_id="user_001",
+        thread_id="thread_001",
+        workflow_name="plan",
+        input_message="调整计划",
+        workflow_key="plan",
+        workflow_version="v1",
+        trigger_message_id=creation.message.id,
+        parent_run_id=creation.run.id,
+        root_run_id=creation.run.id,
+        presentation="compact",
+        public_title="调整学习计划",
+    )
+    await AgentTimelineService(db_session).ensure_workflow_item(
+        thread_id="thread_001",
+        root_run_id=creation.run.id,
+        run_id=child.id,
+    )
+    service = AgentService(db_session)
+
+    agent_input = await service.create_input(
+        child.id,
+        "scope",
+        "请补充需要调整的范围",
+    )
+    approval = await service.create_approval(
+        child.id,
+        "apply_learning_plan",
+        '{"summary":"应用学习计划调整"}',
+    )
+
+    events = await thread_event_store.get_events(
+        db_session,
+        "thread_001",
+        after_sequence=creation.timeline_cursor,
+        limit=20,
+    )
+    interaction_events = [
+        event
+        for event in events
+        if event.event_type in {"workflow.input.required", "workflow.approval.required"}
+    ]
+
+    assert [event.event_type for event in interaction_events] == [
+        "workflow.input.required",
+        "workflow.approval.required",
+    ]
+    assert interaction_events[0].payload == {
+        "sequence": interaction_events[0].sequence,
+        "root_run_id": creation.run.id,
+        "run_id": child.id,
+        "status": "waiting_for_user",
+        "input_id": agent_input.id,
+        "input_key": "scope",
+    }
+    assert interaction_events[1].payload == {
+        "sequence": interaction_events[1].sequence,
+        "root_run_id": creation.run.id,
+        "run_id": child.id,
+        "status": "waiting_for_approval",
+        "approval_id": approval.id,
+        "action_key": "apply_learning_plan",
+    }
+
+
+@pytest.mark.asyncio
 async def test_timeline_uses_sequence_cursor_for_pagination(db_session):
     await _create_thread(db_session)
     await _create_turn(db_session)

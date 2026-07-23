@@ -23,6 +23,7 @@ from .models import (
 from .state_machine import RunStatus, state_machine
 from .events import event_store
 from .outbox import outbox_store
+from .thread_events import thread_event_store
 
 logger = get_logger(__name__)
 
@@ -296,6 +297,16 @@ class AgentService:
         self.db.add(agent_input)
         await self.db.flush()
         await self.db.refresh(agent_input)
+        await thread_event_store.project_workflow_interaction(
+            self.db,
+            run_id,
+            "workflow.input.required",
+            status=RunStatus.WAITING_FOR_USER.value,
+            payload={
+                "input_id": agent_input.id,
+                "input_key": agent_input.input_key,
+            },
+        )
         logger.info("输入项创建", run_id=run_id, input_id=input_id, key=input_key)
         return agent_input
 
@@ -362,6 +373,16 @@ class AgentService:
         self.db.add(approval)
         await self.db.flush()
         await self.db.refresh(approval)
+        await thread_event_store.project_workflow_interaction(
+            self.db,
+            run_id,
+            "workflow.approval.required",
+            status=RunStatus.WAITING_FOR_APPROVAL.value,
+            payload={
+                "approval_id": approval.id,
+                "action_key": approval.action_key,
+            },
+        )
         logger.info(
             "审批请求创建", run_id=run_id, approval_id=approval_id, action=action_key
         )

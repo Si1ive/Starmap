@@ -308,8 +308,11 @@ const PROJECTION_REFRESH_EVENTS = new Set([
   'message.completed',
   'message.failed',
   'workflow.updated',
+  'workflow.input.required',
+  'workflow.approval.required',
   'workflow.completed',
   'workflow.failed',
+  'workflow.cancelled',
   'workflow.step.updated',
   'workflow.artifact.created',
 ])
@@ -766,9 +769,10 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
       approvalId: string,
       decision: 'approve' | 'reject',
     ) => {
-      const response = decision === 'approve'
-        ? await agentApi.approveApproval(runId, approvalId)
-        : await agentApi.rejectApproval(runId, approvalId)
+      const response =
+        decision === 'approve'
+          ? await agentApi.approveApproval(runId, approvalId)
+          : await agentApi.rejectApproval(runId, approvalId)
       await syncActiveWorkflow()
       return response
     },
