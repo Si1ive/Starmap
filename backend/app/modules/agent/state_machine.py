@@ -6,9 +6,8 @@ Agent 基础状态机
 
 from enum import Enum
 from typing import Optional, Callable, Dict, Any
-from datetime import datetime
-
 from app.core.logging import get_logger
+from .time_utils import utc_now
 
 logger = get_logger(__name__)
 
@@ -76,7 +75,7 @@ class StateMachine:
         
         old_status = run.status
         run.status = to_status.value
-        run.updated_at = datetime.utcnow()
+        run.updated_at = utc_now()
         
         # 触发状态变化钩子
         self._trigger_hooks(run, old_status, to_status.value, reason)

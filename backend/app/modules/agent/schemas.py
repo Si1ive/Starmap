@@ -5,9 +5,17 @@ P0 请求/响应模型。
 """
 
 from datetime import datetime
-from typing import Optional, Dict, Any, List, Literal
+from typing import Annotated, Optional, Dict, Any, List, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PlainSerializer
+
+from .time_utils import utc_isoformat
+
+
+UTCDateTime = Annotated[
+    datetime,
+    PlainSerializer(utc_isoformat, return_type=str, when_used="json"),
+]
 
 
 class ThreadCreateRequest(BaseModel):
@@ -23,8 +31,8 @@ class ThreadResponse(BaseModel):
     title: Optional[str]
     status: str
     metadata: Optional[Dict[str, Any]]
-    created_at: datetime
-    updated_at: datetime
+    created_at: UTCDateTime
+    updated_at: UTCDateTime
 
 
 class RunCreateRequest(BaseModel):
@@ -46,8 +54,8 @@ class RunStatusResponse(BaseModel):
     result_artifact_id: Optional[str]
     error_message: Optional[str]
     model_call_count: int
-    created_at: datetime
-    updated_at: datetime
+    created_at: UTCDateTime
+    updated_at: UTCDateTime
 
 
 class EventResponse(BaseModel):
@@ -57,7 +65,7 @@ class EventResponse(BaseModel):
     sequence: int
     event_type: str
     payload: Optional[Dict[str, Any]]
-    created_at: datetime
+    created_at: UTCDateTime
 
 
 class ArtifactResponse(BaseModel):
@@ -66,7 +74,7 @@ class ArtifactResponse(BaseModel):
     run_id: str
     artifact_type: str
     content: Dict[str, Any]
-    created_at: datetime
+    created_at: UTCDateTime
 
 
 class SSEvent(BaseModel):
@@ -107,9 +115,9 @@ class MessageView(BaseModel):
     content: Optional[str]
     content_blocks: List[Dict[str, Any]] = Field(default_factory=list)
     error_code: Optional[str] = None
-    created_at: datetime
-    updated_at: datetime
-    completed_at: Optional[datetime] = None
+    created_at: UTCDateTime
+    updated_at: UTCDateTime
+    completed_at: Optional[UTCDateTime] = None
 
 
 class WorkflowRunView(BaseModel):
@@ -134,7 +142,7 @@ class TimelineThreadView(BaseModel):
 
     id: str
     title: Optional[str]
-    updated_at: datetime
+    updated_at: UTCDateTime
 
 
 class WorkflowProgressView(BaseModel):
@@ -146,8 +154,8 @@ class WorkflowStepView(BaseModel):
     id: str
     label: str
     status: str
-    started_at: Optional[datetime]
-    completed_at: Optional[datetime]
+    started_at: Optional[UTCDateTime]
+    completed_at: Optional[UTCDateTime]
 
 
 class WorkflowView(BaseModel):
@@ -163,8 +171,8 @@ class WorkflowView(BaseModel):
     pending_input: Optional[Dict[str, Any]] = None
     pending_approval: Optional[Dict[str, Any]] = None
     artifacts: List[Dict[str, Any]] = Field(default_factory=list)
-    created_at: datetime
-    updated_at: datetime
+    created_at: UTCDateTime
+    updated_at: UTCDateTime
 
 
 class TimelineItemView(BaseModel):
@@ -176,7 +184,7 @@ class TimelineItemView(BaseModel):
     message: Optional[MessageView] = None
     workflow: Optional[WorkflowView] = None
     notice: Optional[Dict[str, Any]] = None
-    created_at: datetime
+    created_at: UTCDateTime
 
 
 class TimelineResponse(BaseModel):
@@ -196,7 +204,7 @@ class ThreadEventView(BaseModel):
     sequence: int
     event_type: str
     payload: Dict[str, Any]
-    created_at: datetime
+    created_at: UTCDateTime
 
 
 class ThreadEventsResponse(BaseModel):

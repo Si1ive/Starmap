@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from .models import AgentEvent
+from .time_utils import encode_utc_datetimes
 
 logger = get_logger(__name__)
 
@@ -101,13 +102,16 @@ def serialize_sse(event: AgentEvent) -> str:
         event: <event_type>
         data: <json_payload>
     """
-    payload_json = json.dumps(event.payload or {}, ensure_ascii=False)
+    payload_json = json.dumps(
+        encode_utc_datetimes(event.payload or {}),
+        ensure_ascii=False,
+    )
     return f"id: {event.sequence}\nevent: {event.event_type}\ndata: {payload_json}\n\n"
 
 
 def serialize_sse_from_dict(event_id: int, event_type: str, data: dict) -> str:
     """从字典构造SSE事件"""
-    payload_json = json.dumps(data, ensure_ascii=False)
+    payload_json = json.dumps(encode_utc_datetimes(data), ensure_ascii=False)
     return f"id: {event_id}\nevent: {event_type}\ndata: {payload_json}\n\n"
 
 

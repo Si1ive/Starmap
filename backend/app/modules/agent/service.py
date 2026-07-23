@@ -24,6 +24,7 @@ from .state_machine import RunStatus, state_machine
 from .events import event_store
 from .outbox import outbox_store
 from .thread_events import thread_event_store
+from .time_utils import utc_now
 
 logger = get_logger(__name__)
 
@@ -195,7 +196,7 @@ class AgentService:
 
         # 更新输入消息
         run.input_message = input_text
-        run.updated_at = datetime.utcnow()
+        run.updated_at = utc_now()
 
         # 投递到outbox
         await outbox_store.enqueue(self.db, run_id)
@@ -335,14 +336,14 @@ class AgentService:
             return None
         if agent_input.status != "pending":
             return None
-        if agent_input.expires_at and agent_input.expires_at < datetime.utcnow():
+        if agent_input.expires_at and agent_input.expires_at < utc_now():
             agent_input.status = "expired"
             await self.db.flush()
             return None
         agent_input.status = "answered"
         agent_input.answer_ref = answer
         agent_input.answered_by = user_id
-        agent_input.updated_at = datetime.utcnow()
+        agent_input.updated_at = utc_now()
         await self.db.flush()
         # 恢复运行状态
         state_machine.transition(run, RunStatus.RUNNING, reason="用户输入已提交")
@@ -435,13 +436,13 @@ class AgentService:
             return None
         if approval.status != "pending":
             return None
-        if approval.expires_at and approval.expires_at < datetime.utcnow():
+        if approval.expires_at and approval.expires_at < utc_now():
             approval.status = "expired"
             await self.db.flush()
             return None
         approval.status = decision
         approval.decided_by = decided_by
-        approval.updated_at = datetime.utcnow()
+        approval.updated_at = utc_now()
         await self.db.flush()
         # 恢复运行状态
         state_machine.transition(run, RunStatus.RUNNING, reason=f"审批已{decision}")

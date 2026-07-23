@@ -6,8 +6,6 @@
 
 import uuid
 from typing import Optional
-from datetime import datetime
-
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
@@ -15,6 +13,7 @@ from .contracts import WorkflowDefinition, NodeResult, NodeStatus, ExecutionCont
 from ..models import AgentStep
 from ..events import event_store
 from ..checkpoints import checkpoint_store
+from ..time_utils import utc_now
 
 logger = get_logger(__name__)
 
@@ -62,7 +61,7 @@ class WorkflowEngine:
             # 当前公开步骤必须落到 run 上，timeline snapshot 才能与实时
             # workflow.step.updated 事件保持一致，刷新后不会回退为空。
             run.current_public_step = node.name
-            run.updated_at = datetime.utcnow()
+            run.updated_at = utc_now()
 
             # 创建步骤记录
             step = AgentStep(
@@ -71,7 +70,7 @@ class WorkflowEngine:
                 node_name=node.name,
                 node_type=node.node_type,
                 status="running",
-                started_at=datetime.utcnow(),
+                started_at=utc_now(),
             )
             self.db.add(step)
             await self.db.flush()
@@ -93,7 +92,7 @@ class WorkflowEngine:
                 result = await node.execute(context, self.db)
                 step.status = result.status.value
                 step.output_data = result.output
-                step.completed_at = datetime.utcnow()
+                step.completed_at = utc_now()
 
                 # 将节点输出写回 context，供后续节点消费
                 if result.output:
@@ -135,7 +134,7 @@ class WorkflowEngine:
                 logger.error("节点执行异常", node=node.name, error=str(e))
                 step.status = "failed"
                 step.error_info = {"error": str(e)}
-                step.completed_at = datetime.utcnow()
+                step.completed_at = utc_now()
 
                 await event_store.append(
                     self.db,

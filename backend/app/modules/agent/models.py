@@ -14,6 +14,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.mysql import Base
+from .time_utils import utc_now
 
 
 # ========================== ORM Models ==========================
@@ -34,9 +35,9 @@ class AgentThread(Base):
     last_item_sequence: Mapped[int] = mapped_column(
         BigInteger, default=0, comment="线程时间线最后序号"
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime, default=utc_now, onupdate=utc_now
     )
 
     __table_args__ = (
@@ -102,9 +103,9 @@ class AgentRun(Base):
     metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, comment="扩展元数据")
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, comment="开始时间")
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, comment="完成时间")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime, default=utc_now, onupdate=utc_now
     )
 
     __table_args__ = (
@@ -147,9 +148,9 @@ class AgentMessage(Base):
         String(128), comment="客户端幂等消息ID"
     )
     error_code: Mapped[Optional[str]] = mapped_column(String(64), comment="稳定错误码")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime, default=utc_now, onupdate=utc_now
     )
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, comment="完成时间")
 
@@ -182,7 +183,7 @@ class AgentThreadItem(Base):
     visibility: Mapped[str] = mapped_column(
         SAEnum("visible", "hidden"), default="visible", comment="用户可见性"
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     __table_args__ = (
         Index("idx_agent_thread_item_thread", "thread_id", "sequence"),
@@ -213,7 +214,7 @@ class AgentThreadEvent(Base):
         nullable=False, comment="公开事件类型"
     )
     payload: Mapped[Optional[dict]] = mapped_column(JSON, comment="公开事件负载")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     __table_args__ = (
         Index("idx_agent_thread_event_thread", "thread_id", "sequence"),
@@ -250,7 +251,7 @@ class AgentStep(Base):
     error_info: Mapped[Optional[dict]] = mapped_column(JSON, comment="错误信息")
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, comment="开始时间")
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, comment="完成时间")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     __table_args__ = (
         Index("idx_agent_step_run", "run_id"),
@@ -280,7 +281,7 @@ class AgentEvent(Base):
         nullable=False, comment="事件类型"
     )
     payload: Mapped[Optional[dict]] = mapped_column(JSON, comment="事件负载")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     __table_args__ = (
         Index("idx_agent_event_run", "run_id"),
@@ -305,9 +306,9 @@ class AgentRunOutbox(Base):
     )
     worker_id: Mapped[Optional[str]] = mapped_column(String(64), comment="处理Worker标识")
     retry_count: Mapped[int] = mapped_column(Integer, default=0, comment="重试次数")
-    scheduled_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, comment="计划执行时间")
+    scheduled_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, comment="计划执行时间")
     processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, comment="处理时间")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     __table_args__ = (
         Index("idx_agent_outbox_status", "status", "scheduled_at"),
@@ -326,7 +327,7 @@ class AgentCheckpoint(Base):
         nullable=False, comment="所属运行ID"
     )
     context_json: Mapped[dict] = mapped_column(JSON, comment="上下文JSON（可恢复状态）")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     __table_args__ = (
         Index("idx_agent_checkpoint_run", "run_id"),
@@ -351,7 +352,7 @@ class AgentLoopTurn(Base):
     decision_ref: Mapped[Optional[str]] = mapped_column(Text, comment="决策JSON（动作+推理）")
     action_key: Mapped[Optional[str]] = mapped_column(String(50), comment="执行的Action键")
     observation_ref: Mapped[Optional[str]] = mapped_column(Text, comment="Observation结果JSON")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     __table_args__ = (
         Index("idx_agent_loop_run", "run_id"),
@@ -375,7 +376,7 @@ class AgentArtifact(Base):
     )
     content_json: Mapped[dict] = mapped_column(JSON, comment="产物内容")
     metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, comment="扩展元数据")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     __table_args__ = (
         Index("idx_agent_artifact_run", "run_id"),
@@ -403,9 +404,9 @@ class AgentInput(Base):
     answer_ref: Mapped[Optional[str]] = mapped_column(Text, comment="用户答案引用")
     answered_by: Mapped[Optional[str]] = mapped_column(String(32), comment="回答者用户ID")
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, comment="过期时间")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime, default=utc_now, onupdate=utc_now
     )
 
     __table_args__ = (
@@ -434,9 +435,9 @@ class AgentApproval(Base):
     precondition_ref: Mapped[Optional[str]] = mapped_column(Text, comment="前置条件引用")
     decided_by: Mapped[Optional[str]] = mapped_column(String(32), comment="审批者ID")
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, comment="过期时间")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime, default=utc_now, onupdate=utc_now
     )
 
     __table_args__ = (

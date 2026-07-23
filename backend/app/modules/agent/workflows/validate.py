@@ -5,7 +5,6 @@ load_learning_evidence -> question_discovery_loop -> question_gate ->
 set_composition_gate -> practice.create_draft -> render_practice_artifact -> completed
 """
 
-from datetime import datetime
 from typing import Dict, Any, Optional, List
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.logging import get_logger
 from .contracts import WorkflowDefinition, Node, NodeResult, ExecutionContext
 from .registry import workflow_registry
+from ..time_utils import utc_isoformat, utc_now
 
 logger = get_logger(__name__)
 
@@ -110,7 +110,7 @@ async def _create_draft_node(context: ExecutionContext, db: AsyncSession) -> Nod
         "title": f"专项练习 · {context.user_id}",
         "questions": valid_questions,
         "composition": composition,
-        "created_at": str(datetime.utcnow()),
+        "created_at": utc_isoformat(utc_now()),
     }
     
     context.set("practice_draft", draft)

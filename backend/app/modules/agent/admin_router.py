@@ -14,6 +14,7 @@ from app.core.logging import get_logger
 from app.db.mysql import mysql_client
 from .service import AgentService
 from .events import event_store
+from .time_utils import utc_isoformat
 
 logger = get_logger(__name__)
 
@@ -43,16 +44,14 @@ def _serialize_run(run: Any, *, last_event_sequence: int = 0) -> dict[str, Any]:
         "current_step_key": run.current_public_step,
         "last_event_sequence": last_event_sequence,
         "lease_owner": run.lease_owner,
-        "lease_expires_at": (
-            run.lease_expires_at.isoformat() if run.lease_expires_at else None
-        ),
+        "lease_expires_at": utc_isoformat(run.lease_expires_at),
         "model_config_id": _metadata_value(run, "model_config_id"),
-        "started_at": run.started_at.isoformat() if run.started_at else None,
-        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        "started_at": utc_isoformat(run.started_at),
+        "completed_at": utc_isoformat(run.completed_at),
         "error_code": _metadata_value(run, "error_code"),
         "safe_error_summary": run.error_message,
-        "created_at": run.created_at.isoformat() if run.created_at else None,
-        "updated_at": run.updated_at.isoformat() if run.updated_at else None,
+        "created_at": utc_isoformat(run.created_at),
+        "updated_at": utc_isoformat(run.updated_at),
     }
 
 
@@ -212,7 +211,7 @@ async def get_run_events_admin(
                     "sequence": e.sequence,
                     "event_type": e.event_type,
                     "payload": e.payload,
-                    "created_at": e.created_at.isoformat() if e.created_at else None,
+                    "created_at": utc_isoformat(e.created_at),
                 }
                 for e in events
             ],
@@ -243,7 +242,7 @@ async def get_run_artifacts_admin(
                     "type": a.artifact_type,
                     "content": a.content_json,
                     "metadata": a.metadata_json,
-                    "created_at": a.created_at.isoformat() if a.created_at else None,
+                    "created_at": utc_isoformat(a.created_at),
                 }
                 for a in artifacts
             ],

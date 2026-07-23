@@ -7,7 +7,7 @@ P0 简化版：单Worker执行，通过租约防止重复执行。
 import uuid
 import asyncio
 from contextlib import suppress
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Optional, List
 
 from sqlalchemy import select, update, func
@@ -23,6 +23,7 @@ from .service import AgentService
 from .checkpoints import checkpoint_store
 from .workflows.contracts import NodeStatus
 from .model_runtime.config import AgentModelConfigurationError
+from .time_utils import utc_now
 
 logger = get_logger(__name__)
 
@@ -47,7 +48,7 @@ class AgentWorker:
         Returns:
             bool: 是否成功获取
         """
-        now = datetime.utcnow()
+        now = utc_now()
         expires_at = now + timedelta(seconds=lease_duration)
         
         # 更新租约
@@ -73,7 +74,7 @@ class AgentWorker:
 
     async def extend_lease(self, db: AsyncSession, run: AgentRun, lease_duration: int = 300) -> bool:
         """延长租约"""
-        now = datetime.utcnow()
+        now = utc_now()
         expires_at = now + timedelta(seconds=lease_duration)
         
         result = await db.execute(

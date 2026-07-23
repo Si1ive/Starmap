@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any, Optional
 
 from sqlalchemy import desc, or_, select
@@ -27,6 +26,7 @@ from .models import (
 from .outbox import outbox_store
 from .state_machine import RunStatus
 from .thread_events import thread_event_store
+from .time_utils import utc_now
 
 logger = get_logger(__name__)
 
@@ -146,7 +146,7 @@ class AgentTimelineService:
         )
         self.db.add(item)
         thread.last_item_sequence = sequence
-        thread.updated_at = datetime.utcnow()
+        thread.updated_at = utc_now()
         await thread_event_store.append_at(
             self.db,
             thread_id,
@@ -210,7 +210,7 @@ class AgentTimelineService:
                 timeline_cursor=thread.last_item_sequence,
             )
 
-        now = datetime.utcnow()
+        now = utc_now()
         message = AgentMessage(
             id=f"msg_{uuid.uuid4().hex[:20]}",
             thread_id=thread.id,

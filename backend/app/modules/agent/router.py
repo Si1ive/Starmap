@@ -7,7 +7,6 @@ P0 核心 API 路由。
 from typing import AsyncGenerator, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -27,6 +26,7 @@ from .timeline import AgentTimelineService, ThreadNotFoundError, TurnConflictErr
 from .events import event_store, serialize_sse, serialize_sse_from_dict
 from .state_machine import RunStatus
 from .thread_events import thread_event_store
+from .time_utils import encode_utc_datetimes, utc_isoformat
 
 logger = get_logger(__name__)
 
@@ -87,8 +87,8 @@ async def list_thread_runs(
                 "result_artifact_id": r.result_artifact_id,
                 "error_message": r.error_message,
                 "model_call_count": r.model_call_count,
-                "created_at": r.created_at,
-                "updated_at": r.updated_at,
+                "created_at": utc_isoformat(r.created_at),
+                "updated_at": utc_isoformat(r.updated_at),
             }
             for r in runs
         ],
@@ -114,8 +114,8 @@ async def list_threads(
                 "title": t.title,
                 "status": t.status,
                 "metadata": t.metadata_json,
-                "created_at": t.created_at,
-                "updated_at": t.updated_at,
+                "created_at": utc_isoformat(t.created_at),
+                "updated_at": utc_isoformat(t.updated_at),
             }
             for t in threads
         ],
@@ -289,7 +289,7 @@ async def stream_thread_events(
                 yield serialize_sse_from_dict(
                     page.latest_cursor,
                     "timeline.snapshot",
-                    jsonable_encoder(snapshot),
+                    encode_utc_datetimes(snapshot),
                 )
                 last_sequence = page.latest_cursor
 
@@ -359,8 +359,8 @@ async def create_run(
         "workflow_name": run.workflow_name,
         "status": run.status,
         "input_message": run.input_message,
-        "created_at": run.created_at,
-        "updated_at": run.updated_at,
+        "created_at": utc_isoformat(run.created_at),
+        "updated_at": utc_isoformat(run.updated_at),
     }
 
 
@@ -384,8 +384,8 @@ async def get_run(
         "result_artifact_id": run.result_artifact_id,
         "error_message": run.error_message,
         "model_call_count": run.model_call_count,
-        "created_at": run.created_at,
-        "updated_at": run.updated_at,
+        "created_at": utc_isoformat(run.created_at),
+        "updated_at": utc_isoformat(run.updated_at),
     }
 
 
@@ -408,7 +408,7 @@ async def get_run_events(
                 "sequence": e.sequence,
                 "event_type": e.event_type,
                 "payload": e.payload,
-                "created_at": e.created_at,
+                "created_at": utc_isoformat(e.created_at),
             }
             for e in events
         ],
@@ -511,7 +511,7 @@ async def get_run_artifacts(
                 "artifact_type": a.artifact_type,
                 "content": a.content_json,
                 "metadata": a.metadata_json,
-                "created_at": a.created_at,
+                "created_at": utc_isoformat(a.created_at),
             }
             for a in artifacts
         ],
@@ -572,9 +572,9 @@ async def list_run_approvals(
                 "diff_ref": a.diff_ref,
                 "precondition_ref": a.precondition_ref,
                 "decided_by": a.decided_by,
-                "expires_at": a.expires_at.isoformat() if a.expires_at else None,
-                "created_at": a.created_at.isoformat() if a.created_at else None,
-                "updated_at": a.updated_at.isoformat() if a.updated_at else None,
+                "expires_at": utc_isoformat(a.expires_at),
+                "created_at": utc_isoformat(a.created_at),
+                "updated_at": utc_isoformat(a.updated_at),
             }
             for a in approvals
         ],

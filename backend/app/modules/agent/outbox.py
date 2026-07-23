@@ -13,6 +13,7 @@ from sqlalchemy.orm import aliased
 
 from app.core.logging import get_logger
 from .models import AgentRun, AgentRunOutbox
+from .time_utils import utc_now
 
 logger = get_logger(__name__)
 
@@ -28,7 +29,7 @@ class OutboxStore:
     ) -> AgentRunOutbox:
         """投递任务到outbox"""
         if scheduled_at is None:
-            scheduled_at = datetime.utcnow()
+            scheduled_at = utc_now()
 
         outbox = AgentRunOutbox(
             run_id=run_id,
@@ -92,7 +93,7 @@ class OutboxStore:
                 == func.coalesce(candidate_run.root_run_id, candidate_run.id),
             )
             .where(AgentRunOutbox.status == "pending")
-            .where(AgentRunOutbox.scheduled_at <= datetime.utcnow())
+            .where(AgentRunOutbox.scheduled_at <= utc_now())
             .where(AgentRunOutbox.retry_count < max_retries)
             .where(candidate_run.status.in_(("queued", "running")))
             .where(~earlier_active_tree)
@@ -134,7 +135,7 @@ class OutboxStore:
             .where(AgentRunOutbox.id == outbox_id)
             .values(
                 status="completed",
-                processed_at=datetime.utcnow(),
+                processed_at=utc_now(),
             )
         )
 
@@ -151,7 +152,7 @@ class OutboxStore:
             .values(
                 status="pending",
                 retry_count=AgentRunOutbox.retry_count + 1,
-                scheduled_at=datetime.utcnow() + timedelta(seconds=retry_delay_seconds),
+                scheduled_at=utc_now() + timedelta(seconds=retry_delay_seconds),
             )
         )
 

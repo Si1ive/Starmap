@@ -52,8 +52,8 @@ def test_serialize_run_uses_current_agent_run_fields():
     assert payload["current_step_key"] == "answer"
     assert payload["last_event_sequence"] == 7
     assert payload["model_config_id"] == "model-1"
-    assert payload["started_at"] == "2026-07-23T08:00:00"
-    assert payload["completed_at"] == "2026-07-23T08:00:02"
+    assert payload["started_at"] == "2026-07-23T08:00:00Z"
+    assert payload["completed_at"] == "2026-07-23T08:00:02Z"
 
 
 def test_serialize_run_falls_back_to_legacy_workflow_fields():

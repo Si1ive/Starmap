@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 from typing import Any, Optional
 
 from sqlalchemy import select
@@ -16,6 +15,7 @@ from .models import (
     AgentThreadEvent,
     AgentThreadItem,
 )
+from .time_utils import utc_now
 
 RUN_EVENT_TYPES = {
     "run.created": "workflow.updated",
@@ -58,7 +58,7 @@ class ThreadEventStore:
         thread = await self._lock_thread(session, thread_id)
         sequence = thread.last_item_sequence + 1
         thread.last_item_sequence = sequence
-        thread.updated_at = datetime.utcnow()
+        thread.updated_at = utc_now()
         return await self.append_at(session, thread_id, sequence, event_type, payload)
 
     async def append_at(
@@ -239,7 +239,7 @@ class ThreadEventStore:
             thread = await self._lock_thread(session, run.thread_id)
             item_sequence = thread.last_item_sequence + 1
             thread.last_item_sequence = item_sequence
-            thread.updated_at = datetime.utcnow()
+            thread.updated_at = utc_now()
             item = AgentThreadItem(
                 id=f"item_{uuid.uuid4().hex[:20]}",
                 thread_id=run.thread_id,
@@ -272,7 +272,7 @@ class ThreadEventStore:
                 payload.get("content") or message.content_text or ""
             )
             message.status = "completed"
-            message.completed_at = datetime.utcnow()
+            message.completed_at = utc_now()
             public_type = "message.completed"
             public_payload = {
                 "message_id": message.id,
@@ -292,7 +292,7 @@ class ThreadEventStore:
             message.error_code = str(
                 payload.get("error_code") or "agent_run_failed"
             )
-            message.completed_at = datetime.utcnow()
+            message.completed_at = utc_now()
             public_type = "message.failed"
             public_payload = {
                 "message_id": message.id,
@@ -306,7 +306,7 @@ class ThreadEventStore:
                     "error_code": message.error_code,
                 },
             }
-        message.updated_at = datetime.utcnow()
+        message.updated_at = utc_now()
         await self.append(session, run.thread_id, public_type, public_payload)
 
     @staticmethod

@@ -5,7 +5,6 @@ load_attempt_snapshot -> objective_grade_or_skip -> resolve_rubric_gate ->
 generate_subjective_feedback -> feedback_support_gate -> create_feedback_artifact -> completed
 """
 
-from datetime import datetime
 from typing import Dict, Any, Optional, List
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.logging import get_logger
 from .contracts import WorkflowDefinition, Node, NodeResult, ExecutionContext
 from .registry import workflow_registry
+from ..time_utils import utc_isoformat, utc_now
 
 logger = get_logger(__name__)
 
@@ -24,7 +24,7 @@ async def _load_attempt_snapshot_node(context: ExecutionContext, db: AsyncSessio
         "user_id": context.user_id,
         "question_id": context.get("question_id", "unknown"),
         "user_answer": context.get("user_answer", ""),
-        "submitted_at": str(datetime.utcnow()),
+        "submitted_at": utc_isoformat(utc_now()),
     }
     context.set("attempt", attempt)
     logger.info("作答加载", run_id=context.run_id, question_id=attempt["question_id"])

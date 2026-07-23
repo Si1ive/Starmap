@@ -8,7 +8,7 @@ plan_quality_gate -> create_approval -> wait_for_approval -> apply_plan_change -
 import json as _json
 
 from typing import Dict, Any, Optional, List
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +17,7 @@ from .contracts import WorkflowDefinition, Node, NodeResult, NodeStatus, Executi
 from .registry import workflow_registry
 from ..model_runtime.adapter import model_adapter
 from ..state_machine import RunStatus, state_machine
+from ..time_utils import utc_now
 
 logger = get_logger(__name__)
 
@@ -140,7 +141,7 @@ async def _create_approval_node(context: ExecutionContext, db: AsyncSession) -> 
         run_id=context.run_id,
         action_key="plan_approval",
         diff_ref=_json.dumps(diff_content, ensure_ascii=False),
-        expires_at=datetime.utcnow() + timedelta(hours=24),
+        expires_at=utc_now() + timedelta(hours=24),
     )
     
     context.set("approval_data", {
