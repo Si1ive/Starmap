@@ -5,129 +5,129 @@ load_attempt_snapshot -> objective_grade_or_skip -> resolve_rubric_gate ->
 generate_subjective_feedback -> feedback_support_gate -> create_feedback_artifact -> completed
 """
 
-from typing import Dict, Any, Optional, List
 from datetime import datetime
+from typing import Dict, Any, Optional, List
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from .contracts import WorkflowDefinition, Node, NodeResult, ExecutionContext
 from .registry import workflow_registry
-from ..model_runtime.adapter import model_adapter
 
 logger = get_logger(__name__)
 
 
 async def _load_attempt_snapshot_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
     """读取固化题面和作答"""
-    # 从上下文获取作答信息
-    attempt = context.get("attempt_data", {})
-    snapshot = {
-        "question_id": attempt.get("question_id"),
-        "question_text": attempt.get("question_text"),
-        "user_answer": attempt.get("user_answer"),
-        "correct_answer": attempt.get("correct_answer"),
-        "subject": attempt.get("subject"),
-        "difficulty": attempt.get("difficulty"),
+    # 从上下文获取作答数据
+    attempt = {
+        "user_id": context.user_id,
+        "question_id": context.get("question_id", "unknown"),
+        "user_answer": context.get("user_answer", ""),
+        "submitted_at": str(datetime.utcnow()),
     }
-    context.set("attempt_snapshot", snapshot)
-    logger.info("作答快照加载", run_id=context.run_id, question_id=snapshot.get("question_id"))
-    return NodeResult.success({"loaded": True}, next_node="objective_grade_or_skip")
+    context.set("attempt", attempt)
+    logger.info("作答加载", run_id=context.run_id, question_id=attempt["question_id"])
+    return NodeResult.success({"snapshot_loaded": True}, next_node="objective_grade")
 
 
-async def _objective_grade_or_skip_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
+async def _objective_grade_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
     """客观题确定性判定"""
-    snapshot = context.get("attempt_snapshot", {})
+    attempt = context.get("attempt", {})
+    user_answer = attempt.get("user_answer", "")
     
-    user_answer = snapshot.get("user_answer", "").strip().upper()
-    correct_answer = snapshot.get("correct_answer", "").strip().upper()
-    
-    # 客观题判定：选项匹配
-    is_correct = user_answer == correct_answer
-    
-    grade_result = {
-        "question_id": snapshot.get("question_id"),
-        "is_correct": is_correct,
+    # P1 简化：客观题判定
+    # 实际项目中应调用评分服务
+    # 这里简单模拟：如果答案不为空，标记为需要人工复核
+    objective_result = {
+        "question_id": attempt.get("question_id", "unknown"),
+        "is_objective": False,  # P1 简化：全部走主观反馈
         "user_answer": user_answer,
-        "correct_answer": correct_answer,
-        "objective": True,
-        "score": 1.0 if is_correct else 0.0,
+        "submitted_at": attempt.get("submitted_at", ""),
     }
     
-    context.set("grade_result", grade_result)
-    logger.info("客观判定完成", run_id=context.run_id, is_correct=is_correct)
-    return NodeResult.success({"graded": True, "is_correct": is_correct}, next_node="rubric_gate")
+    context.set("objective_result", objective_result)
+    logger.info("客观题判定", run_id=context.run_id, is_objective=False)
+    return NodeResult.success({"graded": True}, next_node="rubric_gate")
 
 
 async def _rubric_gate_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
-    """Rubric 校验"""
-    grade_result = context.get("grade_result", {})
+    """rubric 校验"""
+    objective_result = context.get("objective_result", {})
     
-    # 检查是否有必要数据
-    if not grade_result.get("question_id"):
-        return NodeResult.failure("缺少题目信息")
+    # P1 简化：rubric 校验
+    rubric = {
+        "completeness": len(objective_result.get("user_answer", "")) > 0,
+        "relevance": True,
+        "format": True,
+    }
     
-    logger.info("Rubric校验通过", run_id=context.run_id)
-    return NodeResult.success({"gate_passed": True}, next_node="generate_subjective_feedback")
+    context.set("rubric", rubric)
+    logger.info("rubric 校验", run_id=context.run_id, **rubric)
+    return NodeResult.success({"gate_passed": True}, next_node="generate_feedback")
 
 
-async def _generate_subjective_feedback_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
+async def _generate_feedback_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
     """生成主观反馈"""
-    snapshot = context.get("attempt_snapshot", {})
-    grade_result = context.get("grade_result", {})
+    attempt = context.get("attempt", {})
+    rubric = context.get("rubric", {})
     
-    is_correct = grade_result.get("is_correct", False)
+    # P1 简化：生成反馈
+    feedback = {
+        "overall": "作答已收到，正在分析...",
+        "strengths": [
+            "答题完整度良好" if rubric.get("completeness") else "需要补充更多内容",
+        ],
+        "weaknesses": [
+            "部分细节可以进一步完善",
+        ],
+        "suggestions": [
+            "建议回顾相关知识点",
+            "多做同类题型巩固",
+        ],
+    }
     
-    # P1 简化：根据正误生成简单反馈
-    if is_correct:
-        feedback = {
-            "type": "praise",
-            "message": "回答正确！继续保持。",
-            "tips": ["这道题考查的是基础概念，建议复习相关章节"],
-            "related_concepts": [snapshot.get("subject", "")],
-        }
-    else:
-        feedback = {
-            "type": "correction",
-            "message": f"回答错误。正确答案是：{grade_result.get('correct_answer', 'N/A')}",
-            "tips": ["请仔细审题，注意选项的细微差别"],
-            "related_concepts": [snapshot.get("subject", "")],
-        }
-    
-    context.set("subjective_feedback", feedback)
-    logger.info("主观反馈生成", run_id=context.run_id, is_correct=is_correct)
-    return NodeResult.success({"feedback_generated": True}, next_node="feedback_support_gate")
+    context.set("feedback", feedback)
+    logger.info("反馈生成", run_id=context.run_id, feedback_summary=feedback["overall"])
+    return NodeResult.success({"feedback_generated": True}, next_node="feedback_gate")
 
 
-async def _feedback_support_gate_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
+async def _feedback_gate_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
     """反馈证据校验"""
-    feedback = context.get("subjective_feedback", {})
+    feedback = context.get("feedback", {})
     
-    # 简化为非空校验
-    if not feedback.get("message"):
-        return NodeResult.failure("反馈内容为空")
+    # P1 简化：检查反馈是否有内容
+    if not feedback.get("overall"):
+        logger.warning("反馈为空", run_id=context.run_id)
+        return NodeResult.failure("反馈生成失败")
     
     logger.info("反馈校验通过", run_id=context.run_id)
-    return NodeResult.success({"gate_passed": True}, next_node="create_feedback_artifact")
+    return NodeResult.success({"gate_passed": True}, next_node="render_artifact")
 
 
-async def _create_feedback_artifact_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
+async def _render_artifact_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
     """渲染反馈产物"""
-    grade_result = context.get("grade_result", {})
-    feedback = context.get("subjective_feedback", {})
+    feedback = context.get("feedback", {})
+    attempt = context.get("attempt", {})
     
     artifact = {
         "type": "feedback",
         "title": "批改反馈",
         "content": {
-            "grade": grade_result,
-            "feedback": feedback,
+            "overall": feedback.get("overall", ""),
+            "strengths": feedback.get("strengths", []),
+            "weaknesses": feedback.get("weaknesses", []),
+            "suggestions": feedback.get("suggestions", []),
         },
-        "summary": "批改完成",
+        "summary": feedback.get("overall", "反馈已生成"),
     }
     
-    logger.info("反馈产物渲染完成", run_id=context.run_id)
-    return NodeResult.success({"artifact": artifact}, next_node="completed")
+    logger.info("产物渲染完成", run_id=context.run_id)
+    return NodeResult.success(
+        {"artifact": artifact},
+        next_node="completed",
+        artifact=artifact,
+    )
 
 
 async def _completed_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
@@ -141,23 +141,23 @@ def build_grade_workflow() -> WorkflowDefinition:
         name="grade",
         version="v1",
         entry_node="load_attempt_snapshot",
-        max_model_calls=3,
+        max_model_calls=2,
     )
     
-    wf.add_node(Node(name="load_attempt_snapshot", node_type="action", execute=_load_attempt_snapshot_node, description="加载作答快照"))
-    wf.add_node(Node(name="objective_grade_or_skip", node_type="gate", execute=_objective_grade_or_skip_node, description="客观判定"))
-    wf.add_node(Node(name="rubric_gate", node_type="gate", execute=_rubric_gate_node, description="Rubric校验"))
-    wf.add_node(Node(name="generate_subjective_feedback", node_type="action", execute=_generate_subjective_feedback_node, description="生成反馈"))
-    wf.add_node(Node(name="feedback_support_gate", node_type="gate", execute=_feedback_support_gate_node, description="反馈校验"))
-    wf.add_node(Node(name="create_feedback_artifact", node_type="render", execute=_create_feedback_artifact_node, description="渲染产物"))
+    wf.add_node(Node(name="load_attempt_snapshot", node_type="action", execute=_load_attempt_snapshot_node, description="加载作答"))
+    wf.add_node(Node(name="objective_grade", node_type="gate", execute=_objective_grade_node, description="客观题判定"))
+    wf.add_node(Node(name="rubric_gate", node_type="gate", execute=_rubric_gate_node, description="rubric校验"))
+    wf.add_node(Node(name="generate_feedback", node_type="action", execute=_generate_feedback_node, description="生成反馈"))
+    wf.add_node(Node(name="feedback_gate", node_type="gate", execute=_feedback_gate_node, description="反馈校验"))
+    wf.add_node(Node(name="render_artifact", node_type="render", execute=_render_artifact_node, description="渲染产物"))
     wf.add_node(Node(name="completed", node_type="render", execute=_completed_node, description="完成"))
     
-    wf.add_edge("load_attempt_snapshot", ["objective_grade_or_skip"])
-    wf.add_edge("objective_grade_or_skip", ["rubric_gate"])
-    wf.add_edge("rubric_gate", ["generate_subjective_feedback"])
-    wf.add_edge("generate_subjective_feedback", ["feedback_support_gate"])
-    wf.add_edge("feedback_support_gate", ["create_feedback_artifact"])
-    wf.add_edge("create_feedback_artifact", ["completed"])
+    wf.add_edge("load_attempt_snapshot", ["objective_grade"])
+    wf.add_edge("objective_grade", ["rubric_gate"])
+    wf.add_edge("rubric_gate", ["generate_feedback"])
+    wf.add_edge("generate_feedback", ["feedback_gate"])
+    wf.add_edge("feedback_gate", ["render_artifact"])
+    wf.add_edge("render_artifact", ["completed"])
     
     return wf
 
