@@ -109,6 +109,59 @@ class AgentTimelineService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
+    async def ensure_workflow_item(
+        self,
+        *,
+        thread_id: str,
+        root_run_id: str,
+        run_id: str,
+    ) -> AgentThreadItem:
+        """为动态调度的 run tree 幂等创建一个对话内 workflow 项。"""
+        thread_result = await self.db.execute(
+            select(AgentThread).where(AgentThread.id == thread_id).with_for_update()
+        )
+        thread = thread_result.scalar_one_or_none()
+        if not thread:
+            raise ThreadNotFoundError(thread_id)
+
+        existing_result = await self.db.execute(
+            select(AgentThreadItem).where(
+                AgentThreadItem.thread_id == thread_id,
+                AgentThreadItem.item_type == "workflow",
+                AgentThreadItem.ref_id == root_run_id,
+            )
+        )
+        existing = existing_result.scalar_one_or_none()
+        if existing:
+            return existing
+
+        sequence = thread.last_item_sequence + 1
+        item = AgentThreadItem(
+            id=f"item_{uuid.uuid4().hex[:20]}",
+            thread_id=thread_id,
+            sequence=sequence,
+            item_type="workflow",
+            ref_id=root_run_id,
+            run_id=run_id,
+        )
+        self.db.add(item)
+        thread.last_item_sequence = sequence
+        thread.updated_at = datetime.utcnow()
+        await thread_event_store.append_at(
+            self.db,
+            thread_id,
+            sequence,
+            "timeline.item.created",
+            {
+                "item_type": "workflow",
+                "ref_id": root_run_id,
+                "run_id": run_id,
+                "root_run_id": root_run_id,
+            },
+        )
+        await self.db.flush()
+        return item
+
     async def create_turn(
         self,
         *,
@@ -372,8 +425,9 @@ class AgentTimelineService:
                 continue
             group.sort(key=lambda run: (run.created_at, run.id))
             root = next((run for run in group if run.id == root_id), group[0])
-            effective = self._effective_run(group)
-            group_run_ids = {run.id for run in group}
+            public_group = [run for run in group if run.presentation != "silent"]
+            effective = self._effective_run(public_group or group)
+            group_run_ids = {run.id for run in public_group or group}
             group_steps = [
                 step for run_id in group_run_ids for step in steps.get(run_id, [])
             ]
@@ -400,15 +454,12 @@ class AgentTimelineService:
                 ),
                 None,
             )
-            title_source = (
-                effective if effective.workflow_key != "conversation" else root
-            )
             views[root_id] = {
                 "root_run_id": root_id,
                 "status": effective.status,
-                "title": title_source.public_title
+                "title": effective.public_title
                 or WORKFLOW_TITLES.get(
-                    title_source.workflow_key or title_source.workflow_name, "执行任务"
+                    effective.workflow_key or effective.workflow_name, "执行任务"
                 ),
                 "summary": effective.public_summary
                 or STATUS_SUMMARIES.get(effective.status),

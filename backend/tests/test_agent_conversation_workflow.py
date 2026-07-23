@@ -227,3 +227,161 @@ async def test_clarify_outputs_question_without_calling_answer_agent(
     assert messages[1].content_text == "你希望我讲解哪一道题？"
     assert answer.histories == []
     assert creation.run.status == "completed"
+
+
+@pytest.mark.parametrize(
+    ("action", "title"),
+    [
+        ("explain", "整理讲解"),
+        ("validate", "生成专项练习"),
+        ("grade", "分析作答"),
+        ("plan", "调整学习计划"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_business_action_creates_context_bound_inline_workflow(
+    db_session,
+    monkeypatch,
+    action,
+    title,
+):
+    await _create_thread(db_session)
+    router = RouterStub(
+        [
+            RouterDecision(
+                action=action,
+                confidence=0.93,
+                reason_code=f"needs_{action}",
+            )
+        ]
+    )
+    monkeypatch.setattr(conversation, "router_runtime", router)
+    creation = await AgentTimelineService(db_session).create_turn(
+        user_id="user_001",
+        thread_id="thread_001",
+        content=f"请帮我执行 {action}",
+        client_message_id="client_001",
+        attachments=[{"id": "attachment_001", "name": "题目截图.png"}],
+        context_refs=[{"type": "question", "id": "question_001"}],
+    )
+
+    assert await AgentWorker().process_run(db_session, creation.run) is True
+
+    child = await db_session.scalar(
+        select(AgentRun).where(AgentRun.parent_run_id == creation.run.id)
+    )
+    assert child is not None
+    assert child.workflow_name == action
+    assert child.workflow_key == action
+    assert child.workflow_version == "v1"
+    assert child.trigger_message_id == creation.message.id
+    assert child.root_run_id == creation.run.id
+    assert child.presentation == "compact"
+    assert child.public_title == title
+    assert child.metadata_json["context_policy_version"] == "thread-context-v1"
+    snapshot = child.metadata_json["context_snapshot"]
+    assert snapshot["attachment_refs"][0]["id"] == "attachment_001"
+    assert snapshot["context_refs"][0]["id"] == "question_001"
+    assert snapshot["permission_scope"]["root_run_id"] == creation.run.id
+
+    page = await AgentTimelineService(db_session).get_timeline(
+        user_id="user_001",
+        thread_id="thread_001",
+        before=None,
+        limit=20,
+    )
+    assert [item["type"] for item in page.items] == ["message", "workflow"]
+    workflow = page.items[1]["workflow"]
+    assert workflow["root_run_id"] == creation.run.id
+    assert workflow["title"] == title
+    assert workflow["status"] == "queued"
+    assert workflow["steps"] == []
+
+    events = await thread_event_store.get_events(
+        db_session,
+        "thread_001",
+        after_sequence=creation.timeline_cursor,
+        limit=20,
+    )
+    assert [event.event_type for event in events] == [
+        "workflow.updated",
+        "timeline.item.created",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_thread_continues_with_answer_and_another_workflow_after_completion(
+    db_session,
+    monkeypatch,
+):
+    await _create_thread(db_session)
+    router = RouterStub(
+        [
+            RouterDecision(
+                action="validate",
+                confidence=0.9,
+                reason_code="needs_practice",
+            ),
+            RouterDecision(
+                action="direct_answer",
+                confidence=0.9,
+                reason_code="follow_up_question",
+            ),
+            RouterDecision(
+                action="plan",
+                confidence=0.9,
+                reason_code="needs_plan",
+            ),
+        ]
+    )
+    answer = AnswerStub(
+        [DirectAnswerOutput(content="可以，先完成练习再根据结果调整计划。")]
+    )
+    monkeypatch.setattr(conversation, "router_runtime", router)
+    monkeypatch.setattr(conversation, "direct_answer_runtime", answer)
+
+    first = await _create_turn(
+        db_session,
+        content="给我生成一组专项练习",
+        client_message_id="client_001",
+    )
+    assert await AgentWorker().process_run(db_session, first.run) is True
+    first_child = await db_session.scalar(
+        select(AgentRun).where(AgentRun.parent_run_id == first.run.id)
+    )
+    first_child.status = "completed"
+
+    second = await _create_turn(
+        db_session,
+        content="做完以后可以调整计划吗？",
+        client_message_id="client_002",
+    )
+    assert await AgentWorker().process_run(db_session, second.run) is True
+
+    third = await _create_turn(
+        db_session,
+        content="那就帮我调整接下来七天的计划",
+        client_message_id="client_003",
+    )
+    assert await AgentWorker().process_run(db_session, third.run) is True
+
+    page = await AgentTimelineService(db_session).get_timeline(
+        user_id="user_001",
+        thread_id="thread_001",
+        before=None,
+        limit=20,
+    )
+    assert [item["type"] for item in page.items] == [
+        "message",
+        "workflow",
+        "message",
+        "message",
+        "message",
+        "workflow",
+    ]
+    workflows = [item["workflow"] for item in page.items if item["workflow"]]
+    assert [workflow["title"] for workflow in workflows] == [
+        "生成专项练习",
+        "调整学习计划",
+    ]
+    assert page.thread.status == "active"

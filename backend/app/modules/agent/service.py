@@ -12,19 +12,17 @@ from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.db.mysql import mysql_client
 from .models import (
-    AgentThread, AgentRun, AgentStep, AgentEvent,
-    AgentRunOutbox, AgentCheckpoint, AgentLoopTurn, AgentArtifact,
-)
-from .schemas import (
-    ThreadCreateRequest, RunCreateRequest, RunStatusResponse,
-    EventResponse, ArtifactResponse,
+    AgentApproval,
+    AgentArtifact,
+    AgentEvent,
+    AgentInput,
+    AgentRun,
+    AgentThread,
 )
 from .state_machine import RunStatus, state_machine
 from .events import event_store
 from .outbox import outbox_store
-from .checkpoints import checkpoint_store
 
 logger = get_logger(__name__)
 
@@ -37,7 +35,9 @@ class AgentService:
 
     # ==================== Thread 管理 ====================
 
-    async def create_thread(self, user_id: str, title: Optional[str] = None) -> AgentThread:
+    async def create_thread(
+        self, user_id: str, title: Optional[str] = None
+    ) -> AgentThread:
         """创建线程"""
         thread_id = f"thrd_{uuid.uuid4().hex[:20]}"
         thread = AgentThread(
@@ -61,7 +61,9 @@ class AgentService:
         )
         return result.scalar_one_or_none()
 
-    async def list_threads(self, user_id: str, limit: int = 20, offset: int = 0) -> List[AgentThread]:
+    async def list_threads(
+        self, user_id: str, limit: int = 20, offset: int = 0
+    ) -> List[AgentThread]:
         """列出用户的线程"""
         result = await self.db.execute(
             select(AgentThread)
@@ -90,6 +92,7 @@ class AgentService:
         root_run_id: Optional[str] = None,
         presentation: str = "workflow",
         public_title: Optional[str] = None,
+        metadata_json: Optional[Dict[str, Any]] = None,
     ) -> AgentRun:
         """创建 Run"""
         # 幂等性检查
@@ -102,7 +105,9 @@ class AgentService:
             )
             existing_run = existing.scalar_one_or_none()
             if existing_run:
-                logger.info("幂等命中，返回已有Run", user_id=user_id, key=client_idempotency_key)
+                logger.info(
+                    "幂等命中，返回已有Run", user_id=user_id, key=client_idempotency_key
+                )
                 return existing_run
 
         run_id = f"run_{uuid.uuid4().hex[:20]}"
@@ -121,6 +126,7 @@ class AgentService:
             presentation=presentation,
             public_title=public_title,
             client_idempotency_key=client_idempotency_key,
+            metadata_json=metadata_json,
         )
         self.db.add(run)
         await self.db.flush()
@@ -130,13 +136,18 @@ class AgentService:
         await self.db.refresh(run)
 
         # 记录事件
-        await event_store.append(self.db, run_id, "run.created", {
-            "run_id": run_id,
-            "thread_id": thread_id,
-            "workflow": workflow_name,
-            "root_run_id": run.root_run_id,
-            "parent_run_id": run.parent_run_id,
-        })
+        await event_store.append(
+            self.db,
+            run_id,
+            "run.created",
+            {
+                "run_id": run_id,
+                "thread_id": thread_id,
+                "workflow": workflow_name,
+                "root_run_id": run.root_run_id,
+                "parent_run_id": run.parent_run_id,
+            },
+        )
 
         # 投递到outbox
         await outbox_store.enqueue(self.db, run_id)
@@ -153,7 +164,9 @@ class AgentService:
         )
         return result.scalar_one_or_none()
 
-    async def list_runs(self, thread_id: str, user_id: str, limit: int = 20) -> List[AgentRun]:
+    async def list_runs(
+        self, thread_id: str, user_id: str, limit: int = 20
+    ) -> List[AgentRun]:
         """列出线程的所有 Run"""
         result = await self.db.execute(
             select(AgentRun)
@@ -164,7 +177,9 @@ class AgentService:
         )
         return result.scalars().all()
 
-    async def submit_input(self, run_id: str, user_id: str, input_text: str) -> Optional[AgentRun]:
+    async def submit_input(
+        self, run_id: str, user_id: str, input_text: str
+    ) -> Optional[AgentRun]:
         """提交用户输入（用于 waiting_for_user 状态的 Run）"""
         run = await self.get_run(run_id, user_id)
         if not run:
@@ -176,7 +191,7 @@ class AgentService:
 
         # 状态转移
         state_machine.transition(run, RunStatus.RUNNING, reason="用户输入提交")
-        
+
         # 更新输入消息
         run.input_message = input_text
         run.updated_at = datetime.utcnow()
@@ -185,11 +200,16 @@ class AgentService:
         await outbox_store.enqueue(self.db, run_id)
 
         # 发送即时状态变更事件
-        await event_store.append(self.db, run_id, "run.status_changed", {
-            "from": "waiting_for_user",
-            "to": "running",
-            "reason": "用户输入提交",
-        })
+        await event_store.append(
+            self.db,
+            run_id,
+            "run.status_changed",
+            {
+                "from": "waiting_for_user",
+                "to": "running",
+                "reason": "用户输入提交",
+            },
+        )
 
         logger.info("用户输入提交", run_id=run_id, user_id=user_id)
         return run
@@ -208,7 +228,7 @@ class AgentService:
         run = await self.get_run(run_id, user_id)
         if not run:
             return []
-        
+
         return await event_store.get_events(self.db, run_id, after_sequence, limit)
 
     # ==================== Artifacts ====================
@@ -232,7 +252,7 @@ class AgentService:
         self.db.add(artifact)
         await self.db.flush()
         await self.db.refresh(artifact)
-        
+
         logger.info("产物创建", run_id=run_id, artifact_id=artifact_id)
         return artifact
 
@@ -263,7 +283,6 @@ class AgentService:
         expires_at: Optional[datetime] = None,
     ) -> "AgentInput":
         """创建待用户输入项"""
-        from .models import AgentInput
         input_id = f"inp_{uuid.uuid4().hex[:20]}"
         agent_input = AgentInput(
             id=input_id,
@@ -282,7 +301,6 @@ class AgentService:
 
     async def get_input(self, run_id: str, input_key: str) -> Optional["AgentInput"]:
         """获取输入项"""
-        from .models import AgentInput
         result = await self.db.execute(
             select(AgentInput)
             .where(AgentInput.run_id == run_id)
@@ -298,7 +316,6 @@ class AgentService:
         user_id: str,
     ) -> Optional["AgentInput"]:
         """提交用户答案，恢复运行"""
-        from .models import AgentInput
         agent_input = await self.get_input(run_id, input_key)
         if not agent_input:
             return None
@@ -332,7 +349,6 @@ class AgentService:
         expires_at: Optional[datetime] = None,
     ) -> "AgentApproval":
         """创建审批请求"""
-        from .models import AgentApproval
         approval_id = f"aprv_{uuid.uuid4().hex[:20]}"
         approval = AgentApproval(
             id=approval_id,
@@ -346,12 +362,15 @@ class AgentService:
         self.db.add(approval)
         await self.db.flush()
         await self.db.refresh(approval)
-        logger.info("审批请求创建", run_id=run_id, approval_id=approval_id, action=action_key)
+        logger.info(
+            "审批请求创建", run_id=run_id, approval_id=approval_id, action=action_key
+        )
         return approval
 
-    async def get_approval(self, run_id: str, approval_id: str) -> Optional["AgentApproval"]:
+    async def get_approval(
+        self, run_id: str, approval_id: str
+    ) -> Optional["AgentApproval"]:
         """获取审批请求"""
-        from .models import AgentApproval
         result = await self.db.execute(
             select(AgentApproval)
             .where(AgentApproval.id == approval_id)
@@ -361,7 +380,6 @@ class AgentService:
 
     async def get_run_approvals(self, run_id: str) -> list["AgentApproval"]:
         """获取Run的所有审批请求（按创建时间降序）"""
-        from .models import AgentApproval
         result = await self.db.execute(
             select(AgentApproval)
             .where(AgentApproval.run_id == run_id)
@@ -377,7 +395,6 @@ class AgentService:
         decided_by: str,
     ) -> Optional["AgentApproval"]:
         """处理审批决定（approve/reject）"""
-        from .models import AgentApproval
         approval = await self.get_approval(run_id, approval_id)
         if not approval:
             return None
@@ -397,10 +414,17 @@ class AgentService:
             state_machine.transition(run, RunStatus.RUNNING, reason=f"审批已{decision}")
             await outbox_store.enqueue(self.db, run_id)
             # 发送即时状态变更事件
-            await event_store.append(self.db, run_id, "run.status_changed", {
-                "from": "waiting_for_approval",
-                "to": "running",
-                "reason": f"审批已{decision}",
-            })
-        logger.info("审批决定", run_id=run_id, approval_id=approval_id, decision=decision)
+            await event_store.append(
+                self.db,
+                run_id,
+                "run.status_changed",
+                {
+                    "from": "waiting_for_approval",
+                    "to": "running",
+                    "reason": f"审批已{decision}",
+                },
+            )
+        logger.info(
+            "审批决定", run_id=run_id, approval_id=approval_id, decision=decision
+        )
         return approval

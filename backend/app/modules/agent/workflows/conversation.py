@@ -9,9 +9,10 @@ from app.core.logging import get_logger
 
 from ..context_builder import AgentRunContext, ThreadContextBuilder
 from ..model_runtime.answer import DirectAnswerDeps, direct_answer_runtime
-from ..model_runtime.router import RouterDeps, router_runtime
+from ..model_runtime.router import ROUTER_ACTIONS, RouterDeps, router_runtime
 from ..models import AgentRun
 from ..service import AgentService
+from ..timeline import AgentTimelineService
 from .contracts import (
     ExecutionContext,
     Node,
@@ -23,7 +24,13 @@ from .registry import workflow_registry
 
 logger = get_logger(__name__)
 
-CONVERSATION_ACTIONS = ("direct_answer", "clarify", "explain")
+CONVERSATION_ACTIONS = ROUTER_ACTIONS
+WORKFLOW_ROUTES = {
+    "explain": {"title": "整理讲解"},
+    "validate": {"title": "生成专项练习"},
+    "grade": {"title": "分析作答"},
+    "plan": {"title": "调整学习计划"},
+}
 
 
 async def _load_run(context: ExecutionContext, db: AsyncSession) -> AgentRun | None:
@@ -75,8 +82,7 @@ async def _route_node(context: ExecutionContext, db: AsyncSession) -> NodeResult
     next_node = {
         "direct_answer": "direct_answer",
         "clarify": "clarify",
-        "explain": "dispatch_explain",
-    }[decision.action]
+    }.get(decision.action, "dispatch_workflow")
     logger.info(
         "conversation 动态路由完成",
         run_id=run.id,
@@ -138,30 +144,64 @@ async def _clarify_node(context: ExecutionContext, db: AsyncSession) -> NodeResu
     )
 
 
-async def _dispatch_explain_node(
+def _child_context_metadata(agent_context: AgentRunContext) -> dict[str, Any]:
+    """只向 child run 传递经过上下文策略筛选后的引用和审计信息。"""
+    return {
+        "context_policy_version": agent_context.policy_version,
+        "context_snapshot": {
+            "selected_message_ids": agent_context.selected_message_ids,
+            "selected_artifact_ids": agent_context.selected_artifact_ids,
+            "attachment_refs": agent_context.attachments,
+            "context_refs": agent_context.context_refs,
+            "pending_interaction_ids": [
+                item.id for item in agent_context.pending_interactions
+            ],
+            "permission_scope": agent_context.permission_scope.model_dump(),
+            "estimated_tokens": agent_context.estimated_tokens,
+            "token_budget": agent_context.token_budget,
+        },
+    }
+
+
+async def _dispatch_workflow_node(
     context: ExecutionContext,
     db: AsyncSession,
 ) -> NodeResult:
-    """保持原讲解能力；其他业务 workflow 在下一阶段扩展。"""
+    """按 Router action 幂等创建业务 child run 和对话内 workflow 项。"""
     parent_run = await _load_run(context, db)
     if not parent_run:
         return NodeResult.failure("父 run 不存在，无法调度子工作流")
+    action = context.get("action")
+    route = WORKFLOW_ROUTES.get(action)
+    if not route:
+        return NodeResult.failure(f"不支持的 workflow action: {action}")
+    agent_context = context.get("agent_run_context")
+    if not isinstance(agent_context, AgentRunContext):
+        return NodeResult.failure("缺少受控 AgentRunContext")
+
     child_run = await AgentService(db).create_run(
         user_id=parent_run.user_id,
         thread_id=parent_run.thread_id,
-        workflow_name="explain",
+        workflow_name=action,
         input_message=parent_run.input_message or context.get("input_message", ""),
-        workflow_key="explain",
+        client_idempotency_key=f"dispatch:{parent_run.id}:{action}",
+        workflow_key=action,
         workflow_version="v1",
         trigger_message_id=parent_run.trigger_message_id,
         parent_run_id=parent_run.id,
         root_run_id=parent_run.root_run_id or parent_run.id,
         presentation="compact",
-        public_title="整理讲解",
+        public_title=route["title"],
+        metadata_json=_child_context_metadata(agent_context),
+    )
+    await AgentTimelineService(db).ensure_workflow_item(
+        thread_id=parent_run.thread_id,
+        root_run_id=parent_run.root_run_id or parent_run.id,
+        run_id=child_run.id,
     )
     return NodeResult.success(
         {
-            "target_workflow": "explain@v1",
+            "target_workflow": f"{action}@v1",
             "child_run_id": child_run.id,
         },
         next_node="completed",
@@ -190,7 +230,7 @@ def build_conversation_workflow() -> WorkflowDefinition:
         ("route", "router", _route_node, "结合线程上下文判断下一步"),
         ("direct_answer", "action", _direct_answer_node, "生成普通回答"),
         ("clarify", "render", _clarify_node, "请求必要澄清"),
-        ("dispatch_explain", "router", _dispatch_explain_node, "调度讲解链路"),
+        ("dispatch_workflow", "router", _dispatch_workflow_node, "调度业务链路"),
         ("completed", "render", _completed_node, "完成"),
     ]
     for name, node_type, execute, description in nodes:
