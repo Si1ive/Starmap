@@ -320,7 +320,8 @@ async def get_run_artifacts(
         "artifacts": [
             {
                 "id": a.id,
-                "type": a.artifact_type,
+                "run_id": a.run_id,
+                "artifact_type": a.artifact_type,
                 "content": a.content_json,
                 "metadata": a.metadata_json,
                 "created_at": a.created_at,

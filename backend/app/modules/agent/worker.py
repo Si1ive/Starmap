@@ -130,6 +130,10 @@ class AgentWorker:
                 logger.error(error_msg, run_id=run.id)
                 state_machine.transition(run, RunStatus.FAILED, reason=error_msg)
                 run.error_message = error_msg
+                await event_store.append(db, run.id, "run.failed", {
+                    "run_id": run.id,
+                    "error": error_msg,
+                })
                 await db.flush()
                 return False
 
@@ -170,13 +174,8 @@ class AgentWorker:
 
             # 处理结果
             if result.status == NodeStatus.COMPLETED:
-                state_machine.transition(run, RunStatus.COMPLETED)
-                await event_store.append(db, run.id, "run.completed", {
-                    "run_id": run.id,
-                    "artifacts": result.output.get("artifacts", []) if result.output else [],
-                })
-                
                 # 如果有产物，创建产物记录
+                artifact = None
                 if result.artifact:
                     service = AgentService(db)
                     artifact = await service.create_artifact(
@@ -188,9 +187,33 @@ class AgentWorker:
                     await event_store.append(db, run.id, "artifact.rendered", {
                         "run_id": run.id,
                         "artifact_id": artifact.id,
-                        "type": artifact.artifact_type,
+                        "artifact_type": artifact.artifact_type,
                     })
-                
+
+                display_result = None
+                if result.artifact:
+                    artifact_content = result.artifact.get("content")
+                    if isinstance(artifact_content, str):
+                        display_result = artifact_content
+                        await event_store.append(db, run.id, "message.completed", {
+                            "run_id": run.id,
+                            "content": artifact_content,
+                            "artifact_id": artifact.id if artifact else None,
+                        })
+                    else:
+                        display_result = (
+                            result.artifact.get("summary")
+                            or result.artifact.get("title")
+                        )
+
+                state_machine.transition(run, RunStatus.COMPLETED)
+                await event_store.append(db, run.id, "run.completed", {
+                    "run_id": run.id,
+                    "result": display_result,
+                    "result_artifact_id": artifact.id if artifact else None,
+                    "artifacts": result.output.get("artifacts", []) if result.output else [],
+                })
+
             elif result.status == NodeStatus.WAITING:
                 # 等待状态：转移到 waiting_for_approval
                 state_machine.transition(run, RunStatus.WAITING_FOR_APPROVAL, reason="等待用户审批")
@@ -200,7 +223,7 @@ class AgentWorker:
                 error_msg = result.error or "工作流执行失败"
                 state_machine.transition(run, RunStatus.FAILED, reason=error_msg)
                 run.error_message = error_msg
-                await event_store.append(db, run.id, "error", {
+                await event_store.append(db, run.id, "run.failed", {
                     "run_id": run.id,
                     "error": error_msg,
                 })
@@ -212,7 +235,7 @@ class AgentWorker:
             logger.error("Run 处理异常", run_id=run.id, error=str(e))
             state_machine.transition(run, RunStatus.FAILED, reason=str(e))
             run.error_message = str(e)
-            await event_store.append(db, run.id, "error", {
+            await event_store.append(db, run.id, "run.failed", {
                 "run_id": run.id,
                 "error": str(e),
             })

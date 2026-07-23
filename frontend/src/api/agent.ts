@@ -43,8 +43,26 @@ export interface Artifact {
   run_id: string
   artifact_type: 'explanation' | 'practice' | 'feedback' | 'plan' | 'message'
   content: Record<string, unknown>
+  metadata?: Record<string, unknown> | null
   created_at: string
 }
+
+export const RUN_EVENT_TYPES = [
+  'run.created',
+  'run.status_changed',
+  'run.completed',
+  'run.failed',
+  'step.started',
+  'step.completed',
+  'step.failed',
+  'message.delta',
+  'message.completed',
+  'artifact.rendered',
+  'tool.called',
+  'tool.result',
+] as const
+
+export type RunEventType = (typeof RUN_EVENT_TYPES)[number]
 
 export interface CreateThreadRequest {
   title?: string
@@ -166,6 +184,42 @@ export function createEventSource(runId: string, afterSequence = 0): EventSource
   return new EventSource(`${API_BASE}/agent/runs/${runId}/events/stream?after_sequence=${afterSequence}`, {
     withCredentials: true,
   })
+}
+
+export function listenToRunEvents(
+  source: EventSource,
+  runId: string,
+  onEvent: (event: AgentEvent) => void,
+): () => void {
+  const listeners = RUN_EVENT_TYPES.map((eventType) => {
+    const listener = (event: Event) => {
+      const message = event as MessageEvent<string>
+      if (!message.data) return
+
+      try {
+        const sequence = Number(message.lastEventId)
+        if (!Number.isFinite(sequence) || sequence <= 0) return
+        onEvent({
+          id: sequence,
+          run_id: runId,
+          sequence,
+          event_type: eventType,
+          payload: JSON.parse(message.data) as Record<string, unknown>,
+          created_at: new Date().toISOString(),
+        })
+      } catch {
+        // 单条非法事件不应中断后续事件流。
+      }
+    }
+    source.addEventListener(eventType, listener)
+    return { eventType, listener }
+  })
+
+  return () => {
+    for (const { eventType, listener } of listeners) {
+      source.removeEventListener(eventType, listener)
+    }
+  }
 }
 
 // ==================== Artifacts API ====================

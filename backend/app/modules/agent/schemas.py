@@ -1,6 +1,6 @@
 """
 Agent Pydantic Schemas
-+
+
 P0 请求/响应模型。
 """
 

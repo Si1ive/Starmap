@@ -32,9 +32,11 @@ export interface Run {
   workflow_name: string
   status: string
   input_message: string
+  result_artifact_id: string | null
   error_message: string | null
   model_call_count: number
   created_at: string
+  updated_at: string
 }
 
 export interface AgentEvent {
@@ -121,17 +123,54 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
           ...action.payload.runs.reduce((acc, run) => ({ ...acc, [run.id]: run }), {} as Record<string, Run>),
         },
       }
-    case 'APPEND_EVENTS':
+    case 'APPEND_EVENTS': {
+      const currentEvents = state.events[action.payload.runId] || []
+      const eventsBySequence = new Map<number, AgentEvent>()
+      for (const event of currentEvents) eventsBySequence.set(event.sequence, event)
+      for (const event of action.payload.events) eventsBySequence.set(event.sequence, event)
+
+      const nextEvents = [...eventsBySequence.values()].sort((a, b) => a.sequence - b.sequence)
+      const currentRun = state.runs[action.payload.runId]
+      let nextRun = currentRun
+
+      if (currentRun) {
+        for (const event of action.payload.events) {
+          const payload = event.payload as { to?: unknown; error?: unknown; result_artifact_id?: unknown }
+          let status: string | null = null
+          if (event.event_type === 'run.status_changed' && typeof payload.to === 'string') {
+            status = payload.to
+          } else if (event.event_type === 'run.completed') {
+            status = 'completed'
+          } else if (event.event_type === 'run.failed') {
+            status = 'failed'
+          }
+
+          if (status) {
+            nextRun = {
+              ...nextRun,
+              status,
+              error_message: event.event_type === 'run.failed' && typeof payload.error === 'string'
+                ? payload.error
+                : nextRun.error_message,
+              result_artifact_id: typeof payload.result_artifact_id === 'string'
+                ? payload.result_artifact_id
+                : nextRun.result_artifact_id,
+            }
+          }
+        }
+      }
+
       return {
         ...state,
+        runs: nextRun
+          ? { ...state.runs, [action.payload.runId]: nextRun }
+          : state.runs,
         events: {
           ...state.events,
-          [action.payload.runId]: [
-            ...(state.events[action.payload.runId] || []),
-            ...action.payload.events,
-          ].sort((a, b) => a.sequence - b.sequence),
+          [action.payload.runId]: nextEvents,
         },
       }
+    }
     case 'SET_ARTIFACTS':
       return {
         ...state,
@@ -191,6 +230,7 @@ const AgentContext = createContext<AgentContextValue | undefined>(undefined)
 export function AgentProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(agentReducer, initialState)
   const esRef = useRef<EventSource | null>(null)
+  const removeEventListenersRef = useRef<(() => void) | null>(null)
 
   // Load threads
   const loadThreads = useCallback(async () => {
@@ -291,6 +331,7 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
   // SSE
   const connectSSE = useCallback((runId: string, afterSequence = 0) => {
     if (esRef.current) {
+      removeEventListenersRef.current?.()
       esRef.current.close()
     }
 
@@ -302,20 +343,12 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: 'SET_SSE_CONNECTED', payload: true })
     }
 
-    es.onmessage = (event) => {
-      if (!event.data) return
-      try {
-        const data = JSON.parse(event.data)
-        if (data.sequence && data.event_type) {
-          dispatch({
-            type: 'APPEND_EVENTS',
-            payload: { runId, events: [data as AgentEvent] },
-          })
-        }
-      } catch {
-        // ignore parse errors
-      }
-    }
+    removeEventListenersRef.current = agentApi.listenToRunEvents(es, runId, (event) => {
+      dispatch({
+        type: 'APPEND_EVENTS',
+        payload: { runId, events: [event as AgentEvent] },
+      })
+    })
 
     es.onerror = () => {
       dispatch({ type: 'SET_SSE_CONNECTED', payload: false })
@@ -325,6 +358,8 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
 
   const disconnectSSE = useCallback(() => {
     if (esRef.current) {
+      removeEventListenersRef.current?.()
+      removeEventListenersRef.current = null
       esRef.current.close()
       esRef.current = null
     }
@@ -335,6 +370,7 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     return () => {
       if (esRef.current) {
+        removeEventListenersRef.current?.()
         esRef.current.close()
       }
     }
