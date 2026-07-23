@@ -4,7 +4,8 @@ uvicorn[standard]==0.23.0
 
 # LLM & Agent
 langchain==0.0.300
-openai==0.27.8
+pydantic-ai==2.14.1
+openai==2.46.0
 
 # Database
 redis==4.6.0

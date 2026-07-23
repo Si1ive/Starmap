@@ -1,6 +1,6 @@
 # 408 Agent 对话界面实现逻辑与代码缺口
 
-> 版本：v0.2
+> 版本：v0.3
 >
 > 日期：2026-07-23
 >
@@ -74,7 +74,7 @@ Backend
 | 无普通问答路径 | conversation 只能创建业务 child run | `direct_answer` 直接产生 Assistant 消息且不显示 workflow | P0 |
 | 路由前澄清与 workflow 输入混淆 | clarify 会降级到 explain | 路由前澄清走普通消息，workflow 内输入继续绑定原 run | P0 |
 | 无 thread 上下文构建器 | Worker 只注入当前 `input_message` | 按预算装配历史消息、artifact、附件和 context refs | P0 |
-| Pydantic AI 未实际接入 | requirements 无 `pydantic-ai`；`ModelAdapter` 直接调用 OpenAI SDK | 用 Pydantic AI 承担模型运行、依赖注入、历史处理和结构化输出 | P0 |
+| Pydantic AI 未实际接入 | requirements 无 `pydantic-ai`；`ModelAdapter` 直接调用 OpenAI SDK | 用 Pydantic AI 承担模型运行、依赖注入、受控消息历史消费和结构化输出 | P0 |
 | conversation workflow 默认可见 | 每个 turn 预建 `presentation="workflow"` 时间线项 | 内部 router 静默，只有业务 workflow 被动态显现 | P0 |
 | conversation 消息被统一丢弃 | thread event projector 忽略 conversation 的消息事件 | 只过滤内部事件，允许公开 direct answer/clarify 消息 | P0 |
 | 无 thread 级执行互斥 | lease 只锁单 run | 每个 thread 同时最多运行一个 root run tree | P0 |
@@ -630,14 +630,13 @@ Pydantic AI 继续作为本项目的模型 Loop/Agent 运行时，但不作为 t
 |----|----------|------------|
 | MySQL + Agent kernel | thread/message/run/workflow 状态、队列、审批、幂等、恢复、权限和公开时间线 | 模型 provider 细节和 prompt 内消息编排 |
 | `ThreadContextBuilder` | 从持久化事实中选择、裁剪、摘要并组装本轮上下文 | 执行业务 workflow 或直接调用模型 |
-| Pydantic AI | `message_history`、`RunContext/deps`、history processor、工具注册、结构化输出、输出校验和 usage limits | 自动决定哪些数据库事实应进入上下文；替代 durable workflow 状态机 |
+| Pydantic AI | 消费 `message_history`、`RunContext/deps`、工具注册、结构化输出、输出校验和 usage limits | 自动决定哪些数据库事实应进入上下文；替代 durable workflow 状态机 |
 | workflow definitions | explain/validate/grade/plan 的确定性步骤、等待、审批和副作用边界 | 保存完整聊天历史或自行拼接 provider 私有消息格式 |
 
 官方能力参考：
 
 - [Message History](https://ai.pydantic.dev/message-history/)
 - [Dependencies / RunContext](https://ai.pydantic.dev/dependencies/)
-- [History Processors](https://ai.pydantic.dev/message-history/#processing-message-history)
 - [Output](https://ai.pydantic.dev/output/)
 - [Usage Limits](https://ai.pydantic.dev/agents/#usage-limits)
 - [Durable Execution](https://ai.pydantic.dev/durable_execution/)
@@ -692,7 +691,6 @@ router_agent = Agent(
     model=router_model,
     deps_type=RouterDeps,
     output_type=RouterDecision,
-    history_processors=[context_history_processor],
 )
 
 result = await router_agent.run(
@@ -707,7 +705,7 @@ result = await router_agent.run(
 
 - `deps` 注入本轮只读服务、权限范围、thread/turn 标识和经过校验的领域上下文；不得把全局可写数据库能力无边界暴露给 Router。
 - `message_history` 由 `ThreadContextBuilder` 生成，不把前端提交的任意历史当作事实。
-- history processor 在调用模型前执行预算裁剪：保留最近相关消息、当前任务所依赖的 artifact 和未完成交互，压缩较早历史。
+- `ThreadContextBuilder` 在调用模型前完成预算裁剪，再把处理后的历史作为 `message_history` 传入：保留最近相关消息、当前任务所依赖的 artifact 和未完成交互，压缩较早历史。
 - `output_type=RouterDecision` 取代手写字符串解析；验证失败按稳定策略重试或降级为安全澄清，不能默认降级到 explain。
 - `UsageLimits` 与现有 `max_model_calls`、token 预算和工具调用预算映射，超限后返回可恢复错误。
 - Pydantic AI 的 `new_messages()` 可用于运行时审计和调试，但用户可见事实仍写入 `agent_messages`、`agent_events` 和 artifact；不能把 provider 私有消息对象直接作为唯一持久化格式。
@@ -912,7 +910,7 @@ Agent 新组件统一使用 `agent-chat-*` 或 CSS module，避免继续与全�
 | `backend/app/modules/agent/schemas.py` | 删除 `preferred_action`；新增 RouterDecision、上下文审计和公开 view schema |
 | `backend/app/modules/agent/router.py` | 普通用户只通过 turns 进入 Router；收口显式 `/runs` 创建入口 |
 | `backend/app/modules/agent/context_builder.py` | 新增 thread 历史、摘要、artifact、附件、引用和权限上下文装配 |
-| `backend/app/modules/agent/model_runtime/` | 用真实 Pydantic AI Agent 替换伪命名 adapter；实现 deps、history processors、output 和 usage limits |
+| `backend/app/modules/agent/model_runtime/` | 用真实 Pydantic AI Agent 替换伪命名 adapter；实现 deps、受控 `message_history`、output 和 usage limits |
 | `backend/app/modules/agent/service.py` | 实现原子创建 turn、sequence、隐藏 workflow 占位和 timeline projection |
 | `backend/app/modules/agent/events.py` | 增加 thread 级事件与 snapshot |
 | `backend/app/modules/agent/worker.py` | 注入 AgentRunContext；实现 thread root tree 串行领取和 Assistant 消息生命周期 |
@@ -936,7 +934,7 @@ Agent 新组件统一使用 `agent-chat-*` 或 CSS module，避免继续与全�
 - direct answer 和路由前 clarify 不创建可见 workflow item。
 - validate/grade/plan child run 正确继承 trigger/root 和受控上下文引用。
 - 上下文构建不会读取其他用户消息或无权限 artifact。
-- history processor 在 token 预算内保留当前输入、未完成交互和显式引用，较早历史进入可追溯摘要。
+- `ThreadContextBuilder` 在 token 预算内保留当前输入、未完成交互和显式引用，较早历史进入可追溯摘要。
 - Pydantic AI 测试使用 TestModel/FunctionModel 或等价测试模型，不依赖真实外部模型网络。
 - 同 thread 连续 turn 只能按 root run tree 顺序领取，后续 Router 能读到前一轮已提交结果。
 
@@ -995,5 +993,5 @@ Agent 新组件统一使用 `agent-chat-*` 或 CSS module，避免继续与全�
 6. 证据抽屉保留，workflow 右栏取消。
 7. MySQL 持有完整、可恢复的对话与 workflow 事实；Pydantic AI 只消费 `ThreadContextBuilder` 生成的本轮上下文。
 8. Router、普通回答和各业务 workflow 使用职责受限的独立 Pydantic AI Agent，不创建拥有全部工具权限的全局 Agent。
-9. Pydantic AI history processor 负责调用前裁剪和摘要，但裁剪策略、摘要版本和选入资源必须由项目记录并可审计。
+9. `ThreadContextBuilder` 负责调用前裁剪和摘要，Pydantic AI 只消费处理后的 `message_history`；裁剪策略、摘要版本和选入资源必须由项目记录并可审计。
 10. 当前继续使用 MySQL durable kernel；Pydantic AI durable execution 集成只作为后续独立 PoC，不与本轮 UI 重构捆绑。

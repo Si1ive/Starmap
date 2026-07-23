@@ -1,0 +1,75 @@
+"""Pydantic AI Router 运行时测试。"""
+
+import pytest
+from pydantic_ai.models.test import TestModel
+
+from app.modules.agent.model_runtime.router import RouterDeps, RouterRuntime
+
+
+def _deps(**overrides) -> RouterDeps:
+    values = {
+        "thread_id": "thread_001",
+        "user_id": "user_001",
+        "turn_id": "turn_001",
+    }
+    values.update(overrides)
+    return RouterDeps(**values)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "action",
+    ["direct_answer", "explain", "validate", "grade", "plan"],
+)
+async def test_router_returns_structured_decision_without_network(action):
+    runtime = RouterRuntime(
+        TestModel(
+            custom_output_args={
+                "action": action,
+                "confidence": 0.9,
+                "reason_code": f"route_{action}",
+                "public_summary": "已确定下一步处理方式",
+            }
+        )
+    )
+
+    decision = await runtime.decide("测试输入", deps=_deps())
+
+    assert decision.action == action
+    assert decision.confidence == 0.9
+    assert decision.reason_code == f"route_{action}"
+
+
+@pytest.mark.asyncio
+async def test_router_requires_question_for_clarify():
+    runtime = RouterRuntime(
+        TestModel(
+            custom_output_args={
+                "action": "clarify",
+                "confidence": 0.6,
+                "reason_code": "missing_answer",
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="clarification_question"):
+        await runtime.decide("帮我批改", deps=_deps())
+
+
+@pytest.mark.asyncio
+async def test_router_rejects_action_outside_runtime_scope():
+    runtime = RouterRuntime(
+        TestModel(
+            custom_output_args={
+                "action": "plan",
+                "confidence": 0.8,
+                "reason_code": "route_plan",
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="未授权 action"):
+        await runtime.decide(
+            "给我安排学习计划",
+            deps=_deps(allowed_actions=("direct_answer", "clarify")),
+        )

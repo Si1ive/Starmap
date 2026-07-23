@@ -16,9 +16,9 @@ logger = get_logger(__name__)
 
 class ModelAdapter:
     """
-    Pydantic AI 模型适配器
-    
-    封装 OpenAI 调用，支持结构化输出。
+    旧版 OpenAI 直接调用适配器。
+
+    保留给尚未迁移的 workflow 节点；新 Agent 节点使用 Pydantic AI 运行时。
     """
 
     def __init__(self, model: Optional[str] = None):

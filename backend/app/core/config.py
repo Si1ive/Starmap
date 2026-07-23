@@ -165,6 +165,10 @@ class Settings(BaseSettings):
     # OpenAI
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4")
+    AGENT_ROUTER_MODEL: str = os.getenv(
+        "AGENT_ROUTER_MODEL",
+        f"openai:{os.getenv('OPENAI_MODEL', 'gpt-4')}",
+    )
 
     # GitHub
     GITHUB_TOKEN: str = os.getenv("GITHUB_TOKEN", "")

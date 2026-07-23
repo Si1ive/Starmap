@@ -1,6 +1,6 @@
 # 408 学习 Agent 对话运行时技术设计
 
-> 版本：v1.2
+> 版本：v1.3
 > 日期：2026-07-23
 > 状态：目标设计，已补充统一 Agent 路由与 Pydantic AI 上下文实现边界
 > 上游产品契约：[408 学习 Agent 主体 PRD](../product/408-agent-main-prd.md)
@@ -50,7 +50,7 @@ Pydantic AI 目前也尚未真正接入：依赖文件没有 `pydantic-ai`，现
 | 实时通道 | SSE | 对话运行主要是服务端单向状态和产物更新；双向命令仍走 HTTP。 |
 | 业务编排契约 | 外层版本化受限 Workflow + 内层有界 `agent_loop` | 外层图、节点输入输出、副作用边界和分支均在版本化代码中声明；模型仅可在指定 Loop 中按 Schema 从 action 白名单选择下一次只读探索。详见[工作流编排技术设计](./408-agent-workflow-orchestration-design.md)。 |
  | 图执行与持久执行实现 | P0 首发自建最小 durable kernel；LangGraph 做 PoC；Temporal 按触发条件评估 | 以 `WorkflowDefinition`、`AgentLoopPolicy`、`NodeResult`、MySQL outbox/lease/Worker 为基础，框架只替换执行层，不改变 MySQL 事实、领域命令与 API/SSE 契约。LangGraph 进入 PoC 但不预设进入生产；Temporal 在 timer/跨服务/SLO 触发后评估。详见[工作流技术选型与风险分析](./408-agent-workflow-technology-selection-and-risk-analysis.md)。 |
- | 模型交互 / Loop 层 | Pydantic AI Agent + Pydantic Schema + 项目上下文构建器 | Pydantic AI 承担 `message_history`、`RunContext/deps`、history processor、类型安全工具、结构化输出、多提供商和 usage limits；MySQL 和 durable kernel 仍承担 thread/workflow 事实、审批和恢复。详见[工作流技术选型与风险分析](./408-agent-workflow-technology-selection-and-risk-analysis.md)。 |
+ | 模型交互 / Loop 层 | Pydantic AI Agent + Pydantic Schema + 项目上下文构建器 | Pydantic AI 消费 `message_history` 和 `RunContext/deps`，承担类型安全工具、结构化输出、多提供商和 usage limits；`ThreadContextBuilder` 负责历史筛选与裁剪，MySQL 和 durable kernel 仍承担 thread/workflow 事实、审批和恢复。详见[工作流技术选型与风险分析](./408-agent-workflow-technology-selection-and-risk-analysis.md)。 |
 
 首发不引入 MCP server、WebSocket、通用浏览器自动化、通用命令执行或 TypeScript Agent SDK（如 `pi-agent-core`）。Pydantic AI 用于 Router、普通回答和 workflow 模型节点的消息历史、依赖注入、工具注册与结构化输出，但不自动成为业务事实源。LangGraph 适配层进入 PoC 但不预设进入生产；Temporal 或 Pydantic AI durable execution 集成在触发条件满足后单独评估。所有框架替换只能改变模型/编排适配层，不能改变 MySQL 事实、领域命令与 API/SSE 契约。
 
@@ -291,7 +291,7 @@ Worker 通过短事务获取 run：
 
 ### 8.1 模型适配层
 
-模型运行时使用 Pydantic AI `Agent` 作为 provider-neutral 调用边界。Router、普通回答和各 workflow 模型节点定义职责受限的独立 Agent，分别配置 `deps_type`、`output_type`、工具白名单、history processors 和 usage limits；不得创建可访问全部领域工具的全局 Agent。
+模型运行时使用 Pydantic AI `Agent` 作为 provider-neutral 调用边界。Router、普通回答和各 workflow 模型节点定义职责受限的独立 Agent，分别配置 `deps_type`、`output_type`、工具白名单和 usage limits，并只接收 `ThreadContextBuilder` 处理后的 `message_history`；不得创建可访问全部领域工具的全局 Agent。
 
 `model_runtime/` 为每次调用记录：`model_config_id`、provider、模型名、Prompt bundle 版本、workflow 版本、`step_id`、可空的 `loop_turn_id`、输入/输出 token、延迟、供应商 request ID、结果状态和脱敏错误码。原始输入输出按照数据保留策略保存为受控引用，不进入常规日志。
 
@@ -323,7 +323,7 @@ MySQL 是上下文事实源，Pydantic AI 是本轮上下文消费与处理运�
 
 上下文按以下固定顺序装配：系统和安全规则、当前 workflow/turn 状态、用户授权范围、不可变领域事实、版本化线程摘要、最近相关消息、当前用户消息、显式引用的 artifact/附件、最少量经排序的检索证据。原始资料正文一律标注为不可信内容。
 
-Pydantic AI history processor 在模型调用前执行确定性过滤和压缩：保留当前输入、最近相关 turn、未完成交互和显式引用；移除较早且无关的工具结果；必要时使用版本化摘要替换旧消息。history processor 不能自行扩大权限范围、加载新资源或覆盖数据库事实。
+`ThreadContextBuilder` 在模型调用前执行确定性过滤和压缩：保留当前输入、最近相关 turn、未完成交互和显式引用；移除较早且无关的工具结果；必要时使用版本化摘要替换旧消息。Pydantic AI 只消费处理后的 `message_history`，不能自行扩大权限范围、加载新资源或覆盖数据库事实。
 
 当预计下一次调用超过模型上下文预算的 60%、阶段性 step 完成、即将进入等待状态，或达到消息/工具结果数量阈值时，创建新的 `thread_summaries` 版本。摘要必须保留：当前目标和待办、已确认事实、审批状态、不可重复副作用、来源引用、已排除候选、用户纠正和未提交答案。身份授权、题目/答案快照、幂等键和计划版本必须从领域表/step 引用重建，不能只相信模型摘要。
 
