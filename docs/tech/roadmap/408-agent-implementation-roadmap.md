@@ -413,27 +413,38 @@ backend/app/
 
 ## 4.5 前端实施步骤
 
-### 4.5.1 用户前端（frontend）实施步骤
+### 4.5.1 用户前端（frontend）实施步骤（已完成）
 
-| 步骤 | 文件 | 任务 | 说明 |
-|------|------|------|------|
-| 1 | `frontend/src/api/agent.ts` | 创建 API 客户端 | 封装 thread/run/event/artifact 的 CRUD 和 SSE 连接；使用原生 `fetch` + `credentials: 'include'` 的 Cookie 认证。 |
-| 2 | `frontend/src/store/agentStore.ts` | 创建状态管理 | React Context + useReducer；管理 threads、runs、events、artifacts、SSE 连接状态。 |
-| 3 | `frontend/src/store/agentStore.ts` | 实现 SSE 连接管理 | `connectSSE(runId, afterSequence?)` 创建 EventSource；`disconnectSSE()` 关闭连接；`onmessage` 解析 JSON 并 dispatch APPEND_EVENTS。 |
-| 4 | `frontend/src/pages/AgentPage.tsx` | 实现 Agent 对话页面 | 三栏布局：线程列表/对话区/执行轨迹；支持新建线程、发送消息、SSE 实时推送。 |
-| 5 | `frontend/src/App.tsx` | 注册路由 | 添加 `/agent` 和 `/agent/:threadId` 路由，映射到 `AgentPage`。 |
-| 6 | `frontend/src/main.tsx` | 包裹 AgentProvider | 在 `AuthProvider` 内包裹 `AgentProvider`，确保 `useAgent()` 可用。 |
-| 7 | - | 联调验证 | 验证 thread 创建、run 创建、SSE 事件流、事件重放、断线重连等完整链路。 |
+| 步骤 | 文件 | 任务 | 说明 | 状态 |
+|------|------|------|------|------|
+| 1 | `frontend/src/api/agent.ts` | 创建 API 客户端 | 封装 thread/run/event/artifact/approval 的 CRUD 和 SSE 连接；使用原生 `fetch` + `credentials: 'include'` 的 Cookie 认证。 | ✅ 已完成 |
+| 2 | `frontend/src/store/agent-context.tsx` | 创建状态管理 | React Context + useReducer；管理 threads、runs、events、artifacts、approvals、SSE 连接状态。 | ✅ 已完成 |
+| 3 | `frontend/src/store/agent-context.tsx` | 实现 SSE 连接管理 | `connectSSE(runId, afterSequence?)` 创建 EventSource；`disconnectSSE()` 关闭连接；`onmessage` 解析 JSON 并 dispatch APPEND_EVENTS；自动重连。 | ✅ 已完成 |
+| 4 | `frontend/src/pages/AgentPage.tsx` | 实现 Agent 对话页面 | 三栏布局：线程列表(AppShell侧边栏)/对话区/执行轨迹+证据面板；支持新建线程、发送消息、SSE 实时推送、审批 diff 渲染、工作流自动路由。 | ✅ 已完成 |
+| 5 | `frontend/src/App.tsx` | 注册路由 | 添加 `/agent` 和 `/agent/:threadId` 路由，映射到 `AgentPage`。 | ✅ 已完成 |
+| 6 | `frontend/src/main.tsx` | 包裹 AgentProvider | 在 `AuthProvider` 内包裹 `AgentProvider`，确保 `useAgent()` 可用。 | ✅ 已完成 |
+| 7 | - | 联调验证 | 验证 thread 创建、run 创建、SSE 事件流、事件重放、断线重连等完整链路。 | ✅ 已完成 |
 
-### 4.5.2 管理员前端（frontend-admin）实施步骤
+> **补充实施项**：
+> - 提交按钮 loading 状态与 disabled 绑定，防止重复提交
+> - 错误提示横幅：API 失败时自动展示，5 秒后自动清除
+> - 工作流自动路由：`detectWorkflow` 根据用户输入关键词自动匹配 explain/validate/grade/plan
 
-| 步骤 | 文件 | 任务 | 说明 |
-|------|------|------|------|
-| 1 | `frontend-admin/src/api/agentRuns.ts` | 创建 API 客户端 | 封装 `/api/v1/admin/agent-runs/*` 接口：分页查询、详情、事件回放、重放、统计。 |
-| 2 | `frontend-admin/src/pages/AgentRunsPage.tsx` | 实现监控页面 | 统计卡片、筛选栏、运行列表；支持状态/工作流/用户/时间筛选。 |
-| 3 | `frontend-admin/src/router/index.tsx` | 注册路由 | 添加 `/admin/agent-runs` 和 `/admin/agent-runs/:id` 路由。 |
-| 4 | `frontend-admin/src/components/Sider/index.tsx` | 添加导航菜单 | 在左侧菜单添加 "Agent Runs 监控" 入口，图标使用 `ThunderboltOutlined`。 |
-| 5 | - | 联调验证 | 验证列表查询、筛选、详情跳转、重放操作、统计接口等完整链路。 |
+### 4.5.2 管理员前端（frontend-admin）实施步骤（已完成）
+
+| 步骤 | 文件 | 任务 | 说明 | 状态 |
+|------|------|------|------|------|
+| 1 | `frontend-admin/src/api/agentRuns.ts` | 创建 API 客户端 | 封装 `/api/v1/admin/agent-runs/*` 接口：分页查询、详情、事件回放、重放、统计、产物、审批。 | ✅ 已完成 |
+| 2 | `frontend-admin/src/pages/AgentRunsPage.tsx` | 实现监控页面 | 统计卡片、筛选栏、运行列表；支持状态/工作流/用户/时间筛选。 | ✅ 已完成 |
+| 3 | `frontend-admin/src/router/index.tsx` | 注册路由 | 添加 `/admin/agent-runs` 和 `/admin/agent-runs/:id` 路由。 | ✅ 已完成 |
+| 4 | `frontend-admin/src/components/Sider/index.tsx` | 添加导航菜单 | 在左侧菜单添加 "Agent Runs 监控" 入口，图标使用 `ThunderboltOutlined`。 | ✅ 已完成 |
+| 5 | - | 联调验证 | 验证列表查询、筛选、详情跳转、重放操作、统计接口等完整链路。 | ✅ 已完成 |
+
+> **补充实施项**：
+> - `AgentRunDetailPage.tsx` 事件类型过滤：支持按 `step.started`/`completed`/`failed`/`message.completed`/`run.status_changed`/`error` 等类型筛选
+> - `AgentRunDetailPage.tsx` 产物查看：新增产物卡片，按类型展示结构化 JSON
+> - 审批操作卡片：支持 approve/reject，操作后自动刷新审批列表和运行状态
+> - 统计接口补全 `waiting_for_approval` 状态计数，前端统计卡片同步展示
 ## 5. 实施时间表（参考）
 
  | 阶段 | 周期（估算） | 产出 |
