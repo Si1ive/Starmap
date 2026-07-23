@@ -78,7 +78,7 @@ async def get_database_status() -> Dict[str, Any]:
     # Redis 状态
     try:
         from app.db.redis import redis_client
-        info = await redis_client.client.info()
+        info = await redis_client.info()
         memory = info.get("used_memory_human", "unknown")
         status["redis"] = {
             "status": "up",

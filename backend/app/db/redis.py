@@ -97,6 +97,12 @@ class RedisClient:
             return True
         except Exception:
             return False
+
+    async def info(self) -> Dict[str, Any]:
+        """返回 Redis INFO，供监控代码使用而不暴露底层客户端。"""
+        if not self._client:
+            await self.connect()
+        return await self._client.info()
     
     def _make_key(self, key_type: str, key: str) -> str:
         """

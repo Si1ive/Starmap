@@ -185,3 +185,45 @@ alembic -c alembic.ini stamp head
 
 如果 `alembic upgrade head` 执行失败，请保留完整错误日志，先解决失败原因再重试；
 不要为了绕过报错直接 stamp，也不要删除 `alembic_version` 表。
+
+## Redis 连接状态诊断
+
+### 管理员页面显示“Redis 断开”时先判断真假
+
+管理员端“数据库与资源监控”通过后端 Redis 客户端执行 `INFO`，并根据命令是否成功显示
+连接状态。不要只根据页面状态直接重建 Redis，先分别验证 Redis 服务、后端连接配置和监控
+接口。
+
+Podman 环境依次执行：
+
+```bash
+podman exec starmap-redis redis-cli ping
+podman exec starmap-backend env | grep '^REDIS_URL='
+podman-compose -f docker-compose.podman.yml logs --tail=100 redis backend
+```
+
+正常时第一条命令返回 `PONG`，后端容器中的地址通常应为：
+
+```text
+REDIS_URL=redis://redis:6379
+```
+
+注意，容器内不能使用 `redis://localhost:6379` 连接另一个容器；容器中的 `localhost`
+表示后端容器自身。只有后端直接运行在宿主机时，才通常使用 `redis://localhost:6379`。
+
+再请求管理员监控接口：
+
+```bash
+curl -H "Authorization: Bearer <管理员令牌>" \
+  http://localhost:8000/api/v1/admin/monitor/database
+```
+
+响应中的 Redis 项应包含 `status: connected`、版本、连接数和内存使用量。若 Redis 能返回
+`PONG` 但接口仍显示断开，查看后端日志中的“Redis 监控探活失败”；这通常说明监控调用方式
+或后端 `REDIS_URL` 有误，而不是 Redis 服务本身停止。
+
+### 本次修复的代码原因
+
+旧监控代码调用了不存在的 `redis_client.client.info()`。`RedisClient` 实际只保存私有
+`_client`，因此会触发 `AttributeError`，随后被监控层捕获并错误显示为“断开”。现在统一
+通过公开的 `redis_client.info()` 获取指标，监控层不再依赖客户端内部字段。

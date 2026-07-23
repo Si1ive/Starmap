@@ -49,6 +49,21 @@ class TestRedisClient:
         """测试无客户端时的健康检查"""
         result = await client.health_check()
         assert result is False
+
+    @pytest.mark.asyncio
+    async def test_info_uses_managed_client(self, client):
+        """监控通过公开接口读取 INFO，不依赖不存在的 client 属性。"""
+        with patch("app.db.redis.aioredis.from_url") as mock_from_url:
+            mock_client = AsyncMock()
+            mock_client.ping = AsyncMock(return_value=True)
+            mock_client.info = AsyncMock(return_value={"redis_version": "7.2.0"})
+            mock_from_url.return_value = mock_client
+
+            result = await client.info()
+
+            assert result == {"redis_version": "7.2.0"}
+            mock_client.ping.assert_awaited_once()
+            mock_client.info.assert_awaited_once()
     
     @pytest.mark.asyncio
     async def test_set_and_get(self, client):

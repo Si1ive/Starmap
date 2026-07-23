@@ -435,17 +435,25 @@ async def get_database_status_extended() -> Dict[str, Any]:
                 "size": "-",
                 "operations_per_sec": 0,
                 "cache_hit_rate": 0,
-                "last_check": datetime.utcnow().isoformat(),
+                "last_check": datetime.now(timezone.utc).isoformat(),
             }
         )
-    except Exception:
-        databases.append({"name": "MySQL", "type": "RDBMS", "status": "disconnected"})
+    except Exception as exc:
+        logger.warning("MySQL 监控探活失败", error=str(exc))
+        databases.append(
+            {
+                "name": "MySQL",
+                "type": "RDBMS",
+                "status": "disconnected",
+                "last_check": datetime.now(timezone.utc).isoformat(),
+            }
+        )
 
     # Redis
     try:
         from app.db.redis import redis_client
 
-        info = await redis_client.client.info()
+        info = await redis_client.info()
         databases.append(
             {
                 "name": "Redis",
@@ -458,11 +466,19 @@ async def get_database_status_extended() -> Dict[str, Any]:
                 "size": info.get("used_memory_human", "-"),
                 "operations_per_sec": int(info.get("instantaneous_ops_per_sec", 0)),
                 "cache_hit_rate": 0,
-                "last_check": datetime.utcnow().isoformat(),
+                "last_check": datetime.now(timezone.utc).isoformat(),
             }
         )
-    except Exception:
-        databases.append({"name": "Redis", "type": "Cache", "status": "disconnected"})
+    except Exception as exc:
+        logger.warning("Redis 监控探活失败", error=str(exc))
+        databases.append(
+            {
+                "name": "Redis",
+                "type": "Cache",
+                "status": "disconnected",
+                "last_check": datetime.now(timezone.utc).isoformat(),
+            }
+        )
 
     # Qdrant（项目里 ChromaDB 字段，但实际是 Qdrant）
     try:
@@ -482,7 +498,7 @@ async def get_database_status_extended() -> Dict[str, Any]:
                     "size": f"{len(collections)} collections",
                     "operations_per_sec": 0,
                     "cache_hit_rate": 0,
-                    "last_check": datetime.utcnow().isoformat(),
+                    "last_check": datetime.now(timezone.utc).isoformat(),
                 }
             )
     except Exception:
