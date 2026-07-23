@@ -327,6 +327,9 @@ class AgentService:
         user_id: str,
     ) -> Optional["AgentInput"]:
         """提交用户答案，恢复运行"""
+        run = await self.get_run(run_id, user_id)
+        if not run or run.status != RunStatus.WAITING_FOR_USER.value:
+            return None
         agent_input = await self.get_input(run_id, input_key)
         if not agent_input:
             return None
@@ -342,20 +345,18 @@ class AgentService:
         agent_input.updated_at = datetime.utcnow()
         await self.db.flush()
         # 恢复运行状态
-        run = await self.get_run(run_id, user_id)
-        if run and run.status == RunStatus.WAITING_FOR_USER.value:
-            state_machine.transition(run, RunStatus.RUNNING, reason="用户输入已提交")
-            await outbox_store.enqueue(self.db, run_id)
-            await event_store.append(
-                self.db,
-                run_id,
-                "run.status_changed",
-                {
-                    "from": "waiting_for_user",
-                    "to": "running",
-                    "reason": "用户输入已提交",
-                },
-            )
+        state_machine.transition(run, RunStatus.RUNNING, reason="用户输入已提交")
+        await outbox_store.enqueue(self.db, run_id)
+        await event_store.append(
+            self.db,
+            run_id,
+            "run.status_changed",
+            {
+                "from": "waiting_for_user",
+                "to": "running",
+                "reason": "用户输入已提交",
+            },
+        )
         logger.info("用户答案提交", run_id=run_id, input_key=input_key, user_id=user_id)
         return agent_input
 
@@ -426,6 +427,9 @@ class AgentService:
         decided_by: str,
     ) -> Optional["AgentApproval"]:
         """处理审批决定（approve/reject）"""
+        run = await self.get_run(run_id, decided_by)
+        if not run or run.status != RunStatus.WAITING_FOR_APPROVAL.value:
+            return None
         approval = await self.get_approval(run_id, approval_id)
         if not approval:
             return None
@@ -440,21 +444,19 @@ class AgentService:
         approval.updated_at = datetime.utcnow()
         await self.db.flush()
         # 恢复运行状态
-        run = await self.get_run(run_id, decided_by)
-        if run and run.status == RunStatus.WAITING_FOR_APPROVAL.value:
-            state_machine.transition(run, RunStatus.RUNNING, reason=f"审批已{decision}")
-            await outbox_store.enqueue(self.db, run_id)
-            # 发送即时状态变更事件
-            await event_store.append(
-                self.db,
-                run_id,
-                "run.status_changed",
-                {
-                    "from": "waiting_for_approval",
-                    "to": "running",
-                    "reason": f"审批已{decision}",
-                },
-            )
+        state_machine.transition(run, RunStatus.RUNNING, reason=f"审批已{decision}")
+        await outbox_store.enqueue(self.db, run_id)
+        # 发送即时状态变更事件
+        await event_store.append(
+            self.db,
+            run_id,
+            "run.status_changed",
+            {
+                "from": "waiting_for_approval",
+                "to": "running",
+                "reason": f"审批已{decision}",
+            },
+        )
         logger.info(
             "审批决定", run_id=run_id, approval_id=approval_id, decision=decision
         )

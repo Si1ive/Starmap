@@ -376,6 +376,91 @@ async def test_input_answer_emits_running_status_to_thread(db_session):
 
 
 @pytest.mark.asyncio
+async def test_workflow_interactions_require_owned_run_in_matching_wait_state(
+    db_session,
+):
+    await _create_thread(db_session)
+    creation = await _create_turn(db_session)
+    service = AgentService(db_session)
+
+    input_run = await service.create_run(
+        user_id="user_001",
+        thread_id="thread_001",
+        workflow_name="explain",
+        input_message="整理讲解",
+        parent_run_id=creation.run.id,
+        root_run_id=creation.run.id,
+        presentation="compact",
+    )
+    input_run.status = "waiting_for_user"
+    agent_input = await service.create_input(
+        input_run.id,
+        "scope",
+        "请补充讲解范围",
+    )
+
+    assert (
+        await service.submit_input_answer(
+            input_run.id,
+            agent_input.input_key,
+            "第二章",
+            "other_user",
+        )
+        is None
+    )
+    assert agent_input.status == "pending"
+    input_run.status = "running"
+    assert (
+        await service.submit_input_answer(
+            input_run.id,
+            agent_input.input_key,
+            "第二章",
+            "user_001",
+        )
+        is None
+    )
+    assert agent_input.status == "pending"
+
+    approval_run = await service.create_run(
+        user_id="user_001",
+        thread_id="thread_001",
+        workflow_name="plan",
+        input_message="调整计划",
+        parent_run_id=creation.run.id,
+        root_run_id=creation.run.id,
+        presentation="compact",
+    )
+    approval_run.status = "waiting_for_approval"
+    approval = await service.create_approval(
+        approval_run.id,
+        "apply_learning_plan",
+        '{"summary":"应用学习计划调整"}',
+    )
+
+    assert (
+        await service.decide_approval(
+            approval_run.id,
+            approval.id,
+            "approved",
+            "other_user",
+        )
+        is None
+    )
+    assert approval.status == "pending"
+    approval_run.status = "running"
+    assert (
+        await service.decide_approval(
+            approval_run.id,
+            approval.id,
+            "approved",
+            "user_001",
+        )
+        is None
+    )
+    assert approval.status == "pending"
+
+
+@pytest.mark.asyncio
 async def test_timeline_uses_sequence_cursor_for_pagination(db_session):
     await _create_thread(db_session)
     await _create_turn(db_session)
