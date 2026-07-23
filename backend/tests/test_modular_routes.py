@@ -71,6 +71,27 @@ def test_agent_conversation_routes_keep_legacy_and_app_namespaces():
         assert "GET" in stream.methods
 
 
+def test_agent_admin_routes_use_the_admin_namespace():
+    routes = _routes_by_path()
+    methods = _methods_by_path()
+
+    expected_paths = (
+        "/api/v1/admin/agent-runs",
+        "/api/v1/admin/agent-runs/stats",
+        "/api/v1/admin/agent-runs/{run_id}",
+        "/api/v1/admin/agent-runs/{run_id}/events",
+        "/api/v1/admin/agent-runs/{run_id}/artifacts",
+        "/api/v1/admin/agent-runs/{run_id}/replay",
+    )
+    for path in expected_paths:
+        assert routes[path].endpoint.__module__ == "app.modules.agent.admin_router"
+
+    assert "GET" in methods["/api/v1/admin/agent-runs"]
+    assert "GET" in methods["/api/v1/admin/agent-runs/stats"]
+    assert "POST" in methods["/api/v1/admin/agent-runs/{run_id}/replay"]
+    assert "/api/v1/agent-runs" not in routes
+
+
 def test_learning_user_registration_routes_are_owned_by_identity_module():
     routes = _routes_by_path()
 

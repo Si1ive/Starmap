@@ -48,7 +48,7 @@ Agent Worker
           └───────────────► 学习领域服务 / 检索工具
 
 管理员端
-  ├─ Agent Runs 监控 API ──► agent_runs / events / steps
+  ├─ /api/v1/admin/agent-runs ──► agent_runs / agent_events / artifacts
   ├─ LLM 配置与连通性测试 ──► 配置存储 / LLM Provider
   └─ 基础设施状态 ──► MySQL / Redis / Qdrant
 ```
@@ -71,7 +71,7 @@ Redis 在当前 Agent 核心执行链路中不是事实来源。Agent 的可靠�
 | 模型运行时 | `model_runtime/` | 模型适配、结构化路由、回答生成和策略门禁 |
 | 上下文 | `context_builder.py` | 对话历史、权限范围、学习上下文和 root run 完整性 |
 | 持久化模型 | `models.py` | Agent 领域表、状态和索引定义 |
-| 管理员接口 | `admin_router.py` | Agent Runs 查询、详情与管理能力 |
+| 管理员接口 | `admin_router.py` | 在 `/api/v1/admin/agent-runs` 下提供 Run 查询、详情、统计与管理能力 |
 | 管理员页面 | `frontend-admin/src/pages/AgentRunsPage.tsx` 等 | 运行监控、筛选与详情展示 |
 
 ## 4. 一轮对话的生命周期

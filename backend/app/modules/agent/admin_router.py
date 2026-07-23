@@ -4,9 +4,10 @@ Agent 管理后台路由（Admin Router）
 提供管理员视角的 Agent Run 查询、统计、回放接口。
 """
 
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func, select as sa_select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
@@ -16,7 +17,7 @@ from .events import event_store
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/agent-runs", tags=["Admin Agent Runs"])
+router = APIRouter(prefix="/admin/agent-runs", tags=["Admin Agent Runs"])
 
 
 async def get_db():
@@ -24,12 +25,59 @@ async def get_db():
         yield session
 
 
+def _metadata_value(run: Any, key: str) -> Any:
+    metadata = run.metadata_json if isinstance(run.metadata_json, dict) else {}
+    return metadata.get(key)
+
+
+def _serialize_run(run: Any, *, last_event_sequence: int = 0) -> dict[str, Any]:
+    """将当前 AgentRun 模型稳定映射为管理员前端契约。"""
+    return {
+        "id": run.id,
+        "thread_id": run.thread_id,
+        "user_id": run.user_id,
+        "workflow_key": run.workflow_key or run.workflow_name,
+        "workflow_version": run.workflow_version or "v1",
+        "status": run.status,
+        "request_id": run.client_idempotency_key or "",
+        "current_step_key": run.current_public_step,
+        "last_event_sequence": last_event_sequence,
+        "lease_owner": run.lease_owner,
+        "lease_expires_at": (
+            run.lease_expires_at.isoformat() if run.lease_expires_at else None
+        ),
+        "model_config_id": _metadata_value(run, "model_config_id"),
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        "error_code": _metadata_value(run, "error_code"),
+        "safe_error_summary": run.error_message,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+        "updated_at": run.updated_at.isoformat() if run.updated_at else None,
+    }
+
+
+async def _last_event_sequences(
+    db: AsyncSession,
+    run_ids: list[str],
+) -> dict[str, int]:
+    if not run_ids:
+        return {}
+
+    from .models import AgentEvent
+
+    result = await db.execute(
+        sa_select(AgentEvent.run_id, func.max(AgentEvent.sequence))
+        .where(AgentEvent.run_id.in_(run_ids))
+        .group_by(AgentEvent.run_id)
+    )
+    return {run_id: int(sequence or 0) for run_id, sequence in result.all()}
+
+
 @router.get("/stats")
 async def get_run_stats(
     db: AsyncSession = Depends(get_db),
 ):
     """获取 Run 统计信息"""
-    from sqlalchemy import func, select as sa_select
     from .models import AgentRun
 
     total_result = await db.execute(sa_select(func.count(AgentRun.id)))
@@ -43,17 +91,19 @@ async def get_run_stats(
         status_counts[status] = result.scalar() or 0
 
     return {
-        "total": total,
-        "queued": status_counts.get("queued", 0),
-        "running": status_counts.get("running", 0),
-        "completed": status_counts.get("completed", 0),
-        "failed": status_counts.get("failed", 0),
-        "waiting_for_user": status_counts.get("waiting_for_user", 0),
-        "waiting_for_approval": status_counts.get("waiting_for_approval", 0),
+        "data": {
+            "total": total,
+            "queued": status_counts.get("queued", 0),
+            "running": status_counts.get("running", 0),
+            "completed": status_counts.get("completed", 0),
+            "failed": status_counts.get("failed", 0),
+            "waiting_for_user": status_counts.get("waiting_for_user", 0),
+            "waiting_for_approval": status_counts.get("waiting_for_approval", 0),
+        }
     }
 
 
-@router.get("/")
+@router.get("")
 async def list_all_runs(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -65,7 +115,6 @@ async def list_all_runs(
     db: AsyncSession = Depends(get_db),
 ):
     """列出所有 Agent Runs（管理员视图）"""
-    from sqlalchemy import select as sa_select
     from .models import AgentRun
 
     query = sa_select(AgentRun)
@@ -92,9 +141,9 @@ async def list_all_runs(
             pass
 
     # Get total count
-    from sqlalchemy import func
+    count_query = query.order_by(None).subquery()
     total_result = await db.execute(
-        sa_select(func.count(AgentRun.id)).select_from(query.subquery())
+        sa_select(func.count()).select_from(count_query)
     )
     total = total_result.scalar() or 0
 
@@ -103,31 +152,16 @@ async def list_all_runs(
     query = query.order_by(AgentRun.created_at.desc()).offset(offset).limit(page_size)
     result = await db.execute(query)
     runs = result.scalars().all()
+    event_sequences = await _last_event_sequences(db, [run.id for run in runs])
 
     return {
         "data": {
             "items": [
-                {
-                    "id": r.id,
-                    "thread_id": r.thread_id,
-                    "user_id": r.user_id,
-                    "workflow_key": r.workflow_name,
-                    "workflow_version": "v1",
-                    "status": r.status,
-                    "request_id": r.client_idempotency_key or "",
-                    "current_step_key": None,
-                    "last_event_sequence": 0,
-                    "lease_owner": r.lease_owner,
-                    "lease_expires_at": r.lease_expires_at.isoformat() if r.lease_expires_at else None,
-                    "model_config_id": None,
-                    "started_at": r.created_at.isoformat() if r.created_at else None,
-                    "completed_at": r.updated_at.isoformat() if r.updated_at else None,
-                    "error_code": None,
-                    "safe_error_summary": r.error_message,
-                    "created_at": r.created_at.isoformat() if r.created_at else None,
-                    "updated_at": r.updated_at.isoformat() if r.updated_at else None,
-                }
-                for r in runs
+                _serialize_run(
+                    run,
+                    last_event_sequence=event_sequences.get(run.id, 0),
+                )
+                for run in runs
             ],
             "total": total,
             "page": page,
@@ -142,7 +176,6 @@ async def get_run_detail(
     db: AsyncSession = Depends(get_db),
 ):
     """获取 Run 详情（管理员视图）"""
-    from sqlalchemy import select as sa_select
     from .models import AgentRun
     result = await db.execute(
         sa_select(AgentRun).where(AgentRun.id == run_id)
@@ -151,27 +184,12 @@ async def get_run_detail(
     if not run:
         raise HTTPException(status_code=404, detail="Run 不存在")
 
+    event_sequences = await _last_event_sequences(db, [run.id])
     return {
-        "data": {
-            "id": run.id,
-            "thread_id": run.thread_id,
-            "user_id": run.user_id,
-            "workflow_key": run.workflow_name,
-            "workflow_version": "v1",
-            "status": run.status,
-            "request_id": run.client_idempotency_key or "",
-            "current_step_key": None,
-            "last_event_sequence": 0,
-            "lease_owner": run.lease_owner,
-            "lease_expires_at": run.lease_expires_at.isoformat() if run.lease_expires_at else None,
-            "model_config_id": None,
-            "started_at": run.created_at.isoformat() if run.created_at else None,
-            "completed_at": run.updated_at.isoformat() if run.updated_at else None,
-            "error_code": None,
-            "safe_error_summary": run.error_message,
-            "created_at": run.created_at.isoformat() if run.created_at else None,
-            "updated_at": run.updated_at.isoformat() if run.updated_at else None,
-        }
+        "data": _serialize_run(
+            run,
+            last_event_sequence=event_sequences.get(run.id, 0),
+        )
     }
 
 
