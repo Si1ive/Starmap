@@ -520,7 +520,7 @@ export default function AgentPage() {
               <option value="plan@v1">计划</option>
             </select>
             <span>⌘ Enter 发送</span>
-            <Button disabled={!message.trim()} icon={<Send size={16} />} onClick={sendMessage}>
+            <Button disabled={!message.trim() || isSubmitting} icon={<Send size={16} />} onClick={sendMessage}>
               开始
             </Button>
           </div>
