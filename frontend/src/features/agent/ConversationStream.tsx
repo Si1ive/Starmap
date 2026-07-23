@@ -11,6 +11,7 @@ interface ConversationStreamProps {
   onAnswerInput: (runId: string, inputKey: string, answer: string) => Promise<void>
   onApprove: (runId: string, approvalId: string) => Promise<void>
   onReject: (runId: string, approvalId: string) => Promise<void>
+  onContinueAfterFailure: () => void
 }
 
 function TimelineItemView({
@@ -18,7 +19,11 @@ function TimelineItemView({
   onAnswerInput,
   onApprove,
   onReject,
-}: Pick<ConversationStreamProps, 'onAnswerInput' | 'onApprove' | 'onReject'> & {
+  onContinueAfterFailure,
+}: Pick<
+  ConversationStreamProps,
+  'onAnswerInput' | 'onApprove' | 'onReject' | 'onContinueAfterFailure'
+> & {
   item: TimelineItem
 }) {
   if (item.type === 'message' && item.message) {
@@ -48,6 +53,7 @@ function TimelineItemView({
       <InlineWorkflow
         onAnswerInput={onAnswerInput}
         onApprove={onApprove}
+        onContinueAfterFailure={onContinueAfterFailure}
         onReject={onReject}
         workflow={item.workflow}
       />
@@ -71,6 +77,7 @@ export default function ConversationStream({
   onAnswerInput,
   onApprove,
   onReject,
+  onContinueAfterFailure,
 }: ConversationStreamProps) {
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const shouldStickToBottomRef = useRef(true)
@@ -108,6 +115,7 @@ export default function ConversationStream({
             key={item.id}
             onAnswerInput={onAnswerInput}
             onApprove={onApprove}
+            onContinueAfterFailure={onContinueAfterFailure}
             onReject={onReject}
           />
         ))}

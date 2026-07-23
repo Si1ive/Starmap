@@ -26,6 +26,7 @@ export default function AgentPage() {
     createThread,
     answerWorkflowInput,
     decideWorkflowApproval,
+    connectThreadStream,
     disconnectThreadStream,
     loadEarlierTimeline,
     loadThreads,
@@ -36,6 +37,7 @@ export default function AgentPage() {
   const [action, setAction] = useState<AgentActionPreference>('auto')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isLoadingEarlier, setIsLoadingEarlier] = useState(false)
+  const [composerFocusKey, setComposerFocusKey] = useState(0)
 
   const timelineItems = useMemo(
     () => selectTimelineItems(state.timeline),
@@ -129,6 +131,12 @@ export default function AgentPage() {
       ? WifiOff
       : LoaderCircle
 
+  const handleReconnect = useCallback(() => {
+    if (!threadId) return
+    disconnectThreadStream()
+    connectThreadStream(threadId, state.timeline.latestCursor)
+  }, [connectThreadStream, disconnectThreadStream, state.timeline.latestCursor, threadId])
+
   return (
     <div className={`agent-chat-page ${isEmpty ? 'agent-chat-page--empty' : ''}`}>
       {state.error ? (
@@ -143,15 +151,26 @@ export default function AgentPage() {
         <div>
           <h1>{title}</h1>
           {!isEmpty ? (
-            <span className={`agent-chat-connection is-${connection}`}>
-              <ConnectionIcon
-                className={connection === 'connecting' || connection === 'reconnecting'
-                  ? 'agent-chat-spin'
-                  : ''}
-                size={12}
-              />
-              {CONNECTION_LABELS[connection]}
-            </span>
+            connection === 'offline' ? (
+              <button
+                className={`agent-chat-connection is-${connection}`}
+                onClick={handleReconnect}
+                type="button"
+              >
+                <ConnectionIcon size={12} />
+                连接已断开 · 重新连接
+              </button>
+            ) : (
+              <span className={`agent-chat-connection is-${connection}`}>
+                <ConnectionIcon
+                  className={connection === 'connecting' || connection === 'reconnecting'
+                    ? 'agent-chat-spin'
+                    : ''}
+                  size={12}
+                />
+                {CONNECTION_LABELS[connection]}
+              </span>
+            )
           ) : null}
         </div>
       </header>
@@ -195,6 +214,7 @@ export default function AgentPage() {
               onApprove={async (runId, approvalId) => {
                 await decideWorkflowApproval(runId, approvalId, 'approve')
               }}
+              onContinueAfterFailure={() => setComposerFocusKey((value) => value + 1)}
               onLoadEarlier={() => void handleLoadEarlier()}
               onReject={async (runId, approvalId) => {
                 await decideWorkflowApproval(runId, approvalId, 'reject')
@@ -206,6 +226,7 @@ export default function AgentPage() {
               <ChatComposer
                 action={action}
                 disabled={isSubmitting}
+                focusRequestKey={composerFocusKey}
                 onActionChange={setAction}
                 onChange={setMessage}
                 onSubmit={() => void handleSend()}

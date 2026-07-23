@@ -314,6 +314,7 @@ const PROJECTION_REFRESH_EVENTS = new Set([
   'workflow.step.updated',
   'workflow.artifact.created',
 ])
+const THREAD_RECONNECT_LIMIT = 5
 
 export function AgentProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(agentReducer, initialState)
@@ -594,6 +595,16 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
           threadEventSourceRef.current = null
 
         reconnectAttemptRef.current += 1
+        if (reconnectAttemptRef.current >= THREAD_RECONNECT_LIMIT) {
+          dispatch({
+            type: 'TIMELINE',
+            payload: {
+              type: 'timeline/connectionChanged',
+              connection: 'offline',
+            },
+          })
+          return
+        }
         dispatch({
           type: 'TIMELINE',
           payload: {

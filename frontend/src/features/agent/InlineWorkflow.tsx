@@ -18,6 +18,7 @@ interface InlineWorkflowProps {
   onAnswerInput: (runId: string, inputKey: string, answer: string) => Promise<void>
   onApprove: (runId: string, approvalId: string) => Promise<void>
   onReject: (runId: string, approvalId: string) => Promise<void>
+  onContinueAfterFailure: () => void
 }
 
 const WORKFLOW_STATUS_LABELS: Record<string, string> = {
@@ -91,6 +92,7 @@ export default function InlineWorkflow({
   onAnswerInput,
   onApprove,
   onReject,
+  onContinueAfterFailure,
 }: InlineWorkflowProps) {
   const initiallyOpen = !['completed', 'cancelled'].includes(workflow.status)
   const [open, setOpen] = useState(initiallyOpen)
@@ -141,6 +143,12 @@ export default function InlineWorkflow({
   const approvalSummary = workflow.pending_approval
     ? publicText(workflow.pending_approval.change) || '该操作会继续执行当前工作流。'
     : null
+  const failedStep = [...workflow.steps].reverse().find((step) => step.status === 'failed')
+  const retainedSummary = workflow.artifacts.length > 0
+    ? `已保留 ${workflow.artifacts.length} 项结果，可展开查看。`
+    : workflow.progress.completed > 0
+      ? `已完成的 ${workflow.progress.completed} 个步骤仍会保留。`
+      : '当前没有可确认的已保存结果。'
 
   return (
     <section className={`inline-workflow inline-workflow--${workflow.status}`}>
@@ -231,6 +239,20 @@ export default function InlineWorkflow({
               <AlertCircle size={13} />
               {interactionError}
             </p>
+          ) : null}
+
+          {workflow.status === 'failed' ? (
+            <div className="inline-workflow__failure" role="status">
+              <strong>
+                <AlertCircle aria-hidden="true" size={14} />
+                {failedStep ? `${failedStep.label}未完成` : '本次执行未完成'}
+              </strong>
+              <p>{workflow.summary || '执行过程中出现异常。'}</p>
+              <small>{retainedSummary}</small>
+              <button onClick={onContinueAfterFailure} type="button">
+                在输入框中补充后重新发起
+              </button>
+            </div>
           ) : null}
 
           {workflow.artifacts.length > 0 ? (

@@ -70,6 +70,18 @@
   color: var(--chat-danger);
 }
 
+button.agent-chat-connection {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 5px 0;
+}
+
+button.agent-chat-connection:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .agent-chat-conversation {
   display: flex;
   flex: 1;
@@ -391,6 +403,41 @@
   display: flex;
   gap: 6px;
   margin-top: 9px;
+}
+
+.inline-workflow__failure {
+  background: #fff5f4;
+  border: 1px solid #f0d1ce;
+  border-radius: 9px;
+  color: var(--chat-danger);
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 11px;
+}
+
+.inline-workflow__failure strong {
+  align-items: center;
+  display: flex;
+  font-size: 13px;
+  gap: 6px;
+}
+
+.inline-workflow__failure p,
+.inline-workflow__failure small {
+  color: var(--chat-muted);
+  margin: 0;
+}
+
+.inline-workflow__failure button {
+  background: transparent;
+  color: var(--chat-danger);
+  font-size: 12px;
+  justify-self: start;
+  margin-top: 2px;
+  padding: 2px 0;
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .inline-workflow__artifacts {
@@ -747,6 +794,34 @@
 
   .inline-workflow__meta > span:first-child {
     display: none;
+  }
+
+  .inline-workflow__summary {
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .inline-workflow__heading small {
+    white-space: normal;
+  }
+
+  .inline-workflow__actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .inline-workflow__actions button:only-child {
+    grid-column: 1 / -1;
+  }
+
+  .inline-workflow__artifact-heading {
+    grid-template-columns: 15px minmax(0, 1fr);
+  }
+
+  .inline-workflow__artifact-heading button {
+    grid-column: 2;
+    justify-self: start;
+    padding-left: 0;
   }
 }
 

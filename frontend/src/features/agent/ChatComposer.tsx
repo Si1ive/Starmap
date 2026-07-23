@@ -8,6 +8,7 @@ interface ChatComposerProps {
   action: AgentActionPreference
   disabled?: boolean
   autofocus?: boolean
+  focusRequestKey?: number
   onActionChange: (action: AgentActionPreference) => void
   onChange: (value: string) => void
   onSubmit: () => void
@@ -18,6 +19,7 @@ export default function ChatComposer({
   action,
   disabled = false,
   autofocus = false,
+  focusRequestKey = 0,
   onActionChange,
   onChange,
   onSubmit,
@@ -30,6 +32,10 @@ export default function ChatComposer({
     textarea.style.height = '0px'
     textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`
   }, [value])
+
+  useEffect(() => {
+    if (focusRequestKey > 0) textareaRef.current?.focus()
+  }, [focusRequestKey])
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
