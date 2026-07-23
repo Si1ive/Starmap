@@ -36,7 +36,7 @@ async def get_run_stats(
         total = total_result.scalar() or 0
 
         status_counts = {}
-        for status in ["queued", "running", "completed", "failed", "waiting_for_user"]:
+        for status in ["queued", "running", "completed", "failed", "waiting_for_user", "waiting_for_approval"]:
             result = await db.execute(
                 sa_select(func.count(AgentRun.id)).where(AgentRun.status == status)
             )
@@ -49,6 +49,7 @@ async def get_run_stats(
         "completed": status_counts.get("completed", 0),
         "failed": status_counts.get("failed", 0),
         "waiting_for_user": status_counts.get("waiting_for_user", 0),
+        "waiting_for_approval": status_counts.get("waiting_for_approval", 0),
     }
 
 
