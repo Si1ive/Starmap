@@ -1,30 +1,31 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Table,
-  Tag,
-  Card,
-  Space,
   Button,
+  Card,
+  Col,
   DatePicker,
   Input,
-  Select,
-  Typography,
   Row,
-  Col,
+  Select,
+  Space,
   Statistic,
+  Table,
+  Tag,
+  Typography,
   message,
 } from 'antd'
-import { ReloadOutlined, PlayCircleOutlined, EyeOutlined } from '@ant-design/icons'
+import { EyeOutlined, ReloadOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
-import type { AdminAgentRun } from '@/api/agentRuns'
-import * as agentRunsApi from '@/api/agentRuns'
 import dayjs from 'dayjs'
+
+import * as agentRunsApi from '@/api/agentRuns'
+import type { AdminAgentSession } from '@/api/agentRuns'
 
 const { RangePicker } = DatePicker
 const { Search } = Input
 
-interface RunStats {
+interface SessionStats {
   total: number
   running: number
   completed: number
@@ -42,11 +43,20 @@ const statusColors: Record<string, string> = {
   waiting_for_approval: 'purple',
 }
 
+const statusLabels: Record<string, string> = {
+  queued: '排队中',
+  running: '运行中',
+  completed: '已完成',
+  failed: '失败',
+  waiting_for_user: '等待用户',
+  waiting_for_approval: '等待审批',
+}
+
 const AgentRunsPage = () => {
   const navigate = useNavigate()
-  const [runs, setRuns] = useState<AdminAgentRun[]>([])
+  const [sessions, setSessions] = useState<AdminAgentSession[]>([])
   const [loading, setLoading] = useState(false)
-  const [stats, setStats] = useState<RunStats>({
+  const [stats, setStats] = useState<SessionStats>({
     total: 0,
     running: 0,
     completed: 0,
@@ -54,11 +64,7 @@ const AgentRunsPage = () => {
     waiting_for_user: 0,
     waiting_for_approval: 0,
   })
-  const [pagination, setPagination] = useState({
-    current: 1,
-    pageSize: 20,
-    total: 0,
-  })
+  const [pagination, setPagination] = useState({ current: 1, pageSize: 20, total: 0 })
   const [filters, setFilters] = useState<{
     status?: string
     workflow_key?: string
@@ -67,23 +73,22 @@ const AgentRunsPage = () => {
     end_date?: string
   }>({})
 
-  const fetchRuns = async (page = 1, pageSize = 20) => {
+  const fetchSessions = async (page = 1, pageSize = 20) => {
     setLoading(true)
     try {
-      const params = {
+      const response = await agentRunsApi.getAgentRuns({
         page,
         page_size: pageSize,
         ...filters,
-      }
-      const response = await agentRunsApi.getAgentRuns(params)
-      setRuns(response.data?.items || [])
+      })
+      setSessions(response.data?.items || [])
       setPagination({
         current: page,
         pageSize,
         total: response.data?.total || 0,
       })
-    } catch (error) {
-      message.error('获取 Agent Runs 失败')
+    } catch {
+      message.error('获取 Agent 会话监控失败')
     } finally {
       setLoading(false)
     }
@@ -94,79 +99,64 @@ const AgentRunsPage = () => {
       const response = await agentRunsApi.getAgentRunStats()
       const data = response.data || {}
       setStats({
-        total: Number((data as any).total) || 0,
-        running: Number((data as any).running) || 0,
-        completed: Number((data as any).completed) || 0,
-        failed: Number((data as any).failed) || 0,
-        waiting_for_user: Number((data as any).waiting_for_user) || 0,
-        waiting_for_approval: Number((data as any).waiting_for_approval) || 0,
+        total: Number(data.total) || 0,
+        running: Number(data.running) || 0,
+        completed: Number(data.completed) || 0,
+        failed: Number(data.failed) || 0,
+        waiting_for_user: Number(data.waiting_for_user) || 0,
+        waiting_for_approval: Number(data.waiting_for_approval) || 0,
       })
     } catch {
-      // 统计接口失败不阻塞主流程
+      // 统计接口失败不阻塞会话列表。
     }
   }
 
   useEffect(() => {
-    void fetchRuns()
+    void fetchSessions()
     void fetchStats()
   }, [filters])
 
-  const handleReplay = async (runId: string) => {
-    try {
-      const response = await agentRunsApi.replayAgentRun(runId)
-      message.success(`重放已启动，Eval Run ID: ${response.data?.eval_run_id || 'unknown'}`)
-    } catch (error) {
-      message.error('重放请求失败')
-    }
-  }
-
-  const columns: ColumnsType<AdminAgentRun> = [
+  const columns: ColumnsType<AdminAgentSession> = [
     {
-      title: 'Run ID',
-      dataIndex: 'id',
-      key: 'id',
-      width: 200,
-      render: (id: string) => <Typography.Text copyable>{id}</Typography.Text>,
-    },
-    {
-      title: '工作流',
-      dataIndex: 'workflow_key',
-      key: 'workflow_key',
-      width: 120,
-      render: (key: string) => <Tag>{key}</Tag>,
-    },
-    {
-      title: '状态',
-      dataIndex: 'status',
-      key: 'status',
-      width: 120,
-      render: (status: string) => (
-        <Tag color={statusColors[status] || 'default'}>{status}</Tag>
+      title: '会话',
+      dataIndex: 'title',
+      key: 'title',
+      width: 260,
+      render: (title: string, record) => (
+        <Space direction="vertical" size={0}>
+          <Typography.Text strong>{title}</Typography.Text>
+          <Typography.Text type="secondary" copyable style={{ fontSize: 12 }}>
+            {record.thread_id}
+          </Typography.Text>
+        </Space>
       ),
     },
+    { title: '用户 ID', dataIndex: 'user_id', key: 'user_id', width: 180 },
     {
-      title: '用户',
-      dataIndex: 'user_id',
-      key: 'user_id',
-      width: 150,
+      title: '最新状态',
+      dataIndex: 'latest_status',
+      key: 'latest_status',
+      width: 120,
+      render: (status: string) => (
+        <Tag color={statusColors[status] || 'default'}>
+          {statusLabels[status] || status}
+        </Tag>
+      ),
+    },
+    { title: '问答轮数', dataIndex: 'turn_count', key: 'turn_count', width: 100 },
+    { title: '运行节点', dataIndex: 'total_run_count', key: 'total_run_count', width: 100 },
+    { title: '事件数', dataIndex: 'event_count', key: 'event_count', width: 90 },
+    {
+      title: '最新工作流',
+      dataIndex: 'latest_workflow_key',
+      key: 'latest_workflow_key',
+      width: 140,
+      render: (value: string | null) => value || '-',
     },
     {
-      title: '当前步骤',
-      dataIndex: 'current_step_key',
-      key: 'current_step_key',
-      width: 150,
-      render: (key: string | null) => key || '-',
-    },
-    {
-      title: '事件数',
-      dataIndex: 'last_event_sequence',
-      key: 'last_event_sequence',
-      width: 80,
-    },
-    {
-      title: '创建时间',
-      dataIndex: 'created_at',
-      key: 'created_at',
+      title: '最后更新',
+      dataIndex: 'updated_at',
+      key: 'updated_at',
       width: 180,
       render: (date: string) => dayjs(date).format('YYYY-MM-DD HH:mm:ss'),
     },
@@ -174,119 +164,75 @@ const AgentRunsPage = () => {
       title: '操作',
       key: 'action',
       fixed: 'right',
-      width: 180,
+      width: 90,
       render: (_, record) => (
-        <Space size="small">
-          <Button
-            type="link"
-            size="small"
-            icon={<EyeOutlined />}
-            onClick={() => navigate(`/admin/agent-runs/${record.id}`)}
-          >
-            详情
-          </Button>
-          <Button
-            type="link"
-            size="small"
-            icon={<PlayCircleOutlined />}
-            onClick={() => handleReplay(record.id)}
-          >
-            重放
-          </Button>
-        </Space>
+        <Button
+          type="link"
+          size="small"
+          icon={<EyeOutlined />}
+          onClick={() => navigate(`/admin/agent-runs/${record.thread_id}`)}
+        >
+          详情
+        </Button>
       ),
     },
   ]
 
   return (
     <div className="agent-runs-page">
-      <Typography.Title level={3}>Agent Runs 监控</Typography.Title>
+      <Typography.Title level={3}>Agent 会话监控</Typography.Title>
+      <Typography.Paragraph type="secondary">
+        一条记录对应一个完整会话；详情中按用户提问分组展示多轮运行与事件。
+      </Typography.Paragraph>
 
-      {/* 统计卡片 */}
       <Row gutter={16} style={{ marginBottom: 24 }}>
-        <Col span={4}>
-          <Card>
-            <Statistic title="总计" value={stats.total} />
-          </Card>
-        </Col>
-        <Col span={4}>
-          <Card>
-            <Statistic title="运行中" value={stats.running} valueStyle={{ color: '#1890ff' }} />
-          </Card>
-        </Col>
-        <Col span={4}>
-          <Card>
-            <Statistic title="已完成" value={stats.completed} valueStyle={{ color: '#52c41a' }} />
-          </Card>
-        </Col>
-        <Col span={4}>
-          <Card>
-            <Statistic title="失败" value={stats.failed} valueStyle={{ color: '#f5222d' }} />
-          </Card>
-        </Col>
-        <Col span={4}>
-          <Card>
-            <Statistic title="等待用户" value={stats.waiting_for_user} valueStyle={{ color: '#faad14' }} />
-          </Card>
-        </Col>
-        <Col span={4}>
-          <Card>
-            <Statistic title="等待审批" value={stats.waiting_for_approval} valueStyle={{ color: '#722ed1' }} />
-          </Card>
-        </Col>
+        <Col span={4}><Card><Statistic title="会话总计" value={stats.total} /></Card></Col>
+        <Col span={4}><Card><Statistic title="运行中" value={stats.running} valueStyle={{ color: '#1890ff' }} /></Card></Col>
+        <Col span={4}><Card><Statistic title="已完成" value={stats.completed} valueStyle={{ color: '#52c41a' }} /></Card></Col>
+        <Col span={4}><Card><Statistic title="失败" value={stats.failed} valueStyle={{ color: '#f5222d' }} /></Card></Col>
+        <Col span={4}><Card><Statistic title="等待用户" value={stats.waiting_for_user} valueStyle={{ color: '#faad14' }} /></Card></Col>
+        <Col span={4}><Card><Statistic title="等待审批" value={stats.waiting_for_approval} valueStyle={{ color: '#722ed1' }} /></Card></Col>
       </Row>
 
-      {/* 筛选栏 */}
       <Card style={{ marginBottom: 24 }}>
         <Space wrap size="middle">
           <Select
-            placeholder="状态筛选"
+            placeholder="会话中运行状态"
             allowClear
-            style={{ width: 120 }}
-            onChange={(value) => setFilters((prev) => ({ ...prev, status: value }))}
-            options={[
-              { label: '队列中', value: 'queued' },
-              { label: '运行中', value: 'running' },
-              { label: '已完成', value: 'completed' },
-              { label: '失败', value: 'failed' },
-              { label: '等待用户', value: 'waiting_for_user' },
-              { label: '等待审批', value: 'waiting_for_approval' },
-            ]}
+            style={{ width: 160 }}
+            onChange={(value) => setFilters((previous) => ({ ...previous, status: value }))}
+            options={Object.entries(statusLabels).map(([value, label]) => ({ value, label }))}
           />
           <Select
             placeholder="工作流筛选"
             allowClear
             style={{ width: 150 }}
-            onChange={(value) => setFilters((prev) => ({ ...prev, workflow_key: value }))}
+            onChange={(value) => setFilters((previous) => ({ ...previous, workflow_key: value }))}
             options={[
-              { label: 'conversation@v1', value: 'conversation@v1' },
-              { label: 'explain@v1', value: 'explain@v1' },
-              { label: 'validate@v1', value: 'validate@v1' },
-              { label: 'grade@v1', value: 'grade@v1' },
-              { label: 'plan@v1', value: 'plan@v1' },
+              { label: 'conversation', value: 'conversation' },
+              { label: 'explain', value: 'explain' },
+              { label: 'validate', value: 'validate' },
+              { label: 'grade', value: 'grade' },
+              { label: 'plan', value: 'plan' },
             ]}
           />
           <Search
             placeholder="用户 ID"
             allowClear
             style={{ width: 200 }}
-            onSearch={(value) => setFilters((prev) => ({ ...prev, user_id: value }))}
+            onSearch={(value) => setFilters((previous) => ({ ...previous, user_id: value || undefined }))}
           />
           <RangePicker
-            onChange={(dates) => {
-              if (dates && dates[0] && dates[1]) {
-                setFilters((prev) => ({
-                  ...prev,
-                  start_date: dates[0]!.format('YYYY-MM-DD'),
-                  end_date: dates[1]!.format('YYYY-MM-DD'),
-                }))
-              }
-            }}
+            onChange={(dates) => setFilters((previous) => ({
+              ...previous,
+              start_date: dates?.[0]?.format('YYYY-MM-DD'),
+              end_date: dates?.[1]?.format('YYYY-MM-DD'),
+            }))}
           />
           <Button
             icon={<ReloadOutlined />}
             onClick={() => {
-              void fetchRuns(pagination.current, pagination.pageSize)
+              void fetchSessions(pagination.current, pagination.pageSize)
               void fetchStats()
             }}
           >
@@ -295,23 +241,20 @@ const AgentRunsPage = () => {
         </Space>
       </Card>
 
-      {/* 运行列表 */}
       <Card>
         <Table
           columns={columns}
-          dataSource={runs}
-          rowKey="id"
+          dataSource={sessions}
+          rowKey="thread_id"
           loading={loading}
-          scroll={{ x: 1200 }}
+          scroll={{ x: 1300 }}
           pagination={{
             current: pagination.current,
             pageSize: pagination.pageSize,
             total: pagination.total,
             showSizeChanger: true,
-            showTotal: (total) => `共 ${total} 条`,
-            onChange: (page, pageSize) => {
-              void fetchRuns(page, pageSize)
-            },
+            showTotal: (total) => `共 ${total} 个会话`,
+            onChange: (page, pageSize) => void fetchSessions(page, pageSize),
           }}
         />
       </Card>

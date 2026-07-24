@@ -105,11 +105,11 @@ conversation 工作流先构建历史和学习上下文，再由模型路由决�
 
 后续章节会随着多模型选择、可观察性和具体故障修复持续补充。
 
-## 4. 管理员监控
+## 4. 管理员会话监控
 
-管理员 Agent Runs 页面通过 `admin_router.py` 查询 run、step 和 event。监控接口必须与当前
-数据库模型、管理员 API 响应格式和前端请求封装保持一致。出现“页面加载失败”时，应依次
-检查 HTTP 状态码、后端异常、数据库迁移和前端字段映射。
+Agent Runs 是保留的菜单和 URL 名称，实际监控主实体是 `AgentThread`。这是因为运维人员通常
+需要回答“一个用户会话经历了哪些问答和工作流”，而不是在列表中手工判断多个 root/child Run
+是否属于同一段对话。
 
 ### 4.1 为什么页面曾经完全加载不出来
 
@@ -122,26 +122,70 @@ conversation 工作流先构建历史和学习上下文，再由模型路由决�
 最终地址与所有其他管理员接口保持一致，并继续由主应用统一挂载管理员认证依赖。路由契约
 测试会直接检查最终路径，防止后续重构再次漏掉 `admin` 前缀。
 
-### 4.2 管理列表的数据契约
+### 4.2 为什么详情页曾弹出 `Not Found`
 
-管理员前端约定响应形状为 `{ "data": ... }`。列表、详情和统计现在都遵循这一约定；统计
-接口不再把统计字段直接放在响应根部。Run 字段也从当前 ORM 字段读取：
+旧详情页在挂载时同时请求 Run 详情、事件、审批和产物。前端声明了
+`GET /api/v1/admin/agent-runs/{run_id}/approvals`，后端管理路由却从未实现该地址。即使 Run 详情
+本身成功，Axios 全局错误拦截器仍会把审批请求的 404 以 `Not Found` 弹出，因此表象很像详情
+路由失效。
 
-- `workflow_key` 和 `workflow_version` 优先使用真实版本字段，兼容旧记录时才回退；
-- 当前步骤使用 `current_public_step`；
-- 开始、结束时间使用 `started_at`、`completed_at`，不再拿创建、更新时间代替；
-- 最后事件序号从 `agent_events` 按 run 聚合查询；
-- 模型配置 ID 和错误码暂从运行元数据读取，后续多模型实现会将其纳入统一运行时契约。
+现在 `get_run_detail` 在一次响应中返回会话的多轮消息、Run、事件、审批和产物，
+`AgentRunDetailPage.fetchSession` 只发起这一条详情请求。审批目前作为监控事实只读展示；不再用
+一个不存在的管理端审批接口阻塞页面。
 
-分页总数查询先把带筛选条件的 Run 查询转换为子查询，再对该子查询执行 `count(*)`。这样
-不会在外层错误引用 `agent_runs.id`，可避免额外 FROM 表和错误的总数结果。
+### 4.3 会话级列表与状态统计
 
-### 4.3 排查顺序
+`list_all_runs` 先对 `agent_threads` 应用用户和时间筛选，再用 root run 的 `exists` 子查询应用
+运行状态与工作流筛选。分页只发生在 Thread 层，随后批量查询当前页的全部 Run 和事件计数，
+因此同一 Thread 无论有多少轮问答都只占一行。
+
+列表中的“最新状态”取该 Thread 最后一条 root run；统计接口使用窗口函数为每个 Thread 的 root
+run 按创建时间倒序编号，只统计排名第一的状态。于是“会话总计”和各状态卡片使用同一粒度，
+不会再把一条包含三轮问答的会话计算成三条监控记录。
+
+关键代码定位：
+
+| 执行阶段 | 文件 | 符号 | 代码范围 | 职责 |
+| --- | --- | --- | --- | --- |
+| 会话状态统计 | `backend/app/modules/agent/admin_router.py` | `get_run_stats` | L237-L274 | 用窗口函数选出每个 Thread 最新 root run 并按状态计数 |
+| 会话分页 | `backend/app/modules/agent/admin_router.py` | `list_all_runs` | L277-L374 | 分页 Thread，批量聚合 Run 数、轮数和事件数 |
+| 管理端契约 | `frontend-admin/src/api/agentRuns.ts` | `AdminAgentSession` / `AdminAgentTurn` / `AdminAgentSessionDetail` | L12-L113 | 明确会话摘要、多轮问答和嵌套事实结构 |
+| 列表消费 | `frontend-admin/src/pages/AgentRunsPage.tsx` | `AgentRunsPage` | L55-L271 | 加载统计和会话列表，并使用 Thread ID 进入详情 |
+
+### 4.4 一轮问答如何归并 root/child Run
+
+每次用户提问由一个 `parent_run_id IS NULL` 的 root run 代表。业务工作流创建的 child run 通过
+`root_run_id` 指回本轮 root。`_build_turns` 先按 root ID 建立 Run 组，再把每个 Run 的消息、事件、
+审批和产物归入同一组：
+
+- 用户消息优先使用 root run 的 `trigger_message_id` 精确定位；
+- assistant 消息按本轮 Run 集合中的 `message.run_id` 收集；
+- child run 自己产生的步骤事件不会丢失，而是显示在所属问答的事件流中；
+- Run 链路、事件流、审批与产物分别可折叠，事件流可以按每次问话独立收起；
+- 旧详情链接如果携带 Run ID，`_resolve_thread` 会先找到该 Run，再打开其 Thread。
+
+| 执行阶段 | 文件 | 符号 | 代码范围 | 职责 |
+| --- | --- | --- | --- | --- |
+| 旧链接兼容 | `backend/app/modules/agent/admin_router.py` | `_resolve_thread` | L220-L234 | 把 Thread ID 或历史 Run ID 统一解析为 Thread |
+| 多轮归并 | `backend/app/modules/agent/admin_router.py` | `_build_turns` | L127-L217 | 以 root run 为边界聚合问答和运行事实 |
+| 详情查询 | `backend/app/modules/agent/admin_router.py` | `get_run_detail` | L377-L443 | 批量读取完整 Thread 的五类事实并返回 `turns` |
+| 前端分轮展示 | `frontend-admin/src/pages/AgentRunDetailPage.tsx` | `AgentRunDetailPage` | L251-L376 | 一轮一个一级 Collapse，默认展开最后一轮 |
+| 单轮事件折叠 | `frontend-admin/src/pages/AgentRunDetailPage.tsx` | `TurnDetail` | L95-L248 | 展示问答、Run 链路及可独立收起的事件流 |
+
+### 4.5 事件名为什么保留中英文
+
+数据库和 SSE 使用稳定英文事件名，代码判断也依赖这些值，不应为了界面可读性修改事实值。
+前端通过 `getAgentEventTypeLabel` 把它显示为“步骤开始（step.started）”一类名称：中文帮助管理员
+快速理解，括号中的英文仍可直接用于日志搜索、数据库查询和故障沟通。未登记的新事件显示为
+“未知事件（原始事件名）”，不会因为字典缺项而隐藏。
+
+### 4.6 排查顺序
 
 管理员页面报错时，先在浏览器网络面板确认请求是否为
 `GET /api/v1/admin/agent-runs`，再依次检查：HTTP 401/403 是否为管理员认证问题，404 是否为
-路由契约问题，500 是否为数据库迁移或查询问题。数据库字段故障的处理方式见项目常见操作
-指南。
+路由契约问题，500 是否为数据库迁移或查询问题。详情页应只出现一条聚合详情请求；如果重新
+出现 `/approvals` 404，说明旧前端资源仍在缓存或请求封装被重新引入。数据库字段故障的处理
+方式见项目常见操作指南。
 
 ## 5. 模型配置与运行时
 

@@ -170,6 +170,31 @@ Worker 对每个 outbox 使用独立 session，确保一个模型调用或工作
 菜单层级同时改成 `/admin/monitor/agent-runs` 或 `/admin/settings/agent-models`，详情页返回、浏览器
 书签和外部链接都需要兼容重定向，而本次没有这种业务必要。
 
+### 4.5 管理端从会话列表进入多轮问答与事件流
+
+管理端 URL 继续使用 `agent-runs`，但页面主实体已经从单次 `AgentRun` 改为完整
+`AgentThread`。一次用户提问仍对应一个 root run，root run 触发的 child runs、事件、审批和
+产物在详情接口中聚合为同一个 turn；这样列表一行就是一个会话，而详情中的一块折叠面板就是
+一次问答。
+
+| 执行序号 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | `frontend-admin/src/pages/AgentRunsPage.tsx` | `AgentRunsPage.fetchSessions` | L76-L96 | 页码、每页数量和管理员筛选条件 | 调用会话级列表 API，并把分页结果写入 React 状态 | 表格一行对应一个 Thread | `AgentRunsPage` 表格详情按钮 |
+| 2 | `frontend-admin/src/pages/AgentRunsPage.tsx` | `AgentRunsPage`（表格列定义） | L119-L193 | `AdminAgentSession` | 展示会话标题、Thread ID、最新状态、问答轮数、Run 数和事件数 | 点击详情时 URL 使用 `thread_id` | `getAgentRunDetail` |
+| 3 | `frontend-admin/src/api/agentRuns.ts` | `getAgentRuns` / `getAgentRunDetail` | L125-L135 | 列表查询参数或 Thread/旧 Run ID | 请求 `/api/v1/admin/agent-runs` 及详情路径 | 得到强类型会话摘要或多轮详情 | `list_all_runs` / `get_run_detail` |
+| 4 | `backend/app/modules/agent/admin_router.py` | `list_all_runs` | L277-L374 | 管理员分页、状态、工作流、用户和时间筛选 | 先分页 `AgentThread`，再批量读取该页 Thread 的 runs 和事件计数；状态与工作流筛选使用 root run 是否存在 | `{data: {items, total, page, page_size}}`，每个 item 只代表一个 Thread | 管理端会话表格 |
+| 5 | `backend/app/modules/agent/admin_router.py` | `_resolve_thread` | L220-L234 | 详情路径中的 ID | 优先按 Thread ID 查询；查不到时把旧 Run ID 转换为所属 Thread ID | 旧书签不会因主实体变化而 404 | `get_run_detail` |
+| 6 | `backend/app/modules/agent/admin_router.py` | `get_run_detail` | L377-L443 | 已解析的 Thread | 一次读取会话内 messages、runs、events、approvals、artifacts | 完整会话事实集合 | `_build_turns` |
+| 7 | `backend/app/modules/agent/admin_router.py` | `_build_turns` | L127-L217 | 会话内五类事实记录 | 以 `root_run_id` 分组 child runs，把触发用户消息、assistant 消息和各 Run 的事件/审批/产物归到同一轮 | 按时间排序的 `turns[]` | `AdminAgentSessionDetail` |
+| 8 | `frontend-admin/src/pages/AgentRunDetailPage.tsx` | `AgentRunDetailPage.fetchSession` | L258-L268 | 路由中的 Thread ID 或兼容 Run ID | 只请求一次聚合详情，不再并行调用不存在的管理端 approvals 路由 | 消除详情挂载时的 `Not Found` 弹窗 | `AgentRunDetailPage` 渲染 |
+| 9 | `frontend-admin/src/pages/AgentRunDetailPage.tsx` | `AgentRunDetailPage`（多轮折叠渲染） | L305-L376 | `session.turns` | 每一轮渲染独立折叠面板，默认展开最后一轮 | 管理员可逐轮查看问题、回答与运行状态 | `TurnDetail` |
+| 10 | `frontend-admin/src/pages/AgentRunDetailPage.tsx` | `TurnDetail` | L95-L248 | 单轮 messages、runs、events、approvals、artifacts | 运行链路、事件流、审批与产物分别二次折叠；事件按筛选条件渲染 | 一次问话引发的事件流可以独立收起 | `getAgentEventTypeLabel` |
+| 11 | `frontend-admin/src/pages/AgentRunDetailPage.tsx` | `getAgentEventTypeLabel` | L49-L69 | 英文 `event_type` | 查询中文名称并保留英文原名；未知类型使用“未知事件”兜底 | 统一显示“中文（英文）” | 事件筛选器和 Timeline |
+
+这里的数据库读取是只读聚合，不创建新的监控表。事实来源仍然是 `agent_threads`、
+`agent_messages`、`agent_runs`、`agent_events`、`agent_approvals` 和 `agent_artifacts`；因此 Worker
+写入完成后，管理员刷新详情即可看到新的轮次和事件。
+
 ## 5. 一轮对话的生命周期
 
 ```text
