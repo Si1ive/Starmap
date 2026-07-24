@@ -411,6 +411,15 @@ max_tokens”不会覆盖旧值，而“明确提交 null”会写成无限。OR
 请求参数是否不存在 `max_tokens`。若仍看到越界数字，说明运行实例尚未更新、配置未保存成功，或
 调用走了另一条仍带硬编码预算的任务链路；不要通过 `alembic stamp head` 或修改供应商错误响应规避。
 
+### 5.11 为什么失败回复曾显示两遍
+
+后端 `message.failed` 投影已经把安全失败文案写进 assistant message 的 `content`，前端旧实现又在
+消息正文下固定渲染一次相同提示，所以不是后端重复发事件，而是同一消息的正文和状态提示同时
+展示。`frontend/src/features/agent/ConversationStream.tsx` 的 `TimelineItemView`（L17-L72）现在对
+failed 状态只渲染一个 `agent-message__error`：优先显示后端提供的安全正文，正文为空时才使用
+“这条回复生成失败，请稍后重试。”兜底。这样自定义安全错误仍可展示，默认文案不会重复，颜色
+继续由 `frontend/src/features/agent/agent-chat.css` 的 `.agent-message__error`（L167-L172）控制。
+
 ## 6. 时间处理
 
 ### 6.1 为什么历史时间刚好差几个小时

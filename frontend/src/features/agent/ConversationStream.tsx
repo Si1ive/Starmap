@@ -37,13 +37,16 @@ function TimelineItemView({
 
     return (
       <div className="agent-message agent-message--assistant">
-        <div className="agent-message__content">
-          {item.message.content || (item.message.status === 'streaming' ? '正在回复…' : '')}
-          {item.message.status === 'streaming' ? <span className="agent-message__cursor" /> : null}
-        </div>
         {item.message.status === 'failed' ? (
-          <small className="agent-message__error">这条回复生成失败，请稍后重试。</small>
-        ) : null}
+          <small className="agent-message__error">
+            {item.message.content || '这条回复生成失败，请稍后重试。'}
+          </small>
+        ) : (
+          <div className="agent-message__content">
+            {item.message.content || (item.message.status === 'streaming' ? '正在回复…' : '')}
+            {item.message.status === 'streaming' ? <span className="agent-message__cursor" /> : null}
+          </div>
+        )}
       </div>
     )
   }
