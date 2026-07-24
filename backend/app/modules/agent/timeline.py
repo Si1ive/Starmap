@@ -23,6 +23,7 @@ from .models import (
     AgentThread,
     AgentThreadItem,
 )
+from .model_configs import AgentModelConfigService
 from .outbox import outbox_store
 from .state_machine import RunStatus
 from .thread_events import thread_event_store
@@ -171,6 +172,7 @@ class AgentTimelineService:
         client_message_id: str,
         attachments: list[dict[str, Any]],
         context_refs: list[dict[str, Any]],
+        model_config_id: str | None = None,
     ) -> TurnCreation:
         """原子创建用户消息、根 run、时间线项和 outbox 任务。"""
         thread_result = await self.db.execute(
@@ -204,11 +206,19 @@ class AgentTimelineService:
             existing_run = run_result.scalar_one_or_none()
             if not existing_run:
                 raise TurnConflictError(client_message_id)
+            existing_model_config_id = (existing_run.metadata_json or {}).get(
+                "model_config_id"
+            )
+            if existing_model_config_id != model_config_id:
+                raise TurnConflictError(client_message_id)
             return TurnCreation(
                 message=existing_message,
                 run=existing_run,
                 timeline_cursor=thread.last_item_sequence,
             )
+
+        if model_config_id:
+            await AgentModelConfigService(self.db).get_user_selectable(model_config_id)
 
         now = utc_now()
         message = AgentMessage(
@@ -243,6 +253,7 @@ class AgentTimelineService:
             metadata_json={
                 "attachments": attachments,
                 "context_refs": context_refs,
+                "model_config_id": model_config_id,
             },
         )
         self.db.add(run)

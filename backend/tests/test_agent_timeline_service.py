@@ -15,6 +15,7 @@ from app.modules.agent.models import (
     AgentEvent,
     AgentInput,
     AgentMessage,
+    AgentModelConfigRecord,
     AgentRun,
     AgentRunOutbox,
     AgentStep,
@@ -28,6 +29,7 @@ from app.modules.agent.thread_events import thread_event_store
 from app.modules.agent.timeline import AgentTimelineService, TurnConflictError
 
 TIMELINE_SERVICE_TABLES = [
+    AgentModelConfigRecord.__table__,
     AgentThread.__table__,
     AgentRun.__table__,
     AgentMessage.__table__,
@@ -76,6 +78,7 @@ async def _create_turn(
     *,
     content: str = "解释循环队列",
     client_message_id: str = "client_001",
+    model_config_id: str | None = None,
 ):
     return await AgentTimelineService(db_session).create_turn(
         user_id="user_001",
@@ -84,6 +87,7 @@ async def _create_turn(
         client_message_id=client_message_id,
         attachments=[],
         context_refs=[],
+        model_config_id=model_config_id,
     )
 
 
@@ -115,6 +119,28 @@ async def test_create_turn_writes_message_run_timeline_event_and_outbox(db_sessi
 
 
 @pytest.mark.asyncio
+async def test_create_turn_persists_selected_model_config(db_session):
+    await _create_thread(db_session)
+    db_session.add(
+        AgentModelConfigRecord(
+            id="model_001",
+            display_name="推理模型",
+            model_name="reasoning-model",
+            api_key="test-key",
+            online=True,
+            selectable=True,
+            is_default=True,
+            default_slot=1,
+        )
+    )
+    await db_session.flush()
+
+    creation = await _create_turn(db_session, model_config_id="model_001")
+
+    assert creation.run.metadata_json["model_config_id"] == "model_001"
+
+
+@pytest.mark.asyncio
 async def test_create_turn_is_idempotent_by_client_message_id(db_session):
     await _create_thread(db_session)
 
@@ -128,6 +154,30 @@ async def test_create_turn_is_idempotent_by_client_message_id(db_session):
     assert await db_session.scalar(select(func.count(AgentRun.id))) == 1
     assert await db_session.scalar(select(func.count(AgentThreadItem.id))) == 1
     assert await db_session.scalar(select(func.count(AgentRunOutbox.id))) == 1
+
+
+@pytest.mark.asyncio
+async def test_turn_idempotency_rejects_changed_model_selection(db_session):
+    await _create_thread(db_session)
+    for model_id, display_name in (
+        ("model_001", "模型 A"),
+        ("model_002", "模型 B"),
+    ):
+        db_session.add(
+            AgentModelConfigRecord(
+                id=model_id,
+                display_name=display_name,
+                model_name=model_id,
+                api_key="test-key",
+                online=True,
+                selectable=True,
+            )
+        )
+    await db_session.flush()
+    await _create_turn(db_session, model_config_id="model_001")
+
+    with pytest.raises(TurnConflictError):
+        await _create_turn(db_session, model_config_id="model_002")
 
 
 @pytest.mark.asyncio

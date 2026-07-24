@@ -9,7 +9,7 @@ from typing import Optional, Dict, Any
 
 from sqlalchemy import (
     BigInteger, String, Text, DateTime, Integer, ForeignKey, Index,
-    UniqueConstraint, Enum as SAEnum, JSON,
+    UniqueConstraint, Enum as SAEnum, JSON, Boolean, Float,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -18,6 +18,39 @@ from .time_utils import utc_now
 
 
 # ========================== ORM Models ==========================
+
+class AgentModelConfigRecord(Base):
+    """管理员维护的 Agent 可选模型配置。"""
+
+    __tablename__ = "agent_model_configs"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    provider: Mapped[str] = mapped_column(
+        String(50), default="openai_compatible", nullable=False
+    )
+    base_url: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    api_key: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    model_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    online: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    selectable: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    default_slot: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    temperature: Mapped[float] = mapped_column(Float, default=0.2, nullable=False)
+    max_tokens: Mapped[int] = mapped_column(Integer, default=2000, nullable=False)
+    timeout_seconds: Mapped[int] = mapped_column(Integer, default=60, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, onupdate=utc_now
+    )
+
+    __table_args__ = (
+        Index("idx_agent_model_online_selectable", "online", "selectable"),
+        Index("idx_agent_model_default", "is_default"),
+        UniqueConstraint("display_name", name="uk_agent_model_display_name"),
+        UniqueConstraint("default_slot", name="uk_agent_model_default_slot"),
+        {"comment": "Agent 多模型配置表"},
+    )
 
 class AgentThread(Base):
     """线程表：用户对话容器"""

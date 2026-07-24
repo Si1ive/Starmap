@@ -194,8 +194,37 @@ Run 开始处理、模型配置解析完成、Router 调用开始与完成、回
 失败。如果连“Worker 扫描到待执行任务”都没有，应先检查 Worker 是否启动和 outbox 状态；
 如果停在配置解析，应检查管理员问答 LLM 是否启用以及模型名、API Key、Base URL。
 
-当前这一阶段只打通原有单个 `system_configs.llm` 配置。后台多模型记录、上线/下线和用户选择
-属于后续独立演进，不能把 `model_config_source` 误当成未来真实的模型配置 ID。
+### 5.6 多模型配置如何进入一次 Run
+
+多模型配置存储在 `agent_model_configs`。管理员可以维护显示名称、OpenAI 兼容地址、模型名、
+API Key、采样参数、上线状态、用户可选状态和默认状态。`default_slot` 只有默认记录写入 `1`，
+其他记录写入 `NULL`；数据库唯一约束因此允许多个非默认记录，却不允许两个默认记录并存。
+切换默认模型时，服务先清除旧默认再设置新默认；默认模型不能被直接下线或改为不可选。
+
+用户端只通过 `GET /api/v1/app/agent/models` 获取 `online + selectable` 的记录，响应不包含
+Base URL、模型内部名称或 API Key。创建 turn 时可携带 `model_config_id`。后端在消息、Run 和
+outbox 入库前再次校验该记录仍可用，防止用户拿过期列表提交已下线模型；同一个
+`client_message_id` 重试时，模型 ID 也属于幂等内容，换模型重试会返回冲突而不是复用旧 Run。
+
+运行时解析顺序如下：
+
+```text
+Run.metadata.model_config_id
+  -> agent_model_configs 默认记录
+  -> 旧 system_configs.llm（迁移兼容）
+  -> OPENAI_API_KEY + OPENAI_MODEL（最终兼容）
+```
+
+Router 第一次调用模型后会把实际 `model_config_id` 写回 Run。这样用户未显式选择时也会固定
+当时的默认模型，随后 DirectAnswer 不会因为管理员中途切换默认模型而改用另一条配置。迁移
+`20260723_agent_model_configs` 会创建新表，并把已启用的旧问答 LLM 安全复制为默认记录；迁移
+不删除 `system_configs.llm`，便于滚动升级和旧功能继续运行。启动期 schema guard 除了核对
+Alembic head，还会确认 `agent_model_configs` 真实存在，防止错误 `stamp head` 掩盖缺表。
+
+管理员列表只返回 API Key 保留掩码和 `has_api_key`，更新请求携带保留掩码时不改写原密钥。
+连通性测试与 Agent 运行时都复用独立客户端配置，不向 Run 元数据、日志或用户接口写入密钥。
+排查选择模型失败时，依次检查配置是否存在、`online/selectable`、默认唯一约束、模型名/API
+Key，以及 Run 元数据中的 `model_config_id` 和 `model_config_source`。
 
 ## 6. 时间处理
 

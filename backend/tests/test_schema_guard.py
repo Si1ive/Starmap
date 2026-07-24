@@ -19,7 +19,9 @@ async def test_schema_guard_accepts_database_at_all_alembic_heads():
         "parent_run_id",
         "root_run_id",
     ]
-    session.execute.side_effect = [revision_result, columns_result]
+    tables_result = Mock()
+    tables_result.scalars.return_value.all.return_value = ["agent_model_configs"]
+    session.execute.side_effect = [revision_result, columns_result, tables_result]
 
     revisions = await verify_database_schema(
         session,
@@ -71,7 +73,26 @@ async def test_schema_guard_rejects_missing_agent_run_worker_columns():
         )
 
 
+@pytest.mark.asyncio
+async def test_schema_guard_rejects_missing_agent_model_configs_table():
+    session = AsyncMock()
+    revision_result = Mock()
+    revision_result.scalars.return_value.all.return_value = ["current_revision"]
+    columns_result = Mock()
+    columns_result.scalars.return_value.all.return_value = [
+        "parent_run_id",
+        "root_run_id",
+    ]
+    tables_result = Mock()
+    tables_result.scalars.return_value.all.return_value = []
+    session.execute.side_effect = [revision_result, columns_result, tables_result]
+
+    with pytest.raises(DatabaseSchemaError, match="agent_model_configs"):
+        await verify_database_schema(
+            session,
+            expected_revisions={"current_revision"},
+        )
+
+
 def test_schema_guard_reads_the_project_migration_heads():
-    assert get_expected_revisions() == frozenset(
-        {"20260723_repair_agent_parent"}
-    )
+    assert get_expected_revisions() == frozenset({"20260723_agent_model_configs"})

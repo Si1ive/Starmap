@@ -136,6 +136,7 @@ USE starmap;
 SELECT version_num FROM alembic_version;
 SHOW COLUMNS FROM agent_runs LIKE 'parent_run_id';
 SHOW COLUMNS FROM agent_runs LIKE 'root_run_id';
+SHOW TABLES LIKE 'agent_model_configs';
 ```
 
 #### 5. 重启后端并检查日志
@@ -171,6 +172,39 @@ alembic -c alembic.ini upgrade head
 
 执行成功后，当前 migration head 至少应包含 `20260723_repair_agent_parent`。以后仓库
 新增迁移时，head 名称会继续变化，应始终以 `alembic heads` 的实际输出为准。
+
+### `agent_model_configs` 缺失专项修复
+
+适用现象包括：管理员 Agent 模型列表返回 500、用户发送消息后日志出现
+`Table '...agent_model_configs' doesn't exist`，或者启动阶段直接提示缺少 Agent 数据表。
+
+先确认当前代码要求的 head：
+
+```bash
+cd backend
+source venv/bin/activate
+alembic -c alembic.ini heads
+alembic -c alembic.ini current
+```
+
+迁移 `20260723_agent_model_configs` 会创建多模型配置表、默认模型唯一约束和查询索引，并把
+已启用的旧 `system_configs.llm` 复制为默认模型。正常修复仍然是执行：
+
+```bash
+alembic -c alembic.ini upgrade head
+```
+
+随后在 MySQL 验证：
+
+```sql
+SHOW CREATE TABLE agent_model_configs;
+SELECT id, display_name, online, selectable, is_default, default_slot
+FROM agent_model_configs;
+```
+
+不要手工创建一个字段不完整的同名表，也不要用 `stamp head` 跳过迁移。若版本已经显示为新
+head 但表仍缺失，说明数据库曾被错误 stamp 或结构被人工删除；应先备份数据库，再根据完整
+迁移日志修复版本与真实结构的漂移。应用启动校验会主动检查该表是否存在。
 
 ### 禁止使用 `stamp head` 代替修复
 

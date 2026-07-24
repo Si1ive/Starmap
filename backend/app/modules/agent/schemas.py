@@ -101,6 +101,11 @@ class TurnCreateRequest(BaseModel):
     """用户端创建一轮对话请求。"""
 
     content: str = Field(..., min_length=1, max_length=5000)
+    model_config_id: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=32,
+    )
     attachments: List[Dict[str, Any]] = Field(default_factory=list, max_length=20)
     context_refs: List[Dict[str, Any]] = Field(default_factory=list, max_length=50)
     client_message_id: str = Field(..., min_length=1, max_length=128)

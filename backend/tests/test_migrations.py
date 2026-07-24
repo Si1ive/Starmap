@@ -31,14 +31,12 @@ def test_migration_graph_has_single_head():
     config.set_main_option("script_location", str(backend_dir / "alembic"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_heads() == ["20260723_repair_agent_parent"]
+    assert scripts.get_heads() == ["20260723_agent_model_configs"]
 
 
 def test_user_identity_migration_renders_mysql_ddl():
     backend_dir = Path(__file__).resolve().parents[1]
-    migration_path = (
-        backend_dir / "alembic" / "versions" / "20260716_user_identity.py"
-    )
+    migration_path = backend_dir / "alembic" / "versions" / "20260716_user_identity.py"
     spec = importlib.util.spec_from_file_location(
         "user_identity_migration",
         migration_path,
@@ -66,10 +64,7 @@ def test_user_identity_migration_renders_mysql_ddl():
 def test_agent_timeline_migration_renders_mysql_ddl():
     backend_dir = Path(__file__).resolve().parents[1]
     migration_path = (
-        backend_dir
-        / "alembic"
-        / "versions"
-        / "20260723_agent_conversation_timeline.py"
+        backend_dir / "alembic" / "versions" / "20260723_agent_conversation_timeline.py"
     )
     spec = importlib.util.spec_from_file_location(
         "agent_conversation_timeline_migration",
@@ -125,13 +120,41 @@ def test_agent_thread_events_migration_renders_mysql_ddl():
     assert "workflow.updated" in ddl
 
 
+def test_agent_model_configs_migration_renders_mysql_ddl_and_legacy_backfill():
+    backend_dir = Path(__file__).resolve().parents[1]
+    migration_path = (
+        backend_dir / "alembic" / "versions" / "20260723_agent_model_configs.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "agent_model_configs_migration",
+        migration_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    output = io.StringIO()
+    context = MigrationContext.configure(
+        dialect=mysql.dialect(),
+        opts={"as_sql": True, "output_buffer": output},
+    )
+    migration.op = Operations(context)
+    migration.upgrade()
+    ddl = output.getvalue()
+
+    assert "CREATE TABLE agent_model_configs" in ddl
+    assert "uk_agent_model_display_name" in ddl
+    assert "uk_agent_model_default_slot" in ddl
+    assert "INSERT INTO agent_model_configs" in ddl
+    assert "FROM system_configs" in ddl
+
+
 def _load_agent_parent_repair_migration():
     backend_dir = Path(__file__).resolve().parents[1]
     migration_path = (
-        backend_dir
-        / "alembic"
-        / "versions"
-        / "20260723_repair_agent_parent.py"
+        backend_dir / "alembic" / "versions" / "20260723_repair_agent_parent.py"
     )
     spec = importlib.util.spec_from_file_location(
         "agent_parent_repair_migration",
@@ -189,9 +212,7 @@ def test_agent_parent_repair_migration_is_idempotent(monkeypatch):
     initial_inspector = Mock()
     initial_inspector.get_columns.return_value = [{"name": "parent_run_id"}]
     refreshed_inspector = Mock()
-    refreshed_inspector.get_indexes.return_value = [
-        {"name": "idx_agent_run_parent"}
-    ]
+    refreshed_inspector.get_indexes.return_value = [{"name": "idx_agent_run_parent"}]
     refreshed_inspector.get_foreign_keys.return_value = [
         {"name": "fk_agent_run_parent"}
     ]

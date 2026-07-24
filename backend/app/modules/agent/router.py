@@ -16,6 +16,11 @@ from app.db.mysql import mysql_client
 from app.modules.identity.dependencies import require_current_user
 from app.modules.identity.models import User
 from .models import AgentThread, AgentRun, AgentEvent, AgentArtifact, AgentApproval
+from .model_configs import (
+    AgentModelConfigError,
+    AgentModelConfigNotFoundError,
+    AgentModelConfigService,
+)
 from .schemas import (
     ThreadCreateRequest, ThreadResponse, RunCreateRequest,
     RunStatusResponse, EventResponse, ArtifactResponse,
@@ -45,6 +50,18 @@ async def get_current_user_id(user: User = Depends(require_current_user)) -> str
 
 
 # ==================== Thread API ====================
+
+
+@router.get("/models")
+async def list_selectable_models(
+    _user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """返回用户当前可选择的 Agent 模型，不暴露连接凭据。"""
+    service = AgentModelConfigService(db)
+    records = await service.list_public()
+    return {"items": [service.to_public_dict(record) for record in records]}
+
 
 @router.post("/threads", response_model=ThreadResponse)
 async def create_thread(
@@ -168,6 +185,7 @@ async def create_turn(
             client_message_id=request.client_message_id,
             attachments=request.attachments,
             context_refs=request.context_refs,
+            model_config_id=request.model_config_id,
         )
     except ThreadNotFoundError as exc:
         raise HTTPException(status_code=404, detail="线程不存在") from exc
@@ -175,6 +193,11 @@ async def create_turn(
         raise HTTPException(
             status_code=409,
             detail="client_message_id 已被其他消息使用",
+        ) from exc
+    except (AgentModelConfigError, AgentModelConfigNotFoundError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc) or "所选模型不可用",
         ) from exc
 
     return TurnCreateResponse(

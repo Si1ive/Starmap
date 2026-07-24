@@ -14,6 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.modules.agent.model_configs import (
+    AgentModelConfigError,
+    AgentModelConfigNotFoundError,
+    AgentModelConfigService,
+)
 from app.modules.operations.settings_service import SystemSettingsService
 
 logger = get_logger(__name__)
@@ -28,6 +33,7 @@ class AgentModelConfig:
     """一次 Agent 模型调用所需的不可变配置快照。"""
 
     source: str
+    config_id: str | None
     provider: str
     model_name: str
     api_key: str
@@ -52,8 +58,53 @@ class AgentModelSession:
     config: AgentModelConfig
 
 
-async def load_agent_model_config(db: AsyncSession) -> AgentModelConfig:
-    """优先读取管理员“问答 LLM”，未启用时再回退环境变量。"""
+def _record_to_runtime_config(record: Any) -> AgentModelConfig:
+    provider = str(record.provider or "openai_compatible").strip()
+    if provider != "openai_compatible":
+        raise AgentModelConfigurationError(
+            f"Agent 暂不支持模型服务类型 {provider!r}，请使用 OpenAI 兼容接口"
+        )
+    model_name = str(record.model_name or "").strip()
+    api_key = str(record.api_key or settings.OPENAI_API_KEY or "").strip()
+    if not model_name or not api_key:
+        raise AgentModelConfigurationError(
+            f"Agent 模型 {record.display_name!r} 缺少模型名称或 API Key"
+        )
+    return AgentModelConfig(
+        source="agent_model_configs",
+        config_id=record.id,
+        provider=provider,
+        model_name=model_name,
+        api_key=api_key,
+        base_url=str(record.base_url or "").strip().rstrip("/"),
+        temperature=float(record.temperature),
+        max_tokens=int(record.max_tokens),
+        timeout_seconds=int(record.timeout_seconds),
+    )
+
+
+async def load_agent_model_config(
+    db: AsyncSession,
+    *,
+    model_config_id: str | None = None,
+) -> AgentModelConfig:
+    """优先解析所选或默认多模型配置，再兼容旧系统配置与环境变量。"""
+    model_service = AgentModelConfigService(db)
+    if model_config_id:
+        try:
+            selected = await model_service.get_user_selectable(model_config_id)
+        except (AgentModelConfigError, AgentModelConfigNotFoundError) as exc:
+            raise AgentModelConfigurationError("所选 Agent 模型当前不可用") from exc
+        return _record_to_runtime_config(selected)
+
+    default_model = await model_service.get_default()
+    if default_model is not None:
+        if not (default_model.online and default_model.selectable):
+            raise AgentModelConfigurationError(
+                "默认 Agent 模型当前不可用，请联系管理员"
+            )
+        return _record_to_runtime_config(default_model)
+
     runtime_settings = await SystemSettingsService(db).load()
     configured = runtime_settings.get("llm", {})
     config = configured if isinstance(configured, dict) else {}
@@ -72,6 +123,7 @@ async def load_agent_model_config(db: AsyncSession) -> AgentModelConfig:
             )
         return AgentModelConfig(
             source="system_settings.llm",
+            config_id=None,
             provider=provider,
             model_name=model_name,
             api_key=api_key,
@@ -86,6 +138,7 @@ async def load_agent_model_config(db: AsyncSession) -> AgentModelConfig:
     if api_key and model_name:
         return AgentModelConfig(
             source="environment",
+            config_id=None,
             provider="openai_compatible",
             model_name=model_name,
             api_key=api_key,
@@ -107,7 +160,19 @@ async def open_agent_model(
     run_id: str | None = None,
 ) -> AsyncIterator[AgentModelSession]:
     """创建独立 OpenAI 兼容客户端，并在模型调用结束后可靠关闭。"""
-    config = await load_agent_model_config(db)
+    run = None
+    requested_model_config_id = None
+    if run_id:
+        from app.modules.agent.models import AgentRun
+
+        run = await db.get(AgentRun, run_id)
+        if run:
+            requested_model_config_id = (run.metadata_json or {}).get("model_config_id")
+
+    config = await load_agent_model_config(
+        db,
+        model_config_id=requested_model_config_id,
+    )
     options: dict[str, Any] = {
         "api_key": config.api_key,
         "timeout": config.timeout_seconds,
@@ -118,21 +183,18 @@ async def open_agent_model(
     client = openai.AsyncOpenAI(**options)
     provider = OpenAIProvider(openai_client=client)
     model = OpenAIChatModel(config.model_name, provider=provider)
-    if run_id:
-        from app.modules.agent.models import AgentRun
-
-        run = await db.get(AgentRun, run_id)
-        if run:
-            metadata = dict(run.metadata_json or {})
-            metadata.update(
-                {
-                    "model_config_source": config.source,
-                    "model_name": config.model_name,
-                    "model_provider": config.provider,
-                }
-            )
-            run.metadata_json = metadata
-            await db.flush()
+    if run:
+        metadata = dict(run.metadata_json or {})
+        metadata.update(
+            {
+                "model_config_id": config.config_id,
+                "model_config_source": config.source,
+                "model_name": config.model_name,
+                "model_provider": config.provider,
+            }
+        )
+        run.metadata_json = metadata
+        await db.flush()
     logger.info(
         "Agent 模型配置解析完成",
         source=config.source,

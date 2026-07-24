@@ -8,9 +8,9 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-
 BACKEND_DIR = Path(__file__).resolve().parents[3]
 AGENT_RUN_WORKER_COLUMNS = frozenset({"parent_run_id", "root_run_id"})
+AGENT_REQUIRED_TABLES = frozenset({"agent_model_configs"})
 
 
 class DatabaseSchemaError(RuntimeError):
@@ -73,6 +73,31 @@ async def verify_database_schema(
         raise DatabaseSchemaError(
             "数据库结构与 Alembic 版本记录不一致："
             f"agent_runs 缺少列 [{missing_label}]；"
+            "请先在 backend 目录执行 `alembic upgrade head`。"
+        )
+
+    try:
+        result = await session.execute(
+            text(
+                "SELECT table_name "
+                "FROM information_schema.tables "
+                "WHERE table_schema = DATABASE() "
+                "AND table_name IN ('agent_model_configs')"
+            )
+        )
+        agent_tables = frozenset(result.scalars().all())
+    except Exception as exc:
+        raise DatabaseSchemaError(
+            "无法校验 Agent 必需数据表；"
+            "请先在 backend 目录执行 `alembic upgrade head`。"
+        ) from exc
+
+    missing_tables = AGENT_REQUIRED_TABLES - agent_tables
+    if missing_tables:
+        missing_label = ", ".join(sorted(missing_tables))
+        raise DatabaseSchemaError(
+            "数据库结构与 Alembic 版本记录不一致："
+            f"缺少 Agent 数据表 [{missing_label}]；"
             "请先在 backend 目录执行 `alembic upgrade head`。"
         )
 
