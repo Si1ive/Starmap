@@ -31,7 +31,7 @@ def test_migration_graph_has_single_head():
     config.set_main_option("script_location", str(backend_dir / "alembic"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_heads() == ["20260723_agent_model_configs"]
+    assert scripts.get_heads() == ["20260724_agent_unlimited"]
 
 
 def test_user_identity_migration_renders_mysql_ddl():
@@ -149,6 +149,33 @@ def test_agent_model_configs_migration_renders_mysql_ddl_and_legacy_backfill():
     assert "uk_agent_model_default_slot" in ddl
     assert "INSERT INTO agent_model_configs" in ddl
     assert "FROM system_configs" in ddl
+
+
+def test_agent_unlimited_tokens_migration_makes_limit_nullable():
+    backend_dir = Path(__file__).resolve().parents[1]
+    migration_path = (
+        backend_dir / "alembic" / "versions" / "20260724_agent_unlimited_tokens.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "agent_unlimited_tokens_migration",
+        migration_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    output = io.StringIO()
+    context = MigrationContext.configure(
+        dialect=mysql.dialect(),
+        opts={"as_sql": True, "output_buffer": output},
+    )
+    migration.op = Operations(context)
+    migration.upgrade()
+    ddl = output.getvalue()
+
+    assert "ALTER TABLE agent_model_configs MODIFY max_tokens INTEGER NULL" in ddl
 
 
 def _load_agent_parent_repair_migration():

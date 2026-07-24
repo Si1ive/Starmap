@@ -370,6 +370,47 @@ Agent 模型配置页面维护。
 解析 FastAPI 的 `detail` 为可读中文错误，并自动刷新模型列表；选择消失时会切到新的默认模型。
 前端校验改善交互，后端校验才是并发状态变化下的最终安全边界。
 
+### 5.10 输出 Token 的无限语义与 GLM 越界故障
+
+供应商错误 `Range of max_completion_tokens should be [1, 131072]` 表示客户端实际发送了超出
+`glm-5.2` 接受范围的输出上限。不能把 200000、131072 或其他大数字当作“无限”：不同模型上限
+不同，模型升级后也可能变化；即便正好等于输出上限，还可能与输入上下文共同受总窗口约束。
+
+当前约定如下：
+
+| 配置值 | 含义 | 请求行为 |
+| --- | --- | --- |
+| 字段缺失 | 沿用该用途历史默认值 | 发送默认数字 |
+| 正整数 | 管理员明确限制输出 | 发送 `max_tokens`，SDK 可映射为 `max_completion_tokens` |
+| `null` | 不设置应用侧输出上限 | 完全省略 Token 上限参数 |
+
+Agent 模型创建和更新分别由 `backend/app/modules/agent/model_configs.py` 的
+`AgentModelConfigService.create`（L38-L84）与 `AgentModelConfigService.update`（L86-L110）处理。
+更新接口的 `request.model_dump(exclude_unset=True)` 位于
+`backend/app/modules/agent/model_config_router.py` 的 `update_agent_model`（L53-L69），因此“没有提交
+max_tokens”不会覆盖旧值，而“明确提交 null”会写成无限。ORM 字段
+`AgentModelConfigRecord.max_tokens`（`backend/app/modules/agent/models.py` L40-L44）使用
+`Integer().evaluates_none()`，这是为了阻止 SQLAlchemy 把显式 `None` 当成缺省值并重新写回 2000。
+
+数据库前向迁移 `backend/alembic/versions/20260724_agent_unlimited_tokens.py` 的 `upgrade`（L20-L27）
+只把列改为 nullable，不改写已有数值；`downgrade`（L30-L43）先把无限记录恢复为 2000，再恢复非空
+约束，保证降级 DDL 可执行。
+
+运行时 `AgentModelConfig.model_settings`（`backend/app/modules/agent/model_runtime/config.py` L29-L51）
+只在值非空时加入 `max_tokens`。Router 和 Answer 分别在
+`backend/app/modules/agent/model_runtime/router.py` 的 `RouterRuntime.route`（L75-L100）以及
+`backend/app/modules/agent/model_runtime/answer.py` 的 `DirectAnswerRuntime.answer`（L89-L119）消费该
+字典。因此无限配置不会再被 Pydantic AI/OpenAI SDK 转成越界的 `max_completion_tokens`。
+
+题目结构、大纲、文档元信息和富化等系统 LLM 共用
+`backend/app/infrastructure/ai/llm_client.py` 的 `BaseLLMClient.__init__`（L48-L67）与
+`BaseLLMClient._chat`（L111-L137）：前者区分缺失和显式空值，后者按条件构造 SDK 参数。
+`OutlineLLMClient.__init__`（L154-L160）也只在字段缺失时套用 16000，显式 `null` 不会被覆盖。
+
+排障时先在管理端确认表格显示“无限”，再检查数据库值是否为 SQL `NULL`，最后查看调用监控中的
+请求参数是否不存在 `max_tokens`。若仍看到越界数字，说明运行实例尚未更新、配置未保存成功，或
+调用走了另一条仍带硬编码预算的任务链路；不要通过 `alembic stamp head` 或修改供应商错误响应规避。
+
 ## 6. 时间处理
 
 ### 6.1 为什么历史时间刚好差几个小时

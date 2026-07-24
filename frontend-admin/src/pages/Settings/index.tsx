@@ -15,6 +15,14 @@ const { TextArea } = Input
 const { Option } = Select
 const { TabPane } = Tabs
 
+const defaultMaxTokens: Record<Exclude<LlmKind, 'embedding'>, number> = {
+  llm: 2000,
+  pdf_structure_llm: 2000,
+  outline_llm: 16000,
+  doc_meta_llm: 1000,
+  enrich_llm: 2000,
+}
+
 // 任务型 LLM 配置 Tab（题目结构 / 大纲拆分 / 文档元信息 / 富化共用）
 const LlmConfigTab = ({
   kind,
@@ -26,6 +34,7 @@ const LlmConfigTab = ({
   intro: string
 }) => {
   const queryClient = useQueryClient()
+  const maxTokens = Form.useWatch([kind, 'max_tokens'], form)
   const { data: statusData, isLoading: statusLoading } = useQuery({
     queryKey: ['llm-status', kind],
     queryFn: () => getLlmStatus(kind),
@@ -91,8 +100,30 @@ const LlmConfigTab = ({
       <Form.Item name={[kind, 'temperature']} label="温度参数">
         <InputNumber min={0} max={2} step={0.1} style={{ width: '100%' }} />
       </Form.Item>
-      <Form.Item name={[kind, 'max_tokens']} label="最大Token数">
-        <InputNumber min={100} max={32000} step={100} style={{ width: '100%' }} />
+      <Form.Item
+        label="最大输出 Token"
+        extra="无限时不会向模型供应商发送输出 Token 上限，实际输出仍受模型上下文与供应商限制。"
+      >
+        <Space.Compact style={{ width: '100%' }}>
+          <Form.Item name={[kind, 'max_tokens']} noStyle>
+            <InputNumber
+              min={1}
+              max={200000}
+              precision={0}
+              disabled={maxTokens === null}
+              style={{ width: 'calc(100% - 72px)' }}
+            />
+          </Form.Item>
+          <Switch
+            checked={maxTokens === null}
+            checkedChildren="无限"
+            unCheckedChildren="限额"
+            onChange={(checked) => form.setFieldValue(
+              [kind, 'max_tokens'],
+              checked ? null : defaultMaxTokens[kind],
+            )}
+          />
+        </Space.Compact>
       </Form.Item>
       <Form.Item name={[kind, 'timeout_seconds']} label="请求超时（秒）">
         <InputNumber min={5} max={600} style={{ width: '100%' }} />

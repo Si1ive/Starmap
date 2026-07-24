@@ -39,15 +39,15 @@ class AgentModelConfig:
     api_key: str
     base_url: str
     temperature: float
-    max_tokens: int
+    max_tokens: int | None
     timeout_seconds: int
 
     @property
     def model_settings(self) -> dict[str, Any]:
-        return {
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
-        }
+        settings: dict[str, Any] = {"temperature": self.temperature}
+        if self.max_tokens is not None:
+            settings["max_tokens"] = self.max_tokens
+        return settings
 
 
 @dataclass(frozen=True)
@@ -78,7 +78,9 @@ def _record_to_runtime_config(record: Any) -> AgentModelConfig:
         api_key=api_key,
         base_url=str(record.base_url or "").strip().rstrip("/"),
         temperature=float(record.temperature),
-        max_tokens=int(record.max_tokens),
+        max_tokens=(
+            None if record.max_tokens is None else int(record.max_tokens)
+        ),
         timeout_seconds=int(record.timeout_seconds),
     )
 
@@ -121,6 +123,9 @@ async def load_agent_model_config(
             raise AgentModelConfigurationError(
                 "管理员问答 LLM 已启用，但缺少模型名称或 API Key"
             )
+        configured_max_tokens = (
+            config["max_tokens"] if "max_tokens" in config else 2000
+        )
         return AgentModelConfig(
             source="system_settings.llm",
             config_id=None,
@@ -129,7 +134,11 @@ async def load_agent_model_config(
             api_key=api_key,
             base_url=str(config.get("base_url") or "").strip().rstrip("/"),
             temperature=float(config.get("temperature", 0.2)),
-            max_tokens=int(config.get("max_tokens") or 2000),
+            max_tokens=(
+                None
+                if configured_max_tokens is None
+                else int(configured_max_tokens)
+            ),
             timeout_seconds=int(config.get("timeout_seconds") or 60),
         )
 

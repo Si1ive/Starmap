@@ -65,7 +65,11 @@ class AgentModelConfigService:
             is_default=is_default,
             default_slot=1 if is_default else None,
             temperature=float(data.get("temperature", 0.2)),
-            max_tokens=int(data.get("max_tokens", 2000)),
+            max_tokens=(
+                None
+                if data.get("max_tokens", 2000) is None
+                else int(data.get("max_tokens", 2000))
+            ),
             timeout_seconds=int(data.get("timeout_seconds", 60)),
         )
         if record.provider != "openai_compatible":

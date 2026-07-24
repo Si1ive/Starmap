@@ -404,3 +404,28 @@
 ### 提交信息
 
 `将 Agent Runs 改为会话级多轮监控`
+
+## 2026-07-24：支持 LLM 输出 Token 无限配置
+
+### 目标
+
+让 Agent 模型配置和系统内所有任务型 LLM 配置支持“无限”输出 Token，并修复 `glm-5.2` 因
+`max_completion_tokens` 超过 131072 而在后续对话返回 400 的问题。
+
+### 实现
+
+- 管理端 Agent 模型与任务型 LLM 表单增加无限开关，`null` 表示不发送输出 Token 上限。
+- Agent 模型列改为 nullable，并增加 Alembic 前向迁移；ORM 保留显式 SQL `NULL`。
+- Agent Pydantic AI 运行时和共享 OpenAI 客户端仅在数值非空时加入 Token 参数。
+- 保留“字段缺失使用默认值、数字表示明确限额、null 表示无限”的三态契约。
+- 补充持久化、运行时参数省略、共享客户端、系统设置合并和迁移图测试。
+
+### 验证
+
+- 后端相关测试通过。
+- 管理端 `npm run build` 通过。
+- `git diff --check` 通过。
+
+### 提交信息
+
+`支持 LLM 输出 Token 无限配置`

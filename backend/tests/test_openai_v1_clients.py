@@ -49,6 +49,36 @@ async def test_chat_llm_client_uses_async_openai_instance_api():
 
 
 @pytest.mark.asyncio
+async def test_chat_llm_client_omits_token_limit_when_unlimited():
+    response = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="LLM_OK"))]
+    )
+    sdk_client = MagicMock()
+    sdk_client.chat.completions.create = AsyncMock(return_value=response)
+    sdk_client.close = AsyncMock()
+    client = ChatLLMClient(
+        {
+            "enabled": True,
+            "api_key": "test-key",
+            "model": "glm-5.2",
+            "max_tokens": None,
+            "temperature": 0.1,
+        }
+    )
+    messages = [{"role": "user", "content": "ping"}]
+
+    with patch("openai.AsyncOpenAI", return_value=sdk_client):
+        await client._chat(messages)
+
+    sdk_client.chat.completions.create.assert_awaited_once_with(
+        model="glm-5.2",
+        messages=messages,
+        temperature=0.1,
+    )
+    sdk_client.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_embedding_service_uses_async_openai_instance_api():
     response = SimpleNamespace(
         data=[SimpleNamespace(embedding=[0.25, 0.75])]

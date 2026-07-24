@@ -51,6 +51,56 @@ async def test_agent_model_prefers_enabled_admin_llm(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_agent_model_omits_output_limit_when_configured_as_unlimited(monkeypatch):
+    record = SimpleNamespace(
+        id="model_unlimited",
+        display_name="无限输出模型",
+        provider="openai_compatible",
+        base_url="https://models.example.com/v1",
+        api_key="model-key",
+        model_name="glm-5.2",
+        online=True,
+        selectable=True,
+        temperature=0.2,
+        max_tokens=None,
+        timeout_seconds=60,
+    )
+    monkeypatch.setattr(
+        AgentModelConfigService,
+        "get_default",
+        AsyncMock(return_value=record),
+    )
+
+    config = await load_agent_model_config(MagicMock())
+
+    assert config.max_tokens is None
+    assert config.model_settings == {"temperature": 0.2}
+
+
+@pytest.mark.asyncio
+async def test_legacy_llm_null_output_limit_is_unlimited(monkeypatch):
+    async def fake_load(self):
+        return {
+            "llm": {
+                "enabled": True,
+                "provider": "openai_compatible",
+                "api_key": "admin-key",
+                "model": "glm-5.2",
+                "temperature": 0.3,
+                "max_tokens": None,
+                "timeout_seconds": 45,
+            }
+        }
+
+    monkeypatch.setattr(SystemSettingsService, "load", fake_load)
+
+    config = await load_agent_model_config(MagicMock())
+
+    assert config.max_tokens is None
+    assert config.model_settings == {"temperature": 0.3}
+
+
+@pytest.mark.asyncio
 async def test_agent_model_reports_clear_error_when_no_config(monkeypatch):
     async def fake_load(self):
         return {"llm": {"enabled": False}}

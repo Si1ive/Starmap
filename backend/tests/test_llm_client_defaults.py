@@ -22,3 +22,9 @@ def test_outline_llm_client_preserves_explicit_runtime_limits():
     assert client.temperature == 0.35
     assert client.max_tokens == 4096
     assert client.timeout_seconds == 90
+
+
+def test_outline_llm_client_preserves_explicit_unlimited_tokens():
+    client = OutlineLLMClient({"max_tokens": None})
+
+    assert client.max_tokens is None

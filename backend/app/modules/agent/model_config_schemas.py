@@ -15,7 +15,7 @@ class AgentModelConfigCreate(BaseModel):
     selectable: bool = True
     is_default: bool = False
     temperature: float = Field(default=0.2, ge=0, le=2)
-    max_tokens: int = Field(default=2000, ge=1, le=200000)
+    max_tokens: int | None = Field(default=2000, ge=1, le=200000)
     timeout_seconds: int = Field(default=60, ge=5, le=600)
 
 

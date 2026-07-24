@@ -37,7 +37,11 @@ class AgentModelConfigRecord(Base):
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     default_slot: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     temperature: Mapped[float] = mapped_column(Float, default=0.2, nullable=False)
-    max_tokens: Mapped[int] = mapped_column(Integer, default=2000, nullable=False)
+    max_tokens: Mapped[int | None] = mapped_column(
+        Integer().evaluates_none(),
+        default=2000,
+        nullable=True,
+    )
     timeout_seconds: Mapped[int] = mapped_column(Integer, default=60, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(

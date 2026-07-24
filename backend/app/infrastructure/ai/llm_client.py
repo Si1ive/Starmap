@@ -55,7 +55,12 @@ class BaseLLMClient:
         ).strip()
         self.model = str(config.get("model") or settings.OPENAI_MODEL).strip()
         self.temperature = float(config.get("temperature", self.default_temperature))
-        self.max_tokens = int(config.get("max_tokens", 2000))
+        configured_max_tokens = config.get("max_tokens", 2000)
+        self.max_tokens = (
+            None
+            if configured_max_tokens is None
+            else int(configured_max_tokens)
+        )
         self.timeout_seconds = int(config.get("timeout_seconds", 60))
         self.system_prompt = str(
             config.get("system_prompt") or self.default_system_prompt
@@ -86,10 +91,11 @@ class BaseLLMClient:
                 f"LLM 未启用或缺少 api_key/model（called_by={self.called_by}），请在系统设置中配置"
             )
         params = {
-            "max_tokens": self.max_tokens,
             "temperature": self.temperature,
             "timeout_seconds": self.timeout_seconds,
         }
+        if self.max_tokens is not None:
+            params["max_tokens"] = self.max_tokens
         async with LLMCallRecorder(
             model=self.model,
             called_by=self.called_by,
@@ -114,12 +120,14 @@ class BaseLLMClient:
 
         client = openai.AsyncOpenAI(**client_options)
         try:
-            response = await client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                max_tokens=self.max_tokens,
-                temperature=self.temperature,
-            )
+            request_kwargs: Dict[str, Any] = {
+                "model": self.model,
+                "messages": messages,
+                "temperature": self.temperature,
+            }
+            if self.max_tokens is not None:
+                request_kwargs["max_tokens"] = self.max_tokens
+            response = await client.chat.completions.create(**request_kwargs)
             content = response.choices[0].message.content
             if not content:
                 raise RuntimeError("LLM 返回为空")
@@ -146,7 +154,7 @@ class OutlineLLMClient(BaseLLMClient):
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         config = config or {}
         super().__init__(config)
-        if not config.get("max_tokens"):
+        if "max_tokens" not in config:
             self.max_tokens = 16000
         if not config.get("timeout_seconds"):
             self.timeout_seconds = 180

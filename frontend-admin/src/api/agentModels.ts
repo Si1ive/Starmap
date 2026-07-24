@@ -13,7 +13,7 @@ export interface AgentModelConfig {
   selectable: boolean
   is_default: boolean
   temperature: number
-  max_tokens: number
+  max_tokens: number | null
   timeout_seconds: number
   created_at: string | null
   updated_at: string | null
@@ -29,7 +29,7 @@ export interface AgentModelConfigInput {
   selectable: boolean
   is_default: boolean
   temperature: number
-  max_tokens: number
+  max_tokens: number | null
   timeout_seconds: number
 }
 

@@ -31,7 +31,7 @@ class ModelAdapter:
         self,
         messages: List[Dict[str, str]],
         temperature: float = 0.2,
-        max_tokens: int = 2000,
+        max_tokens: int | None = 2000,
         purpose: Optional[str] = None,
     ) -> str:
         """
@@ -52,13 +52,15 @@ class ModelAdapter:
         for attempt in range(self.max_retries):
             try:
                 client = openai.AsyncOpenAI(api_key=self.api_key)
-                response = await client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    timeout=self.timeout_seconds,
-                )
+                request_kwargs: Dict[str, Any] = {
+                    "model": self.model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "timeout": self.timeout_seconds,
+                }
+                if max_tokens is not None:
+                    request_kwargs["max_tokens"] = max_tokens
+                response = await client.chat.completions.create(**request_kwargs)
                 return response.choices[0].message.content or ""
             except Exception as e:
                 last_error = e
@@ -78,7 +80,7 @@ class ModelAdapter:
         messages: List[Dict[str, str]],
         response_format: type,
         temperature: float = 0.2,
-        max_tokens: int = 2000,
+        max_tokens: int | None = 2000,
     ) -> Any:
         """
         结构化输出调用
@@ -100,14 +102,16 @@ class ModelAdapter:
         for attempt in range(self.max_retries):
             try:
                 client = openai.AsyncOpenAI(api_key=self.api_key)
-                response = await client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    response_format={"type": "json_object"},
-                    timeout=self.timeout_seconds,
-                )
+                request_kwargs: Dict[str, Any] = {
+                    "model": self.model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "response_format": {"type": "json_object"},
+                    "timeout": self.timeout_seconds,
+                }
+                if max_tokens is not None:
+                    request_kwargs["max_tokens"] = max_tokens
+                response = await client.chat.completions.create(**request_kwargs)
                 text = response.choices[0].message.content or ""
                 data = json.loads(text)
                 return response_format(**data)

@@ -99,6 +99,17 @@ async def test_secret_mask_keeps_existing_api_key(db_session):
 
 
 @pytest.mark.asyncio
+async def test_model_config_persists_unlimited_output_tokens(db_session):
+    service = AgentModelConfigService(db_session)
+
+    record = await service.create(_payload(max_tokens=None))
+    payload = service.to_admin_dict(record)
+
+    assert record.max_tokens is None
+    assert payload["max_tokens"] is None
+
+
+@pytest.mark.asyncio
 async def test_rejects_blank_names_after_trimming(db_session):
     service = AgentModelConfigService(db_session)
 

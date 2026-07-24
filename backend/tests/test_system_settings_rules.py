@@ -38,6 +38,18 @@ def test_merge_settings_defaults_preserves_custom_sections_and_forces_mineru():
     assert source["pdf_parser"]["active_parser"] == "docling"
 
 
+def test_merge_settings_defaults_preserves_unlimited_llm_tokens():
+    merged = merge_settings_defaults(
+        {
+            "outline_llm": {"max_tokens": None},
+            "doc_meta_llm": {"max_tokens": None},
+        }
+    )
+
+    assert merged["outline_llm"]["max_tokens"] is None
+    assert merged["doc_meta_llm"]["max_tokens"] is None
+
+
 def test_merge_section_dicts_recursively_merges_without_mutating_inputs():
     base = {"llm": {"enabled": False, "model": "base"}}
     updates = {"llm": {"enabled": True}}

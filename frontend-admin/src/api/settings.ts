@@ -20,7 +20,7 @@ export interface LlmConfig {
   api_key: string
   model: string
   temperature: number
-  max_tokens: number
+  max_tokens: number | null
   timeout_seconds: number
   system_prompt: string
 }
