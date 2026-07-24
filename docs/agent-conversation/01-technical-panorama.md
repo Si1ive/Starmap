@@ -18,8 +18,8 @@ Agent 对话模块不仅负责普通聊天，还要把学习任务编排成可�
 用户端 AgentPage
   │
   ├─ 创建/选择 Thread
-  ├─ GET 已上线且可选的模型
-  ├─ POST 一轮消息
+  ├─ GET 已上线且可选的模型，并默认选中管理员默认项
+  ├─ POST 一轮消息，明确携带本轮 model_config_id
   ├─ GET 时间线快照
   └─ SSE 接收增量事件
           │
@@ -66,8 +66,8 @@ Redis 在当前 Agent 核心执行链路中不是事实来源。Agent 的可靠�
 | 层次 | 主要位置 | 职责 |
 | --- | --- | --- |
 | 用户端页面 | `frontend/src/pages/AgentPage.tsx` | thread 选择、消息提交、时间线加载和 SSE 生命周期 |
-| 用户端组件 | `frontend/src/features/agent/` | 消息流、输入框、内嵌工作流、时间线状态归并，并复用全局设计 token |
-| 用户端 API | `frontend/src/api/agent.ts` | Agent HTTP/SSE 契约和前端类型 |
+| 用户端组件 | `frontend/src/features/agent/` | 消息流、模型选择输入框、内嵌工作流、时间线状态归并，并复用全局设计 token |
+| 用户端 API | `frontend/src/api/agent.ts` | Agent HTTP/SSE 契约、公开模型列表、错误解析和前端类型 |
 | HTTP 接口 | `backend/app/modules/agent/router.py` | 认证、参数校验、thread/run/timeline/event API |
 | 对话时间线 | `timeline.py`、`thread_events.py` | 原子创建一轮对话、公开投影和统一事件 cursor |
 | 执行调度 | `outbox.py`、`worker.py` | 可靠任务扫描、线程串行化、认领、租约和重试 |
@@ -133,6 +133,11 @@ Redis 在当前 Agent 核心执行链路中不是事实来源。Agent 的可靠�
 可选状态使用独立状态接口，设置默认前要求模型同时上线且可选，连通性测试使用按钮级 loading
 并展示模型回复或截断后的错误。这样管理动作都经过后端约束，而不是在浏览器本地伪造状态。
 
+用户端 Agent 页面加载时请求 `/api/v1/app/agent/models`，只把公开 ID、显示名称和默认标记保存
+在页面状态中。当前选择在空会话与已有会话的两个 Composer 间共享，每次 `sendTurn` 都将其作为
+`model_config_id` 写入请求。列表加载中、为空或选择失效时发送按钮不可用；若提交时模型刚被
+管理员下线，页面保留输入内容、展示服务端中文错误并刷新列表，重新选择默认项或第一条可用项。
+
 Agent 时间采用“两段式 UTC 契约”：MySQL `DATETIME` 继续保存无时区的 UTC 值，避免改变现有
 表结构和 SQL 比较行为；HTTP JSON 与 SSE 一旦把时间发送给浏览器，就统一序列化为带 `Z` 的
 ISO 8601 字符串。前端 `new Date(...)` 因此能先识别 UTC，再按用户设备时区显示。
@@ -148,6 +153,6 @@ Agent 对话保留消息流、工作流卡片和底部输入区等专有布局�
 2. 打通用户消息到模型回答的可观察链路，避免“无响应但无错误”。
 3. 统一 UTC 存储与用户时区展示。
 4. 让 Agent 页面遵循用户端全局设计系统。
-5. 完成用户端模型选择器，让已上线模型在发送 turn 时明确进入 Run。
+5. 为模型选择与实际 Run 增加更直观的历史展示和管理员审计筛选。
 
 每完成一项，必须同步更新本全景图、细致讲解和进展记录。

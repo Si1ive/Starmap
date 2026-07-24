@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AlertCircle, CheckCircle2, LoaderCircle, WifiOff } from 'lucide-react'
 import { useNavigate, useParams } from 'react-router-dom'
+import {
+  AgentApiError,
+  listSelectableAgentModels,
+  type SelectableAgentModel,
+} from '../api/agent'
 import ChatComposer from '../features/agent/ChatComposer'
 import ConversationStream from '../features/agent/ConversationStream'
 import { selectTimelineItems } from '../features/agent/timeline-state'
@@ -35,6 +40,10 @@ export default function AgentPage() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isLoadingEarlier, setIsLoadingEarlier] = useState(false)
   const [composerFocusKey, setComposerFocusKey] = useState(0)
+  const [models, setModels] = useState<SelectableAgentModel[]>([])
+  const [modelsLoading, setModelsLoading] = useState(true)
+  const [modelError, setModelError] = useState<string | null>(null)
+  const [selectedModelId, setSelectedModelId] = useState('')
 
   const timelineItems = useMemo(
     () => selectTimelineItems(state.timeline),
@@ -47,6 +56,29 @@ export default function AgentPage() {
   useEffect(() => {
     void loadThreads()
   }, [loadThreads])
+
+  const loadModels = useCallback(async () => {
+    setModelsLoading(true)
+    setModelError(null)
+    try {
+      const response = await listSelectableAgentModels()
+      setModels(response.items)
+      setSelectedModelId((current) => {
+        if (current && response.items.some((model) => model.id === current)) return current
+        return response.items.find((model) => model.is_default)?.id || response.items[0]?.id || ''
+      })
+    } catch (error) {
+      setModels([])
+      setSelectedModelId('')
+      setModelError(error instanceof Error ? error.message : '模型列表加载失败')
+    } finally {
+      setModelsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadModels()
+  }, [loadModels])
 
   useEffect(() => {
     if (!threadId) {
@@ -68,7 +100,11 @@ export default function AgentPage() {
 
   const handleSend = useCallback(async () => {
     const content = message.trim()
-    if (!content || isSubmitting) return
+    if (!content || isSubmitting || modelsLoading) return
+    if (!selectedModelId) {
+      dispatch({ type: 'SET_ERROR', payload: '暂无可用 Agent 模型，请联系管理员' })
+      return
+    }
     setIsSubmitting(true)
 
     try {
@@ -80,10 +116,11 @@ export default function AgentPage() {
         navigate(`/agent/${thread.id}`)
       }
 
-      await sendTurn(targetThreadId, content)
+      await sendTurn(targetThreadId, content, { modelConfigId: selectedModelId })
       setMessage('')
       void loadThreads()
     } catch (error) {
+      if (error instanceof AgentApiError && error.status === 400) void loadModels()
       dispatch({
         type: 'SET_ERROR',
         payload: error instanceof Error ? error.message : '消息发送失败，请稍后重试',
@@ -95,11 +132,14 @@ export default function AgentPage() {
     createThread,
     dispatch,
     isSubmitting,
+    loadModels,
     loadThreads,
     message,
+    modelsLoading,
     navigate,
     openThread,
     sendTurn,
+    selectedModelId,
     threadId,
   ])
 
@@ -180,8 +220,14 @@ export default function AgentPage() {
             <ChatComposer
               autofocus
               disabled={isSubmitting}
+              modelError={modelError}
+              models={models}
+              modelsLoading={modelsLoading}
               onChange={setMessage}
+              onModelChange={setSelectedModelId}
+              onRetryModels={() => void loadModels()}
               onSubmit={() => void handleSend()}
+              selectedModelId={selectedModelId}
               value={message}
             />
             <p className="agent-chat-disclaimer">Agent 可能会出错，重要信息请自行核实。</p>
@@ -218,8 +264,14 @@ export default function AgentPage() {
               <ChatComposer
                 disabled={isSubmitting}
                 focusRequestKey={composerFocusKey}
+                modelError={modelError}
+                models={models}
+                modelsLoading={modelsLoading}
                 onChange={setMessage}
+                onModelChange={setSelectedModelId}
+                onRetryModels={() => void loadModels()}
                 onSubmit={() => void handleSend()}
+                selectedModelId={selectedModelId}
                 value={message}
               />
               <p className="agent-chat-disclaimer">Agent 可能会出错，重要信息请自行核实。</p>

@@ -201,9 +201,16 @@ export interface TimelineResponse {
 
 export interface TurnCreateRequest {
   content: string
+  model_config_id?: string
   attachments?: Record<string, unknown>[]
   context_refs?: Record<string, unknown>[]
   client_message_id: string
+}
+
+export interface SelectableAgentModel {
+  id: string
+  display_name: string
+  is_default: boolean
 }
 
 export interface WorkflowRunView {
@@ -272,7 +279,7 @@ export interface ApprovalDecisionResponse {
   message: string
 }
 
-class AgentApiError extends Error {
+export class AgentApiError extends Error {
   readonly status: number
   constructor(message: string, status: number) {
     super(message)
@@ -295,8 +302,16 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   })
 
   if (!response.ok) {
-    const text = await response.text().catch(() => 'Unknown error')
-    throw new AgentApiError(text, response.status)
+    const text = await response.text().catch(() => '')
+    let message = text || '请求失败，请稍后重试'
+    try {
+      const payload = JSON.parse(text) as { detail?: unknown; message?: unknown }
+      if (typeof payload.detail === 'string') message = payload.detail
+      else if (typeof payload.message === 'string') message = payload.message
+    } catch {
+      // 非 JSON 错误响应沿用原始文本。
+    }
+    throw new AgentApiError(message, response.status)
   }
 
   const data = (await response.json().catch(() => null)) as T
@@ -326,6 +341,12 @@ export async function getThread(threadId: string): Promise<Thread> {
 }
 
 // ==================== App Thread Timeline API ====================
+
+export async function listSelectableAgentModels(): Promise<{
+  items: SelectableAgentModel[]
+}> {
+  return apiRequest<{ items: SelectableAgentModel[] }>(`${APP_AGENT_BASE}/models`)
+}
 
 export async function createTurn(
   threadId: string,

@@ -51,6 +51,7 @@ export interface SendTurnOptions {
   attachments?: Record<string, unknown>[]
   contextRefs?: Record<string, unknown>[]
   clientMessageId?: string
+  modelConfigId?: string
 }
 
 // ==================== Reducer ====================
@@ -428,6 +429,7 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
     ) => {
       const response = await agentApi.createTurn(threadId, {
         content,
+        model_config_id: options.modelConfigId,
         attachments: options.attachments ?? [],
         context_refs: options.contextRefs ?? [],
         client_message_id: options.clientMessageId ?? createClientMessageId(),
