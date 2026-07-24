@@ -49,8 +49,6 @@ const menuItems = [
   },
   { key: '/admin/search', icon: <SearchOutlined />, label: '检索调试' },
   { key: '/admin/conversations', icon: <MessageOutlined />, label: '智能问答' },
-  { key: '/admin/agent-runs', icon: <ThunderboltOutlined />, label: 'Agent Runs 监控' },
-  { key: '/admin/agent-models', icon: <RobotOutlined />, label: 'Agent 模型管理' },
   {
     key: '/admin/crawler-group',
     icon: <BugOutlined />,
@@ -70,6 +68,7 @@ const menuItems = [
     label: '系统监控',
     children: [
       { key: '/admin/monitor', label: '概览' },
+      { key: '/admin/agent-runs', icon: <ThunderboltOutlined />, label: 'Agent Runs 监控' },
       { key: '/admin/monitor/llm', icon: <ThunderboltOutlined />, label: 'LLM 调用' },
       { key: '/admin/monitor/api', icon: <ApiOutlined />, label: 'API性能' },
       { key: '/admin/monitor/database', icon: <DatabaseOutlined />, label: '数据库' },
@@ -83,6 +82,7 @@ const menuItems = [
     label: '系统配置',
     children: [
       { key: '/admin/settings', label: '基础配置' },
+      { key: '/admin/agent-models', icon: <RobotOutlined />, label: 'Agent 模型配置' },
       { key: '/admin/settings/users', icon: <TeamOutlined />, label: '用户管理' },
     ],
   },
@@ -121,7 +121,9 @@ const menuGroups = [
   { key: '/admin/review-group', prefix: '/admin/review' },
   { key: '/admin/crawler-group', prefix: '/admin/crawler' },
   { key: '/admin/monitor-group', prefix: '/admin/monitor' },
+  { key: '/admin/monitor-group', prefix: '/admin/agent-runs' },
   { key: '/admin/settings-group', prefix: '/admin/settings' },
+  { key: '/admin/settings-group', prefix: '/admin/agent-models' },
 ]
 
 const AppSider = () => {

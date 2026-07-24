@@ -51,9 +51,12 @@ Agent Worker
           └───────────────► 学习领域服务 / 检索工具
 
 管理员端
-  ├─ Agent Runs 页面 ──► /api/v1/admin/agent-runs ──► agent_runs / agent_events / artifacts
-  ├─ Agent 模型管理页面 ──► /api/v1/admin/agent-models
-  │     └─ 创建/编辑、上下线、用户可选、默认模型、连通性测试
+  ├─ 系统监控
+  │   └─ Agent Runs 监控 ──► /api/v1/admin/agent-runs ──► agent_runs / agent_events / artifacts
+  ├─ 系统配置
+  │   ├─ 基础配置（不再维护旧问答 LLM）
+  │   └─ Agent 模型配置 ──► /api/v1/admin/agent-models
+  │         └─ 创建/编辑、上下线、用户可选、默认模型、连通性测试
   └─ 基础设施状态 ──► MySQL / Redis / Qdrant
 ```
 
@@ -78,6 +81,8 @@ Redis 在当前 Agent 核心执行链路中不是事实来源。Agent 的可靠�
 | 持久化模型 | `models.py` | Agent 领域表、状态和索引定义 |
 | 管理员接口 | `admin_router.py` | 在 `/api/v1/admin/agent-runs` 下提供 Run 查询、详情、统计与管理能力 |
 | 管理员页面 | `frontend-admin/src/pages/AgentRunsPage.tsx`、`AgentModelsPage.tsx` | 运行监控，以及多模型创建、编辑、状态控制和连通性测试 |
+| 管理端导航 | `frontend-admin/src/components/Sider/index.tsx`、`Header/index.tsx`、`router/index.tsx` | 把 Agent Runs 归入系统监控，把 Agent 模型配置归入系统配置，并保持原 URL |
+| 管理端基础配置 | `frontend-admin/src/pages/Settings/index.tsx` | 维护任务型 LLM、向量化和解析器配置；不再展示或提交旧问答 LLM |
 | 管理员模型 API | `frontend-admin/src/api/agentModels.ts` | 管理端模型接口类型、请求封装和测试超时策略 |
 
 ## 4. 代码执行全景总览
@@ -143,6 +148,27 @@ Worker 对每个 outbox 使用独立 session，确保一个模型调用或工作
 | 管理端 HTTP 封装 | `frontend-admin/src/api/agentModels.ts` | `listAgentModels` 等模型 API 函数 | L44-L66 | 请求 `/api/v1/admin/agent-models` 系列接口 |
 | 后端管理入口 | `backend/app/modules/agent/model_config_router.py` | `list_agent_models` 至 `test_agent_model` | L29-L138 | 调用配置服务，事务提交后返回脱敏数据或测试结果 |
 | 状态不变量 | `backend/app/modules/agent/model_configs.py` | `AgentModelConfigService.create` 至 `get_user_selectable` | L46-L186 | 保证显示名称唯一、最多一个默认模型、默认项不可直接下线，并在 turn 创建前二次校验可用性 |
+
+### 4.4 管理端导航到 Agent 页面和基础配置保存
+
+| 执行序号 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | `frontend-admin/src/components/Sider/index.tsx` | `menuItems` | L34-L89 | 管理端布局渲染侧栏 | 把 `/admin/agent-runs` 配置为“系统监控”子项，把 `/admin/agent-models` 配置为“系统配置”子项 | 两个 Agent 页面不再占用顶级菜单 | `AppSider` |
+| 2 | `frontend-admin/src/components/Sider/index.tsx` | `selectableMenuKeys` / `menuGroups` | L91-L127 | 当前 `location.pathname` | 详情路径仍选中 Agent Runs；原 URL 分别映射到监控组和配置组 | 进入页面或刷新页面时自动展开正确父菜单 | `AppSider` |
+| 3 | `frontend-admin/src/components/Sider/index.tsx` | `AppSider`（导航状态计算） | L129-L194 | 当前 `location.pathname` | 计算权限过滤、选中项和应自动展开的父菜单 | 得到 `selectedKey` 与 `openKeys` | `AppSider` 菜单渲染 |
+| 4 | `frontend-admin/src/components/Sider/index.tsx` | `AppSider`（菜单点击） | L196-L224 | 管理员点击子菜单 | 把选中项和展开项交给 Ant Design Menu，并执行 `navigate(key)` | URL 保持 `/admin/agent-runs` 或 `/admin/agent-models` | `AppRoutes` |
+| 5 | `frontend-admin/src/router/index.tsx` | `AppRoutes`（Agent Runs 路由） | L187-L189 | React Router 匹配 `/admin/agent-runs` 或详情 URL | 渲染 `AgentRunsPage` / `AgentRunDetailPage` | 监控页面挂载；详情返回路径继续有效 | Agent Runs 查询接口 |
+| 6 | `frontend-admin/src/router/index.tsx` | `AppRoutes`（Agent 模型路由） | L232-L233 | React Router 匹配 `/admin/agent-models` | 渲染 `AgentModelsPage` | 模型配置页面挂载；旧书签继续有效 | `listAgentModels` |
+| 7 | `frontend-admin/src/components/Header/index.tsx` | `routeContexts` | L14-L41 | 管理端路由表初始化 | 声明 Agent URL 对应的栏目与标题 | 路由上下文映射表 | `AppHeader` |
+| 8 | `frontend-admin/src/components/Header/index.tsx` | `AppHeader`（路由上下文选择） | L43-L48 | 当前 `location.pathname` | 按前缀查找当前栏目和页面标题 | Header 显示系统监控或系统配置 | 页面交互 |
+| 9 | `frontend-admin/src/pages/Settings/index.tsx` | `Settings`（默认页签） | L234-L244 | 基础配置页面挂载 | 默认选择 `pdf-structure-llm`，加载系统配置 | 问答 LLM 不再作为默认入口 | `Settings` Tab 渲染 |
+| 10 | `frontend-admin/src/pages/Settings/index.tsx` | `Settings`（Tab 渲染） | L323-L352 | 系统配置数据加载完成 | 只注册题目结构、大纲拆分、文档元信息和富化等仍受基础配置维护的页签 | 页面不存在旧“问答 LLM”Tab | `Settings.handleSubmit` |
+| 11 | `frontend-admin/src/pages/Settings/index.tsx` | `Settings.handleSubmit` | L264-L295 | 管理员提交基础配置表单 | 复制表单值并删除隐藏 `llm`，再执行解析器切换校验 | `updateSettings` 只保存仍可见的配置域 | 系统配置 API |
+| 12 | `frontend-admin/src/pages/AgentModelsPage.tsx` | `AgentModelsPage`（查询与操作） | L60-L165 | 管理员进入 Agent 模型配置 | React Query 加载列表，并执行创建、编辑、状态切换、默认模型和连通性测试 | `/api/v1/admin/agent-models` 成为 Agent 问答模型的唯一管理界面 | `AgentModelConfigService` |
+
+这里保持 URL 不变是有意的：菜单归属属于信息架构，URL 是页面和导航之间的稳定契约。若为了
+菜单层级同时改成 `/admin/monitor/agent-runs` 或 `/admin/settings/agent-models`，详情页返回、浏览器
+书签和外部链接都需要兼容重定向，而本次没有这种业务必要。
 
 ## 5. 一轮对话的生命周期
 

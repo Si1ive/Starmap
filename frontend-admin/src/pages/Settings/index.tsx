@@ -15,7 +15,7 @@ const { TextArea } = Input
 const { Option } = Select
 const { TabPane } = Tabs
 
-// 对话型 LLM 配置 Tab（问答 / 题目结构 / 大纲拆分共用）
+// 任务型 LLM 配置 Tab（题目结构 / 大纲拆分 / 文档元信息 / 富化共用）
 const LlmConfigTab = ({
   kind,
   form,
@@ -234,7 +234,7 @@ const EmbeddingConfigTab = ({ form }: { form: any }) => {
 const Settings = () => {
   const [form] = Form.useForm()
   const queryClient = useQueryClient()
-  const [activeTab, setActiveTab] = useState('llm')
+  const [activeTab, setActiveTab] = useState('pdf-structure-llm')
 
   const { data, isLoading } = useQuery({
     queryKey: ['settings'],
@@ -262,12 +262,15 @@ const Settings = () => {
   })
 
   const handleSubmit = (values: Partial<SystemSettings>) => {
-    const nextTarget = values.pdf_parser?.deployment_target
+    const settingsToSave = { ...values }
+    delete settingsToSave.llm
+
+    const nextTarget = settingsToSave.pdf_parser?.deployment_target
     const currentTarget = parserSettings?.deployment_target
-    const switchNotes = values.pdf_parser?.service_switch_notes?.trim() || ''
+    const switchNotes = settingsToSave.pdf_parser?.service_switch_notes?.trim() || ''
     const isSwitching = !!nextTarget && !!currentTarget && nextTarget !== currentTarget
 
-    if (nextTarget === 'remote' && !values.pdf_parser?.remote_service_endpoint?.trim()) {
+    if (nextTarget === 'remote' && !settingsToSave.pdf_parser?.remote_service_endpoint?.trim()) {
       message.error('远程模式必须填写远程解析服务地址')
       return
     }
@@ -283,12 +286,12 @@ const Settings = () => {
         content: `将从 ${currentTarget} 切换到 ${nextTarget}。这会影响后续所有文档解析，请确认目标服务已启动，并已准备好回滚方案。`,
         okText: '确认切换',
         cancelText: '取消',
-        onOk: () => mutation.mutate(values),
+        onOk: () => mutation.mutate(settingsToSave),
       })
       return
     }
 
-    mutation.mutate(values)
+    mutation.mutate(settingsToSave)
   }
 
   const parserSettings = data?.data?.pdf_parser
@@ -333,10 +336,6 @@ const Settings = () => {
 
       <Form form={form} layout="vertical" onFinish={handleSubmit} initialValues={initialValues}>
         <Tabs activeKey={activeTab} onChange={setActiveTab}>
-          <TabPane tab="问答 LLM" key="llm">
-            <LlmConfigTab kind="llm" form={form} intro="该配置用于学生问答（RAG 增强回答与建议问题）" />
-          </TabPane>
-
           <TabPane tab="题目结构 LLM" key="pdf-structure-llm">
             <LlmConfigTab kind="pdf_structure_llm" form={form} intro="该配置只用于题目抽取中跨页/跨列/选项缺失的 LLM 兜底修复" />
           </TabPane>

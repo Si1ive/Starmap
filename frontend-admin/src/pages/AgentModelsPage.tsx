@@ -278,7 +278,7 @@ const AgentModelsPage = () => {
     <div className="agent-models-page">
       <PageHeader
         eyebrow="Agent Runtime"
-        title="Agent 模型管理"
+        title="Agent 模型配置"
         description="集中维护 OpenAI 兼容模型。用户只能看到已上线且允许选择的显示名称，密钥不会在页面回显。"
         actions={(
           <Space>

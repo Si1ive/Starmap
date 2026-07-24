@@ -268,7 +268,13 @@ Key，以及 Run 元数据中的 `model_config_id` 和 `model_config_source`。
 
 ### 5.7 管理员页面如何安全维护模型
 
-管理入口位于 `/admin/agent-models`。`frontend-admin/src/api/agentModels.ts` 负责管理接口类型和
+管理入口位于“系统配置 → Agent 模型配置”，URL 仍为 `/admin/agent-models`。
+`frontend-admin/src/components/Sider/index.tsx` 的 `menuItems`（L34-L89）决定可见层级，
+`menuGroups`（L120-L127）负责在原 URL 下自动展开“系统配置”；
+`frontend-admin/src/components/Header/index.tsx` 的 `routeContexts`（L14-L41）同步显示所属栏目。
+URL 没有随着菜单移动而改变，避免破坏已有书签和页面跳转。
+
+`frontend-admin/src/api/agentModels.ts` 负责管理接口类型和
 请求封装，页面通过 React Query 获取列表，并在创建、编辑、状态切换或设置默认成功后失效
 `adminAgentModels` 查询，避免表格继续展示旧状态。连通性测试允许模型供应商响应较慢，因此
 单独使用 120 秒请求超时，同时用记录 ID 控制按钮级 loading，管理员仍可辨认正在测试哪一行。
@@ -284,7 +290,24 @@ API Key 的编辑流程刻意不把服务端掩码填回密码框：列表只用
 是否需要先切换默认模型。测试返回 HTTP 成功但业务 `success=false` 时，页面展示响应中的错误，
 因为供应商不可用属于配置测试结果，不应被误判为管理接口本身不可达。
 
-### 5.8 用户选择如何进入每一轮对话
+### 5.8 为什么基础配置不再显示旧问答 LLM
+
+旧“系统配置 → 基础配置 → 问答 LLM”和新的“系统配置 → Agent 模型配置”都能改变 Agent 问答
+模型，管理员无法直观看出哪套配置优先，容易出现“刚保存却没有生效”的误判。因此
+`frontend-admin/src/pages/Settings/index.tsx` 的 `Settings` 默认页签初始化（L234-L237）改为
+`pdf-structure-llm`，Tab 渲染区（L323-L352）不再注册 `key="llm"`；问答模型统一从同级的
+Agent 模型配置页面维护。
+
+这里只移除管理入口，没有删除后端 `system_configs.llm` 数据。原因是
+`20260723_agent_model_configs` 迁移会用它回填第一条默认模型，运行时也暂时保留旧数据库和环境变量
+回退，以支持已有环境前向升级。为了避免 Ant Design Form 中通过 `setFieldsValue` 注入的隐藏旧值
+随基础配置再次提交，`Settings.handleSubmit`（L264-L295）复制表单值后显式删除 `llm`，再执行
+部署位置校验和 `updateSettings`。这样旧值只承担迁移兼容职责，不再成为可继续编辑的第二入口。
+
+如果以后确认所有环境都已完成多模型迁移，应另开数据库清理迁移，并同时删除运行时回退、API
+类型和旧配置字段；不能只在前端删除字段后直接清空数据库，否则滚动升级中的旧实例可能失去模型。
+
+### 5.9 用户选择如何进入每一轮对话
 
 `AgentPage` 挂载后调用 `listSelectableAgentModels()`，接口只返回 ID、显示名称和默认标记。页面
 优先选择 `is_default=true` 的记录；如果管理员尚未指定默认但存在可用模型，则选择列表第一项。

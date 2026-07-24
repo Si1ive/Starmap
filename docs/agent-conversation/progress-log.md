@@ -10,6 +10,43 @@
 - 测试或构建结果；
 - Git 提交哈希与中文提交信息。
 
+## 2026-07-24：调整管理端 Agent 功能菜单归属
+
+### 目标
+
+将 Agent Runs 监控归入“系统监控”，将 Agent 模型配置归入“系统配置”，并移除与多模型管理
+冲突的旧“问答 LLM”基础配置页，让监控、模型维护和其他系统配置的层级更清晰。
+
+### 实现
+
+- 侧栏把 Agent Runs 作为系统监控子项，把 Agent 模型配置作为系统配置子项，并补充原 URL 到父
+  菜单的映射，保证列表页、详情页刷新时选中并展开正确分组。
+- 路由 URL 保持 `/admin/agent-runs`、`/admin/agent-runs/:id` 和 `/admin/agent-models` 不变，仅把
+  路由声明移动到相应代码区域，避免破坏已有跳转和书签。
+- Header 路由上下文同步显示“系统监控 / Agent Runs 监控”和“系统配置 / Agent 模型配置”。
+- 基础配置移除旧“问答 LLM”Tab，默认打开题目结构 LLM；保存前显式剔除隐藏的 `llm` 字段，
+  避免基础配置继续成为第二个 Agent 问答模型写入口。
+- 保留后端 `system_configs.llm`、迁移回填和运行时兼容回退，本次只收敛管理界面，不破坏已有环境。
+
+### 教学文档
+
+- `01-technical-panorama.md`：更新管理员端全景，并新增侧栏、路由、Header、页面保存和模型管理
+  API 的完整代码执行链及精确文件、符号、行号。
+- `02-detailed-implementation.md`：说明菜单归属、保留 URL、移除旧问答 LLM 页面但保留兼容数据
+  的原因和后续清理边界。
+
+### 验证
+
+- 管理端 `npm run build` 通过。
+- 本次修改的 `Sider`、`Header`、`Settings`、`AgentModelsPage` 和路由文件定向 ESLint 通过。
+- 管理端全量 `npm run lint` 未通过：仅命中未改动的 `AgentRunDetailPage.tsx` 1 条 hooks 依赖 warning，
+  以及 `AgentRunsPage.tsx` 1 条 hooks 依赖、2 条非空断言 warning；无 error、无本次新增 warning。
+- `git diff --check` 通过。
+
+### 提交信息
+
+`调整管理端 Agent 功能菜单归属`
+
 ## 2026-07-24：修复用户端模型选择器缺表故障
 
 ### 目标

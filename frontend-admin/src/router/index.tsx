@@ -148,11 +148,6 @@ const AppRoutes = () => {
         <Route path="conversations" element={<ConversationList />} />
         <Route path="conversations/:id" element={<ConversationDetail />} />
 
-        {/* Agent Runs 监控 */}
-        <Route path="agent-runs" element={<AgentRunsPage />} />
-        <Route path="agent-runs/:id" element={<AgentRunDetailPage />} />
-        <Route path="agent-models" element={<AgentModelsPage />} />
-
         {/* 爬虫管理 */}
         <Route path="crawler" element={<CrawlerList />} />
         <Route
@@ -190,6 +185,8 @@ const AppRoutes = () => {
         <Route path="crawler/logs" element={<CrawlerLogs />} />
 
         {/* 系统监控 */}
+        <Route path="agent-runs" element={<AgentRunsPage />} />
+        <Route path="agent-runs/:id" element={<AgentRunDetailPage />} />
         <Route path="monitor" element={<MonitorOverview />} />
         <Route
           path="monitor/api"
@@ -233,6 +230,7 @@ const AppRoutes = () => {
         />
 
         {/* 系统配置 */}
+        <Route path="agent-models" element={<AgentModelsPage />} />
         <Route
           path="settings"
           element={
