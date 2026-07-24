@@ -26,6 +26,46 @@ ORM 仍会生成包含新字段的 SQL，MySQL 随后返回 `Unknown column`。
 
 具体手动操作见 `docs/guides/common-operations-guide.md`。
 
+### 1.4 模型选择器报 `agent_model_configs` 不存在时如何定位
+
+2026-07-24 的一次实际故障中，用户端打开 Agent 页面后模型列表请求返回 500，MySQL 报错：
+
+```text
+Table 'starmap.agent_model_configs' doesn't exist
+```
+
+页面请求地址和查询条件都是正确的。真实原因是代码迁移 head 已经是
+`20260723_agent_model_configs`，运行数据库却仍停在它的父 revision
+`20260723_repair_agent_parent`。因此 ORM 正常生成了查询 SQL，但 MySQL 中还没有目标表。
+
+关键代码定位如下：
+
+| 执行阶段 | 文件 | 符号 | 代码范围 | 职责 |
+| --- | --- | --- | --- | --- |
+| 定义前向迁移 | `backend/alembic/versions/20260723_agent_model_configs.py` | `upgrade` | L21-L90 | 创建 `agent_model_configs`，建立默认槽位唯一约束和索引，并回填启用的旧 LLM 配置 |
+| 启动时阻断旧结构 | `backend/app/main.py` | `lifespan` | L77-L107 | MySQL 连接成功后先执行 schema guard，失败时关闭连接并终止启动 |
+| 校验版本与真表 | `backend/app/modules/operations/schema_guard.py` | `verify_database_schema` | L28-L104 | 同时校验 Alembic head、`agent_runs` 必需字段和 `agent_model_configs` 是否真实存在 |
+| 用户模型接口 | `backend/app/modules/agent/router.py` | `list_selectable_models` | L55-L63 | 认证后调用公开模型查询，不向用户返回连接凭据 |
+| 触发报错的查询 | `backend/app/modules/agent/model_configs.py` | `AgentModelConfigService.list_public` | L168-L180 | 从真表筛选已上线且允许用户选择的记录 |
+| 前端请求与恢复 | `frontend/src/pages/AgentPage.tsx` | `AgentPage.loadModels` | L60-L77 | 加载模型、选择默认项；失败时展示错误并允许重试 |
+
+标准诊断顺序是：
+
+1. 在 `backend` 目录执行 `alembic current`，确认数据库当前 revision。
+2. 执行 `alembic heads`，确认当前代码要求的 head。
+3. 若 current 落后，执行 `alembic upgrade head`，不能使用 `stamp head`。
+4. 再执行 `alembic current`，并查询 `SHOW TABLES LIKE 'agent_model_configs'`。
+5. 最后通过 `AgentModelConfigService.list_public` 或真实 HTTP 接口验证，而不是只看迁移命令退出码。
+
+本次修复执行前，current 为 `20260723_repair_agent_parent`；执行前向迁移后，current 为
+`20260723_agent_model_configs (head)`。迁移从旧 `system_configs.llm` 回填出
+`legacy_llm / 默认问答模型 / glm-5.2`，其 `online`、`selectable`、`is_default` 均为真，应用服务
+查询能够正常返回该记录。
+
+为什么不在模型列表接口里捕获 1146 并返回空数组：空数组会把“数据库结构未部署”伪装成“管理员
+尚未配置模型”，既延迟告警，也可能让其他依赖同表的管理端和 Worker 继续产生 500。结构漂移必须
+在部署迁移或启动 guard 处被解决，业务接口不负责运行时建表。
+
 ## 2. 对话创建与时间线
 
 ### 2.1 HTTP 入口

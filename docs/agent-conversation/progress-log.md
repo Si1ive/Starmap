@@ -10,6 +10,46 @@
 - 测试或构建结果；
 - Git 提交哈希与中文提交信息。
 
+## 2026-07-24：修复用户端模型选择器缺表故障
+
+### 目标
+
+解决 Agent 页面加载可选 LLM 时 MySQL 报错
+`Table 'starmap.agent_model_configs' doesn't exist`，恢复用户端模型列表，并把真实执行入口、迁移、
+查询和完整对话主链补成可按文件、函数和行号定位的教学文档。
+
+### 实现
+
+- 确认当前代码迁移 head 为 `20260723_agent_model_configs`，运行数据库实际停在父 revision
+  `20260723_repair_agent_parent`。
+- 执行 `alembic upgrade head` 前向迁移，创建 `agent_model_configs`；未使用 `stamp head`，未手工
+  创建不完整表。
+- 迁移从已启用的旧 `system_configs.llm` 自动回填 `legacy_llm / 默认问答模型 / glm-5.2`，并保持
+  上线、用户可选和默认状态。
+- 补充缺表故障的根因判断、标准诊断顺序、业务接口不应静默吞掉结构漂移的设计原因。
+- 在技术全景中新增独立“代码执行全景总览”，按入口、函数、事务、Worker、模型、持久化、SSE
+  和前端消费顺序列出准确代码锚点；同时补充模型加载、用户输入、审批和管理员模型配置旁路。
+
+### 教学文档
+
+- `01-technical-panorama.md`：新增启动迁移、模型列表、完整 turn 执行链和交互旁路的代码全景。
+- `02-detailed-implementation.md`：新增 `agent_model_configs` 缺表实际案例、代码锚点和修复原则。
+- `docs/guides/common-operations-guide.md`：补充专项排障代码定位、应用层验证和实际 revision 对比。
+
+### 验证
+
+- `alembic current`：`20260723_agent_model_configs (head)`。
+- MySQL：`agent_model_configs` 表存在，公开记录为 `legacy_llm / glm-5.2`，且
+  `online=1`、`selectable=1`、`is_default=1`。
+- 应用真实数据库校验：`verify_database_schema` 返回最新 head，
+  `AgentModelConfigService.list_public` 正常返回默认模型。
+- 后端迁移、schema guard 和模型配置相关自动化测试通过。
+- `git diff --check` 通过。
+
+### 提交信息
+
+`记录并验证 Agent 模型配置缺表修复`
+
 ## 2026-07-24：接入用户端 Agent 模型选择器
 
 ### 目标

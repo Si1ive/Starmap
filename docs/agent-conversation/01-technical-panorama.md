@@ -80,7 +80,71 @@ Redis 在当前 Agent 核心执行链路中不是事实来源。Agent 的可靠�
 | 管理员页面 | `frontend-admin/src/pages/AgentRunsPage.tsx`、`AgentModelsPage.tsx` | 运行监控，以及多模型创建、编辑、状态控制和连通性测试 |
 | 管理员模型 API | `frontend-admin/src/api/agentModels.ts` | 管理端模型接口类型、请求封装和测试超时策略 |
 
-## 4. 一轮对话的生命周期
+## 4. 代码执行全景总览
+
+本节按真实调用顺序记录入口、函数、事务和异步交接点。代码范围以当前版本为准；定位故障时，
+先找到对应入口，再沿“下一步”逐行向后追，不要只根据页面现象猜测后端模块。
+
+### 4.1 后端启动、数据库迁移与用户模型列表
+
+| 执行序号 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | `docker-compose.podman.yml` | `services.backend.command` | L190-L190 | 后端容器启动 | 先执行 `alembic upgrade head`，成功后才启动 Uvicorn | 数据库推进到当前 head；迁移失败则后端不启动 | `20260723_agent_model_configs.upgrade` |
+| 2 | `backend/alembic/versions/20260723_agent_model_configs.py` | `upgrade` | L21-L90 | 旧数据库位于 `20260723_repair_agent_parent` | 创建 `agent_model_configs`、唯一约束和索引，并从启用的 `system_configs.llm` 回填默认模型 | 新表和可选默认记录落库，Alembic revision 前移 | `lifespan` |
+| 3 | `backend/app/main.py` | `lifespan` | L77-L107 | FastAPI 进程启动 | 连接 MySQL，并在调度器、日志 sink 和 Worker 启动前执行结构校验 | 结构正确则继续启动；版本落后或缺表则关闭连接并抛出 `DatabaseSchemaError` | `verify_database_schema` |
+| 4 | `backend/app/modules/operations/schema_guard.py` | `verify_database_schema` | L28-L104 | 当前 `AsyncSession` 与迁移图 heads | 比较 `alembic_version`，检查 `agent_runs` 必需列和 `agent_model_configs` 真表 | 返回当前 revisions；结构漂移时明确提示执行 `alembic upgrade head` | Agent 页面加载模型 |
+| 5 | `frontend/src/pages/AgentPage.tsx` | `AgentPage.loadModels` | L60-L77 | Agent 页面挂载或用户点击重试 | 请求公开模型列表，保留仍有效的选择，否则选默认项或第一项 | 更新 `models`、`selectedModelId`、loading 和错误状态 | `listSelectableAgentModels` |
+| 6 | `frontend/src/api/agent.ts` | `listSelectableAgentModels` | L345-L349 | 浏览器认证态 | 请求 `GET /api/v1/app/agent/models` | 返回公开模型数组，不包含 API Key、Base URL 等凭据 | `list_selectable_models` |
+| 7 | `backend/app/modules/agent/router.py` | `list_selectable_models` | L55-L63 | 当前用户和请求级数据库 session | 创建配置服务并查询公开记录 | 返回 `{items}` | `AgentModelConfigService.list_public` |
+| 8 | `backend/app/modules/agent/model_configs.py` | `AgentModelConfigService.list_public` | L168-L180 | `agent_model_configs` 表 | 筛选 `online=true` 且 `selectable=true`，默认模型优先、显示名称次序 | ORM 记录列表 | `AgentPage.loadModels` 消费响应 |
+
+这里的关键边界是：模型选择器不是静态配置。页面每次加载都会查询真实数据库；因此出现
+MySQL `1146 Table '...agent_model_configs' doesn't exist` 时，根因在数据库迁移状态，不在下拉框
+字段映射。不能让接口静默返回空列表，也不能手工建一个不完整的同名表。
+
+### 4.2 用户发起一轮对话直到前端显示结果
+
+| 执行序号 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | `frontend/src/pages/AgentPage.tsx` | `AgentPage.handleSend` | L101-L144 | 输入文本、thread ID、`selectedModelId` | 空会话先建 thread，再把模型 ID 交给上下文 store；模型失效时保留输入并刷新列表 | 开始一次 turn 请求 | `AgentProvider.sendTurn` |
+| 2 | `frontend/src/store/agent-context.tsx` | `AgentProvider.sendTurn` | L424-L445 | thread、内容和 `modelConfigId` | 生成 `client_message_id`，转换为后端 `model_config_id`；成功后刷新时间线并确保 SSE 已连接 | `TurnCreateResponse` 和最新时间线 | `createTurn` |
+| 3 | `frontend/src/api/agent.ts` | `createTurn` | L351-L362 | `TurnCreateRequest` | POST `/api/v1/app/agent/threads/{thread_id}/turns` | HTTP 201 或带 `detail` 的 API 错误 | `create_turn` |
+| 4 | `backend/app/modules/agent/router.py` | `create_turn` | L167-L212 | 已认证用户、请求体、请求级 session | 转换模型/幂等/线程异常为 400、409、404；其余工作委托给时间线服务 | 用户消息、root run 和 cursor | `AgentTimelineService.create_turn` |
+| 5 | `backend/app/modules/agent/timeline.py` | `AgentTimelineService.create_turn` | L166-L317 | user/thread/content/client ID/model ID | 锁定 thread，验证模型仍可选；原子创建用户消息、conversation root run、时间线项、run/thread 事件和 outbox | 多表写入尚处于同一事务，Run 状态为 `queued` | `OutboxStore.enqueue` 后返回路由 |
+| 6 | `backend/app/modules/agent/outbox.py` | `OutboxStore.enqueue` | L24-L44 | root run ID | 新增 `pending` outbox 并 flush | 可靠 Worker 唤醒事实 | 请求 session 退出 |
+| 7 | `backend/app/db/mysql.py` | `MySQLClient.session` | L131-L155 | 路由依赖创建的 session | 正常退出统一 commit；异常统一 rollback 并继续抛出 | 消息、Run、事件和 outbox 同时可见，或全部回滚 | Worker 异步扫描 |
+| 8 | `backend/app/modules/agent/worker.py` | `start_worker` | L395-L420 | FastAPI lifespan 启动 | 保存 `asyncio.Task` 强引用并注册异常退出回调 | 后台 `AgentWorker.start` 循环存活 | `AgentWorker.start` |
+| 9 | `backend/app/modules/agent/worker.py` | `AgentWorker.start` | L364-L382 | 扫描间隔 | 周期调用 `scan_and_process` | 每批处理完成后继续下一轮扫描 | `AgentWorker.scan_and_process` |
+| 10 | `backend/app/modules/agent/worker.py` | `AgentWorker.scan_and_process` | L305-L362 | pending outbox | 先筛选可执行任务，再为每个 run 创建独立 session、原子认领 outbox | 单个 run 的事务与其他 run 隔离 | `AgentWorker.process_run` |
+| 11 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | L100-L265 | 已认领 run | 获取租约、恢复 checkpoint、加载工作流并执行；完成后创建 artifact、更新 Run、写事件 | Run 进入 running、waiting、completed 或 failed | `WorkflowEngine.execute` |
+| 12 | `backend/app/modules/agent/workflows/engine.py` | `WorkflowEngine.execute` | L27-L197 | workflow 定义、执行上下文和 Run | 逐节点创建 step、执行节点、累计模型调用、写 step 事件；WAITING 时保存 checkpoint | 最终 `NodeResult` 或可恢复等待点 | conversation 节点或业务 child workflow |
+| 13 | `backend/app/modules/agent/workflows/conversation.py` | `_route_node` | L41-L101 | 当前 conversation run | 构建受控线程上下文，调用结构化 Router，记录上下文审计并选择 direct answer / clarify / child workflow | 下一节点名称与路由决策 | `_direct_answer_node` 或 `_dispatch_workflow_node` |
+| 14 | `backend/app/modules/agent/workflows/conversation.py` | `_direct_answer_node` | L103-L129 | `AgentRunContext` | 调用回答运行时并把文本包装成 message artifact | assistant message 内容 | `DirectAnswerRuntime.answer` |
+| 15 | `backend/app/modules/agent/model_runtime/config.py` | `open_agent_model` | L157-L208 | 当前 run ID | 读取 Run 指定模型；否则取数据库默认/旧配置/环境回退，创建独立 `AsyncOpenAI`，并把实际模型信息固定写回 Run 元数据 | 隔离的模型 session；退出时关闭客户端 | Router 或 Answer runtime 的模型调用 |
+| 16 | `backend/app/modules/agent/model_runtime/answer.py` | `DirectAnswerRuntime.answer` / `DirectAnswerRuntime._run` | L89-L153 | 当前输入、历史、模型 session、token 预算 | 调用 Pydantic AI `direct_answer_agent.run` | 结构化 `DirectAnswerOutput` | conversation 节点返回 artifact |
+| 17 | `backend/app/modules/agent/events.py` | `EventStore.append` | L24-L69 | run 事件类型和 payload | 分配 run 内序号、写 `agent_events`，再触发公开 thread 投影 | 内部事件与公开事件保持关联 | `ThreadEventStore.project_run_event` |
+| 18 | `backend/app/modules/agent/thread_events.py` | `ThreadEventStore.project_run_event` / `ThreadEventStore._project_message_event` | L100-L183 / L211-L310 | Run 事件 | 将公开消息/工作流状态写入 `agent_messages`、`agent_thread_items`、`agent_thread_events` | 可按统一 cursor 消费的时间线事实 | `stream_thread_events` |
+| 19 | `backend/app/modules/agent/router.py` | `stream_thread_events` | L280-L348 | thread ID 与 `after_sequence` | 校验所有权，循环补查事件并输出 SSE heartbeat/事件 | `StreamingResponse` | 浏览器 `EventSource` |
+| 20 | `frontend/src/store/agent-context.tsx` | `AgentProvider.connectThreadStream` | L245-L360 | thread ID 和 cursor | 建立 EventSource、归并事件；投影类事件触发时间线快照刷新，断线按退避重连 | reducer 中的最新 timeline/connection | `ConversationStream` 渲染 |
+
+事务边界有两个：HTTP 创建 turn 使用一个请求级 session，确保消息、Run、事件和 outbox 原子提交；
+Worker 对每个 outbox 使用独立 session，确保一个模型调用或工作流失败不会污染下一条任务。两者之间
+以 MySQL outbox 交接，不依赖浏览器连接或 Redis 存活。
+
+### 4.3 等待用户输入、审批与管理员模型配置旁路
+
+| 执行阶段 | 文件 | 符号 | 代码范围 | 职责与最终落点 |
+| --- | --- | --- | --- | --- |
+| 用户补充输入 | `frontend/src/store/agent-context.tsx` | `AgentProvider.answerWorkflowInput` | L456-L463 | 调用输入回答 API，成功后刷新当前 thread 时间线 |
+| 后端接收输入 | `backend/app/modules/agent/router.py` | `submit_input_answer` | L547-L568 | 校验用户和等待项，写入答案并重新投递 Run |
+| 用户审批 | `frontend/src/store/agent-context.tsx` | `AgentProvider.decideWorkflowApproval` | L465-L479 | 调用批准/拒绝 API，成功后刷新时间线 |
+| 后端审批 | `backend/app/modules/agent/router.py` | `approve_approval` / `reject_approval` | L607-L622 / L626-L641 | 更新审批事实并恢复或终止相应工作流 |
+| 管理员页面入口 | `frontend-admin/src/pages/AgentModelsPage.tsx` | `AgentModelsPage` | L60-L165 | 加载模型、提交创建/编辑、切换状态/默认项和测试连通性 |
+| 管理端 HTTP 封装 | `frontend-admin/src/api/agentModels.ts` | `listAgentModels` 等模型 API 函数 | L44-L66 | 请求 `/api/v1/admin/agent-models` 系列接口 |
+| 后端管理入口 | `backend/app/modules/agent/model_config_router.py` | `list_agent_models` 至 `test_agent_model` | L29-L138 | 调用配置服务，事务提交后返回脱敏数据或测试结果 |
+| 状态不变量 | `backend/app/modules/agent/model_configs.py` | `AgentModelConfigService.create` 至 `get_user_selectable` | L46-L186 | 保证显示名称唯一、最多一个默认模型、默认项不可直接下线，并在 turn 创建前二次校验可用性 |
+
+## 5. 一轮对话的生命周期
 
 ```text
 用户发送消息
@@ -106,7 +170,7 @@ Redis 在当前 Agent 核心执行链路中不是事实来源。Agent 的可靠�
 避免两轮用户输入并发修改同一对话上下文。进入等待用户、等待审批或终态后，事实已经稳定，
 后续轮次可以继续执行。
 
-## 5. 数据与状态的来源
+## 6. 数据与状态的来源
 
 - MySQL 是 thread、message、run、event、workflow 状态的事实来源。
 - `agent_thread_items` 是面向用户时间线的有序投影。
@@ -147,7 +211,7 @@ Agent 对话保留消息流、工作流卡片和底部输入区等专有布局�
 `--canvas`、`--paper`、`--ink`、`--blue`、`--jade`、`--amber`、`--red`、`--serif` 和
 `--mono`。因此全站调整主题时，Agent 页面会跟随更新，而不会再次产生蓝紫色孤岛。
 
-## 6. 当前重点演进方向
+## 7. 当前重点演进方向
 
 1. 修复并强化管理员 Agent Runs、基础设施状态和 LLM 连通性监控。
 2. 打通用户消息到模型回答的可观察链路，避免“无响应但无错误”。

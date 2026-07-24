@@ -178,6 +178,15 @@ alembic -c alembic.ini upgrade head
 适用现象包括：管理员 Agent 模型列表返回 500、用户发送消息后日志出现
 `Table '...agent_model_configs' doesn't exist`，或者启动阶段直接提示缺少 Agent 数据表。
 
+代码定位：
+
+| 阶段 | 文件 | 符号 | 代码范围 | 作用 |
+| --- | --- | --- | --- | --- |
+| 建表与旧配置回填 | `backend/alembic/versions/20260723_agent_model_configs.py` | `upgrade` | L21-L90 | 创建完整表结构，并把已启用的 `system_configs.llm` 复制为默认记录 |
+| 启动期结构检查 | `backend/app/modules/operations/schema_guard.py` | `verify_database_schema` | L28-L104 | 比较 Alembic revision，并检查 `agent_model_configs` 真表是否存在 |
+| 用户模型查询 | `backend/app/modules/agent/model_configs.py` | `AgentModelConfigService.list_public` | L168-L180 | 查询 `online + selectable` 记录；缺表时 MySQL 1146 从这里暴露 |
+| 容器部署入口 | `docker-compose.podman.yml` | `services.backend.command` | L190-L190 | 在启动 Uvicorn 前执行 `alembic upgrade head` |
+
 先确认当前代码要求的 head：
 
 ```bash
@@ -201,6 +210,17 @@ SHOW CREATE TABLE agent_model_configs;
 SELECT id, display_name, online, selectable, is_default, default_slot
 FROM agent_model_configs;
 ```
+
+还应通过应用自身验证一次，因为“表存在”不等于“查询契约可用”。可在后端测试环境调用
+`verify_database_schema` 和 `AgentModelConfigService.list_public`，或携带用户认证请求：
+
+```text
+GET /api/v1/app/agent/models
+```
+
+2026-07-24 的实际案例中，修复前 `alembic current` 为
+`20260723_repair_agent_parent`，而 `alembic heads` 为 `20260723_agent_model_configs`。执行
+`alembic upgrade head` 后，迁移自动回填了 `legacy_llm` 默认模型，公开模型服务恢复正常。
 
 不要手工创建一个字段不完整的同名表，也不要用 `stamp head` 跳过迁移。若版本已经显示为新
 head 但表仍缺失，说明数据库曾被错误 stamp 或结构被人工删除；应先备份数据库，再根据完整
