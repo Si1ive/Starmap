@@ -24,4 +24,4 @@
 1. 数据库结构变化必须通过 Alembic 前向迁移完成，不能只修改 ORM 模型。
 2. 不得使用 `alembic stamp head` 掩盖迁移失败或结构漂移。
 3. 迁移应尽可能支持已有数据库安全升级，并补充迁移图或行为测试。
-4. Agent 数据库故障的常用诊断和修复流程记录在 `docs/project-common-operations-guide.md`。
+4. Agent 数据库故障的常用诊断和修复流程记录在 `docs/guides/common-operations-guide.md`。

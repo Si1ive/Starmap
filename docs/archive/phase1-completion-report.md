@@ -102,7 +102,7 @@ backend/scripts/
 
 #### 文档
 ```
-docs/design/
+docs/tech/
   └── exam-outline-system-design.md  # 完整设计方案
 ```
 

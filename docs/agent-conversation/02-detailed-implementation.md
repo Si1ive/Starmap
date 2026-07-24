@@ -24,7 +24,7 @@ ORM 仍会生成包含新字段的 SQL，MySQL 随后返回 `Unknown column`。
 - 版本号正确但实际结构漂移时，后端会在启动阶段失败并给出迁移提示，而不是让 Worker
   周期性重复打印 SQL 错误。
 
-具体手动操作见 `docs/project-common-operations-guide.md`。
+具体手动操作见 `docs/guides/common-operations-guide.md`。
 
 ## 2. 对话创建与时间线
 

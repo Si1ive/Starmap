@@ -4,8 +4,8 @@
  > 日期：2026-07-22
  > 状态：实施规划，由编排设计与运行时设计整合而来
  > 上游文档：
- > - [408-agent-workflow-orchestration-design.md](./408-agent-workflow-orchestration-design.md)
- > - [408-agent-conversation-runtime-design.md](./408-agent-conversation-runtime-design.md)
+ > - [408-agent-workflow-orchestration-design.md](../408-agent-workflow-orchestration-design.md)
+ > - [408-agent-conversation-runtime-design.md](../408-agent-conversation-runtime-design.md)
 
  ## 0. 设计哲学：从核心开始，逐步扩展
 

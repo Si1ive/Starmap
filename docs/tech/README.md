@@ -18,6 +18,28 @@
 - [多模态数据结构与迁移清单](./multimodal-schema-migration-plan.md) - 迁移与回填说明
 - [部署指南](./deployment.md) - 本地开发与部署
 
+### 语料与检索
+
+- [语料富化增强与关联建立架构](./enrichment-architecture.md) - 富化、双向关联、结构化检索全链路实现
+- [章节关联匹配策略深度设计](./chapter-linking-strategy.md) - 4 层匹配策略、边界处理与质量监控
+- [跨章节大纲检索关联设计](./outline-retrieval-cross-chapter-association-design.md) - 大纲辅助检索与跨章扩展
+- [考试大纲管理系统设计](./exam-outline-system-design.md) - 大纲数据模型与拆分入库方案
+- [题目提取（bbox 坐标分组）设计](./bbox-question-extraction.md) - 基于 MinerU bbox 的题目分组重构
+- [语料管线计划](./corpus-pipeline-plan.md) - 采集、解析、抽取管线
+
+### 认证
+
+- [本地认证联调](./local-auth-integration.md) - 本地 OAuth / SMTP 联调
+- [环境问题排查](./environment-troubleshooting.md) - 常见本地环境故障
+
+### 规范
+
+- [工程规范目录](./conventions/README.md) - Git 提交、命令执行、版本控制、开发日志规范
+
+### 路线图
+
+- [408 学习 Agent 分步实施路线图](./roadmap/408-agent-implementation-roadmap.md) - 由编排与运行时设计整合的实施步骤
+
 ## 快速参考
 
 ### 技术栈总览
