@@ -201,16 +201,17 @@ Worker 对每个 outbox 使用独立 session，确保一个模型调用或工作
 
 | 执行序号 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `frontend-admin/src/pages/AgentModelsPage.tsx` | `AgentModelsPage`（输出 Token 表单） | L365-L390 | 管理员打开“无限”开关 | 把 `max_tokens` 设为 `null` 并禁用数值输入 | 创建/编辑请求携带 JSON `null` | `create_agent_model` / `update_agent_model` |
-| 2 | `frontend-admin/src/pages/Settings/index.tsx` | `LlmConfigTab` | L27-L128 | 管理员配置题目结构、大纲、元信息或富化 LLM | 所有任务型 LLM 共用无限开关；关闭时恢复对应默认值 | `system_configs` 对应分区保存 `null` | `BaseLLMClient.__init__` |
-| 3 | `backend/app/modules/agent/model_config_router.py` | `create_agent_model` / `update_agent_model` | L38-L69 | `max_tokens` 为数字或显式 `null` | Pydantic 校验后保留显式空值，更新接口用 `exclude_unset` 区分“未传”与“传 null” | 交给配置服务 | `AgentModelConfigService.create` / `update` |
-| 4 | `backend/app/modules/agent/model_configs.py` | `AgentModelConfigService.create` / `update` | L38-L110 | 配置字典 | 缺省值使用 2000；显式 `None` 原样写入 | ORM 记录待提交 | `AgentModelConfigRecord.max_tokens` |
-| 5 | `backend/app/modules/agent/models.py` | `AgentModelConfigRecord.max_tokens` | L40-L44 | 数字或 `None` | `evaluates_none()` 防止 SQLAlchemy 把显式空值重新替换为 Python 默认值 | `agent_model_configs.max_tokens` 保存 SQL `NULL` | `load_agent_model_config` |
-| 6 | `backend/alembic/versions/20260724_agent_unlimited_tokens.py` | `upgrade` | L20-L27 | 数据库升级到新 head | 把 `agent_model_configs.max_tokens` 改为 nullable | 既有数字不变，新配置可保存 `NULL` | Agent Runtime |
-| 7 | `backend/app/modules/agent/model_runtime/config.py` | `AgentModelConfig.model_settings` / `_record_to_runtime_config` | L29-L87 | 数据库配置快照 | `None` 保持无限；仅数字值写入 Pydantic AI 的 `model_settings` | 无限时 settings 只有 temperature | Router/Answer Runtime |
-| 8 | `backend/app/modules/agent/model_runtime/router.py` | `RouterRuntime.route` | L75-L100 | 当前消息、历史和运行配置 | 把条件生成的 `model_settings` 交给 Pydantic AI | 供应商请求不再出现越界的 `max_completion_tokens` | 路由结果 |
-| 9 | `backend/app/modules/agent/model_runtime/answer.py` | `DirectAnswerRuntime.answer` | L89-L119 | 当前问题、历史和运行配置 | 使用相同 settings 调用回答模型 | 无限时由模型/供应商上下文限制决定输出 | 消息完成事件 |
-| 10 | `backend/app/infrastructure/ai/llm_client.py` | `BaseLLMClient.__init__` / `_chat` | L48-L137 | 任务型系统 LLM 配置 | 保留显式 `None`，构造 SDK kwargs 时仅在非空时加入 `max_tokens` | 任务型 LLM 同样支持无限 | OpenAI 兼容供应商 |
+| 1 | `frontend-admin/src/components/TokenLimitField/index.tsx` | `TokenLimitField` / `switchMode` | L12-L80 | Form 注入的数字或 `null`、该用途默认值 | 用“按额度/不设上限”分段选择统一两种状态；切换到无限发出 `null`，切回时恢复上一次数字 | 形成可被多个 LLM 表单复用的三态输入值 | Agent 模型或任务型 LLM Form |
+| 2 | `frontend-admin/src/pages/AgentModelsPage.tsx` | `AgentModelsPage`（输出 Token 列与表单） | L227-L237、L368-L377 | 管理员查看列表或修改 Agent 模型配额 | 表格用弱化文本显示“不设上限”，编辑表单把 `TokenLimitField` 直接绑定到 `max_tokens` | 创建/编辑请求携带数字或 JSON `null` | `create_agent_model` / `update_agent_model` |
+| 3 | `frontend-admin/src/pages/Settings/index.tsx` | `defaultMaxTokens` / `LlmConfigTab` | L19-L25、L27-L122 | 管理员配置题目结构、大纲、元信息或富化 LLM | 所有任务型 LLM 复用同一配额控件，切回限额时按用途恢复默认值 | `system_configs` 对应分区保存数字或 `null` | `BaseLLMClient.__init__` |
+| 4 | `backend/app/modules/agent/model_config_router.py` | `create_agent_model` / `update_agent_model` | L38-L69 | `max_tokens` 为数字或显式 `null` | Pydantic 校验后保留显式空值，更新接口用 `exclude_unset` 区分“未传”与“传 null” | 交给配置服务 | `AgentModelConfigService.create` / `update` |
+| 5 | `backend/app/modules/agent/model_configs.py` | `AgentModelConfigService.create` / `update` | L38-L110 | 配置字典 | 缺省值使用 2000；显式 `None` 原样写入 | ORM 记录待提交 | `AgentModelConfigRecord.max_tokens` |
+| 6 | `backend/app/modules/agent/models.py` | `AgentModelConfigRecord.max_tokens` | L40-L44 | 数字或 `None` | `evaluates_none()` 防止 SQLAlchemy 把显式空值重新替换为 Python 默认值 | `agent_model_configs.max_tokens` 保存 SQL `NULL` | `load_agent_model_config` |
+| 7 | `backend/alembic/versions/20260724_agent_unlimited_tokens.py` | `upgrade` | L20-L27 | 数据库升级到新 head | 把 `agent_model_configs.max_tokens` 改为 nullable | 既有数字不变，新配置可保存 `NULL` | Agent Runtime |
+| 8 | `backend/app/modules/agent/model_runtime/config.py` | `AgentModelConfig.model_settings` / `_record_to_runtime_config` | L29-L87 | 数据库配置快照 | `None` 保持无限；仅数字值写入 Pydantic AI 的 `model_settings` | 无限时 settings 只有 temperature | Router/Answer Runtime |
+| 9 | `backend/app/modules/agent/model_runtime/router.py` | `RouterRuntime.route` | L75-L100 | 当前消息、历史和运行配置 | 把条件生成的 `model_settings` 交给 Pydantic AI | 供应商请求不再出现越界的 `max_completion_tokens` | 路由结果 |
+| 10 | `backend/app/modules/agent/model_runtime/answer.py` | `DirectAnswerRuntime.answer` | L89-L119 | 当前问题、历史和运行配置 | 使用相同 settings 调用回答模型 | 无限时由模型/供应商上下文限制决定输出 | 消息完成事件 |
+| 11 | `backend/app/infrastructure/ai/llm_client.py` | `BaseLLMClient.__init__` / `_chat` | L48-L137 | 任务型系统 LLM 配置 | 保留显式 `None`，构造 SDK kwargs 时仅在非空时加入 `max_tokens` | 任务型 LLM 同样支持无限 | OpenAI 兼容供应商 |
 
 `null`、字段缺失和数字是三种不同状态：`null` 表示无限；字段缺失使用该用途默认值；数字表示
 管理员明确指定上限。这样既保留历史默认行为，也不会再用 200000 等值撞上不同供应商的上限。

@@ -28,6 +28,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import PageHeader from '@/components/PageHeader'
+import TokenLimitField from '@/components/TokenLimitField'
 import {
   createAgentModel,
   listAgentModels,
@@ -60,7 +61,6 @@ const defaultFormValues: ModelFormValues = {
 const AgentModelsPage = () => {
   const queryClient = useQueryClient()
   const [form] = Form.useForm<ModelFormValues>()
-  const maxTokens = Form.useWatch('max_tokens', form)
   const [editing, setEditing] = useState<AgentModelConfig | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
   const [testingId, setTestingId] = useState<string | null>(null)
@@ -229,7 +229,11 @@ const AgentModelsPage = () => {
       dataIndex: 'max_tokens',
       key: 'max_tokens',
       width: 110,
-      render: (value: number | null) => value === null ? <Tag color="blue">无限</Tag> : value,
+      render: (value: number | null) => (
+        <span className={value === null ? 'agent-models-page__unlimited-value' : undefined}>
+          {value === null ? '不设上限' : value}
+        </span>
+      ),
     },
     {
       title: '更新时间',
@@ -367,25 +371,9 @@ const AgentModelsPage = () => {
             </Form.Item>
             <Form.Item
               label="最大输出 Token"
-              extra="无限时不会向模型供应商发送输出 Token 上限，实际输出仍受模型上下文与供应商限制。"
+              name="max_tokens"
             >
-              <Space.Compact style={{ width: '100%' }}>
-                <Form.Item name="max_tokens" noStyle>
-                  <InputNumber
-                    min={1}
-                    max={200000}
-                    precision={0}
-                    disabled={maxTokens === null}
-                    style={{ width: 'calc(100% - 72px)' }}
-                  />
-                </Form.Item>
-                <Switch
-                  checked={maxTokens === null}
-                  checkedChildren="无限"
-                  unCheckedChildren="限额"
-                  onChange={(checked) => form.setFieldValue('max_tokens', checked ? null : 2000)}
-                />
-              </Space.Compact>
+              <TokenLimitField defaultValue={2000} />
             </Form.Item>
             <Form.Item label="超时秒数" name="timeout_seconds" rules={[{ required: true }]}>
               <InputNumber min={5} max={600} precision={0} style={{ width: '100%' }} />

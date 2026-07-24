@@ -499,6 +499,108 @@ button {
   padding: 0;
 }
 
+.agent-models-page__unlimited-value {
+  color: var(--admin-ink-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.token-limit-field {
+  overflow: hidden;
+  width: 100%;
+  border: 1px solid var(--admin-border);
+  border-radius: 9px;
+  background: var(--admin-surface);
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.token-limit-field:focus-within {
+  border-color: var(--admin-jade);
+  box-shadow: 0 0 0 2px rgba(76, 117, 104, 0.12);
+}
+
+.token-limit-field__mode.ant-segmented {
+  display: block;
+  margin: 5px;
+  padding: 3px;
+  border-radius: 6px;
+  background: var(--admin-surface-soft);
+}
+
+.token-limit-field__mode .ant-segmented-item {
+  color: var(--admin-ink-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.token-limit-field__mode .ant-segmented-item-selected {
+  color: var(--admin-blue);
+  box-shadow: 0 1px 4px rgba(49, 89, 78, 0.12);
+}
+
+.token-limit-field__value {
+  min-height: 48px;
+  padding: 7px 10px 10px;
+  border-top: 1px solid var(--admin-border-soft);
+}
+
+.token-limit-field__value .ant-input-number-group-wrapper,
+.token-limit-field__value .ant-input-number {
+  width: 100%;
+}
+
+.token-limit-field__value .ant-input-number-input {
+  font-family: var(--admin-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.token-limit-field__value .ant-input-number-group-addon {
+  color: var(--admin-ink-faint);
+  font-family: var(--admin-mono);
+  font-size: 11px;
+}
+
+.token-limit-field__unlimited {
+  display: flex;
+  min-height: 31px;
+  align-items: center;
+  gap: 10px;
+  color: var(--admin-ink-muted);
+}
+
+.token-limit-field__infinity {
+  display: grid;
+  width: 31px;
+  height: 31px;
+  flex: 0 0 31px;
+  place-items: center;
+  border-radius: 7px;
+  background: var(--admin-blue-soft);
+  color: var(--admin-blue);
+  font-family: Georgia, serif;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.token-limit-field__unlimited strong,
+.token-limit-field__unlimited small {
+  display: block;
+}
+
+.token-limit-field__unlimited strong {
+  color: var(--admin-ink);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.token-limit-field__unlimited small {
+  margin-top: 1px;
+  color: var(--admin-ink-faint);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
 .agent-model-form__grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

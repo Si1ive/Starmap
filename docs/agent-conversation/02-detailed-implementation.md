@@ -384,6 +384,21 @@ Agent 模型配置页面维护。
 | 正整数 | 管理员明确限制输出 | 发送 `max_tokens`，SDK 可映射为 `max_completion_tokens` |
 | `null` | 不设置应用侧输出上限 | 完全省略 Token 上限参数 |
 
+管理端不再把一个数字输入框与独立 Switch 生硬拼接。共享组件
+`frontend-admin/src/components/TokenLimitField/index.tsx` 的 `TokenLimitField`（L12-L80）把状态组织成
+同一个“配额轨道”：上层 `Segmented` 选择“按额度/不设上限”，下层在同一边界内显示带 Token
+单位的数字输入，或显示“不发送输出上限”的语义说明。`switchMode`（L28-L38）在切到无限前记录
+当前数字，并在切回限额时恢复；所以管理员不会因为临时查看无限模式而丢失原额度。输入框被清空时
+不会把空输入误解释成无限，只有主动选择“不设上限”才会发出 `null`。
+
+Agent 表格与表单入口位于 `frontend-admin/src/pages/AgentModelsPage.tsx` 的 `AgentModelsPage`：输出
+Token 列（L227-L237）用克制的弱化文本展示“不设上限”，不再使用高亮蓝色标签；编辑表单
+（L368-L377）把组件直接绑定到 `max_tokens`。任务型 LLM 则在
+`frontend-admin/src/pages/Settings/index.tsx` 的 `defaultMaxTokens`（L19-L25）保留各用途恢复值，并由
+`LlmConfigTab`（L27-L122）复用同一组件。视觉规则集中在 `frontend-admin/src/index.css` 的
+`.agent-models-page__unlimited-value` 与 `.token-limit-field*`（L502-L602），使用管理端既有纸白、
+中性灰和品牌绿变量，并提供 `focus-within` 焦点反馈；这使多个配置页的行为、语义和外观保持一致。
+
 Agent 模型创建和更新分别由 `backend/app/modules/agent/model_configs.py` 的
 `AgentModelConfigService.create`（L38-L84）与 `AgentModelConfigService.update`（L86-L110）处理。
 更新接口的 `request.model_dump(exclude_unset=True)` 位于

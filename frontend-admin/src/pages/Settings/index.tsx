@@ -10,6 +10,7 @@ import {
   testLlm,
 } from '@/api'
 import type { SystemSettings, LlmKind, LlmConfig, EmbeddingConfig } from '@/api/settings'
+import TokenLimitField from '@/components/TokenLimitField'
 
 const { TextArea } = Input
 const { Option } = Select
@@ -34,7 +35,6 @@ const LlmConfigTab = ({
   intro: string
 }) => {
   const queryClient = useQueryClient()
-  const maxTokens = Form.useWatch([kind, 'max_tokens'], form)
   const { data: statusData, isLoading: statusLoading } = useQuery({
     queryKey: ['llm-status', kind],
     queryFn: () => getLlmStatus(kind),
@@ -102,28 +102,9 @@ const LlmConfigTab = ({
       </Form.Item>
       <Form.Item
         label="最大输出 Token"
-        extra="无限时不会向模型供应商发送输出 Token 上限，实际输出仍受模型上下文与供应商限制。"
+        name={[kind, 'max_tokens']}
       >
-        <Space.Compact style={{ width: '100%' }}>
-          <Form.Item name={[kind, 'max_tokens']} noStyle>
-            <InputNumber
-              min={1}
-              max={200000}
-              precision={0}
-              disabled={maxTokens === null}
-              style={{ width: 'calc(100% - 72px)' }}
-            />
-          </Form.Item>
-          <Switch
-            checked={maxTokens === null}
-            checkedChildren="无限"
-            unCheckedChildren="限额"
-            onChange={(checked) => form.setFieldValue(
-              [kind, 'max_tokens'],
-              checked ? null : defaultMaxTokens[kind],
-            )}
-          />
-        </Space.Compact>
+        <TokenLimitField defaultValue={defaultMaxTokens[kind]} />
       </Form.Item>
       <Form.Item name={[kind, 'timeout_seconds']} label="请求超时（秒）">
         <InputNumber min={5} max={600} style={{ width: '100%' }} />
