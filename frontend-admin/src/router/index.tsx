@@ -17,6 +17,7 @@ const ConversationList = lazy(() => import('@/pages/Conversation/List'))
 const ConversationDetail = lazy(() => import('@/pages/Conversation/Detail'))
 const AgentRunsPage = lazy(() => import('@/pages/AgentRunsPage'))
 const AgentRunDetailPage = lazy(() => import('@/pages/AgentRunDetailPage'))
+const AgentModelsPage = lazy(() => import('@/pages/AgentModelsPage'))
 const MonitorOverview = lazy(() => import('@/pages/Monitor/Overview'))
 const ApiMonitor = lazy(() => import('@/pages/Monitor/Api'))
 const DatabaseMonitor = lazy(() => import('@/pages/Monitor/Database'))
@@ -150,6 +151,7 @@ const AppRoutes = () => {
         {/* Agent Runs 监控 */}
         <Route path="agent-runs" element={<AgentRunsPage />} />
         <Route path="agent-runs/:id" element={<AgentRunDetailPage />} />
+        <Route path="agent-models" element={<AgentModelsPage />} />
 
         {/* 爬虫管理 */}
         <Route path="crawler" element={<CrawlerList />} />

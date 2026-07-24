@@ -51,8 +51,9 @@ Agent Worker
           └───────────────► 学习领域服务 / 检索工具
 
 管理员端
-  ├─ /api/v1/admin/agent-runs ──► agent_runs / agent_events / artifacts
-  ├─ /api/v1/admin/agent-models ──► 多模型配置、上下线、默认模型与连通性测试
+  ├─ Agent Runs 页面 ──► /api/v1/admin/agent-runs ──► agent_runs / agent_events / artifacts
+  ├─ Agent 模型管理页面 ──► /api/v1/admin/agent-models
+  │     └─ 创建/编辑、上下线、用户可选、默认模型、连通性测试
   └─ 基础设施状态 ──► MySQL / Redis / Qdrant
 ```
 
@@ -76,7 +77,8 @@ Redis 在当前 Agent 核心执行链路中不是事实来源。Agent 的可靠�
 | 上下文 | `context_builder.py` | 对话历史、权限范围、学习上下文和 root run 完整性 |
 | 持久化模型 | `models.py` | Agent 领域表、状态和索引定义 |
 | 管理员接口 | `admin_router.py` | 在 `/api/v1/admin/agent-runs` 下提供 Run 查询、详情、统计与管理能力 |
-| 管理员页面 | `frontend-admin/src/pages/AgentRunsPage.tsx` 等 | 运行监控、筛选与详情展示 |
+| 管理员页面 | `frontend-admin/src/pages/AgentRunsPage.tsx`、`AgentModelsPage.tsx` | 运行监控，以及多模型创建、编辑、状态控制和连通性测试 |
+| 管理员模型 API | `frontend-admin/src/api/agentModels.ts` | 管理端模型接口类型、请求封装和测试超时策略 |
 
 ## 4. 一轮对话的生命周期
 
@@ -126,6 +128,11 @@ Redis 在当前 Agent 核心执行链路中不是事实来源。Agent 的可靠�
 `OPENAI_API_KEY` 与 `OPENAI_MODEL` 环境变量。API Key 只保存在服务端，管理员列表返回掩码，
 用户模型列表只返回 ID、显示名称和默认标记。
 
+管理员端 `/admin/agent-models` 直接消费上述管理接口。页面只根据 `has_api_key` 展示“已配置”，
+编辑已有模型时 API Key 输入框保持空白；保存时省略空密钥字段，使服务端保留原值。上线与用户
+可选状态使用独立状态接口，设置默认前要求模型同时上线且可选，连通性测试使用按钮级 loading
+并展示模型回复或截断后的错误。这样管理动作都经过后端约束，而不是在浏览器本地伪造状态。
+
 Agent 时间采用“两段式 UTC 契约”：MySQL `DATETIME` 继续保存无时区的 UTC 值，避免改变现有
 表结构和 SQL 比较行为；HTTP JSON 与 SSE 一旦把时间发送给浏览器，就统一序列化为带 `Z` 的
 ISO 8601 字符串。前端 `new Date(...)` 因此能先识别 UTC，再按用户设备时区显示。
@@ -141,6 +148,6 @@ Agent 对话保留消息流、工作流卡片和底部输入区等专有布局�
 2. 打通用户消息到模型回答的可观察链路，避免“无响应但无错误”。
 3. 统一 UTC 存储与用户时区展示。
 4. 让 Agent 页面遵循用户端全局设计系统。
-5. 完成管理员多模型页面与用户端选择器，使现有后端能力可视化并补齐交互反馈。
+5. 完成用户端模型选择器，让已上线模型在发送 turn 时明确进入 Run。
 
 每完成一项，必须同步更新本全景图、细致讲解和进展记录。

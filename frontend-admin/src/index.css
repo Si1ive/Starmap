@@ -486,6 +486,39 @@ button {
   gap: 8px;
 }
 
+.agent-models-page__result {
+  margin-bottom: 16px;
+}
+
+.agent-models-page__table.ant-card {
+  border: 1px solid var(--admin-border-soft);
+  box-shadow: 0 10px 30px rgba(49, 89, 78, 0.05);
+}
+
+.agent-models-page__table .ant-card-body {
+  padding: 0;
+}
+
+.agent-model-form__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 16px;
+}
+
+.agent-model-form__grid--three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.agent-model-form__switches {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0 16px;
+  padding: 14px 16px 0;
+  border: 1px solid var(--admin-border-soft);
+  border-radius: 8px;
+  background: var(--admin-surface-soft);
+}
+
 .ant-btn {
   box-shadow: none;
   font-weight: 580;

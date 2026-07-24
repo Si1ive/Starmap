@@ -23,6 +23,7 @@ import {
   ApartmentOutlined,
   ShareAltOutlined,
   AimOutlined,
+  RobotOutlined,
 } from '@ant-design/icons'
 import { useAdminStore } from '@/store'
 import { usePermission } from '@/hooks/usePermission'
@@ -49,6 +50,7 @@ const menuItems = [
   { key: '/admin/search', icon: <SearchOutlined />, label: '检索调试' },
   { key: '/admin/conversations', icon: <MessageOutlined />, label: '智能问答' },
   { key: '/admin/agent-runs', icon: <ThunderboltOutlined />, label: 'Agent Runs 监控' },
+  { key: '/admin/agent-models', icon: <RobotOutlined />, label: 'Agent 模型管理' },
   {
     key: '/admin/crawler-group',
     icon: <BugOutlined />,
@@ -91,6 +93,7 @@ const selectableMenuKeys = [
   '/admin/review/chapter-relations',
   '/admin/review/relations',
   '/admin/agent-runs',
+  '/admin/agent-models',
   '/admin/crawler/schedules',
   '/admin/crawler/sources',
   '/admin/crawler/config',
