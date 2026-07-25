@@ -30,7 +30,7 @@ PUBLIC_ERROR_MESSAGES = {
     "agent_model_busy": "模型服务当前请求较多，请稍后重试。",
     "agent_model_timeout": "模型服务响应超时，请稍后重试。",
     "agent_response_format_invalid": (
-        "模型返回内容格式不符合要求，系统未能完成解析。请重试；如果持续出现，请联系管理员。"
+        "模型返回内容格式不符合要求，系统未能完成解析。"
     ),
     "agent_run_failed": "这条回复生成失败，请稍后重试。",
 }

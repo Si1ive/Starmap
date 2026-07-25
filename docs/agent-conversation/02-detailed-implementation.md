@@ -496,6 +496,12 @@ Router 提示词也明确了业务边界，但提示词不是唯一保障。`_ex
 `max_completion_tokens` 参数范围 → 模型参数不支持；429 → 服务繁忙；timeout → 响应超时；结构化输出
 重试耗尽 → 返回格式不符合要求。供应商原始 body 和堆栈不会发给用户。
 
+结构化输出重试耗尽对应的公开文案固定为“模型返回内容格式不符合要求，系统未能完成解析。”，只陈述
+本轮失败原因，不再附加“请重试”或“联系管理员”等操作建议。映射位于
+`backend/app/modules/agent/public_errors.py` 的 `PUBLIC_ERROR_MESSAGES`（L16-L36），精确文案回归位于
+`backend/tests/test_agent_public_errors.py` 的
+`test_response_format_error_only_explains_the_failure_reason`（L40-L44）。
+
 `frontend/src/features/agent/agent-chat.css` 的 `.agent-message__error` / `:only-child`（L207-L216）继续
 保持红色；只有错误、没有 partial 正文时移除多余顶部间距。旧记录若 `content` 本身等于默认错误文案，
 前端把它识别为兼容数据，不再当成正文重复显示。

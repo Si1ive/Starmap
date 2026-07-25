@@ -35,3 +35,10 @@ def test_classify_agent_error_returns_stable_public_reason(error, expected_code)
     assert public_error.code == expected_code
     assert public_error.message
     assert error not in public_error.message
+
+
+def test_response_format_error_only_explains_the_failure_reason():
+    public_error = classify_agent_error("Exceeded maximum output retries (1)")
+
+    assert public_error.code == "agent_response_format_invalid"
+    assert public_error.message == "模型返回内容格式不符合要求，系统未能完成解析。"
