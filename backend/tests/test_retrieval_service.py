@@ -59,7 +59,7 @@ def test_merge_hits_does_not_mutate_qdrant_or_sparse_hits():
 
 
 @pytest.mark.asyncio
-async def test_hydrate_results_preserves_hit_order_and_adds_source_filename():
+async def test_hydrate_results_preserves_hit_order_and_adds_source_display_name():
     segment = SimpleNamespace(
         id="segment-1",
         entity_type="question",
@@ -78,7 +78,11 @@ async def test_hydrate_results_preserves_hit_order_and_adds_source_filename():
     document_result = SimpleNamespace(
         scalars=lambda: SimpleNamespace(
             all=lambda: [
-                SimpleNamespace(id="document-1", filename="试卷.pdf"),
+                SimpleNamespace(
+                    id="document-1",
+                    source_label="2024 年 408 真题",
+                    title="操作系统真题",
+                ),
             ]
         ),
     )
@@ -104,8 +108,70 @@ async def test_hydrate_results_preserves_hit_order_and_adds_source_filename():
     assert len(results) == 1
     assert results[0].segment_id == "segment-1"
     assert results[0].score == 0.92
-    assert results[0].source_filename == "试卷.pdf"
+    assert results[0].source_filename == "2024 年 408 真题"
     assert results[0].page_no == 3
+
+
+@pytest.mark.asyncio
+async def test_hydrate_results_falls_back_to_title_and_handles_missing_source():
+    segment_with_doc = SimpleNamespace(
+        id="segment-1",
+        entity_type="knowledge_point",
+        entity_id="kp-1",
+        segment_type="summary",
+        content_text="二分查找要求有序。",
+        context_text=None,
+        subject_id="subject-ds",
+        chapter_ids=["chapter-search"],
+        document_id="document-1",
+        page_no=1,
+    )
+    segment_without_doc = SimpleNamespace(
+        id="segment-2",
+        entity_type="knowledge_point",
+        entity_id="kp-2",
+        segment_type="summary",
+        content_text="哈希查找依赖散列函数。",
+        context_text=None,
+        subject_id="subject-ds",
+        chapter_ids=["chapter-search"],
+        document_id=None,
+        page_no=None,
+    )
+    segment_result = SimpleNamespace(
+        scalars=lambda: SimpleNamespace(
+            all=lambda: [segment_with_doc, segment_without_doc]
+        ),
+    )
+    document_result = SimpleNamespace(
+        scalars=lambda: SimpleNamespace(
+            all=lambda: [
+                SimpleNamespace(id="document-1", source_label=None, title="算法教材"),
+            ]
+        ),
+    )
+    db = SimpleNamespace(
+        execute=AsyncMock(side_effect=[segment_result, document_result]),
+    )
+
+    results = await RetrievalSearchEngine(db).hydrate_results(
+        [
+            {
+                "id": "point-1",
+                "score": 0.92,
+                "payload": {"segment_id": "segment-1"},
+            },
+            {
+                "id": "point-2",
+                "score": 0.66,
+                "payload": {"segment_id": "segment-2"},
+            },
+        ]
+    )
+
+    assert [result.segment_id for result in results] == ["segment-1", "segment-2"]
+    assert results[0].source_filename == "算法教材"
+    assert results[1].source_filename is None
 
 
 @pytest.mark.asyncio

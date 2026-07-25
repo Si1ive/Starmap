@@ -256,7 +256,7 @@ class RetrievalSearchEngine:
                 select(Document).where(Document.id.in_(document_ids))
             )
             document_names = {
-                document.id: document.filename
+                document.id: self._document_source_name(document)
                 for document in document_result.scalars().all()
             }
 
@@ -283,6 +283,17 @@ class RetrievalSearchEngine:
                 )
             )
         return retrieval_results
+
+    @staticmethod
+    def _document_source_name(document: Document) -> Optional[str]:
+        """优先使用展示来源，其次回退到文档标题。"""
+        for value in (
+            getattr(document, "source_label", None),
+            getattr(document, "title", None),
+        ):
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
 
     @staticmethod
     def _build_sparse_conditions(

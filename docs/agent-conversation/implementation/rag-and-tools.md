@@ -15,7 +15,7 @@
 | 大纲扩展与混合检索 | `backend/app/modules/retrieval/service.py` | `RetrievalService.search_with_outline_expansion` | L44-L107 | query、学科/章节过滤、`entity_type`、limit | 先做 canonical chapter 扩展，再组合 dense + sparse hybrid 检索 | `results`、`outline_expansion` | `search` |
 | Collection 路由 | `backend/app/modules/retrieval/search_engine.py` | `RetrievalSearchEngine.get_collections` | L105-L114 | `entity_type` | `knowledge_point` 和 `question` 进入不同 Qdrant collection；空类型时两者都查 | collection 列表 | `search` |
 | 稀疏召回与命中合并 | `backend/app/modules/retrieval/search_engine.py` | `sparse_search`、`merge_hits` | L116-L194 | collection、query、filter | MySQL `sparse_text` 召回与 Qdrant dense 结果加权合并 | hit 列表 | `hydrate_results` |
-| 命中内容回填 | `backend/app/modules/retrieval/search_engine.py` | `hydrate_results` | L197-L282 | hit 列表 | 按命中顺序从 `retrieval_segments` 和 `documents` 补齐正文、上下文、来源文档和页码 | `RetrievalResult` 列表 | `RetrievalResult.to_dict` |
+| 命中内容回填 | `backend/app/modules/retrieval/search_engine.py` | `hydrate_results`、`_document_source_name` | L222-L296 | hit 列表 | 按命中顺序从 `retrieval_segments` 和 `documents` 补齐正文、上下文、来源文档和页码；来源名优先取 `source_label`，其次回退到 `title` | `RetrievalResult` 列表 | `RetrievalResult.to_dict` |
 | Agent DTO 出口 | `backend/app/modules/retrieval/search_engine.py` | `RetrievalResult.to_dict` | L15-L62 | `RetrievalResult` | 统一输出 `entity_id`、`content_text`、`source`、`chapter_ids` 等字段 | Agent 工具与其他检索消费者的原始 DTO | `retrieve_knowledge` |
 
 ## 当前公开活动与用户端归并
@@ -27,12 +27,12 @@
 | 前端实时归并 | `frontend/src/features/agent/timeline-state.ts` | `applyWorkflowEvent` | L167-L224 | 以 activity ID 为键更新工作流活动状态 |
 | 工作流卡片渲染 | `frontend/src/features/agent/InlineWorkflow.tsx` | `ActivityCard` / `InlineWorkflow` | L92-L133、L218-L242 | 渲染查询、命中数、资料列表和零命中/异常提示 |
 
-## 当前已定位问题与代码锚点
+## 当前任务锚点
 
 | 任务 ID | 文件 | 符号 | 代码范围 | 当前问题 |
 | --- | --- | --- | --- | --- |
 | `ACT-001` | `backend/app/modules/agent/tools/retrieve_knowledge.py` | `retrieve_knowledge` | L19-L181 | 每次重试都随机生成新的 `activity_id`，用户端按不同活动展示多张卡片 |
-| `RAG-001` | `backend/app/modules/retrieval/search_engine.py` | `hydrate_results` | L197-L282 | 命中后需要从 `documents` 回填来源信息；整改前曾因为访问不存在字段导致 Explain 真实命中却失败 |
+| `RAG-001` | `backend/app/modules/retrieval/search_engine.py` | `hydrate_results`、`_document_source_name` | L222-L296 | 已改为 `source_label -> title -> None` 回退链，不再访问不存在的 `Document.filename` |
 | `RAG-002` | `backend/app/modules/retrieval/search_engine.py`、`backend/app/modules/agent/tools/retrieve_knowledge.py` | `RetrievalResult.to_dict`、`retrieve_knowledge` | `search_engine.py` L15-L62；`retrieve_knowledge.py` L77-L181 | 底层 DTO 与 Agent 简化字段之间存在语义压缩，Explain/Validate 需要稳定的实体类型和来源字段 |
 | `EXP-001` | `backend/app/modules/agent/workflows/explain.py` | `_evidence_gate_node`、`_generate_explanation_node` | L159-L225 | 零命中仍允许进入模型生成，但必须区分正常空结果与服务异常，且不能伪造引用 |
 
@@ -42,7 +42,7 @@
 | --- | --- | --- | --- |
 | 用户可读的零命中与异常提示 | `backend/tests/test_agent_retrieve_activity.py` | `test_retrieve_knowledge_explains_empty_result_without_internal_jargon` / `test_retrieve_knowledge_failure_hides_internal_degradation_wording` | L54-L107 |
 | Explain 模型错误、零命中、首次强制检索和正文生成 | `backend/tests/test_agent_explain_workflow.py` | `test_evidence_loop_reports_model_failure_instead_of_false_completion` 至 `test_generate_explanation_uses_structured_runtime` | L42-L167 |
-| 检索过滤、回填和服务委托 | `backend/tests/test_retrieval_service.py` | `test_hydrate_results_preserves_hit_order_and_adds_source_filename` 等 | L1-L176 |
+| 检索过滤、回填和服务委托 | `backend/tests/test_retrieval_service.py` | `test_hydrate_results_preserves_hit_order_and_adds_source_display_name` 等 | L1-L202 |
 
 ## 下一步阅读
 

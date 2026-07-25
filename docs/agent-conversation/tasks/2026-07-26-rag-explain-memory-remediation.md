@@ -20,7 +20,7 @@
 | 2. Explain 无资料时由 LLM 回答 | EXP-001 | 无证据继续进入模型生成的路径已存在，且本次 Run 确实生成了正文 | 待实现完整验收 | 正常零命中和检索异常均可按策略继续回答；无伪造引用；最终内容成功展示 |
 | 3. LLM 已生成长回答但最终显示失败 | FLOW-001 | `NodeResult.success()` 已支持 `artifact`，Explain 渲染链已补最终节点回归测试 | 已完成 | Explain/Validate/Grade/Plan 均可创建 Artifact；失败回归测试覆盖最终节点 |
 | 4. 题目和知识点看似走同一路检索 | RAG-002 | MySQL 实体和 Qdrant Collection 已分类；共享工具按 `entity_type` 路由，但 Agent DTO 和业务语义不完整 | 已定位 | 统一类型化 DTO；Explain 与 Validate 使用明确实体类型、字段和用户可见名称 |
-| 5. 二分查找题明明存在却未检索到 | RAG-001、RAG-002 | 数据、检索片段、稀疏召回和向量召回均命中；失败发生在 MySQL 回填和 Agent DTO 转换 | 已定位 | 修复来源字段和 DTO；真实二分查找题通过混合检索进入 Validate 候选集 |
+| 5. 二分查找题明明存在却未检索到 | RAG-001、RAG-002 | RAG-001 已修复 MySQL 来源回填；剩余阻塞在 Agent DTO 转换与 Validate 资格门 | 已定位 | 修复来源字段和 DTO；真实二分查找题通过混合检索进入 Validate 候选集 |
 
 结论：五个问题均已登记，没有遗漏；目前尚不能把任何一项标记为产品修复完成。
 
@@ -63,7 +63,7 @@ load_scope completed
 | 用户活动归并 | `backend/app/modules/agent/timeline.py` | `AgentTimelineService._activity_views` | L506-L538 | 按 `activity_id` 聚合；不同 ID 必然生成不同活动 |
 | 检索结果契约 | `backend/app/modules/retrieval/search_engine.py` | `RetrievalResult.to_dict` | L15-L62 | 返回 `entity_id`、`content_text` 和嵌套 `source`，与 Agent 工具读取字段不一致 |
 | Collection 路由 | `backend/app/modules/retrieval/search_engine.py` | `RetrievalSearchEngine.get_collections` | L118-L128 | `knowledge_point` 和 `question` 分别进入不同 Qdrant Collection；空类型同时查两者 |
-| 命中内容回填 | `backend/app/modules/retrieval/search_engine.py` | `RetrievalSearchEngine.hydrate_results` | L222-L282 | 从 MySQL 补全片段和文档来源；当前错误访问 `Document.filename` |
+| 命中内容回填 | `backend/app/modules/retrieval/search_engine.py` | `RetrievalSearchEngine.hydrate_results`、`RetrievalSearchEngine._document_source_name` | L222-L296 | 已改为 `source_label -> title -> None` 回退链，从 MySQL 补全文档来源，不再访问不存在字段 |
 | 无证据生成 | `backend/app/modules/agent/workflows/explain.py` | `_evidence_gate_node`、`_generate_explanation_node` | L159-L225 | 无证据仍进入模型生成，并要求使用通用知识且不伪造引用 |
 | Explain 产物渲染 | `backend/app/modules/agent/workflows/explain.py` | `_render_artifact_node`、`_completed_node` | L243-L270 | 将成功正文组装为 Artifact，但传入了工厂方法不支持的 `artifact` 参数 |
 | 节点结果契约 | `backend/app/modules/agent/workflows/contracts.py` | `NodeResult.success` | L27-L48 | 已支持 `artifact` 参数，render 节点可通过统一工厂方法把最终产物传给引擎与 worker |
@@ -83,9 +83,10 @@ load_scope completed
 
 ### RAG-001 修复命中后的来源信息回填
 
-- 使用当前 `Document.title`/`source_label` 契约替代不存在的 `filename`，明确空来源回退规则。
-- 增加“Qdrant 命中且存在来源文档”的回填测试，以及没有来源文档的测试。
-- 验收：二分查找题不会在 `hydrate_results` 抛错，稀疏和向量候选均能进入最终结果。
+- 状态：已完成（2026-07-25）。
+- 已使用当前 `Document.source_label` / `title` 契约替代不存在的 `filename`，空来源明确回退为 `None`。
+- 已增加“Qdrant 命中且存在展示来源”和“只有标题或完全没有来源文档”的回填测试。
+- 验证：`cd backend && ./venv/bin/pytest tests/test_retrieval_service.py -q` 通过。
 
 ### RAG-002 统一题目/知识点检索 DTO
 
