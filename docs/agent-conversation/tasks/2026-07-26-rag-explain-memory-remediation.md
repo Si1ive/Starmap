@@ -138,16 +138,24 @@ load_scope completed
 冲突优先级固定为：当前输入明确主题 > 显式引用/附件 > 待处理任务 > 最近活跃主题 > 唯一高优先级
 学习薄弱点 > 请求用户澄清。禁止静默使用“数据结构 操作系统”作为默认主题。
 
-### MEM-004 按工作流选择最小记忆
+### MEM-004 按能力声明选择最小记忆
 
-- 定义类型化 `MemoryNeed` 和 Router/Explain/Validate/Grade/Plan 专用 Bundle。
+- 定义类型化 `MemoryNeed`，把消费能力固定为 `conversation_continuity`、`topic_focus`、`practice_generation`、
+  `grading_evidence`、`planning_goal`、`pending_interaction` 等稳定标签；当前 Router/Explain/Validate/Grade/Plan
+  只是这些能力的第一批消费者，不是记忆表结构边界。
+- Bundle 命名按能力而不是按 workflow：`ConversationBundle`、`TopicBundle`、`PracticeBundle`、
+  `EvaluationBundle`、`PlanningBundle`。未来新增或重排 workflow 时，只声明需要哪些能力，不改底层存储。
 - 先做权限和作用域过滤，再按实体 ID 精确查询；只有旧情景摘要缺少实体 ID 时才做向量检索。
 - `message_history` 只承担近期对话连续性；主题、学习画像和 Artifact 使用结构化 Bundle。
 - 快照记录每条选中记忆的来源、版本、选择原因、内容副本、估算 Token 和被丢弃原因。
 
-### MEM-005 Validate 消费记忆并构造工具参数
+### MEM-005 先用 Validate 打穿首个消费闭环
 
-目标链路：
+`validate` 是首个落地消费者，因为当前“讲解后出题”的痛点最集中、验证成本最低；它只是样板，不是
+记忆内核对 workflow 的硬编码。后续若把 `validate` 拆成新的 workflow，或新增 `drill`、`quiz`、`review`
+之类分支，只要复用 `practice_generation`/`topic_focus` 能力和同一套快照、回写协议即可。
+
+首个目标链路：
 
 ```text
 “讲解二分查找”完成
@@ -162,11 +170,13 @@ load_scope completed
 
 没有明确主题时：先使用活跃主题；再考虑唯一高优先级薄弱点；仍不唯一则澄清，不随机出题。
 
-### MEM-006 LLM 输出和业务结果的增量回写
+### MEM-006 按事实事件回写，而不是按 workflow 名写库
 
 - 不把 `message.delta` 写长期记忆，只在 `message.completed`/`artifact.rendered`/`run.completed` 后投影。
 - Run 完成事务同步更新下一轮马上需要的热状态，并写 Memory Outbox。
 - 异步投影历史摘要、Embedding、偏好候选和长期事件，失败可重放且不反向把成功 Run 改成失败。
+- 领域事件固定为“主题被确认”“讲解 Artifact 产生”“练习 Artifact 产生”“评分结果确认”“计划被用户确认”
+  等事实事件；Explain/Validate/Grade/Plan 只是当前这些事件的来源。
 - Explain 只更新主题和讲解 Artifact，不提高掌握度；Validate 创建练习和排除集，也不提高掌握度。
 - Grade 的真实得分/错误类型才更新 `user_learning_mastery`；Plan 只有经用户确认后才成为长期目标。
 - `run.failed` 不写 Agent 输出记忆，用户已表达的输入主题仍保留为事实。
@@ -185,6 +195,32 @@ load_scope completed
 - 记忆正文不塞入公开 SSE；事件只保存快照/调用 ID 和安全摘要。
 - 所有读取校验 `user_id`、`thread_id` 和 Artifact 权限；记忆文本按不可信数据渲染，不能成为系统指令。
 - 支持按 source ID 回查、幂等重放、快照复现和投影失败重试。
+
+## 外部基线与设计校正
+
+本轮审计结论：对“现有方案是否过度绑定当前 workflow”的担忧是合理的。当前任务单里稳定的部分是
+MEM-001/002/003/007/008；风险主要在 MEM-004/005/006 的原始表述，它们容易让维护者误以为
+Validate/Explain/Grade/Plan 是记忆内核的天然边界。这里把设计口径校正为：稳定的是事实模型、快照、
+选择协议和事件回写；可变的是 workflow 对这些能力的装配方式。
+
+| 方案 | 公开设计 | 为什么稳定 | 为什么不直接照搬 | 本任务单吸收后的落点 |
+| --- | --- | --- | --- | --- |
+| [Codex AGENTS.md](https://learn.chatgpt.com/docs/agent-configuration/agents-md)、[Memories](https://learn.chatgpt.com/docs/customization/memories?surface=app)、[Skills](https://learn.chatgpt.com/docs/build-skills)、[Subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents) | `AGENTS.md` 负责持久规则，Memories 在后台把旧会话沉淀为本地记忆，Skills 按需加载，Subagents 把噪声工作移出主线程 | 规则、记忆、执行技能三层分离；会话空闲后异步生成记忆，技能只在命中时加载，workflow 变化不会倒逼底层记忆重建 | Codex 主要服务工程协作，缺少“学习掌握度、题目排除集、评分证据”这类教育域结构化状态；它的 durable recall 更偏通用提示与历史上下文 | 采纳“三层分离”：记忆底座只存事实和结构化状态，workflow 只声明 `MemoryNeed`；不把 `validate`、`grade` 名称写进存储契约 |
+| [Claude Code Memory](https://code.claude.com/docs/en/memory)、[Skills](https://code.claude.com/docs/en/skills)、[Context Windows](https://platform.claude.com/docs/en/build-with-claude/context-windows) | `CLAUDE.md` 与 auto memory 在每次会话启动时加载，长流程靠 compaction 管理上下文，技能正文只在使用时注入 | 作用域和加载时机清晰：事实/规则常驻，流程说明按需注入；官方明确把“procedure”从常驻记忆里拆到 skills，避免上下文腐烂 | Claude Code 的 memory 更像“项目说明 + 偏好 + 调试经验”，不是我们要长期审计的业务事实账本；auto memory 也不提供我们需要的用户级学习画像和快照复现 | 采纳“事实常驻、流程按需加载”的边界：主题状态、掌握度、摘要常驻； Explain/Validate/Grade 的步骤说明放在 workflow adapter，不进入核心记忆 schema |
+| [Hermes Memory](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/memory.md)、[Memory Providers](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/memory-providers.md)、[Context Engine Plugins](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/developer-guide/context-engine-plugin.md) | 小而常驻的 `MEMORY.md`/`USER.md` 负责有界记忆，外部 provider 做跨会话召回，context engine 可替换压缩/上下文管理策略 | 内建记忆、外部记忆、上下文管理彼此解耦；即使改检索或压缩引擎，也不必改 agent core 和 memory surface | Hermes 的 Markdown 记忆非常轻量，适合个人 agent，不足以承载我们需要的权限校验、评分证据、用户级 mastery 和可追溯快照；它也公开暴露单用户污染风险 | 采纳“有界常驻 + 外部检索 + 可替换上下文引擎”的思想：线程热状态要小，历史摘要/向量检索走异步通道，记忆选择器与具体 workflow 解耦 |
+
+三类成熟方案虽然实现不同，但共同点很一致：
+
+1. 记忆底座独立于 workflow。稳定的是记忆面、作用域和加载协议，不是某条业务流程图。
+2. 常驻记忆必须小而可信。大型步骤说明、长参考资料、工具细节都按需加载，不能长期塞在主上下文。
+3. 长期记忆只接收确认后的事实，不接收流式中间态和临时推理。
+4. 复杂流程靠技能、子代理、上下文压缩去适配，而不是频繁改底层记忆 schema。
+
+因此，本任务单的最终口径应当是：
+
+- 当前设计的大方向没有错：分层记忆、快照、事件回写、热状态与长期画像分离，这些都比“把全部历史直接塞回模型”更稳。
+- 需要修正的是表达和边界：记忆核心必须围绕事实类型与能力标签稳定，workflow 只做薄适配层。
+- `validate` 仍然应该作为第一条打通链路，因为它最能暴露主题继承、题目检索和排除集是否好用；但它只是验收样例，不是架构中心。
 
 ## 实施顺序与依赖
 
