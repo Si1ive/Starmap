@@ -22,7 +22,7 @@ from .outbox import outbox_store
 from .service import AgentService
 from .checkpoints import checkpoint_store
 from .workflows.contracts import NodeStatus
-from .model_runtime.config import AgentModelConfigurationError
+from .public_errors import classify_agent_error
 from .time_utils import utc_now
 
 logger = get_logger(__name__)
@@ -275,13 +275,7 @@ class AgentWorker:
         exception: Exception | None = None,
     ) -> None:
         """持久化失败事实，并给静默 conversation run 创建用户可见失败消息。"""
-        error_code = (
-            "agent_model_unavailable"
-            if isinstance(exception, AgentModelConfigurationError)
-            or "Agent 没有可用模型" in error
-            or "管理员问答 LLM" in error
-            else "agent_run_failed"
-        )
+        public_error = classify_agent_error(error, exception=exception)
         current_status = RunStatus(run.status)
         if current_status != RunStatus.FAILED:
             if not state_machine.can_transition(current_status, RunStatus.FAILED):
@@ -295,13 +289,18 @@ class AgentWorker:
             state_machine.transition(run, RunStatus.FAILED, reason=error)
         run.error_message = error
         metadata = dict(run.metadata_json or {})
-        metadata["error_code"] = error_code
+        metadata["error_code"] = public_error.code
         run.metadata_json = metadata
         await event_store.append(
             db,
             run.id,
             "run.failed",
-            {"run_id": run.id, "error": error, "error_code": error_code},
+            {
+                "run_id": run.id,
+                "error": error,
+                "error_code": public_error.code,
+                "public_message": public_error.message,
+            },
         )
 
     async def scan_and_process(self, limit: int = 10) -> int:

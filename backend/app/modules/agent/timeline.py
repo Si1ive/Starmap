@@ -552,6 +552,8 @@ class AgentTimelineService:
 
     @staticmethod
     def message_view(message: AgentMessage) -> dict[str, Any]:
+        from .public_errors import public_error_message
+
         return {
             "id": message.id,
             "role": message.role,
@@ -559,6 +561,11 @@ class AgentTimelineService:
             "content": message.content_text,
             "content_blocks": message.content_blocks_json or [],
             "error_code": message.error_code,
+            "error_message": (
+                public_error_message(message.error_code)
+                if message.status == "failed"
+                else None
+            ),
             "created_at": message.created_at,
             "updated_at": message.updated_at,
             "completed_at": message.completed_at,

@@ -98,6 +98,7 @@ function applyMessageEvent(
     content: '',
     content_blocks: [],
     error_code: null,
+    error_message: null,
     created_at: now,
     updated_at: now,
     completed_at: null,
@@ -151,6 +152,9 @@ function applyMessageEvent(
         status: 'failed',
         content: stringValue(publicMessage.content) ?? base.content,
         error_code: stringValue(event.payload.error_code),
+        error_message:
+          stringValue(event.payload.error_message)
+          ?? stringValue(publicMessage.error_message),
         updated_at: now,
         completed_at: now,
       },

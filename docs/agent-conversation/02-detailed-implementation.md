@@ -269,9 +269,10 @@ MySQL。这样停机时不会让 Worker 拿着已关闭的数据库连接继续�
 ### 5.5 静默普通问答失败如何对用户可见
 
 `silent` 的含义是“不展示内部工作流卡片”，不是“隐藏所有错误”。对于 conversation run，
-`run.failed` 现在会被 `ThreadEventStore` 特判并投影成 assistant `message.failed`：如果模型未
-配置，用户看到“Agent 模型尚未配置好”；其他执行异常显示可重试的通用提示。前端时间线
-reducer 会使用事件中的公开内容更新失败消息并标记完成时间。
+`run.failed` 会被 `ThreadEventStore` 特判并投影成 assistant `message.failed`。Worker 保留完整原始
+错误给管理端审计，用户端只收到稳定错误码和安全中文说明；模型未配置、输出过长、上下文过长、
+参数越界、限流、超时和结构化结果失败都能显示不同原因。前端时间线 reducer 会把公开错误和已累计
+正文分别归并，并标记完成时间。
 
 排查“发消息后无响应”时，可以按日志顺序检查：turn/run/outbox 创建、Worker 扫描到任务、
 Run 开始处理、模型配置解析完成、Router 调用开始与完成、回答调用开始与完成、Run 完成或
@@ -479,12 +480,25 @@ Router 提示词也明确了业务边界，但提示词不是唯一保障。`_ex
 
 ### 5.11 为什么失败回复曾显示两遍
 
-后端 `message.failed` 投影已经把安全失败文案写进 assistant message 的 `content`，前端旧实现又在
-消息正文下固定渲染一次相同提示，所以不是后端重复发事件，而是同一消息的正文和状态提示同时
-展示。`frontend/src/features/agent/ConversationStream.tsx` 的 `TimelineItemView`（L31-L74）现在对
-failed 状态只渲染一个 `agent-message__error`：优先显示后端提供的安全正文，正文为空时才使用
-“这条回复生成失败，请稍后重试。”兜底。这样自定义安全错误仍可展示，默认文案不会重复，颜色
-继续由 `frontend/src/features/agent/agent-chat.css` 的 `.agent-message__error`（L207-L212）控制。
+旧投影把安全失败文案直接写进 assistant message 的 `content`，前端又在正文下显示一次状态错误，
+所以不是后端重复发事件，而是同一文案占用了“正文”和“错误”两个槽位。现在这两个语义已经分开：
+
+| 执行阶段 | 文件 | 符号 | 代码范围 | 入口条件 | 处理与副作用 | 最终消费 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 异常分类 | `backend/app/modules/agent/public_errors.py` | `classify_agent_error` / `public_error_message` | L39-L96 | Worker 得到异常或刷新读取 error_code | 生成稳定错误码和安全中文原因；未知码回退通用提示 | Worker 事件和时间线刷新 |
+| 保存双层错误 | `backend/app/modules/agent/worker.py` | `AgentWorker._record_failure` | L269-L304 | Run 执行失败 | `run.error_message` 保留原始错误，metadata 和事件写稳定码，事件另带 `public_message` | 管理端审计与 thread 投影分别消费 |
+| 保留流式正文 | `backend/app/modules/agent/thread_events.py` | `ThreadEventStore._project_message_event`（failed 分支） | L316-L346 | 失败前可能已有多个 `message.delta` | 不再用失败文案覆盖 `content_text`；错误原因只进 `error_message` 事件字段 | SSE 和数据库消息 |
+| 刷新恢复原因 | `backend/app/modules/agent/timeline.py` | `AgentTimelineService.message_view` | L553-L572 | 页面刷新读取 `AgentMessage` | 用 error_code 重建 error_message，不需要为文案增加数据库列 | TimelineResponse |
+| 实时归并 | `frontend/src/features/agent/timeline-state.ts` | `applyMessageEvent`（failed 分支） | L142-L162 | 收到 `message.failed` | 同时保留 content、error_code 和 error_message | React timeline state |
+| 失败渲染 | `frontend/src/features/agent/ConversationStream.tsx` | `TimelineItemView` | L31-L82 | assistant status 为 failed | partial 正文正常显示，具体原因单独以红色小字显示；没有正文时只显示一次；兼容历史重复记录 | 用户对话页面 |
+
+具体映射包括：Pydantic AI `total_tokens_limit` → 回答过长；供应商 context window → 上下文过长；
+`max_completion_tokens` 参数范围 → 模型参数不支持；429 → 服务繁忙；timeout → 响应超时；结构化输出
+重试耗尽 → 返回格式不符合要求。供应商原始 body 和堆栈不会发给用户。
+
+`frontend/src/features/agent/agent-chat.css` 的 `.agent-message__error` / `:only-child`（L207-L216）继续
+保持红色；只有错误、没有 partial 正文时移除多余顶部间距。旧记录若 `content` 本身等于默认错误文案，
+前端把它识别为兼容数据，不再当成正文重复显示。
 
 ### 5.12 等待动画与 DirectAnswer 结构化正文流
 
@@ -496,9 +510,9 @@ failed 状态只渲染一个 `agent-message__error`：优先显示后端提供�
 | 模型执行 | `backend/app/modules/agent/model_runtime/answer.py` | `DirectAnswerRuntime._run_stream` | L168-L201 | 使用 `run_stream`，每 100ms partial validate 一次结构化 `DirectAnswerOutput` |
 | 增量持久化 | `backend/app/modules/agent/workflows/conversation.py` | `_direct_answer_node.publish_delta` | L104-L131 | 每批正文写 `message.delta` 并 commit，使独立 SSE session 立即可见 |
 | 最终收敛 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run`（message completed 分支） | L200-L209 | artifact 完整生成后写 `message.completed`，用最终正文覆盖并收敛 streaming message |
-| 公共事件投影 | `backend/app/modules/agent/thread_events.py` | `ThreadEventStore._project_message_event`（delta 分支） | L232-L307 | 第一个 delta 创建 assistant 时间线项，后续 delta 追加正文并发布公开事件 |
-| 前端归并 | `frontend/src/features/agent/timeline-state.ts` | `applyMessageEvent` | L85-L161 | 对 delta 做有序字符串追加，对 completed/failed 收敛状态 |
-| 前端显示 | `frontend/src/features/agent/ConversationStream.tsx` | `TimelineItemView` | L31-L74 | streaming 且已有正文时直接显示增量内容和闪烁光标 |
+| 公共事件投影 | `backend/app/modules/agent/thread_events.py` | `ThreadEventStore._project_message_event`（delta 分支） | L240-L315 | 第一个 delta 创建 assistant 时间线项，后续 delta 追加正文并发布公开事件 |
+| 前端归并 | `frontend/src/features/agent/timeline-state.ts` | `applyMessageEvent` | L85-L165 | 对 delta 做有序字符串追加，对 completed/failed 收敛状态和错误原因 |
+| 前端显示 | `frontend/src/features/agent/ConversationStream.tsx` | `TimelineItemView` | L31-L82 | streaming 显示增量内容；failed 保留正文并追加具体原因 |
 
 `DirectAnswerOutput` 同时包含 `content` 和 `public_summary`，不能直接把供应商返回的半截 JSON 当正文。
 `DirectAnswerRuntime._run_stream` 使用 Pydantic AI 的 `stream_output(debounce_by=0.1)` 进行 partial
@@ -518,10 +532,10 @@ validation，拿到的是阶段性结构化对象。它维护 `published_content
 等待状态。
 
 `frontend/src/features/agent/ConversationStream.tsx` 的 `AssistantPending`（L18-L29）渲染带
-`role="status"` 的“正在组织回答”和动态三点；`ConversationStream`（L97-L162）只在尚无真实 streaming
+`role="status"` 的“正在组织回答”和动态三点；`ConversationStream`（L105-L170）只在尚无真实 streaming
 assistant 时追加这个临时项；首个真实 delta 到达后自动切换为正文。样式位于
 `frontend/src/features/agent/agent-chat.css` 的 `.agent-message__pending*`（L156-L194）、
-`@keyframes agent-message-pending-dot`（L807-L816）和 reduced-motion 分支（L905-L911）：复用现有
+`@keyframes agent-message-pending-dot`（L933-L942）和 reduced-motion 分支（L1035-L1042）：复用现有
 品牌绿、浅蓝和弱文本变量，系统要求减少动画时停止跳动。
 
 回归测试 `backend/tests/test_agent_answer_runtime.py` 的
@@ -556,7 +570,7 @@ Worker 事务里跑完整条工作流，只有 `process_run` 退出时才提交�
 系统提示词、Router reason 或模型隐藏推理。`explain._evidence_loop_node` 与
 `validate._question_discovery_node` 都传入真实 run ID，因此讲解检索和候选题检索共用同一观测机制。
 
-`backend/app/modules/agent/thread_events.py` 的 `ThreadEventStore.project_run_event`（L161-L204）只把
+`backend/app/modules/agent/thread_events.py` 的 `ThreadEventStore.project_run_event`（L162-L212）只把
 `public_metadata` 投影成 `workflow.activity.updated`。数据库迁移
 `backend/alembic/versions/20260725_agent_activity.py` 的 `upgrade`（L34-L41）扩展 MySQL thread event
 ENUM；本机数据库已经前向升级到 `20260725_agent_activity (head)`。Run 事件负责完整审计，thread
@@ -565,7 +579,7 @@ ENUM；本机数据库已经前向升级到 `20260725_agent_activity (head)`。R
 刷新恢复由 `backend/app/modules/agent/timeline.py` 的 `AgentTimelineService._build_workflow_views` 与
 `AgentTimelineService._activity_views`（L399-L538）完成：读取 child runs 下的 `AgentEvent`，用相同
 activity ID 合并 called/result，重建 running/completed/failed 状态。实时路径由
-`frontend/src/features/agent/timeline-state.ts` 的 `applyWorkflowEvent`（L163-L220）按 ID upsert；最终
+`frontend/src/features/agent/timeline-state.ts` 的 `applyWorkflowEvent`（L167-L224）按 ID upsert；最终
 `frontend/src/features/agent/InlineWorkflow.tsx` 的 `ActivityCard`（L92-L133）和实时记录区
 （L218-L242）展示检索通道、查询、数量与资料。这意味着网络断线后不是回到 mock 初始态，而是用
 数据库事实重放。
@@ -701,11 +715,11 @@ Agent 页面仍保留 `--chat-*` 语义变量，目的是让组件样式能表�
 | 执行阶段 | 文件 | 符号 | 代码范围 | 入口条件 | 处理与副作用 | 最终消费 |
 | --- | --- | --- | --- | --- | --- | --- |
 | 自动计算高度 | `frontend/src/features/agent/ChatComposer.tsx` | `ChatComposer`（textarea 高度 effect） | L36-L41 | 输入值变化 | 先把高度归零，再把 `scrollHeight` 限制到 180px；不会写后端状态 | 浏览器内联 `height` |
-| 底部安全距离 | `frontend/src/features/agent/agent-chat.css` | `.agent-chat-composer-dock` | L670-L678 | 已有会话使用底部 dock | 桌面底部 padding 提高到 18px，并叠加 `safe-area-inset-bottom` | composer 与视口底部保持小幅安全距离 |
-| 紧凑编辑区 | `frontend/src/features/agent/agent-chat.css` | `.agent-composer` / `.agent-composer textarea` | L687-L715 | 空文本或普通单行输入 | 收紧容器 padding；明确清除旧 textarea padding；单行高度 24px，最多增长到 160px | 用户输入文本和自动增长高度 |
-| 重置旧 footer | `frontend/src/features/agent/agent-chat.css` | `.agent-composer__footer` | L721-L729 | 模型选择与发送按钮渲染 | 显式清除旧 border/padding，把最小高度收敛为 32px | 模型选择、快捷键提示和发送按钮 |
-| 控件与说明 | `frontend/src/features/agent/agent-chat.css` | `.agent-composer__send` / `.agent-chat-disclaimer` | L786-L813 | composer 渲染 | 发送按钮收敛到 32px，说明文字与 composer 保持 6px 间距 | 底部工具行和安全说明 |
-| 移动端适配 | `frontend/src/features/agent/agent-chat.css` | `@media (max-width: 640px)`（composer 分支） | L974-L995 | 视口不超过 640px | 底部距离为 13px 加安全区；快捷键提示隐藏后由发送按钮 `margin-left:auto` 补足右对齐 | 底部导航上方的移动端输入区 |
+| 底部安全距离 | `frontend/src/features/agent/agent-chat.css` | `.agent-chat-composer-dock` | L674-L682 | 已有会话使用底部 dock | 桌面底部 padding 提高到 18px，并叠加 `safe-area-inset-bottom` | composer 与视口底部保持小幅安全距离 |
+| 紧凑编辑区 | `frontend/src/features/agent/agent-chat.css` | `.agent-composer` / `.agent-composer textarea` | L691-L719 | 空文本或普通单行输入 | 收紧容器 padding；明确清除旧 textarea padding；单行高度 24px，最多增长到 160px | 用户输入文本和自动增长高度 |
+| 重置旧 footer | `frontend/src/features/agent/agent-chat.css` | `.agent-composer__footer` | L725-L733 | 模型选择与发送按钮渲染 | 显式清除旧 border/padding，把最小高度收敛为 32px | 模型选择、快捷键提示和发送按钮 |
+| 控件与说明 | `frontend/src/features/agent/agent-chat.css` | `.agent-composer__send` / `.agent-chat-disclaimer` | L790-L817 | composer 渲染 | 发送按钮收敛到 32px，说明文字与 composer 保持 6px 间距 | 底部工具行和安全说明 |
+| 移动端适配 | `frontend/src/features/agent/agent-chat.css` | `@media (max-width: 640px)`（composer 分支） | L978-L1000 | 视口不超过 640px | 底部距离为 13px 加安全区；快捷键提示隐藏后由发送按钮 `margin-left:auto` 补足右对齐 | 底部导航上方的移动端输入区 |
 
 实际无头浏览器检查覆盖 1440×900 和 390×844：空文本及单行文本的 composer 都为 78px，textarea
 和 footer 分别为 24px、32px；textarea 上下 padding、footer 上下 padding、footer 顶边框都为 0。

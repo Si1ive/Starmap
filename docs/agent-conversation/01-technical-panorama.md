@@ -101,7 +101,7 @@ Redis 在当前 Agent 核心执行链路中不是事实来源。Agent 的可靠�
 | 5 | `backend/app/main.py` | `lifespan` | L77-L107 | FastAPI 进程启动 | 连接 MySQL，并在调度器、日志 sink 和 Worker 启动前执行结构校验 | 结构正确则继续启动；版本落后或约束漂移则关闭连接并抛出 `DatabaseSchemaError` | `verify_database_schema` |
 | 6 | `backend/app/modules/operations/schema_guard.py` | `verify_database_schema` | L29-L138 | 当前 `AsyncSession` 与迁移图 heads | 比较 `alembic_version`，检查 `agent_runs` 必需列、`agent_model_configs` 真表及 `max_tokens` nullable 约束 | 返回当前 revisions；结构漂移时明确提示执行 `alembic upgrade head` | Agent 页面加载模型 |
 | 7 | `frontend/src/pages/AgentPage.tsx` | `AgentPage.loadModels` | L78-L95 | Agent 页面挂载或用户点击重试 | 请求公开模型列表，保留仍有效的选择，否则选默认项或第一项 | 更新 `models`、`selectedModelId`、loading 和错误状态 | `listSelectableAgentModels` |
-| 8 | `frontend/src/api/agent.ts` | `listSelectableAgentModels` | L358-L362 | 浏览器认证态 | 请求 `GET /api/v1/app/agent/models` | 返回公开模型数组，不包含 API Key、Base URL 等凭据 | `list_selectable_models` |
+| 8 | `frontend/src/api/agent.ts` | `listSelectableAgentModels` | L359-L363 | 浏览器认证态 | 请求 `GET /api/v1/app/agent/models` | 返回公开模型数组，不包含 API Key、Base URL 等凭据 | `list_selectable_models` |
 | 9 | `backend/app/modules/agent/router.py` | `list_selectable_models` | L55-L63 | 当前用户和请求级数据库 session | 创建配置服务并查询公开记录 | 返回 `{items}` | `AgentModelConfigService.list_public` |
 | 10 | `backend/app/modules/agent/model_configs.py` | `AgentModelConfigService.list_public` | L168-L180 | `agent_model_configs` 表 | 筛选 `online=true` 且 `selectable=true`，默认模型优先、显示名称次序 | ORM 记录列表 | `AgentPage.loadModels` 消费响应 |
 
@@ -115,15 +115,15 @@ MySQL `1146 Table '...agent_model_configs' doesn't exist` 时，根因在数据�
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `frontend/src/pages/AgentPage.tsx` | `AgentPage.handleSend` | L101-L144 | 输入文本、thread ID、`selectedModelId` | 空会话先建 thread，再把模型 ID 交给上下文 store；模型失效时保留输入并刷新列表 | 开始一次 turn 请求 | `AgentProvider.sendTurn` |
 | 2 | `frontend/src/store/agent-context.tsx` | `AgentProvider.sendTurn` | L425-L446 | thread、内容和 `modelConfigId` | 生成 `client_message_id`，转换为后端 `model_config_id`；成功后刷新时间线并确保 SSE 已连接 | `TurnCreateResponse` 和最新时间线 | `createTurn` |
-| 3 | `frontend/src/api/agent.ts` | `createTurn` | L364-L375 | `TurnCreateRequest` | POST `/api/v1/app/agent/threads/{thread_id}/turns` | HTTP 201 或带 `detail` 的 API 错误 | `create_turn` |
+| 3 | `frontend/src/api/agent.ts` | `createTurn` | L365-L376 | `TurnCreateRequest` | POST `/api/v1/app/agent/threads/{thread_id}/turns` | HTTP 201 或带 `detail` 的 API 错误 | `create_turn` |
 | 4 | `backend/app/modules/agent/router.py` | `create_turn` | L167-L212 | 已认证用户、请求体、请求级 session | 转换模型/幂等/线程异常为 400、409、404；其余工作委托给时间线服务 | 用户消息、root run 和 cursor | `AgentTimelineService.create_turn` |
 | 5 | `backend/app/modules/agent/timeline.py` | `AgentTimelineService.create_turn` | L166-L317 | user/thread/content/client ID/model ID | 锁定 thread，验证模型仍可选；原子创建用户消息、conversation root run、时间线项、run/thread 事件和 outbox | 多表写入尚处于同一事务，Run 状态为 `queued` | `OutboxStore.enqueue` 后返回路由 |
 | 6 | `backend/app/modules/agent/outbox.py` | `OutboxStore.enqueue` | L24-L44 | root run ID | 新增 `pending` outbox 并 flush | 可靠 Worker 唤醒事实 | 请求 session 退出 |
 | 7 | `backend/app/db/mysql.py` | `MySQLClient.session` | L131-L155 | 路由依赖创建的 session | 正常退出统一 commit；异常统一 rollback 并继续抛出 | 消息、Run、事件和 outbox 同时可见，或全部回滚 | Worker 异步扫描 |
-| 8 | `backend/app/modules/agent/worker.py` | `start_worker` | L397-L423 | FastAPI lifespan 启动 | 保存 `asyncio.Task` 强引用并注册异常退出回调 | 后台 `AgentWorker.start` 循环存活 | `AgentWorker.start` |
-| 9 | `backend/app/modules/agent/worker.py` | `AgentWorker.start` | L366-L384 | 扫描间隔 | 周期调用 `scan_and_process` | 每批处理完成后继续下一轮扫描 | `AgentWorker.scan_and_process` |
-| 10 | `backend/app/modules/agent/worker.py` | `AgentWorker.scan_and_process` | L307-L364 | pending outbox | 先筛选可执行任务，再为每个 run 创建独立 session、原子认领 outbox | 单个 run 的 session 与其他 run 隔离 | `AgentWorker.process_run` |
-| 11 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | L100-L267 | 已认领 run | 获取租约、提交 running 状态、恢复 checkpoint、执行工作流；完成后创建 artifact、更新 Run、写事件 | Run 进入 running、waiting、completed 或 failed | `WorkflowEngine.execute` |
+| 8 | `backend/app/modules/agent/worker.py` | `start_worker` | L396-L422 | FastAPI lifespan 启动 | 保存 `asyncio.Task` 强引用并注册异常退出回调 | 后台 `AgentWorker.start` 循环存活 | `AgentWorker.start` |
+| 9 | `backend/app/modules/agent/worker.py` | `AgentWorker.start` | L365-L383 | 扫描间隔 | 周期调用 `scan_and_process` | 每批处理完成后继续下一轮扫描 | `AgentWorker.scan_and_process` |
+| 10 | `backend/app/modules/agent/worker.py` | `AgentWorker.scan_and_process` | L306-L363 | pending outbox | 先筛选可执行任务，再为每个 run 创建独立 session、原子认领 outbox | 单个 run 的 session 与其他 run 隔离 | `AgentWorker.process_run` |
+| 11 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | L100-L267 | 已认领 run | 获取租约、提交 running 状态、恢复 checkpoint、执行工作流；完成后创建 artifact、更新 Run、写事件；异常交给 `_record_failure` | Run 进入 running、waiting、completed 或 failed | `WorkflowEngine.execute` 或失败公开链 |
 | 12 | `backend/app/modules/agent/workflows/engine.py` | `WorkflowEngine.execute` | L27-L212 | workflow 定义、执行上下文和 Run | 逐节点创建 step；在开始、完成或失败后提交真实进度；累计模型调用并在 WAITING 时保存 checkpoint | SSE 执行期间可见的步骤链、最终 `NodeResult` 或可恢复等待点 | conversation 节点或业务 child workflow |
 | 13 | `backend/app/modules/agent/workflows/conversation.py` | `_route_node` | L42-L102 | 当前 conversation run | 用 4096 Token 预算筛选可信历史，再调用 Router；记录上下文审计并按 action 选择节点 | 下一节点名称与路由决策；4096 只限制历史选择 | `RouterRuntime.decide` |
 | 14 | `backend/app/modules/agent/model_runtime/router.py` | `_explicit_workflow_action` / `RouterRuntime.decide` / `RouterRuntime._run` | L87-L94 / L114-L180 / L182-L198 | 当前消息、筛选后的历史、允许 action、模型配置 | 模型返回结构化决策；显式“讲解/出题/批改/计划”在非 clarify 时由确定性护栏纠偏；只限制模型请求次数，不再用上下文预算限制输入加输出总量 | 经授权校验的 `RouterDecision`，reason_code 可区分显式意图 | `_route_node` 选择 direct answer 或 child workflow |
@@ -131,12 +131,12 @@ MySQL `1146 Table '...agent_model_configs' doesn't exist` 时，根因在数据�
 | 16 | `backend/app/modules/agent/model_runtime/config.py` | `open_agent_model` | L157-L208 | 当前 run ID | 读取 Run 指定模型；否则取数据库默认/旧配置/环境回退，创建独立 `AsyncOpenAI`，并把实际模型信息固定写回 Run 元数据 | 隔离的模型 session；退出时关闭客户端 | Router 或 Answer runtime 的模型调用 |
 | 17 | `backend/app/modules/agent/model_runtime/answer.py` | `DirectAnswerRuntime.answer` / `DirectAnswerRuntime._run_stream` | L91-L201 | 当前输入、筛选后的历史、模型 session 和 delta callback | 调用 Pydantic AI `run_stream` 与 `stream_output(debounce_by=0.1)`；只发布延续已发布前缀的 `content` 增量；只保留请求次数保护 | 多个正文 delta 和最终完整 `DirectAnswerOutput`；输出限额来自模型配置 | conversation 节点回调与 artifact |
 | 18 | `backend/app/modules/agent/events.py` | `EventStore.append` | L24-L69 | run 事件类型和 payload | 分配 run 内序号、写 `agent_events`，再触发公开 thread 投影 | 内部事件与公开事件保持关联 | `ThreadEventStore.project_run_event` |
-| 19 | `backend/app/modules/agent/thread_events.py` | `ThreadEventStore.project_run_event` / `ThreadEventStore._project_message_event` | L102-L204 / L232-L337 | Run 事件 | 将公开消息、工作流步骤和工具活动写入 `agent_messages`、`agent_thread_items`、`agent_thread_events` | 可按统一 cursor 消费的时间线事实 | `stream_thread_events` |
+| 19 | `backend/app/modules/agent/thread_events.py` | `ThreadEventStore.project_run_event` / `ThreadEventStore._project_message_event` | L103-L212 / L240-L346 | Run 事件 | 将公开消息、工作流步骤和工具活动写入持久化投影；失败时保留已有正文并另带安全错误说明 | 可按统一 cursor 消费、刷新后可恢复的时间线事实 | `stream_thread_events` |
 | 20 | `backend/app/modules/agent/router.py` | `stream_thread_events` | L280-L348 | thread ID 与 `after_sequence` | 校验所有权，循环补查事件并输出 SSE heartbeat/事件 | `StreamingResponse` | 浏览器 `EventSource` |
 | 21 | `frontend/src/store/agent-context.tsx` | `AgentProvider.connectThreadStream` | L246-L362 | thread ID 和 cursor | 建立 EventSource、归并事件；投影类事件触发时间线快照刷新，断线按退避重连 | reducer 中的最新 timeline/connection | `applyMessageEvent` |
-| 22 | `frontend/src/features/agent/timeline-state.ts` | `applyMessageEvent` | L85-L161 | `message.delta`、`message.completed` 或 `message.failed` | delta 追加到现有正文并保持 streaming；完成或失败事件收敛最终状态 | 规范化 `messagesById` | `AgentPage` / `ConversationStream` |
+| 22 | `frontend/src/features/agent/timeline-state.ts` | `applyMessageEvent` | L85-L165 | `message.delta`、`message.completed` 或 `message.failed` | delta 追加到现有正文；失败时同时归并保留正文、稳定错误码和安全说明 | 规范化 `messagesById` | `AgentPage` / `ConversationStream` |
 | 23 | `frontend/src/pages/AgentPage.tsx` | `AgentPage`（`pendingResponse` 与 `handleSend`） | L47-L72、L119-L146、L268-L285 | turn 提交状态、响应 cursor 和最新 timeline items | 请求开始即记录等待状态；出现 cursor 之后的 assistant 消息或 workflow 时清除等待状态 | 在后端尚未创建可见回复项时仍有明确 UI 状态 | `ConversationStream` |
-| 24 | `frontend/src/features/agent/ConversationStream.tsx` | `AssistantPending` / `TimelineItemView` / `ConversationStream` | L18-L29、L31-L95、L97-L162 | 等待标记与 timeline items | 无正文时显示动态三点；收到 delta 后展示真实正文和光标；已有 streaming 消息时避免重复占位 | 用户看到等待、增量正文或最终结果 | 页面滚动区 |
+| 24 | `frontend/src/features/agent/ConversationStream.tsx` | `AssistantPending` / `TimelineItemView` / `ConversationStream` | L18-L29 / L31-L103 / L105-L170 | 等待标记与 timeline items | 无正文时显示动态三点；失败且有 partial 正文时先显示正文再显示具体红色原因；兼容历史重复失败文案 | 用户看到等待、增量正文、保留的未完成正文或最终结果 | 页面滚动区 |
 
 HTTP 创建 turn 仍使用一个请求级事务，确保消息、Run、事件和 outbox 原子提交；HTTP 与 Worker 之间
 以 MySQL outbox 交接，不依赖浏览器连接或 Redis 存活。Worker 为每个 outbox 使用独立 session，但
@@ -144,7 +144,23 @@ HTTP 创建 turn 仍使用一个请求级事务，确保消息、Run、事件和
 delta 都是可恢复 commit 边界。这样 SSE session 能在任务执行期间读取进度；最终 artifact、Run 终态
 和 `message.completed` 继续负责收敛完整结果。
 
-#### 4.2.1 Router 分流到业务工作流后的真实公开执行链
+#### 4.2.1 模型异常直到用户看到具体原因
+
+| 执行序号 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run`（异常分支） | L246-L264 | 节点失败结果或模型抛出的异常 | 保留完整原始错误并统一调用失败记录函数 | 待分类的内部错误 | `AgentWorker._record_failure` |
+| 2 | `backend/app/modules/agent/public_errors.py` | `classify_agent_error` | L48-L96 | 原始错误字符串和可选异常对象 | 区分模型未配置、回答过长、上下文过长、参数越界、限流、超时、结构化解析和未知错误 | 稳定 `AgentPublicError(code, message)`；不包含供应商敏感原文 | `AgentWorker._record_failure` |
+| 3 | `backend/app/modules/agent/worker.py` | `AgentWorker._record_failure` | L269-L304 | Run、原始错误、公开错误 | 原始错误写 `run.error_message`，稳定码写 metadata；`run.failed` 同时携带内部原文与公开说明 | 管理端仍可审计原始原因，公开投影有安全信息 | `EventStore.append` |
+| 4 | `backend/app/modules/agent/thread_events.py` | `ThreadEventStore.project_run_event`（silent 失败分支） | L140-L160 | conversation `run.failed` | 只把稳定码和公开说明交给消息投影 | `message.failed` 投影请求 | `ThreadEventStore._project_message_event` |
+| 5 | `backend/app/modules/agent/thread_events.py` | `ThreadEventStore._project_message_event`（失败分支） | L316-L346 | 已累计的 assistant message 与公开错误 | 不覆盖 `content_text`；标记 failed，写 error_code，事件同时携带正文、错误说明和是否保留 partial | `agent_messages` 与 `agent_thread_events` 持久化 | SSE 或时间线刷新 |
+| 6 | `backend/app/modules/agent/timeline.py` | `AgentTimelineService.message_view` | L553-L572 | 刷新时读取失败消息 | 根据持久化 error_code 重建 `error_message`，无需新增数据库列 | `MessageView` | `ConversationStream` |
+| 7 | `frontend/src/features/agent/timeline-state.ts` | `applyMessageEvent`（failed 分支） | L142-L162 | 实时 `message.failed` | 保留 delta 累计正文，归并 error_code/error_message 并结束 streaming 状态 | React 消息状态 | `TimelineItemView` |
+| 8 | `frontend/src/features/agent/ConversationStream.tsx` | `TimelineItemView`（failed 分支） | L52-L82 | 失败消息、可选 partial 正文和具体原因 | 有正文则正文与红色原因分开显示；无正文只显示一次原因；识别旧版把失败文案写入 content 的记录，避免重复 | 用户可见的未完成正文和可操作提示 | 对话页面 |
+
+该分支仍与正常主链共享同一事务投影和 thread cursor。原始 provider body 只留在 Run 监控，不进入
+用户 SSE；因此管理员可定位真实异常，用户也不会只看到无法行动的 500 或泄露内部调用细节。
+
+#### 4.2.2 Router 分流到业务工作流后的真实公开执行链
 
 Router 的决策本身保持完整结构化返回，不流式暴露内部原因；当 action 为 `explain`、`validate`、
 `grade` 或 `plan` 时，child workflow 的公开步骤和工具活动才进入用户可见事件流。
@@ -166,9 +182,9 @@ Router 的决策本身保持完整结构化返回，不流式暴露内部原因�
 | 13 | `backend/app/modules/agent/model_runtime/explanation.py` | `ExplanationRuntime.generate` / `ExplanationRuntime._run_generation` | L103-L143 / L161-L175 | 问题、资料文本、child Run ID | 复用本轮 Agent 模型配置，调用 Pydantic AI 生成提纲、Markdown 正文、引用和总结；不再叠加项目内部总 Token 上限 | 严格校验后的 `ExplanationOutput` | `_citation_gate_node` |
 | 14 | `backend/app/modules/agent/workflows/explain.py` | `_citation_gate_node` / `_render_artifact_node` / `_completed_node` | L228-L270 | 结构化讲解 | 校验正文非空，组装 explanation artifact 并结束工作流 | `agent_artifacts` 与 completed Run | `AgentWorker.process_run` 完成分支 |
 | 15 | `backend/app/modules/agent/events.py` | `EventStore.append` | L24-L61 | step/tool Run 事件与公开 payload | 分配 run 内 sequence，写 `agent_events`，同事务触发 thread 投影 | 内部可审计事实与公开事件保持关联 | `ThreadEventStore.project_run_event` |
-| 16 | `backend/app/modules/agent/thread_events.py` | `ThreadEventStore.project_run_event`（tool 分支） | L161-L204 | `tool.called` / `tool.result` | 只转发显式 `public_metadata`，统一投影成 `workflow.activity.updated` | `agent_thread_events` 获得 thread cursor | SSE |
+| 16 | `backend/app/modules/agent/thread_events.py` | `ThreadEventStore.project_run_event`（tool 分支） | L162-L212 | `tool.called` / `tool.result` | 只转发显式 `public_metadata`，统一投影成 `workflow.activity.updated` | `agent_thread_events` 获得 thread cursor | SSE |
 | 17 | `backend/app/modules/agent/timeline.py` | `AgentTimelineService._build_workflow_views` / `_activity_views` | L399-L538 | Run、Step、Tool Event、交互和产物事实 | 按 root run 聚合，使用同一 activity ID 合并 called/result | 刷新或断线后可重建 `workflow.activities[]` | timeline snapshot |
-| 18 | `frontend/src/features/agent/timeline-state.ts` | `applyWorkflowEvent` | L163-L220 | SSE `workflow.activity.updated` | 按 activity ID 新增或更新状态，保留已到达元数据 | React 状态立即变化 | `InlineWorkflow` |
+| 18 | `frontend/src/features/agent/timeline-state.ts` | `applyWorkflowEvent` | L167-L224 | SSE `workflow.activity.updated` | 按 activity ID 新增或更新状态，保留已到达元数据 | React 状态立即变化 | `InlineWorkflow` |
 | 19 | `frontend/src/features/agent/InlineWorkflow.tsx` | `ActivityCard` / `InlineWorkflow`（实时记录） | L92-L133 / L218-L242 | `workflow.activities[]` | 展示查询、命中数和资料；零命中时直接显示后端的“没有检索到相关文档” | 用户看到真实动态执行链，不展示内部错误策略或隐藏推理 | 对话内 workflow 卡片 |
 
 ### 4.3 等待用户输入、审批与管理员模型配置旁路

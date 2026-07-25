@@ -113,6 +113,7 @@ export interface MessageView {
   content: string | null
   content_blocks: Record<string, unknown>[]
   error_code: string | null
+  error_message: string | null
   created_at: string
   updated_at: string
   completed_at: string | null

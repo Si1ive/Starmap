@@ -15,6 +15,7 @@ from .models import (
     AgentThreadEvent,
     AgentThreadItem,
 )
+from .public_errors import public_error_message
 from .time_utils import utc_now
 
 RUN_EVENT_TYPES = {
@@ -128,6 +129,7 @@ class ThreadEventStore:
                     {
                         "content": source.get("content", ""),
                         "error_code": source.get("error_code", "agent_run_failed"),
+                        "error_message": source.get("error_message"),
                     }
                 )
             await self._project_message_event(
@@ -142,6 +144,9 @@ class ThreadEventStore:
             }:
                 source = payload or {}
                 error_code = source.get("error_code") or "agent_run_failed"
+                error_message = source.get("public_message") or public_error_message(
+                    error_code
+                )
                 await self._project_message_event(
                     session,
                     run,
@@ -149,11 +154,7 @@ class ThreadEventStore:
                     "message.failed",
                     {
                         "error_code": error_code,
-                        "content": (
-                            "Agent 模型尚未配置好，请联系管理员检查问答 LLM。"
-                            if error_code == "agent_model_unavailable"
-                            else "这条回复生成失败，请稍后重试。"
-                        ),
+                        "error_message": error_message,
                     },
                 )
             return
@@ -198,7 +199,14 @@ class ThreadEventStore:
                     }
                 )
             elif run_event_type in {"run.failed", "error"}:
-                public_payload["error"] = source.get("error") or run.error_message
+                error_code = source.get("error_code") or "agent_run_failed"
+                public_payload.update(
+                    {
+                        "error_code": error_code,
+                        "error": source.get("public_message")
+                        or public_error_message(error_code),
+                    }
+                )
             elif run_event_type == "run.status_changed":
                 public_payload["reason"] = source.get("reason")
             await self.append(session, run.thread_id, thread_event_type, public_payload)
@@ -306,12 +314,16 @@ class ThreadEventStore:
                 },
             }
         else:
-            message.content_text = str(
-                payload.get("content") or "这条回复生成失败，请稍后重试。"
-            )
+            incoming_content = payload.get("content")
+            if incoming_content and not message.content_text:
+                message.content_text = str(incoming_content)
             message.status = "failed"
             message.error_code = str(
                 payload.get("error_code") or "agent_run_failed"
+            )
+            error_message = str(
+                payload.get("error_message")
+                or public_error_message(message.error_code)
             )
             message.completed_at = utc_now()
             public_type = "message.failed"
@@ -319,12 +331,15 @@ class ThreadEventStore:
                 "message_id": message.id,
                 "root_run_id": root_run_id,
                 "error_code": message.error_code,
+                "error_message": error_message,
+                "partial_content_retained": bool(message.content_text),
                 "message": {
                     "id": message.id,
                     "role": message.role,
                     "status": message.status,
                     "content": message.content_text,
                     "error_code": message.error_code,
+                    "error_message": error_message,
                 },
             }
         message.updated_at = utc_now()

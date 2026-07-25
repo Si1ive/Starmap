@@ -211,6 +211,10 @@ button.agent-chat-connection:hover {
   margin-top: 7px;
 }
 
+.agent-message__error:only-child {
+  margin-top: 0;
+}
+
 .inline-workflow {
   background: rgba(255, 255, 255, 0.78);
   border: 1px solid var(--chat-line);

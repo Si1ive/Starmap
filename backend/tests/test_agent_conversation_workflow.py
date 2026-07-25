@@ -119,6 +119,24 @@ class FailingRouterStub:
         )
 
 
+class TokenLimitStreamingAnswerStub:
+    async def answer(
+        self,
+        current_input,
+        *,
+        deps,
+        message_history=(),
+        db=None,
+        on_delta=None,
+    ):
+        assert on_delta is not None
+        await on_delta("红黑树是一种近似平衡二叉搜索树。")
+        await on_delta("这里是已经生成但尚未完成的正文。")
+        raise RuntimeError(
+            "Exceeded the total_tokens_limit of 4096 (total_tokens=4863)."
+        )
+
+
 async def _create_thread(db_session):
     thread = AgentThread(
         id="thread_001",
@@ -510,7 +528,8 @@ async def test_model_configuration_failure_creates_visible_failed_message(
     failed_message = page.items[1]["message"]
     assert failed_message["status"] == "failed"
     assert failed_message["error_code"] == "agent_model_unavailable"
-    assert "问答 LLM" in failed_message["content"]
+    assert failed_message["content"] == ""
+    assert "Agent 模型配置" in failed_message["error_message"]
 
     events = await thread_event_store.get_events(
         db_session,
@@ -522,3 +541,69 @@ async def test_model_configuration_failure_creates_visible_failed_message(
         "timeline.item.created",
         "message.failed",
     ]
+
+
+@pytest.mark.asyncio
+async def test_streaming_failure_retains_partial_content_and_explains_reason(
+    db_session,
+    monkeypatch,
+):
+    await _create_thread(db_session)
+    monkeypatch.setattr(
+        conversation,
+        "router_runtime",
+        RouterStub(
+            [
+                RouterDecision(
+                    action="direct_answer",
+                    confidence=0.95,
+                    reason_code="simple_question",
+                )
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        conversation,
+        "direct_answer_runtime",
+        TokenLimitStreamingAnswerStub(),
+    )
+    creation = await _create_turn(
+        db_session,
+        content="给我讲解一下红黑树",
+        client_message_id="client_token_limit",
+    )
+
+    assert await AgentWorker().process_run(db_session, creation.run) is True
+
+    page = await AgentTimelineService(db_session).get_timeline(
+        user_id="user_001",
+        thread_id="thread_001",
+        before=None,
+        limit=20,
+    )
+    failed_message = page.items[-1]["message"]
+    assert failed_message["status"] == "failed"
+    assert failed_message["error_code"] == "agent_response_too_long"
+    assert failed_message["content"] == (
+        "红黑树是一种近似平衡二叉搜索树。"
+        "这里是已经生成但尚未完成的正文。"
+    )
+    assert "长度" in failed_message["error_message"]
+    assert "已生成的内容会保留" in failed_message["error_message"]
+
+    events = await thread_event_store.get_events(
+        db_session,
+        "thread_001",
+        after_sequence=creation.timeline_cursor,
+        limit=20,
+    )
+    assert [event.event_type for event in events] == [
+        "timeline.item.created",
+        "message.delta",
+        "message.delta",
+        "message.failed",
+    ]
+    failed_event = events[-1]
+    assert failed_event.payload["message"]["content"].startswith("红黑树")
+    assert failed_event.payload["error_code"] == "agent_response_too_long"
+    assert "长度" in failed_event.payload["error_message"]

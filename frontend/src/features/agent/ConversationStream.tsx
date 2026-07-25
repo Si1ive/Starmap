@@ -51,13 +51,21 @@ function TimelineItemView({
 
     const isStreaming = item.message.status === 'streaming'
     const hasContent = Boolean(item.message.content)
+    const fallbackError = '这条回复生成失败，请稍后重试。'
+    const errorMessage = item.message.error_message || fallbackError
+    const legacyFailureContent =
+      item.message.content === errorMessage || item.message.content === fallbackError
+    const retainedContent = legacyFailureContent ? null : item.message.content
 
     return (
       <div className="agent-message agent-message--assistant">
         {item.message.status === 'failed' ? (
-          <small className="agent-message__error">
-            {item.message.content || '这条回复生成失败，请稍后重试。'}
-          </small>
+          <>
+            {retainedContent ? (
+              <div className="agent-message__content">{retainedContent}</div>
+            ) : null}
+            <small className="agent-message__error">{errorMessage}</small>
+          </>
         ) : (
           <div className="agent-message__content">
             {isStreaming && !hasContent ? (

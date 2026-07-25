@@ -120,6 +120,7 @@ class MessageView(BaseModel):
     content: Optional[str]
     content_blocks: List[Dict[str, Any]] = Field(default_factory=list)
     error_code: Optional[str] = None
+    error_message: Optional[str] = None
     created_at: UTCDateTime
     updated_at: UTCDateTime
     completed_at: Optional[UTCDateTime] = None
