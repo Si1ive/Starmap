@@ -120,15 +120,15 @@ MySQL `1146 Table '...agent_model_configs' doesn't exist` 时，根因在数据�
 | 5 | `backend/app/modules/agent/timeline.py` | `AgentTimelineService.create_turn` | L166-L317 | user/thread/content/client ID/model ID | 锁定 thread，验证模型仍可选；原子创建用户消息、conversation root run、时间线项、run/thread 事件和 outbox | 多表写入尚处于同一事务，Run 状态为 `queued` | `OutboxStore.enqueue` 后返回路由 |
 | 6 | `backend/app/modules/agent/outbox.py` | `OutboxStore.enqueue` | L24-L44 | root run ID | 新增 `pending` outbox 并 flush | 可靠 Worker 唤醒事实 | 请求 session 退出 |
 | 7 | `backend/app/db/mysql.py` | `MySQLClient.session` | L131-L155 | 路由依赖创建的 session | 正常退出统一 commit；异常统一 rollback 并继续抛出 | 消息、Run、事件和 outbox 同时可见，或全部回滚 | Worker 异步扫描 |
-| 8 | `backend/app/modules/agent/worker.py` | `start_worker` | L395-L420 | FastAPI lifespan 启动 | 保存 `asyncio.Task` 强引用并注册异常退出回调 | 后台 `AgentWorker.start` 循环存活 | `AgentWorker.start` |
-| 9 | `backend/app/modules/agent/worker.py` | `AgentWorker.start` | L364-L382 | 扫描间隔 | 周期调用 `scan_and_process` | 每批处理完成后继续下一轮扫描 | `AgentWorker.scan_and_process` |
-| 10 | `backend/app/modules/agent/worker.py` | `AgentWorker.scan_and_process` | L305-L362 | pending outbox | 先筛选可执行任务，再为每个 run 创建独立 session、原子认领 outbox | 单个 run 的事务与其他 run 隔离 | `AgentWorker.process_run` |
-| 11 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | L100-L265 | 已认领 run | 获取租约、恢复 checkpoint、加载工作流并执行；完成后创建 artifact、更新 Run、写事件 | Run 进入 running、waiting、completed 或 failed | `WorkflowEngine.execute` |
+| 8 | `backend/app/modules/agent/worker.py` | `start_worker` | L397-L423 | FastAPI lifespan 启动 | 保存 `asyncio.Task` 强引用并注册异常退出回调 | 后台 `AgentWorker.start` 循环存活 | `AgentWorker.start` |
+| 9 | `backend/app/modules/agent/worker.py` | `AgentWorker.start` | L366-L384 | 扫描间隔 | 周期调用 `scan_and_process` | 每批处理完成后继续下一轮扫描 | `AgentWorker.scan_and_process` |
+| 10 | `backend/app/modules/agent/worker.py` | `AgentWorker.scan_and_process` | L307-L364 | pending outbox | 先筛选可执行任务，再为每个 run 创建独立 session、原子认领 outbox | 单个 run 的 session 与其他 run 隔离 | `AgentWorker.process_run` |
+| 11 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | L100-L267 | 已认领 run | 获取租约、提交 running 状态、恢复 checkpoint、执行工作流；完成后创建 artifact、更新 Run、写事件 | Run 进入 running、waiting、completed 或 failed | `WorkflowEngine.execute` |
 | 12 | `backend/app/modules/agent/workflows/engine.py` | `WorkflowEngine.execute` | L27-L212 | workflow 定义、执行上下文和 Run | 逐节点创建 step；在开始、完成或失败后提交真实进度；累计模型调用并在 WAITING 时保存 checkpoint | SSE 执行期间可见的步骤链、最终 `NodeResult` 或可恢复等待点 | conversation 节点或业务 child workflow |
-| 13 | `backend/app/modules/agent/workflows/conversation.py` | `_route_node` | L41-L101 | 当前 conversation run | 构建受控线程上下文，调用结构化 Router，记录上下文审计并选择 direct answer / clarify / child workflow | 下一节点名称与路由决策 | `_direct_answer_node` 或 `_dispatch_workflow_node` |
-| 14 | `backend/app/modules/agent/workflows/conversation.py` | `_direct_answer_node` | L103-L129 | `AgentRunContext` | 调用回答运行时并把文本包装成 message artifact | assistant message 内容 | `DirectAnswerRuntime.answer` |
+| 13 | `backend/app/modules/agent/workflows/conversation.py` | `_route_node` | L42-L102 | 当前 conversation run | 构建受控线程上下文，完整调用结构化 Router，记录上下文审计并选择 direct answer / clarify / child workflow | 下一节点名称与路由决策；Router 自身不流式 | `_direct_answer_node` 或 `_dispatch_workflow_node` |
+| 14 | `backend/app/modules/agent/workflows/conversation.py` | `_direct_answer_node` | L104-L142 | `AgentRunContext` | 把 100ms 聚合后的正文 delta 写入事件并 commit；最终把完整输出包装成 message artifact | 可实时读取的 `message.delta` 与最终 assistant 内容 | `DirectAnswerRuntime.answer` |
 | 15 | `backend/app/modules/agent/model_runtime/config.py` | `open_agent_model` | L157-L208 | 当前 run ID | 读取 Run 指定模型；否则取数据库默认/旧配置/环境回退，创建独立 `AsyncOpenAI`，并把实际模型信息固定写回 Run 元数据 | 隔离的模型 session；退出时关闭客户端 | Router 或 Answer runtime 的模型调用 |
-| 16 | `backend/app/modules/agent/model_runtime/answer.py` | `DirectAnswerRuntime.answer` / `DirectAnswerRuntime._run` | L89-L153 | 当前输入、历史、模型 session、token 预算 | 调用 Pydantic AI `direct_answer_agent.run` | 结构化 `DirectAnswerOutput` | conversation 节点返回 artifact |
+| 16 | `backend/app/modules/agent/model_runtime/answer.py` | `DirectAnswerRuntime.answer` / `DirectAnswerRuntime._run_stream` | L91-L204 | 当前输入、历史、模型 session、token 预算和 delta callback | 调用 Pydantic AI `run_stream` 与 `stream_output(debounce_by=0.1)`；只发布延续已发布前缀的 `content` 增量 | 多个正文 delta 和最终完整 `DirectAnswerOutput` | conversation 节点回调与 artifact |
 | 17 | `backend/app/modules/agent/events.py` | `EventStore.append` | L24-L69 | run 事件类型和 payload | 分配 run 内序号、写 `agent_events`，再触发公开 thread 投影 | 内部事件与公开事件保持关联 | `ThreadEventStore.project_run_event` |
 | 18 | `backend/app/modules/agent/thread_events.py` | `ThreadEventStore.project_run_event` / `ThreadEventStore._project_message_event` | L102-L204 / L232-L337 | Run 事件 | 将公开消息、工作流步骤和工具活动写入 `agent_messages`、`agent_thread_items`、`agent_thread_events` | 可按统一 cursor 消费的时间线事实 | `stream_thread_events` |
 | 19 | `backend/app/modules/agent/router.py` | `stream_thread_events` | L280-L348 | thread ID 与 `after_sequence` | 校验所有权，循环补查事件并输出 SSE heartbeat/事件 | `StreamingResponse` | 浏览器 `EventSource` |
@@ -137,9 +137,11 @@ MySQL `1146 Table '...agent_model_configs' doesn't exist` 时，根因在数据�
 | 22 | `frontend/src/pages/AgentPage.tsx` | `AgentPage`（`pendingResponse` 与 `handleSend`） | L47-L72、L119-L146、L268-L285 | turn 提交状态、响应 cursor 和最新 timeline items | 请求开始即记录等待状态；出现 cursor 之后的 assistant 消息或 workflow 时清除等待状态 | 在后端尚未创建可见回复项时仍有明确 UI 状态 | `ConversationStream` |
 | 23 | `frontend/src/features/agent/ConversationStream.tsx` | `AssistantPending` / `TimelineItemView` / `ConversationStream` | L18-L29、L31-L95、L97-L162 | 等待标记与 timeline items | 无正文时显示动态三点；收到 delta 后展示真实正文和光标；已有 streaming 消息时避免重复占位 | 用户看到等待、增量正文或最终结果 | 页面滚动区 |
 
-事务边界有两个：HTTP 创建 turn 使用一个请求级 session，确保消息、Run、事件和 outbox 原子提交；
-Worker 对每个 outbox 使用独立 session，确保一个模型调用或工作流失败不会污染下一条任务。两者之间
-以 MySQL outbox 交接，不依赖浏览器连接或 Redis 存活。
+HTTP 创建 turn 仍使用一个请求级事务，确保消息、Run、事件和 outbox 原子提交；HTTP 与 Worker 之间
+以 MySQL outbox 交接，不依赖浏览器连接或 Redis 存活。Worker 为每个 outbox 使用独立 session，但
+不再把整条长任务压成一个提交：running 状态、每个工作流步骤、公开工具活动和 100ms 聚合的回答
+delta 都是可恢复 commit 边界。这样 SSE session 能在任务执行期间读取进度；最终 artifact、Run 终态
+和 `message.completed` 继续负责收敛完整结果。
 
 #### 4.2.1 Router 分流到业务工作流后的真实公开执行链
 
@@ -148,7 +150,7 @@ Router 的决策本身保持完整结构化返回，不流式暴露内部原因�
 
 | 执行序号 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `backend/app/modules/agent/workflows/conversation.py` | `_dispatch_workflow_node` | L168-L210 | Router 选出的业务 action 与受控上下文 | 幂等创建 compact child run，并创建对话内 workflow 时间线项 | 用户先看到真实排队中的业务卡片 | `AgentWorker.process_run` |
+| 1 | `backend/app/modules/agent/workflows/conversation.py` | `_dispatch_workflow_node` | L182-L224 | Router 选出的业务 action 与受控上下文 | 幂等创建 compact child run，并创建对话内 workflow 时间线项 | 用户先看到真实排队中的业务卡片 | `AgentWorker.process_run` |
 | 2 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run`（进入 running） | L127-L138 | queued child run | 写 `run.status_changed` 并立即 commit | SSE 可在节点执行前看到“执行中” | `WorkflowEngine.execute` |
 | 3 | `backend/app/modules/agent/workflows/engine.py` | `WorkflowEngine.execute` | L61-L157 | workflow 节点图 | 每个节点开始写 `step.started` 并 commit；完成、等待或失败后写对应事件再 commit | 真实步骤逐个出现，Worker 中断后仍可恢复最后进度 | 具体节点或工具 |
 | 4 | `backend/app/modules/agent/tools/retrieve_knowledge.py` | `retrieve_knowledge` | L19-L176 | explain/validate 的查询词、范围和 run ID | 检索前写 `tool.called`；调用真实 RetrievalService；完成后只公开安全的通道、查询、命中数量和资料摘要并写 `tool.result` | 两次提交形成 running → completed/failed activity | `RetrievalService.search_with_outline_expansion` |
@@ -233,8 +235,8 @@ Router 的决策本身保持完整结构化返回，不流式暴露内部原因�
 | 6 | `backend/app/modules/agent/models.py` | `AgentModelConfigRecord.max_tokens` | L40-L44 | 数字或 `None` | `evaluates_none()` 防止 SQLAlchemy 把显式空值重新替换为 Python 默认值 | `agent_model_configs.max_tokens` 保存 SQL `NULL` | `load_agent_model_config` |
 | 7 | `backend/alembic/versions/20260724_agent_unlimited_tokens.py` | `upgrade` | L20-L27 | 数据库升级到新 head | 把 `agent_model_configs.max_tokens` 改为 nullable | 既有数字不变，新配置可保存 `NULL` | Agent Runtime |
 | 8 | `backend/app/modules/agent/model_runtime/config.py` | `AgentModelConfig.model_settings` / `_record_to_runtime_config` | L29-L87 | 数据库配置快照 | `None` 保持无限；仅数字值写入 Pydantic AI 的 `model_settings` | 无限时 settings 只有 temperature | Router/Answer Runtime |
-| 9 | `backend/app/modules/agent/model_runtime/router.py` | `RouterRuntime.route` | L75-L100 | 当前消息、历史和运行配置 | 把条件生成的 `model_settings` 交给 Pydantic AI | 供应商请求不再出现越界的 `max_completion_tokens` | 路由结果 |
-| 10 | `backend/app/modules/agent/model_runtime/answer.py` | `DirectAnswerRuntime.answer` | L89-L119 | 当前问题、历史和运行配置 | 使用相同 settings 调用回答模型 | 无限时由模型/供应商上下文限制决定输出 | 消息完成事件 |
+| 9 | `backend/app/modules/agent/model_runtime/router.py` | `RouterRuntime.decide` | L70-L121 | 当前消息、历史和运行配置 | 把条件生成的 `model_settings` 交给 Pydantic AI 并校验结构化 action | 供应商请求不再出现越界的 `max_completion_tokens` | 路由结果 |
+| 10 | `backend/app/modules/agent/model_runtime/answer.py` | `DirectAnswerRuntime.answer` | L91-L166 | 当前问题、历史和运行配置 | 使用相同 settings 调用回答模型；存在 callback 时进入结构化正文流 | 无限时由模型/供应商上下文限制决定输出 | delta 与消息完成事件 |
 | 11 | `backend/app/infrastructure/ai/llm_client.py` | `BaseLLMClient.__init__` / `_chat` | L48-L137 | 任务型系统 LLM 配置 | 保留显式 `None`，构造 SDK kwargs 时仅在非空时加入 `max_tokens` | 任务型 LLM 同样支持无限 | OpenAI 兼容供应商 |
 
 `null`、字段缺失和数字是三种不同状态：`null` 表示无限；字段缺失使用该用途默认值；数字表示

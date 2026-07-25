@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.logging import get_logger
 
 from ..context_builder import AgentRunContext, ThreadContextBuilder
+from ..events import event_store
 from ..model_runtime.answer import DirectAnswerDeps, direct_answer_runtime
 from ..model_runtime.router import ROUTER_ACTIONS, RouterDeps, router_runtime
 from ..models import AgentRun
@@ -108,12 +109,25 @@ async def _direct_answer_node(
     agent_context = context.get("agent_run_context")
     if not isinstance(agent_context, AgentRunContext):
         return NodeResult.failure("缺少受控 AgentRunContext")
+
+    async def publish_delta(delta: str) -> None:
+        await event_store.append(
+            db,
+            context.run_id,
+            "message.delta",
+            {"run_id": context.run_id, "delta": delta},
+        )
+        # stream_output 已按 100ms 聚合；这里提交后独立 SSE session 才能
+        # 读取增量，不能只 flush 后等待整个回答完成。
+        await db.commit()
+
     context.charge_model_call()
     output = await direct_answer_runtime.answer(
         agent_context.current_input,
         deps=DirectAnswerDeps.from_context(agent_context),
         message_history=agent_context.to_message_history(),
         db=db,
+        on_delta=publish_delta,
     )
     return NodeResult(
         status=NodeStatus.COMPLETED,

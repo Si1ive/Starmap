@@ -1,7 +1,7 @@
 """Pydantic AI 普通问答运行时。"""
 
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Awaitable, Callable, Sequence
 
 from pydantic_ai import Agent, RunContext, UsageLimits
 from pydantic_ai.messages import ModelMessage
@@ -15,6 +15,8 @@ from .config import open_agent_model
 from .schema import DirectAnswerOutput
 
 logger = get_logger(__name__)
+
+AnswerDeltaHandler = Callable[[str], Awaitable[None]]
 
 
 @dataclass(frozen=True)
@@ -93,14 +95,25 @@ class DirectAnswerRuntime:
         deps: DirectAnswerDeps,
         message_history: Sequence[ModelMessage] = (),
         db=None,
+        on_delta: AnswerDeltaHandler | None = None,
     ) -> DirectAnswerOutput:
         if self.model is not None:
-            result = await self._run(
-                current_input,
-                deps=deps,
-                message_history=message_history,
-                model=self.model,
-            )
+            if on_delta:
+                output = await self._run_stream(
+                    current_input,
+                    deps=deps,
+                    message_history=message_history,
+                    model=self.model,
+                    on_delta=on_delta,
+                )
+            else:
+                result = await self._run(
+                    current_input,
+                    deps=deps,
+                    message_history=message_history,
+                    model=self.model,
+                )
+                output = result.output
         elif db is not None:
             async with open_agent_model(db, run_id=deps.turn_id) as session:
                 logger.info(
@@ -110,26 +123,85 @@ class DirectAnswerRuntime:
                     model=session.config.model_name,
                     config_source=session.config.source,
                 )
+                if on_delta:
+                    output = await self._run_stream(
+                        current_input,
+                        deps=deps,
+                        message_history=message_history,
+                        model=session.model,
+                        model_settings=session.config.model_settings,
+                        on_delta=on_delta,
+                    )
+                else:
+                    result = await self._run(
+                        current_input,
+                        deps=deps,
+                        message_history=message_history,
+                        model=session.model,
+                        model_settings=session.config.model_settings,
+                    )
+                    output = result.output
+        else:
+            if on_delta:
+                output = await self._run_stream(
+                    current_input,
+                    deps=deps,
+                    message_history=message_history,
+                    model=settings.AGENT_ROUTER_MODEL,
+                    on_delta=on_delta,
+                )
+            else:
                 result = await self._run(
                     current_input,
                     deps=deps,
                     message_history=message_history,
-                    model=session.model,
-                    model_settings=session.config.model_settings,
+                    model=settings.AGENT_ROUTER_MODEL,
                 )
-        else:
-            result = await self._run(
-                current_input,
-                deps=deps,
-                message_history=message_history,
-                model=settings.AGENT_ROUTER_MODEL,
-            )
+                output = result.output
         logger.info(
             "Agent 回答模型调用完成",
             thread_id=deps.thread_id,
             run_id=deps.turn_id,
         )
-        return result.output
+        return output
+
+    @staticmethod
+    async def _run_stream(
+        current_input: str,
+        *,
+        deps: DirectAnswerDeps,
+        message_history: Sequence[ModelMessage],
+        model: Model | str,
+        on_delta: AnswerDeltaHandler,
+        model_settings=None,
+    ) -> DirectAnswerOutput:
+        published_content = ""
+        final_output: DirectAnswerOutput | None = None
+        async with direct_answer_agent.run_stream(
+            current_input,
+            deps=deps,
+            message_history=message_history,
+            model=model,
+            model_settings=model_settings,
+            usage_limits=UsageLimits(
+                request_limit=2,
+                total_tokens_limit=deps.token_budget,
+            ),
+        ) as stream:
+            async for output in stream.stream_output(debounce_by=0.1):
+                final_output = output
+                content = output.content or ""
+                # 结构化 partial validation 可能修正尚未闭合的字段。只有当前
+                # content 延续已发布前缀时才追加，最终 completed 会用完整正文收敛。
+                if content.startswith(published_content):
+                    delta = content[len(published_content):]
+                    if delta:
+                        await on_delta(delta)
+                        published_content = content
+
+        if final_output is None:
+            raise RuntimeError("回答模型流结束但未生成结构化输出")
+        return final_output
 
     @staticmethod
     async def _run(

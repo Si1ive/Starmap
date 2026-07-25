@@ -429,8 +429,8 @@ DDL；迁移图后来继续前进到 workflow activity revision，不改变这�
 
 运行时 `AgentModelConfig.model_settings`（`backend/app/modules/agent/model_runtime/config.py` L29-L51）
 只在值非空时加入 `max_tokens`。Router 和 Answer 分别在
-`backend/app/modules/agent/model_runtime/router.py` 的 `RouterRuntime.route`（L75-L100）以及
-`backend/app/modules/agent/model_runtime/answer.py` 的 `DirectAnswerRuntime.answer`（L89-L119）消费该
+`backend/app/modules/agent/model_runtime/router.py` 的 `RouterRuntime.decide`（L70-L121）以及
+`backend/app/modules/agent/model_runtime/answer.py` 的 `DirectAnswerRuntime.answer`（L91-L166）消费该
 字典。因此无限配置不会再被 Pydantic AI/OpenAI SDK 转成越界的 `max_completion_tokens`。
 
 题目结构、大纲、文档元信息和富化等系统 LLM 共用
@@ -451,21 +451,30 @@ failed 状态只渲染一个 `agent-message__error`：优先显示后端提供�
 “这条回复生成失败，请稍后重试。”兜底。这样自定义安全错误仍可展示，默认文案不会重复，颜色
 继续由 `frontend/src/features/agent/agent-chat.css` 的 `.agent-message__error`（L207-L212）控制。
 
-### 5.12 等待动画、已有增量能力与真正流式输出的边界
+### 5.12 等待动画与 DirectAnswer 结构化正文流
 
-当前系统不能简单归类为“支持流式”或“不支持流式”，而是协议和展示层已经准备好，模型执行层尚未
-真正流式：
+当前普通回答已经形成真实端到端正文流，Router 仍保持一次性结构化决策：
 
 | 层次 | 文件 | 符号 | 代码范围 | 当前行为 |
 | --- | --- | --- | --- | --- |
-| 模型执行 | `backend/app/modules/agent/model_runtime/answer.py` | `DirectAnswerRuntime._run` | L134-L153 | 调用 `direct_answer_agent.run()`，等待完整结构化 `DirectAnswerOutput`；没有消费 token delta |
-| 完成事件 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run`（message completed 分支） | L198-L207 | artifact 完整生成后一次写入 `message.completed`，生产链目前不循环写 `message.delta` |
-| 公共事件投影 | `backend/app/modules/agent/thread_events.py` | `ThreadEventStore._project_message_event`（delta 分支） | L260-L269 | 如果上游传入 delta，追加消息正文并发布公开 `message.delta` |
+| 路由决策 | `backend/app/modules/agent/model_runtime/router.py` | `RouterRuntime.decide` / `_run` | L70-L142 | 完整返回并校验 `RouterDecision`，不把 Router reason 或 partial JSON 推给用户 |
+| 模型执行 | `backend/app/modules/agent/model_runtime/answer.py` | `DirectAnswerRuntime._run_stream` | L168-L204 | 使用 `run_stream`，每 100ms partial validate 一次结构化 `DirectAnswerOutput` |
+| 增量持久化 | `backend/app/modules/agent/workflows/conversation.py` | `_direct_answer_node.publish_delta` | L104-L131 | 每批正文写 `message.delta` 并 commit，使独立 SSE session 立即可见 |
+| 最终收敛 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run`（message completed 分支） | L200-L209 | artifact 完整生成后写 `message.completed`，用最终正文覆盖并收敛 streaming message |
+| 公共事件投影 | `backend/app/modules/agent/thread_events.py` | `ThreadEventStore._project_message_event`（delta 分支） | L232-L307 | 第一个 delta 创建 assistant 时间线项，后续 delta 追加正文并发布公开事件 |
 | 前端归并 | `frontend/src/features/agent/timeline-state.ts` | `applyMessageEvent` | L85-L161 | 对 delta 做有序字符串追加，对 completed/failed 收敛状态 |
 | 前端显示 | `frontend/src/features/agent/ConversationStream.tsx` | `TimelineItemView` | L31-L74 | streaming 且已有正文时直接显示增量内容和闪烁光标 |
 
-因此本次没有伪造逐字输出，也没有把内部 Router 原因或隐藏推理当作“过程信息”展示。工作流本身的
-公开步骤、进度和产物仍沿现有 SSE 动态更新；普通直接回答在模型完整返回前没有公开文本可展示。
+`DirectAnswerOutput` 同时包含 `content` 和 `public_summary`，不能直接把供应商返回的半截 JSON 当正文。
+`DirectAnswerRuntime._run_stream` 使用 Pydantic AI 的 `stream_output(debounce_by=0.1)` 进行 partial
+validation，拿到的是阶段性结构化对象。它维护 `published_content`，只有新 content 以已发布正文为
+前缀时才计算后缀 delta；如果 partial parser 修正尚未闭合字段而不再延续前缀，该次不追加，最终
+`message.completed` 会用完整、严格校验后的 content 收敛，避免重复或损坏正文。
+
+每个 delta 不是每 token 一个事务，而是 Pydantic AI 先按 100ms 聚合，再由
+`_direct_answer_node.publish_delta` 写 Run Event、assistant message 投影和 Thread Event并 commit。
+第一个 delta 会创建真实 assistant 时间线项；后续事件共用 message ID。SSE 断线后按 thread cursor
+重放，刷新则直接读取已累计的 `AgentMessage.content_text`。
 
 为消除这段空白，`frontend/src/pages/AgentPage.tsx` 的 `AgentPage.pendingResponse` 状态与清理 effect
 （L47-L72）按 thread 和响应 cursor 追踪等待中的一轮；`AgentPage.handleSend`（L119-L146）在请求开始
@@ -475,15 +484,16 @@ failed 状态只渲染一个 `agent-message__error`：优先显示后端提供�
 
 `frontend/src/features/agent/ConversationStream.tsx` 的 `AssistantPending`（L18-L29）渲染带
 `role="status"` 的“正在组织回答”和动态三点；`ConversationStream`（L97-L162）只在尚无真实 streaming
-assistant 时追加这个临时项，避免与未来真实 delta 消息重复。样式位于
+assistant 时追加这个临时项；首个真实 delta 到达后自动切换为正文。样式位于
 `frontend/src/features/agent/agent-chat.css` 的 `.agent-message__pending*`（L156-L194）、
 `@keyframes agent-message-pending-dot`（L807-L816）和 reduced-motion 分支（L905-L911）：复用现有
 品牌绿、浅蓝和弱文本变量，系统要求减少动画时停止跳动。
 
-如果后续接入真正文本流，关键不是再改 UI，而是把 Answer Runtime 改为 Pydantic AI 的流式 API，
-并按时间或字符批量持久化 `message.delta`。不能每个 token 单独开事务；还必须定义结构化输出与
-可见文本流如何共存、SSE 断线重放如何去重、半段文本失败后如何收敛，以及 Worker 租约失效时如何
-停止流。现有投影、cursor、reducer 和渲染可继续复用。
+回归测试 `backend/tests/test_agent_answer_runtime.py` 的
+`test_direct_answer_streams_structured_content_as_prefix_deltas`（L39-L65）验证结构化流可重组为最终正文；
+`backend/tests/test_agent_conversation_workflow.py` 的
+`test_direct_answer_persists_deltas_before_completed_message`（L227-L280）锁定公开事件顺序为时间线项、
+多个 delta、completed，并确认最终正文不重复。
 
 ### 5.13 为什么工作流曾像静态 mock，以及如何变成真实动态执行链
 

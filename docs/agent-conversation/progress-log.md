@@ -576,3 +576,34 @@
 ### 提交信息
 
 `将 Agent 工作流执行链接入真实动态事件`
+
+## 2026-07-25：接入 DirectAnswer 结构化正文流
+
+### 目标
+
+让 Router 选择普通问答后，DirectAnswerRuntime 在最终结构化结果完成前持续输出可见正文，同时保留
+Router 的完整结构化决策和最终消息收敛能力。
+
+### 实现
+
+- DirectAnswerRuntime 使用 Pydantic AI `run_stream` 和 100ms debounce 的 `stream_output`。
+- 从 partial `DirectAnswerOutput.content` 计算安全前缀增量，不直接展示半截结构化 JSON。
+- conversation 节点把每批正文写入 `message.delta` 并 commit，使 SSE 在模型生成期间可读。
+- 第一个 delta 创建真实 assistant 时间线项，后续 delta 追加；最终 `message.completed` 用完整正文收敛。
+- RouterRuntime 保持非流式，不公开内部 reason、partial 决策或隐藏推理。
+- 保留无 callback 的非流式执行入口，支持测试模型和需要完整结果的内部调用。
+
+### 教学文档
+
+- 全景文档更新普通回答从 Router、结构化 stream、delta commit、事件投影到前端显示的完整链。
+- 细致讲解补充 partial validation、前缀增量、100ms 批处理和最终 completed 收敛策略。
+- 所有新增代码说明均标注仓库相对路径、完整符号及最终精确代码范围。
+
+### 验证
+
+- 完整 Agent 后端回归：93 项通过。
+- `git diff --check` 通过。
+
+### 提交信息
+
+`接入 DirectAnswer 结构化正文流`

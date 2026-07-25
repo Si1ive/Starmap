@@ -80,9 +80,36 @@ class AnswerStub:
         self.answers = list(answers)
         self.histories = []
 
-    async def answer(self, current_input, *, deps, message_history=(), db=None):
+    async def answer(
+        self,
+        current_input,
+        *,
+        deps,
+        message_history=(),
+        db=None,
+        on_delta=None,
+    ):
         self.histories.append(list(message_history))
         return self.answers.pop(0)
+
+
+class StreamingAnswerStub:
+    async def answer(
+        self,
+        current_input,
+        *,
+        deps,
+        message_history=(),
+        db=None,
+        on_delta=None,
+    ):
+        assert on_delta is not None
+        await on_delta("循环队列通过")
+        await on_delta("取模复用数组空间。")
+        return DirectAnswerOutput(
+            content="循环队列通过取模复用数组空间。",
+            public_summary="说明循环队列",
+        )
 
 
 class FailingRouterStub:
@@ -195,6 +222,62 @@ async def test_direct_answer_is_message_without_visible_workflow_and_reuses_hist
     assert second_history[1].parts[0].content == "队列是先进先出的线性结构。"
     assert second.run.metadata_json["router_decision"]["action"] == "direct_answer"
     assert second.run.metadata_json["context_audit"]["selected_message_ids"]
+
+
+@pytest.mark.asyncio
+async def test_direct_answer_persists_deltas_before_completed_message(
+    db_session,
+    monkeypatch,
+):
+    await _create_thread(db_session)
+    monkeypatch.setattr(
+        conversation,
+        "router_runtime",
+        RouterStub(
+            [
+                RouterDecision(
+                    action="direct_answer",
+                    confidence=0.95,
+                    reason_code="simple_question",
+                )
+            ]
+        ),
+    )
+    monkeypatch.setattr(conversation, "direct_answer_runtime", StreamingAnswerStub())
+    creation = await _create_turn(
+        db_session,
+        content="什么是循环队列？",
+        client_message_id="client_stream_001",
+    )
+
+    assert await AgentWorker().process_run(db_session, creation.run) is True
+
+    events = await thread_event_store.get_events(
+        db_session,
+        "thread_001",
+        after_sequence=creation.timeline_cursor,
+        limit=20,
+    )
+    assert [event.event_type for event in events] == [
+        "timeline.item.created",
+        "message.delta",
+        "message.delta",
+        "message.completed",
+    ]
+    assert [
+        event.payload.get("delta")
+        for event in events
+        if event.event_type == "message.delta"
+    ] == ["循环队列通过", "取模复用数组空间。"]
+
+    page = await AgentTimelineService(db_session).get_timeline(
+        user_id="user_001",
+        thread_id="thread_001",
+        before=None,
+        limit=20,
+    )
+    assert page.items[-1]["message"]["status"] == "completed"
+    assert page.items[-1]["message"]["content"] == "循环队列通过取模复用数组空间。"
 
 
 @pytest.mark.asyncio
