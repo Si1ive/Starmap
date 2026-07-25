@@ -721,7 +721,25 @@ Agent 页面仍保留 `--chat-*` 语义变量，目的是让组件样式能表�
 | 控件与说明 | `frontend/src/features/agent/agent-chat.css` | `.agent-composer__send` / `.agent-chat-disclaimer` | L790-L817 | composer 渲染 | 发送按钮收敛到 32px，说明文字与 composer 保持 6px 间距 | 底部工具行和安全说明 |
 | 移动端适配 | `frontend/src/features/agent/agent-chat.css` | `@media (max-width: 640px)`（composer 分支） | L978-L1000 | 视口不超过 640px | 底部距离为 13px 加安全区；快捷键提示隐藏后由发送按钮 `margin-left:auto` 补足右对齐 | 底部导航上方的移动端输入区 |
 
-实际无头浏览器检查覆盖 1440×900 和 390×844：空文本及单行文本的 composer 都为 78px，textarea
-和 footer 分别为 24px、32px；textarea 上下 padding、footer 上下 padding、footer 顶边框都为 0。
-桌面 dock 底部 padding 为 18px，移动端为 13px，两个视口均无横向溢出或运行时异常。多行输入仍由
-原 effect 按真实内容增长，不会为了单行紧凑而失去长文本编辑能力。
+会话内基础规则在空文本及单行文本时保持 composer 78px，textarea 和 footer 分别为 24px、32px；
+textarea 上下 padding、footer 上下 padding、footer 顶边框都为 0。桌面 dock 底部 padding 为 18px，
+移动端为 13px。多行输入仍由原 effect 按真实内容增长，不会为了单行紧凑而失去长文本编辑能力。
+空首页在下一节通过更具体的场景选择器覆盖这一基础高度。
+
+### 7.4 为什么首页与会话内输入框不再使用同一高度
+
+已有会话里，输入框是持续交流的辅助控件，需要给上方消息流留下空间；空会话首页里，输入框是首个
+也是最重要的操作入口。两种场景强制使用同一套 78px 尺寸，会让首页的主操作显得过弱。因此保留
+`ChatComposer` 组件复用，只通过页面已有的 `agent-chat-page--empty` 根状态形成场景差异。
+
+| 执行阶段 | 文件 | 符号 | 代码范围 | 入口条件 | 处理与副作用 | 最终消费 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 场景标记 | `frontend/src/pages/AgentPage.tsx` | `AgentPage`（根 className） | L199-L199 | 当前 thread 没有历史时间线项 | 给页面根节点追加 `agent-chat-page--empty`；有会话时不追加 | CSS 场景选择器 |
+| 首页渲染 | `frontend/src/pages/AgentPage.tsx` | `AgentPage`（empty 分支） | L236-L259 | `isEmpty=true` | 在首屏介绍下复用同一个 `ChatComposer`，不复制状态和发送逻辑 | 首页输入区 |
+| 自动增长 | `frontend/src/features/agent/ChatComposer.tsx` | `ChatComposer`（textarea 高度 effect） | L36-L41 | 文本值变化 | 内联高度按 `scrollHeight` 增长到 180px；CSS `min-height` 仍保证空首页基线高度 | 浏览器 textarea 布局 |
+| 场景尺寸 | `frontend/src/features/agent/agent-chat.css` | `.agent-chat-page--empty .agent-composer` / `.agent-chat-page--empty .agent-composer textarea` | L1045-L1054 | 仅空会话首页 | 容器恢复宽松 padding，textarea 最小高度 88px、最大 180px；不会命中已有会话 dock | 首页 150px 的主输入区 |
+| 会话内尺寸 | `frontend/src/features/agent/agent-chat.css` | `.agent-composer` / `.agent-composer textarea` / `.agent-composer__footer` | L691-L733 | 已有会话或所有 composer 的基础规则 | 保持 24px textarea、32px footer 和紧凑 padding；首页只在其上覆盖必要尺寸 | 会话内 78px 输入区 |
+
+这里不通过复制组件或增加 JavaScript 分支控制高度，原因是差异完全属于页面层级和视觉语义。发送、
+模型选择、禁用状态、键盘快捷键和自动增长仍走同一套实现；以后调整交互时不会出现首页与会话内逻辑
+漂移。

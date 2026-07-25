@@ -1040,3 +1040,15 @@ button.agent-chat-connection:hover {
     animation: none;
   }
 }
+
+/* 空会话首页把输入作为首要操作；已有会话继续使用上方的紧凑尺寸。 */
+.agent-chat-page--empty .agent-composer {
+  padding: 14px 14px 10px 16px;
+}
+
+.agent-chat-page--empty .agent-composer textarea {
+  line-height: 1.65;
+  max-height: 180px;
+  min-height: 88px;
+  padding: 4px 2px;
+}
