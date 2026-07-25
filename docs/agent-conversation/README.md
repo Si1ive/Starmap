@@ -6,9 +6,9 @@
 
 ## 当前状态
 
-现有 `01-technical-panorama.md`、`02-detailed-implementation.md` 和 `progress-log.md` 是早期连续追加形成的
-迁移源，总计约 141 KB。它们仍保留现有内容和链接，但不再作为未来持续追加的目标。下一次 Agent 实现
-需要新增教学正文前，应先用独立提交完成下述分卷迁移，并把三个旧路径收敛为薄索引。
+`architecture/`、`implementation/`、`tasks/` 和 `progress/` 已在 2026-07-25 完成首轮分卷迁移。
+`01-technical-panorama.md`、`02-detailed-implementation.md` 和 `progress-log.md` 现仅保留薄索引职责，
+后续 Agent 教学正文只更新对应分卷与当月进展日志。
 
 ## 目标文档结构
 
@@ -57,27 +57,25 @@ docs/agent-conversation/
 - [RAG、Explain 与分层记忆整改计划](./tasks/2026-07-26-rag-explain-memory-remediation.md)：覆盖
   `run_5c6c46d3`、检索重试公开投影、Explain 无资料回答、RAG 契约和分层长期记忆。
 
-## 迁移源
+## 薄索引入口
 
 ### 技术实现全景图
 
 [01-technical-panorama.md](./01-technical-panorama.md)
 
-从系统边界出发说明用户端、API、时间线、Worker、工作流、模型运行时、数据库、Redis 和
-管理员监控之间的关系，并持续维护请求链路与数据所有权。
+作为旧路径兼容索引，指向 `architecture/` 下的系统边界、主链和旁路分卷。
 
 ### 分模块细致讲解
 
 [02-detailed-implementation.md](./02-detailed-implementation.md)
 
-按照全景图中的模块逐一讲解关键文件、状态变化、数据库结构、异常处理、前后端协议和测试
-方法。每次实现或修复 Agent 功能时同步更新对应章节。
+作为旧路径兼容索引，指向 `implementation/` 下的上下文、模型运行时、RAG、事件、管理端和前端分卷。
 
 ### 历史进展记录
 
 [progress-log.md](./progress-log.md)
 
-按功能提交记录目标、实现内容、验证结果和 Git 提交，便于将文档状态与代码状态对应起来。
+作为旧路径兼容索引，指向 `progress/` 月度日志。
 
 ## 按需阅读方法
 

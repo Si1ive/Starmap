@@ -1,0 +1,47 @@
+# Agent 对话主链
+
+## 适用场景
+
+本分卷覆盖用户端发起一轮对话，到后端创建消息与 Run、Worker 执行、事件投影、SSE 推送，再到前端归并显示
+的完整主链。排查“为什么用户没看到最终回答”时应先读本分卷。
+
+## 用户发起一轮对话直到前端显示结果
+
+| 执行序号 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | `frontend/src/pages/AgentPage.tsx` | `AgentPage.handleSend` | L101-L144 | 输入文本、thread ID、`selectedModelId` | 空会话先建 thread，再提交 turn；模型失效时保留输入并刷新模型列表 | 一次 turn 请求 | `AgentProvider.sendTurn` |
+| 2 | `frontend/src/store/agent-context.tsx` | `AgentProvider.sendTurn` | L425-L446 | thread、内容、`modelConfigId` | 生成 `client_message_id`，调用后端 turn API，成功后刷新时间线并确保 SSE 已连接 | `TurnCreateResponse` 与最新 timeline | `createTurn` |
+| 3 | `frontend/src/api/agent.ts` | `createTurn` | L365-L376 | `TurnCreateRequest` | POST `/api/v1/app/agent/threads/{thread_id}/turns` | HTTP 201 或 API 错误 | `create_turn` |
+| 4 | `backend/app/modules/agent/router.py` | `create_turn` | L167-L212 | 已认证用户、请求体、请求级 session | 处理线程不存在、模型不可用、幂等冲突，剩余逻辑委托给时间线服务 | 用户消息、root run 和 cursor | `AgentTimelineService.create_turn` |
+| 5 | `backend/app/modules/agent/timeline.py` | `AgentTimelineService.create_turn` | L166-L317 | user/thread/content/client ID/model ID | 在同一事务中创建用户消息、conversation root run、thread item、run/thread 事件与 outbox | `queued` run、可重放时间线事实 | `OutboxStore.enqueue` |
+| 6 | `backend/app/modules/agent/outbox.py` | `OutboxStore.enqueue` | L24-L44 | root run ID | 创建 `pending` outbox 记录并 flush | Worker 可见的可靠执行任务 | 请求 session 退出 |
+| 7 | `backend/app/db/mysql.py` | `MySQLClient.session` | L131-L155 | 路由依赖创建的 session | 成功统一 commit，异常统一 rollback | 消息、Run、事件和 outbox 一起可见或一起回滚 | Worker 扫描 |
+| 8 | `backend/app/modules/agent/worker.py` | `AgentWorker.start` / `AgentWorker.scan_and_process` | L365-L383、L306-L363 | pending outbox | 按轮询批次创建独立 session、原子认领 outbox、串行化同线程执行 | 单个 Run 的独立工作 session | `AgentWorker.process_run` |
+| 9 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | L100-L267 | 已认领 run | 进入 running、恢复 checkpoint、执行 workflow、落库 Artifact/最终消息/完成事件；异常交给 `_record_failure` | completed / waiting / failed run | `WorkflowEngine.execute` |
+| 10 | `backend/app/modules/agent/workflows/engine.py` | `WorkflowEngine.execute` | L27-L212 | workflow 定义、执行上下文、Run | 每个节点开始写 `step.started` 并 commit；完成/失败再写对应事件并 commit；WAITING 保存 checkpoint | 真实步骤链、最终 `NodeResult` 或断点 | conversation / child workflow 节点 |
+| 11 | `backend/app/modules/agent/workflows/conversation.py` | `_route_node` | L42-L102 | 当前消息、筛选后的历史、模型配置 | 用 4096 Token 预算只筛历史，不限制模型总输出；调用 Router 决定 direct/explain/validate/grade/plan/clarify | `RouterDecision` 与下一节点 | `RouterRuntime.decide` |
+| 12 | `backend/app/modules/agent/model_runtime/router.py` | `_explicit_workflow_action`、`RouterRuntime.decide`、`RouterRuntime._run` | L87-L94、L114-L180、L182-L198 | 当前输入、允许 action、历史与模型配置 | 结构化路由，显式“讲解/出题/批改/计划”由护栏纠偏，`UsageLimits(request_limit=2)` 仅限制请求次数 | 经授权的 `RouterDecision` | direct answer 或 child workflow |
+| 13 | `backend/app/modules/agent/workflows/conversation.py` | `_direct_answer_node` | L104-L142 | `AgentRunContext` | 把 100ms 聚合后的正文 delta 写 `message.delta` 并 commit，最终输出包装成 message artifact | 增量 assistant 正文与最终 artifact | `DirectAnswerRuntime.answer` |
+| 14 | `backend/app/modules/agent/model_runtime/answer.py` | `DirectAnswerRuntime.answer` / `_run_stream` | L91-L201 | 当前问题、历史、模型配置和 delta callback | 通过 Pydantic AI `run_stream` 产出结构化正文，增量只发送已确认前缀 | `message.delta` 与 `message.completed` 内容 | `EventStore.append` |
+| 15 | `backend/app/modules/agent/events.py` | `EventStore.append` | L24-L69 | run 事件类型与 payload | 分配 run 内序号，写 `agent_events`，并触发公开 thread 投影 | 内部事件与公开事件关联 | `ThreadEventStore.project_run_event` |
+| 16 | `backend/app/modules/agent/thread_events.py` | `ThreadEventStore.project_run_event` / `_project_message_event` | L103-L212、L240-L346 | run 事件 | 把 `message.delta`、`message.completed`、`message.failed`、step/tool 事件投影成 thread 事件 | 可按 cursor 消费的公开时间线事实 | `stream_thread_events` |
+| 17 | `backend/app/modules/agent/router.py` | `stream_thread_events` | L280-L348 | thread ID、`after_sequence` | 校验线程归属，循环补查新事件并输出 SSE heartbeat | `StreamingResponse` | 浏览器 EventSource |
+| 18 | `frontend/src/store/agent-context.tsx` | `AgentProvider.connectThreadStream` | L246-L362 | thread ID 和 cursor | 建立 EventSource，按事件类型更新 reducer；投影类事件触发时间线快照刷新 | 最新 timeline 与连接状态 | `applyMessageEvent` / `applyWorkflowEvent` |
+| 19 | `frontend/src/features/agent/timeline-state.ts` | `applyMessageEvent` | L85-L165 | `message.delta` / `message.completed` / `message.failed` | 对 delta 追加正文，对 completed/failed 收敛状态和错误信息 | 规范化消息状态 | `ConversationStream` |
+| 20 | `frontend/src/features/agent/ConversationStream.tsx` | `TimelineItemView` / `ConversationStream` | L31-L103、L105-L170 | timeline items | 展示 streaming 文本、失败原因、工作流卡片和最终产物；无正文时显示等待三点 | 用户最终看到回答或失败说明 | 页面滚动区 |
+
+## 异常主链：模型或工作流失败如何公开
+
+| 执行序号 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run`（异常分支） | L246-L264 | 节点失败结果或模型异常 | 统一进入失败记录逻辑，不吞掉原始异常 | 待分类内部错误 | `_record_failure` |
+| 2 | `backend/app/modules/agent/public_errors.py` | `classify_agent_error` | L48-L96 | 原始错误与异常对象 | 映射为稳定 `error_code` 和安全中文说明 | 公开错误对象 | `AgentWorker._record_failure` |
+| 3 | `backend/app/modules/agent/worker.py` | `AgentWorker._record_failure` | L269-L304 | Run、原始错误、公开错误 | `run.error_message` 保留内部原文，事件写安全说明和稳定码 | `run.failed` 事件 | `ThreadEventStore.project_run_event` |
+| 4 | `backend/app/modules/agent/thread_events.py` | `ThreadEventStore.project_run_event` / `_project_message_event`（失败分支） | L140-L160、L316-L346 | `run.failed` | 不覆盖已有 partial 正文，只在消息状态和错误字段中写失败原因 | 可恢复的失败消息和公开事件 | `applyMessageEvent` |
+| 5 | `frontend/src/features/agent/timeline-state.ts` | `applyMessageEvent`（failed 分支） | L142-L162 | 实时 `message.failed` | 保留已显示正文，归并 `error_code` / `error_message`，结束 streaming | React timeline state | `ConversationStream` |
+| 6 | `frontend/src/features/agent/ConversationStream.tsx` | `TimelineItemView`（failed 分支） | L52-L82 | 失败消息和可选 partial 正文 | 有正文则正文与红色原因分开显示，无正文只显示一次原因 | 用户可见失败结果 | 页面消息气泡 |
+
+## 下一步阅读
+
+- 需要看 explain/validate/grade/plan 的 child workflow 链路，转到 `architecture/workflow-branches.md`。
+- 需要看消息、步骤、工具活动和错误如何投影/恢复，转到 `implementation/events-timeline-errors.md`。
