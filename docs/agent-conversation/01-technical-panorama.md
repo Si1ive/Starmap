@@ -131,7 +131,10 @@ MySQL `1146 Table '...agent_model_configs' doesn't exist` 时，根因在数据�
 | 17 | `backend/app/modules/agent/events.py` | `EventStore.append` | L24-L69 | run 事件类型和 payload | 分配 run 内序号、写 `agent_events`，再触发公开 thread 投影 | 内部事件与公开事件保持关联 | `ThreadEventStore.project_run_event` |
 | 18 | `backend/app/modules/agent/thread_events.py` | `ThreadEventStore.project_run_event` / `ThreadEventStore._project_message_event` | L100-L183 / L211-L310 | Run 事件 | 将公开消息/工作流状态写入 `agent_messages`、`agent_thread_items`、`agent_thread_events` | 可按统一 cursor 消费的时间线事实 | `stream_thread_events` |
 | 19 | `backend/app/modules/agent/router.py` | `stream_thread_events` | L280-L348 | thread ID 与 `after_sequence` | 校验所有权，循环补查事件并输出 SSE heartbeat/事件 | `StreamingResponse` | 浏览器 `EventSource` |
-| 20 | `frontend/src/store/agent-context.tsx` | `AgentProvider.connectThreadStream` | L245-L360 | thread ID 和 cursor | 建立 EventSource、归并事件；投影类事件触发时间线快照刷新，断线按退避重连 | reducer 中的最新 timeline/connection | `ConversationStream` 渲染 |
+| 20 | `frontend/src/store/agent-context.tsx` | `AgentProvider.connectThreadStream` | L245-L360 | thread ID 和 cursor | 建立 EventSource、归并事件；投影类事件触发时间线快照刷新，断线按退避重连 | reducer 中的最新 timeline/connection | `applyMessageEvent` |
+| 21 | `frontend/src/features/agent/timeline-state.ts` | `applyMessageEvent` | L85-L161 | `message.delta`、`message.completed` 或 `message.failed` | delta 追加到现有正文并保持 streaming；完成或失败事件收敛最终状态 | 规范化 `messagesById` | `AgentPage` / `ConversationStream` |
+| 22 | `frontend/src/pages/AgentPage.tsx` | `AgentPage`（`pendingResponse` 与 `handleSend`） | L47-L72、L119-L146、L268-L285 | turn 提交状态、响应 cursor 和最新 timeline items | 请求开始即记录等待状态；出现 cursor 之后的 assistant 消息或 workflow 时清除等待状态 | 在后端尚未创建可见回复项时仍有明确 UI 状态 | `ConversationStream` |
+| 23 | `frontend/src/features/agent/ConversationStream.tsx` | `AssistantPending` / `TimelineItemView` / `ConversationStream` | L18-L29、L31-L95、L97-L162 | 等待标记与 timeline items | 无正文时显示动态三点；收到 delta 后展示真实正文和光标；已有 streaming 消息时避免重复占位 | 用户看到等待、增量正文或最终结果 | 页面滚动区 |
 
 事务边界有两个：HTTP 创建 turn 使用一个请求级 session，确保消息、Run、事件和 outbox 原子提交；
 Worker 对每个 outbox 使用独立 session，确保一个模型调用或工作流失败不会污染下一条任务。两者之间

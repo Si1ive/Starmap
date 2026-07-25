@@ -153,6 +153,46 @@ button.agent-chat-connection:hover {
   white-space: pre-wrap;
 }
 
+.agent-message__pending {
+  align-items: center;
+  color: var(--chat-muted);
+  display: inline-flex;
+  font-size: 13px;
+  gap: 9px;
+  letter-spacing: 0.01em;
+  min-height: 27px;
+}
+
+.agent-message__pending-dots {
+  align-items: center;
+  background: var(--blue-soft);
+  border: 1px solid var(--chat-line);
+  border-radius: 999px;
+  display: inline-flex;
+  gap: 3px;
+  height: 25px;
+  justify-content: center;
+  padding: 0 8px;
+}
+
+.agent-message__pending-dots i {
+  animation: agent-message-pending-dot 1.15s ease-in-out infinite;
+  background: var(--chat-accent);
+  border-radius: 50%;
+  display: block;
+  height: 4px;
+  opacity: 0.35;
+  width: 4px;
+}
+
+.agent-message__pending-dots i:nth-child(2) {
+  animation-delay: 140ms;
+}
+
+.agent-message__pending-dots i:nth-child(3) {
+  animation-delay: 280ms;
+}
+
 .agent-message__cursor {
   animation: agent-chat-cursor 1s steps(2, start) infinite;
   background: var(--chat-accent);
@@ -764,6 +804,17 @@ button.agent-chat-connection:hover {
   50% { opacity: 0; }
 }
 
+@keyframes agent-message-pending-dot {
+  0%, 60%, 100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
 @keyframes agent-workflow-pulse {
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(25px); }
@@ -854,7 +905,8 @@ button.agent-chat-connection:hover {
 @media (prefers-reduced-motion: reduce) {
   .agent-chat-spin,
   .inline-workflow__rail::after,
-  .agent-message__cursor {
+  .agent-message__cursor,
+  .agent-message__pending-dots i {
     animation: none;
   }
 }

@@ -445,10 +445,44 @@ max_tokens”不会覆盖旧值，而“明确提交 null”会写成无限。OR
 
 后端 `message.failed` 投影已经把安全失败文案写进 assistant message 的 `content`，前端旧实现又在
 消息正文下固定渲染一次相同提示，所以不是后端重复发事件，而是同一消息的正文和状态提示同时
-展示。`frontend/src/features/agent/ConversationStream.tsx` 的 `TimelineItemView`（L17-L72）现在对
+展示。`frontend/src/features/agent/ConversationStream.tsx` 的 `TimelineItemView`（L31-L74）现在对
 failed 状态只渲染一个 `agent-message__error`：优先显示后端提供的安全正文，正文为空时才使用
 “这条回复生成失败，请稍后重试。”兜底。这样自定义安全错误仍可展示，默认文案不会重复，颜色
-继续由 `frontend/src/features/agent/agent-chat.css` 的 `.agent-message__error`（L167-L172）控制。
+继续由 `frontend/src/features/agent/agent-chat.css` 的 `.agent-message__error`（L207-L212）控制。
+
+### 5.12 等待动画、已有增量能力与真正流式输出的边界
+
+当前系统不能简单归类为“支持流式”或“不支持流式”，而是协议和展示层已经准备好，模型执行层尚未
+真正流式：
+
+| 层次 | 文件 | 符号 | 代码范围 | 当前行为 |
+| --- | --- | --- | --- | --- |
+| 模型执行 | `backend/app/modules/agent/model_runtime/answer.py` | `DirectAnswerRuntime._run` | L134-L153 | 调用 `direct_answer_agent.run()`，等待完整结构化 `DirectAnswerOutput`；没有消费 token delta |
+| 完成事件 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run`（message completed 分支） | L198-L207 | artifact 完整生成后一次写入 `message.completed`，生产链目前不循环写 `message.delta` |
+| 公共事件投影 | `backend/app/modules/agent/thread_events.py` | `ThreadEventStore._project_message_event`（delta 分支） | L260-L269 | 如果上游传入 delta，追加消息正文并发布公开 `message.delta` |
+| 前端归并 | `frontend/src/features/agent/timeline-state.ts` | `applyMessageEvent` | L85-L161 | 对 delta 做有序字符串追加，对 completed/failed 收敛状态 |
+| 前端显示 | `frontend/src/features/agent/ConversationStream.tsx` | `TimelineItemView` | L31-L74 | streaming 且已有正文时直接显示增量内容和闪烁光标 |
+
+因此本次没有伪造逐字输出，也没有把内部 Router 原因或隐藏推理当作“过程信息”展示。工作流本身的
+公开步骤、进度和产物仍沿现有 SSE 动态更新；普通直接回答在模型完整返回前没有公开文本可展示。
+
+为消除这段空白，`frontend/src/pages/AgentPage.tsx` 的 `AgentPage.pendingResponse` 状态与清理 effect
+（L47-L72）按 thread 和响应 cursor 追踪等待中的一轮；`AgentPage.handleSend`（L119-L146）在请求开始
+时建立等待状态，拿到 `timeline_cursor` 后记录边界，发送失败则立即清除。cursor 之后出现 assistant
+消息或 workflow 时，effect 自动收起占位；所以直接回答、失败回复和路由到业务工作流都能正确结束
+等待状态。
+
+`frontend/src/features/agent/ConversationStream.tsx` 的 `AssistantPending`（L18-L29）渲染带
+`role="status"` 的“正在组织回答”和动态三点；`ConversationStream`（L97-L162）只在尚无真实 streaming
+assistant 时追加这个临时项，避免与未来真实 delta 消息重复。样式位于
+`frontend/src/features/agent/agent-chat.css` 的 `.agent-message__pending*`（L156-L194）、
+`@keyframes agent-message-pending-dot`（L807-L816）和 reduced-motion 分支（L905-L911）：复用现有
+品牌绿、浅蓝和弱文本变量，系统要求减少动画时停止跳动。
+
+如果后续接入真正文本流，关键不是再改 UI，而是把 Answer Runtime 改为 Pydantic AI 的流式 API，
+并按时间或字符批量持久化 `message.delta`。不能每个 token 单独开事务；还必须定义结构化输出与
+可见文本流如何共存、SSE 断线重放如何去重、半段文本失败后如何收敛，以及 Worker 租约失效时如何
+停止流。现有投影、cursor、reducer 和渲染可继续复用。
 
 ## 6. 时间处理
 

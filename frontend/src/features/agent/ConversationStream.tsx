@@ -6,12 +6,26 @@ interface ConversationStreamProps {
   items: TimelineItem[]
   hasMore: boolean
   loading: boolean
+  awaitingResponse: boolean
   latestCursor: number
   onLoadEarlier: () => void
   onAnswerInput: (runId: string, inputKey: string, answer: string) => Promise<void>
   onApprove: (runId: string, approvalId: string) => Promise<void>
   onReject: (runId: string, approvalId: string) => Promise<void>
   onContinueAfterFailure: () => void
+}
+
+function AssistantPending() {
+  return (
+    <span className="agent-message__pending" role="status">
+      <span className="agent-message__pending-dots" aria-hidden="true">
+        <i />
+        <i />
+        <i />
+      </span>
+      <span>正在组织回答</span>
+    </span>
+  )
 }
 
 function TimelineItemView({
@@ -35,6 +49,9 @@ function TimelineItemView({
       )
     }
 
+    const isStreaming = item.message.status === 'streaming'
+    const hasContent = Boolean(item.message.content)
+
     return (
       <div className="agent-message agent-message--assistant">
         {item.message.status === 'failed' ? (
@@ -43,8 +60,14 @@ function TimelineItemView({
           </small>
         ) : (
           <div className="agent-message__content">
-            {item.message.content || (item.message.status === 'streaming' ? '正在回复…' : '')}
-            {item.message.status === 'streaming' ? <span className="agent-message__cursor" /> : null}
+            {isStreaming && !hasContent ? (
+              <AssistantPending />
+            ) : (
+              <>
+                {item.message.content}
+                {isStreaming ? <span className="agent-message__cursor" /> : null}
+              </>
+            )}
           </div>
         )}
       </div>
@@ -75,6 +98,7 @@ export default function ConversationStream({
   items,
   hasMore,
   loading,
+  awaitingResponse,
   latestCursor,
   onLoadEarlier,
   onAnswerInput,
@@ -84,12 +108,15 @@ export default function ConversationStream({
 }: ConversationStreamProps) {
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const shouldStickToBottomRef = useRef(true)
+  const hasStreamingAssistant = items.some(
+    (item) => item.message?.role === 'assistant' && item.message.status === 'streaming',
+  )
 
   useEffect(() => {
     if (!shouldStickToBottomRef.current) return
     const viewport = viewportRef.current
     if (viewport) viewport.scrollTop = viewport.scrollHeight
-  }, [items.length, latestCursor])
+  }, [awaitingResponse, items.length, latestCursor])
 
   return (
     <div
@@ -122,6 +149,13 @@ export default function ConversationStream({
             onReject={onReject}
           />
         ))}
+        {awaitingResponse && !hasStreamingAssistant ? (
+          <div className="agent-message agent-message--assistant">
+            <div className="agent-message__content">
+              <AssistantPending />
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   )

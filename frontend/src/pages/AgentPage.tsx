@@ -44,6 +44,10 @@ export default function AgentPage() {
   const [modelsLoading, setModelsLoading] = useState(true)
   const [modelError, setModelError] = useState<string | null>(null)
   const [selectedModelId, setSelectedModelId] = useState('')
+  const [pendingResponse, setPendingResponse] = useState<{
+    threadId: string
+    afterSequence: number | null
+  } | null>(null)
 
   const timelineItems = useMemo(
     () => selectTimelineItems(state.timeline),
@@ -52,6 +56,20 @@ export default function AgentPage() {
   const currentThread = state.threads.find((thread) => thread.id === threadId)
   const title = state.timeline.thread?.title || currentThread?.title || '新对话'
   const isEmpty = !threadId
+
+  useEffect(() => {
+    if (
+      !pendingResponse ||
+      pendingResponse.threadId !== threadId ||
+      pendingResponse.afterSequence === null
+    ) return
+
+    const responseVisible = timelineItems.some((item) => (
+      item.sequence > pendingResponse.afterSequence! &&
+      (item.message?.role === 'assistant' || Boolean(item.workflow))
+    ))
+    if (responseVisible) setPendingResponse(null)
+  }, [pendingResponse, threadId, timelineItems])
 
   useEffect(() => {
     void loadThreads()
@@ -116,10 +134,16 @@ export default function AgentPage() {
         navigate(`/agent/${thread.id}`)
       }
 
-      await sendTurn(targetThreadId, content, { modelConfigId: selectedModelId })
+      setPendingResponse({ threadId: targetThreadId, afterSequence: null })
+      const response = await sendTurn(targetThreadId, content, { modelConfigId: selectedModelId })
+      setPendingResponse({
+        threadId: targetThreadId,
+        afterSequence: response.timeline_cursor,
+      })
       setMessage('')
       void loadThreads()
     } catch (error) {
+      setPendingResponse(null)
       if (error instanceof AgentApiError && error.status === 400) void loadModels()
       dispatch({
         type: 'SET_ERROR',
@@ -242,6 +266,7 @@ export default function AgentPage() {
             </div>
           ) : (
             <ConversationStream
+              awaitingResponse={pendingResponse?.threadId === threadId}
               hasMore={state.timeline.hasMore}
               items={timelineItems}
               latestCursor={state.timeline.latestCursor}
