@@ -119,6 +119,7 @@ async def _evidence_loop_node(context: ExecutionContext, db: AsyncSession) -> No
                     subject_id=params.get("subject_id"),
                     chapter_ids=params.get("chapter_ids"),
                     limit=params.get("limit", 5),
+                    run_id=context.run_id,
                 )
                 observation = {"total": result.get("total", 0), "status": result.get("status")}
                 collected_evidence.append({

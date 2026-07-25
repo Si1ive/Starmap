@@ -542,3 +542,37 @@
 ### 提交信息
 
 `增强 Agent 等待回复动态反馈`
+
+## 2026-07-25：将 Agent 工作流执行链接入真实动态事件
+
+### 目标
+
+让 Router 分流到 explain、validate、grade 或 plan 后，原有内嵌执行链按真实后端进度动态更新；
+对于 RAG 检索进一步展示实际数据通道、查询内容、命中数量和资料，而不是静态或 mock 数据。
+
+### 实现
+
+- WorkflowEngine 在每个节点开始和结束后提交步骤、Run Event 与 Thread Event，消除整条任务完成后
+  才一次性可见的事务问题。
+- 新增 `workflow.activity.updated` 公开事件和 Alembic ENUM 前向迁移，数据库已升级到最新 head。
+- explain 与 validate 的 `retrieve_knowledge` 在真实 Qdrant+MySQL 混合检索前后写入同一活动 ID。
+- 公开载荷只包含安全的工具名、检索通道、查询范围、命中数和资料摘要，不暴露隐藏推理或正文。
+- timeline snapshot 从持久化 tool events 重建 activities，SSE 断线或刷新后不会丢失执行记录。
+- 前端 reducer 按活动 ID 动态 upsert，InlineWorkflow 展示运行状态、检索参数和命中资料。
+
+### 教学文档
+
+- 全景文档新增 Router 分流到 child workflow、逐节点 commit、真实 RAG、事件投影和 UI 消费的完整链。
+- 细致讲解补充原页面像 mock 的事务根因、公开数据边界和刷新重建机制。
+- 所有新增代码说明均标注仓库相对路径、完整符号及最终精确代码范围。
+
+### 验证
+
+- 完整 Agent 后端回归：91 项通过。
+- 用户端 `npm run build` 通过。
+- 数据库 `alembic current` 返回 `20260725_agent_activity (head)`。
+- `git diff --check` 通过。
+
+### 提交信息
+
+`将 Agent 工作流执行链接入真实动态事件`

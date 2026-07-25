@@ -248,14 +248,16 @@ alembic current
 alembic heads
 ```
 
-如果 current 是 `20260723_agent_model_configs`、heads 是 `20260724_agent_unlimited`，执行：
+如果 current 仍是 `20260723_agent_model_configs`，而 heads 已经包含
+`20260724_agent_unlimited` 或更晚 revision，执行：
 
 ```bash
 alembic upgrade head
 alembic current
 ```
 
-成功结果应为 `20260724_agent_unlimited (head)`。再用 MySQL 核对真实列，而不只看版本表：
+成功结果应与 `alembic heads` 一致；当前仓库为 `20260725_agent_activity (head)`，并且升级路径中必须
+实际经过 `20260724_agent_unlimited`。再用 MySQL 核对真实列，而不只看版本表：
 
 ```sql
 SELECT column_name, is_nullable, column_default

@@ -256,6 +256,39 @@ async def test_timeline_aggregates_child_workflow_into_root_item(db_session):
         ]
     )
     await db_session.flush()
+    await event_store.append(
+        db_session,
+        child.id,
+        "tool.called",
+        {
+            "activity_id": "activity_001",
+            "activity_type": "retrieval",
+            "title": "检索 408 知识库",
+            "detail": "正在查询循环队列",
+            "public_metadata": {
+                "backend": "Qdrant 混合检索 + MySQL 内容索引",
+                "query": "循环队列",
+            },
+        },
+    )
+    await event_store.append(
+        db_session,
+        child.id,
+        "tool.result",
+        {
+            "activity_id": "activity_001",
+            "activity_type": "retrieval",
+            "title": "检索 408 知识库",
+            "detail": "命中 1 份资料",
+            "status": "completed",
+            "public_metadata": {
+                "backend": "Qdrant 混合检索 + MySQL 内容索引",
+                "query": "循环队列",
+                "total": 1,
+                "documents": [{"id": "kp_001", "title": "循环队列"}],
+            },
+        },
+    )
 
     page = await AgentTimelineService(db_session).get_timeline(
         user_id="user_001",
@@ -271,11 +304,43 @@ async def test_timeline_aggregates_child_workflow_into_root_item(db_session):
     assert workflow["title"] == "整理讲解"
     assert workflow["current_step"] == "组织讲解"
     assert workflow["steps"][0]["label"] == "组织讲解"
+    assert workflow["activities"] == [
+        {
+            "id": "activity_001",
+            "activity_type": "retrieval",
+            "title": "检索 408 知识库",
+            "detail": "命中 1 份资料",
+            "status": "completed",
+            "metadata": {
+                "backend": "Qdrant 混合检索 + MySQL 内容索引",
+                "query": "循环队列",
+                "total": 1,
+                "documents": [{"id": "kp_001", "title": "循环队列"}],
+            },
+            "started_at": workflow["activities"][0]["started_at"],
+            "completed_at": workflow["activities"][0]["completed_at"],
+        }
+    ]
     assert workflow["pending_input"]["input_key"] == "scope"
     assert workflow["pending_input"]["run_id"] == child.id
     assert workflow["pending_approval"]["id"] == "approval_001"
     assert workflow["pending_approval"]["run_id"] == child.id
     assert workflow["artifacts"][0]["type"] == "message"
+
+    activity_events = await thread_event_store.get_events(
+        db_session,
+        "thread_001",
+        after_sequence=creation.timeline_cursor,
+        limit=50,
+    )
+    projected_activities = [
+        event for event in activity_events
+        if event.event_type == "workflow.activity.updated"
+    ]
+    assert [event.payload["activity"]["status"] for event in projected_activities] == [
+        "running",
+        "completed",
+    ]
 
 
 @pytest.mark.asyncio

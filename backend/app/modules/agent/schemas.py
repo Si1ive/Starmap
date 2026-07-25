@@ -163,6 +163,17 @@ class WorkflowStepView(BaseModel):
     completed_at: Optional[UTCDateTime]
 
 
+class WorkflowActivityView(BaseModel):
+    id: str
+    activity_type: str
+    title: str
+    detail: Optional[str]
+    status: str
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    started_at: UTCDateTime
+    completed_at: Optional[UTCDateTime]
+
+
 class WorkflowView(BaseModel):
     """供聊天界面直接渲染的 workflow 投影。"""
 
@@ -173,6 +184,7 @@ class WorkflowView(BaseModel):
     current_step: Optional[str]
     progress: WorkflowProgressView
     steps: List[WorkflowStepView] = Field(default_factory=list)
+    activities: List[WorkflowActivityView] = Field(default_factory=list)
     pending_input: Optional[Dict[str, Any]] = None
     pending_approval: Optional[Dict[str, Any]] = None
     artifacts: List[Dict[str, Any]] = Field(default_factory=list)

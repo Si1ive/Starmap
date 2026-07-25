@@ -160,6 +160,17 @@ export interface WorkflowArtifactView {
   created_at: string
 }
 
+export interface WorkflowActivityView {
+  id: string
+  activity_type: string
+  title: string
+  detail: string | null
+  status: string
+  metadata: Record<string, unknown>
+  started_at: string
+  completed_at: string | null
+}
+
 export interface WorkflowView {
   root_run_id: string
   status: string
@@ -168,6 +179,7 @@ export interface WorkflowView {
   current_step: string | null
   progress: WorkflowProgressView
   steps: WorkflowStepView[]
+  activities: WorkflowActivityView[]
   pending_input: WorkflowInputView | null
   pending_approval: WorkflowApprovalView | null
   artifacts: WorkflowArtifactView[]
@@ -240,6 +252,7 @@ export const THREAD_EVENT_TYPES = [
   'workflow.failed',
   'workflow.cancelled',
   'workflow.step.updated',
+  'workflow.activity.updated',
   'workflow.artifact.created',
 ] as const
 

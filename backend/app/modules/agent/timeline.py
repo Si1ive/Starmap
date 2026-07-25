@@ -16,6 +16,7 @@ from .events import event_store
 from .models import (
     AgentApproval,
     AgentArtifact,
+    AgentEvent,
     AgentInput,
     AgentMessage,
     AgentRun,
@@ -421,6 +422,7 @@ class AgentTimelineService:
         artifacts = await self._load_grouped(
             AgentArtifact, AgentArtifact.run_id, run_ids
         )
+        events = await self._load_grouped(AgentEvent, AgentEvent.run_id, run_ids)
 
         grouped_runs: dict[str, list[AgentRun]] = {
             root_id: [] for root_id in root_run_ids
@@ -452,6 +454,10 @@ class AgentTimelineService:
             group_artifacts = [
                 item for run_id in group_run_ids for item in artifacts.get(run_id, [])
             ]
+            group_events = [
+                item for run_id in group_run_ids for item in events.get(run_id, [])
+            ]
+            group_events.sort(key=lambda event: (event.created_at, event.id))
 
             pending_input = next(
                 (item for item in reversed(group_inputs) if item.status == "pending"),
@@ -482,6 +488,7 @@ class AgentTimelineService:
                     "total": len(group_steps),
                 },
                 "steps": [self._step_view(step) for step in group_steps],
+                "activities": self._activity_views(group_events),
                 "pending_input": (
                     self._input_view(pending_input) if pending_input else None
                 ),
@@ -495,6 +502,40 @@ class AgentTimelineService:
                 "updated_at": max(run.updated_at for run in group),
             }
         return views
+
+    @staticmethod
+    def _activity_views(events: list[AgentEvent]) -> list[dict[str, Any]]:
+        activities: dict[str, dict[str, Any]] = {}
+        order: list[str] = []
+        for event in events:
+            if event.event_type not in {"tool.called", "tool.result"}:
+                continue
+            payload = event.payload or {}
+            activity_id = str(payload.get("activity_id") or f"event_{event.id}")
+            if activity_id not in activities:
+                order.append(activity_id)
+                activities[activity_id] = {
+                    "id": activity_id,
+                    "activity_type": str(payload.get("activity_type") or "tool"),
+                    "title": str(payload.get("title") or "调用工具"),
+                    "detail": payload.get("detail"),
+                    "status": "running",
+                    "metadata": payload.get("public_metadata") or {},
+                    "started_at": payload.get("started_at") or event.created_at,
+                    "completed_at": None,
+                }
+            current = activities[activity_id]
+            current.update(
+                {
+                    "title": str(payload.get("title") or current["title"]),
+                    "detail": payload.get("detail") or current["detail"],
+                    "metadata": payload.get("public_metadata") or current["metadata"],
+                }
+            )
+            if event.event_type == "tool.result":
+                current["status"] = str(payload.get("status") or "completed")
+                current["completed_at"] = payload.get("completed_at") or event.created_at
+        return [activities[activity_id] for activity_id in order]
 
     async def _load_grouped(
         self, model, run_id_column, run_ids: list[str]

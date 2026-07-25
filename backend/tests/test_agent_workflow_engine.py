@@ -62,7 +62,7 @@ async def db_session():
 
 
 @pytest.mark.asyncio
-async def test_engine_persists_public_step_for_timeline_snapshot(db_session):
+async def test_engine_persists_public_step_for_timeline_snapshot(db_session, monkeypatch):
     thread = AgentThread(
         id="thread_001",
         user_id="user_001",
@@ -107,6 +107,10 @@ async def test_engine_persists_public_step_for_timeline_snapshot(db_session):
         )
     )
 
+    from unittest.mock import AsyncMock
+
+    commit = AsyncMock(wraps=db_session.commit)
+    monkeypatch.setattr(db_session, "commit", commit)
     result = await WorkflowEngine(db_session).execute(
         workflow,
         ExecutionContext(run.id, run.user_id, db_session),
@@ -128,5 +132,6 @@ async def test_engine_persists_public_step_for_timeline_snapshot(db_session):
     )
 
     assert result.status.value == "completed"
+    assert commit.await_count >= 2
     assert persisted_run.current_public_step == "generate_explanation"
     assert page.items[0]["workflow"]["current_step"] == "组织讲解"

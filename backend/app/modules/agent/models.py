@@ -247,6 +247,7 @@ class AgentThreadEvent(Base):
             "workflow.step.updated", "workflow.input.required",
             "workflow.approval.required", "workflow.artifact.created",
             "workflow.completed", "workflow.failed", "workflow.cancelled",
+            "workflow.activity.updated",
         ),
         nullable=False, comment="公开事件类型"
     )

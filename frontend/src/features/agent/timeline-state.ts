@@ -179,12 +179,41 @@ function applyWorkflowEvent(
       ? (stringValue(event.payload.label) ?? current.current_step)
       : current.current_step
 
+  let activities = current.activities ?? []
+  if (event.event_type === 'workflow.activity.updated') {
+    const rawActivity = event.payload.activity
+    const activity = rawActivity && typeof rawActivity === 'object'
+      ? (rawActivity as Record<string, unknown>)
+      : null
+    const activityId = activity ? stringValue(activity.id) : null
+    if (activity && activityId) {
+      const existing = activities.find((item) => item.id === activityId)
+      const metadata = activity.metadata && typeof activity.metadata === 'object'
+        ? (activity.metadata as Record<string, unknown>)
+        : (existing?.metadata ?? {})
+      const nextActivity = {
+        id: activityId,
+        activity_type: stringValue(activity.activity_type) ?? existing?.activity_type ?? 'tool',
+        title: stringValue(activity.title) ?? existing?.title ?? '执行工具',
+        detail: stringValue(activity.detail) ?? existing?.detail ?? null,
+        status: stringValue(activity.status) ?? existing?.status ?? 'running',
+        metadata,
+        started_at: stringValue(activity.started_at) ?? existing?.started_at ?? event.created_at,
+        completed_at: stringValue(activity.completed_at) ?? existing?.completed_at ?? null,
+      }
+      activities = existing
+        ? activities.map((item) => item.id === activityId ? nextActivity : item)
+        : [...activities, nextActivity]
+    }
+  }
+
   return {
     ...state.workflowsByRootRunId,
     [rootRunId]: {
       ...current,
       status,
       current_step: currentStep,
+      activities,
       updated_at: event.created_at,
     },
   }

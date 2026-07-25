@@ -46,6 +46,7 @@ async def _question_discovery_node(context: ExecutionContext, db: AsyncSession) 
         query=query,
         entity_type="question",
         limit=10,
+        run_id=context.run_id,
     )
     
     candidates = result.get("results", [])

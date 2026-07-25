@@ -86,11 +86,18 @@ class WorkflowEngine:
                     "node_type": node.node_type,
                 },
             )
+            # 把步骤开始作为独立、可恢复的公开边界提交。否则 SSE 只能在
+            # 整个工作流结束后一次性看到所有步骤，表现成静态 mock。
+            await self.db.commit()
 
             # 执行节点
             try:
                 result = await node.execute(context, self.db)
-                step.status = result.status.value
+                step.status = (
+                    NodeStatus.COMPLETED.value
+                    if result.status == NodeStatus.WAITING
+                    else result.status.value
+                )
                 step.output_data = result.output
                 step.completed_at = utc_now()
 
@@ -103,7 +110,7 @@ class WorkflowEngine:
                 run.model_call_count = context.model_call_count
 
                 # 发布事件
-                if result.status == NodeStatus.COMPLETED:
+                if result.status in {NodeStatus.COMPLETED, NodeStatus.WAITING}:
                     await event_store.append(
                         self.db,
                         context.run_id,
@@ -112,6 +119,7 @@ class WorkflowEngine:
                             "step_id": step.id,
                             "node_name": node.name,
                             "output": result.output,
+                            "waiting": result.status == NodeStatus.WAITING,
                         },
                     )
                 elif result.status == NodeStatus.FAILED:
@@ -130,6 +138,10 @@ class WorkflowEngine:
                 if result.artifact:
                     context.artifacts.append(result.artifact)
 
+                # 节点结果、步骤状态和公开事件一起提交，刷新与断线重放都
+                # 能恢复到最后一个真实完成节点。
+                await self.db.commit()
+
             except Exception as e:
                 logger.error("节点执行异常", node=node.name, error=str(e))
                 step.status = "failed"
@@ -142,6 +154,7 @@ class WorkflowEngine:
                     "step.failed",
                     {"step_id": step.id, "node_name": node.name, "error": str(e)},
                 )
+                await self.db.commit()
 
                 # 失败时尝试重试
                 if node.max_retries > 0:

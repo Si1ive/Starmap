@@ -26,6 +26,8 @@ RUN_EVENT_TYPES = {
     "step.started": "workflow.step.updated",
     "step.completed": "workflow.step.updated",
     "step.failed": "workflow.step.updated",
+    "tool.called": "workflow.activity.updated",
+    "tool.result": "workflow.activity.updated",
     "artifact.rendered": "workflow.artifact.created",
 }
 
@@ -167,6 +169,25 @@ class ThreadEventStore:
                             source.get("node_name"), "执行步骤"
                         ),
                         "step_status": run_event_type.removeprefix("step."),
+                    }
+                )
+            elif run_event_type in {"tool.called", "tool.result"}:
+                public_payload.update(
+                    {
+                        "activity": {
+                            "id": source.get("activity_id"),
+                            "activity_type": source.get("activity_type", "tool"),
+                            "title": source.get("title", "调用工具"),
+                            "detail": source.get("detail"),
+                            "status": (
+                                source.get("status", "completed")
+                                if run_event_type == "tool.result"
+                                else "running"
+                            ),
+                            "metadata": source.get("public_metadata") or {},
+                            "started_at": source.get("started_at"),
+                            "completed_at": source.get("completed_at"),
+                        }
                     }
                 )
             elif run_event_type == "artifact.rendered":

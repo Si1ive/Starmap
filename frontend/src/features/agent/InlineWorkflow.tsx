@@ -4,11 +4,13 @@ import {
   Check,
   ChevronDown,
   Circle,
+  Database,
   FileText,
   LoaderCircle,
 } from 'lucide-react'
 import type {
   WorkflowArtifactView,
+  WorkflowActivityView,
   WorkflowStepView,
   WorkflowView,
 } from '../../api/agent'
@@ -84,6 +86,49 @@ function ArtifactCard({ artifact }: { artifact: WorkflowArtifactView }) {
       </div>
       {open && detail ? <p className="inline-workflow__artifact-content">{detail}</p> : null}
     </article>
+  )
+}
+
+function ActivityCard({ activity }: { activity: WorkflowActivityView }) {
+  const documents = Array.isArray(activity.metadata.documents)
+    ? activity.metadata.documents.filter(
+      (item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'),
+    )
+    : []
+  const backend = publicText(activity.metadata.backend)
+  const query = publicText(activity.metadata.query)
+  const total = publicText(activity.metadata.total)
+  const running = activity.status === 'running'
+
+  return (
+    <li className={`inline-workflow__activity is-${activity.status}`}>
+      <span className="inline-workflow__activity-icon">
+        {running
+          ? <LoaderCircle className="agent-chat-spin" size={13} />
+          : <Database aria-hidden="true" size={13} />}
+      </span>
+      <div>
+        <strong>{activity.title}</strong>
+        {activity.detail ? <p>{activity.detail}</p> : null}
+        {backend || query ? (
+          <dl>
+            {backend ? <><dt>数据通道</dt><dd>{backend}</dd></> : null}
+            {query ? <><dt>查询内容</dt><dd>{query}</dd></> : null}
+            {total ? <><dt>命中数量</dt><dd>{total}</dd></> : null}
+          </dl>
+        ) : null}
+        {documents.length > 0 ? (
+          <ul className="inline-workflow__sources">
+            {documents.map((document, index) => (
+              <li key={publicText(document.id) || `${activity.id}_${index}`}>
+                <span>{publicText(document.title) || '未命名资料'}</span>
+                {publicText(document.score) ? <small>相关度 {publicText(document.score)}</small> : null}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+    </li>
   )
 }
 
@@ -184,6 +229,17 @@ export default function InlineWorkflow({
           ) : (
             <p>{workflow.summary || '正在安排执行步骤…'}</p>
           )}
+
+          {workflow.activities?.length > 0 ? (
+            <div className="inline-workflow__activity-section">
+              <span>实时执行记录</span>
+              <ol>
+                {workflow.activities.map((activity) => (
+                  <ActivityCard activity={activity} key={activity.id} />
+                ))}
+              </ol>
+            </div>
+          ) : null}
 
           {workflow.pending_input ? (
             <form className="inline-workflow__interaction" onSubmit={(event) => void handleAnswer(event)}>

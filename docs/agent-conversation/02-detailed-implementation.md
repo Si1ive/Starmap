@@ -412,10 +412,11 @@ max_tokens”不会覆盖旧值，而“明确提交 null”会写成无限。OR
 约束，保证降级 DDL 可执行。
 
 2026-07-25 实际保存 500 的根因不是前端丢失字段，而是运行数据库仍停在
-`20260723_agent_model_configs`，比代码要求的 `20260724_agent_unlimited` 落后一个 revision。此时 ORM
+`20260723_agent_model_configs`，比当时修复所需的 `20260724_agent_unlimited` 落后一个 revision。此时 ORM
 会正确发送 SQL `NULL`，但 MySQL 旧列仍是 `NOT NULL`，所以事务在 commit 时回滚，全局异常处理最终
 只向管理端显示“服务器内部错误”。修复必须在后端目录执行 `alembic upgrade head`；本次数据库已
-从旧 revision 正常升级到 `20260724_agent_unlimited (head)`，不能用 `stamp head` 假装执行过 DDL。
+从旧 revision 正常升级到当时的 `20260724_agent_unlimited (head)`，不能用 `stamp head` 假装执行过
+DDL；迁移图后来继续前进到 workflow activity revision，不改变这次 nullable 故障的结论。
 
 启动校验 `backend/app/modules/operations/schema_guard.py` 的 `get_expected_revisions`（L21-L26）从真实
 迁移图读取 head；`verify_database_schema`（L29-L138）除比较 revision、检查必需列和真表外，还查询
@@ -483,6 +484,46 @@ assistant 时追加这个临时项，避免与未来真实 delta 消息重复。
 并按时间或字符批量持久化 `message.delta`。不能每个 token 单独开事务；还必须定义结构化输出与
 可见文本流如何共存、SSE 断线重放如何去重、半段文本失败后如何收敛，以及 Worker 租约失效时如何
 停止流。现有投影、cursor、reducer 和渲染可继续复用。
+
+### 5.13 为什么工作流曾像静态 mock，以及如何变成真实动态执行链
+
+旧实现已经创建真实 `AgentStep` 和 `step.started/completed/failed`，但 `WorkflowEngine.execute` 在同一个
+Worker 事务里跑完整条工作流，只有 `process_run` 退出时才提交。SSE 使用另一数据库 session，无法
+读取未提交事件，所以用户只能在任务结束后一次性看到所有步骤，看起来就像前端把 mock 数组渲染
+出来。问题不在折叠卡片，而在事务可见性与公开事件粒度。
+
+现在 `backend/app/modules/agent/workflows/engine.py` 的 `WorkflowEngine.execute`（L61-L157）把每个节点
+变成独立可恢复边界：步骤开始事件写入后 commit，节点完成、等待或失败后再连同 `AgentStep` 状态和
+输出 commit。等待节点在步骤层记为 completed、在 Run 层进入 waiting，避免把不受数据库 ENUM 支持的
+`waiting` 写进 `agent_steps.status`。这使 `explain/validate/grade/plan` 无论内部执行何种动作，都能先
+动态展示真实节点名称和状态。
+
+仅有“查找相关资料”仍不够回答“正在查哪个库、查什么、命中什么”。项目已有 `tool.called` 和
+`tool.result` Run 事件，本次没有另造一套日志表，而是让
+`backend/app/modules/agent/tools/retrieve_knowledge.py` 的 `retrieve_knowledge`（L19-L176）在调用真实
+`RetrievalService.search_with_outline_expansion` 前后写入同一 `activity_id`。开始事件公开：
+
+- 工具名 `retrieve_knowledge`；
+- 数据通道“Qdrant 混合检索 + MySQL 内容索引”；
+- 截断后的查询词、学科/章节/实体范围和 limit。
+
+完成事件公开命中数量、最多五份资料的 ID/标题/类型/分数和匹配章节；不公开检索正文、API Key、
+系统提示词、Router reason 或模型隐藏推理。`explain._evidence_loop_node` 与
+`validate._question_discovery_node` 都传入真实 run ID，因此讲解检索和候选题检索共用同一观测机制。
+
+`backend/app/modules/agent/thread_events.py` 的 `ThreadEventStore.project_run_event`（L161-L204）只把
+`public_metadata` 投影成 `workflow.activity.updated`。数据库迁移
+`backend/alembic/versions/20260725_agent_activity.py` 的 `upgrade`（L34-L41）扩展 MySQL thread event
+ENUM；本机数据库已经前向升级到 `20260725_agent_activity (head)`。Run 事件负责完整审计，thread
+事件只承载明确允许用户看到的数据，两个边界不能合并。
+
+刷新恢复由 `backend/app/modules/agent/timeline.py` 的 `AgentTimelineService._build_workflow_views` 与
+`AgentTimelineService._activity_views`（L399-L538）完成：读取 child runs 下的 `AgentEvent`，用相同
+activity ID 合并 called/result，重建 running/completed/failed 状态。实时路径由
+`frontend/src/features/agent/timeline-state.ts` 的 `applyWorkflowEvent`（L163-L220）按 ID upsert；最终
+`frontend/src/features/agent/InlineWorkflow.tsx` 的 `ActivityCard`（L92-L133）和实时记录区
+（L218-L242）展示检索通道、查询、数量与资料。这意味着网络断线后不是回到 mock 初始态，而是用
+数据库事实重放。
 
 ## 6. 时间处理
 

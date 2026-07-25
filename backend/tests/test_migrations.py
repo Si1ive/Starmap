@@ -31,7 +31,7 @@ def test_migration_graph_has_single_head():
     config.set_main_option("script_location", str(backend_dir / "alembic"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_heads() == ["20260724_agent_unlimited"]
+    assert scripts.get_heads() == ["20260725_agent_activity"]
 
 
 def test_user_identity_migration_renders_mysql_ddl():
@@ -176,6 +176,26 @@ def test_agent_unlimited_tokens_migration_makes_limit_nullable():
     ddl = output.getvalue()
 
     assert "ALTER TABLE agent_model_configs MODIFY max_tokens INTEGER NULL" in ddl
+
+
+def test_agent_activity_migration_adds_public_event_type():
+    backend_dir = Path(__file__).resolve().parents[1]
+    migration_path = backend_dir / "alembic" / "versions" / "20260725_agent_activity.py"
+    spec = importlib.util.spec_from_file_location("agent_activity_migration", migration_path)
+    assert spec is not None
+    assert spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    output = io.StringIO()
+    context = MigrationContext.configure(
+        dialect=mysql.dialect(),
+        opts={"as_sql": True, "output_buffer": output},
+    )
+    migration.op = Operations(context)
+    migration.upgrade()
+
+    assert "workflow.activity.updated" in output.getvalue()
 
 
 def _load_agent_parent_repair_migration():

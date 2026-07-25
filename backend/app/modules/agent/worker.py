@@ -131,7 +131,9 @@ class AgentWorker:
                     "from": "queued",
                     "to": "running",
                 })
-                await db.flush()
+                # 运行态先提交，随后每个 WorkflowEngine 节点再提交自己的
+                # 公开进度，SSE 才能在长任务执行期间持续读取。
+                await db.commit()
 
             # 获取工作流
             workflow = workflow_registry.get(run.workflow_name)

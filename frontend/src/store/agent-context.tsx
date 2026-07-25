@@ -140,6 +140,7 @@ const PROJECTION_REFRESH_EVENTS = new Set([
   'workflow.failed',
   'workflow.cancelled',
   'workflow.step.updated',
+  'workflow.activity.updated',
   'workflow.artifact.created',
 ])
 const THREAD_RECONNECT_LIMIT = 5
