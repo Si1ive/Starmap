@@ -355,6 +355,10 @@ async def test_business_action_creates_context_bound_inline_workflow(
         attachments=[{"id": "attachment_001", "name": "题目截图.png"}],
         context_refs=[{"type": "question", "id": "question_001"}],
     )
+    creation.run.metadata_json = {
+        **(creation.run.metadata_json or {}),
+        "model_config_id": "model_selected",
+    }
 
     assert await AgentWorker().process_run(db_session, creation.run) is True
 
@@ -369,6 +373,7 @@ async def test_business_action_creates_context_bound_inline_workflow(
     assert child.root_run_id == creation.run.id
     assert child.presentation == "compact"
     assert child.public_title == title
+    assert child.metadata_json["model_config_id"] == "model_selected"
     assert child.metadata_json["context_policy_version"] == "thread-context-v1"
     snapshot = child.metadata_json["context_snapshot"]
     assert snapshot["attachment_refs"][0]["id"] == "attachment_001"

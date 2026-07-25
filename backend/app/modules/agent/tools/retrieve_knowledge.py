@@ -124,7 +124,11 @@ async def retrieve_knowledge(
                     "activity_id": activity_id,
                     "activity_type": "retrieval",
                     "title": "检索 408 知识库",
-                    "detail": f"混合检索完成，命中 {len(simplified)} 份资料",
+                    "detail": (
+                        f"混合检索完成，命中 {len(simplified)} 份资料"
+                        if simplified
+                        else "没有检索到相关文档"
+                    ),
                     "status": "completed",
                     "started_at": utc_isoformat(started_at),
                     "completed_at": utc_isoformat(completed_at),
@@ -161,7 +165,7 @@ async def retrieve_knowledge(
                     "activity_id": activity_id,
                     "activity_type": "retrieval",
                     "title": "检索 408 知识库",
-                    "detail": "知识库检索失败，工作流将按降级策略继续",
+                    "detail": "暂时无法检索相关文档",
                     "status": "failed",
                     "started_at": utc_isoformat(started_at),
                     "completed_at": utc_isoformat(completed_at),

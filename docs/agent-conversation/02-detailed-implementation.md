@@ -535,6 +535,48 @@ activity ID 合并 called/result，重建 running/completed/failed 状态。实�
 （L218-L242）展示检索通道、查询、数量与资料。这意味着网络断线后不是回到 mock 初始态，而是用
 数据库事实重放。
 
+### 5.14 为什么 explain 的 Router 成功但检索和讲解仍缺少凭据
+
+故障 Run `run_2f048308e30544bd9404` 的父 conversation Run 已经通过管理员模型配置成功调用
+`glm-5.2`，但 explain child Run 在资料规划和正文生成时都报 `Missing credentials`。这不是 RAG
+未命中：该 Run 没有任何 `tool.called/tool.result`，唯一 loop turn 在产生动作前就失败。旧
+`ModelAdapter` 只在模块初始化时读取 `OPENAI_MODEL/OPENAI_API_KEY`，不会读取
+`agent_model_configs` 的 API Key、Base URL 和模型名；资料规划异常又被捕获后返回
+`evidence_count=0`，所以用户端曾错误显示“查找相关资料”已完成。
+
+现在模型选择和 explain 调用形成同一条配置链：
+
+| 执行阶段 | 文件 | 符号 | 代码范围 | 入口与关键参数 | 处理、调用关系与副作用 | 错误与最终消费 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 复制模型选择 | `backend/app/modules/agent/workflows/conversation.py` | `_child_context_metadata` | L163-L186 | `AgentRunContext`、父 Run 的 `model_config_id` | 只把配置 ID 放入 child metadata，API Key 仍留在配置表 | ID 由 `_dispatch_workflow_node` 写入 child Run |
+| 创建 child Run | `backend/app/modules/agent/workflows/conversation.py` | `_dispatch_workflow_node` | L189-L234 | Router action、parent/root Run ID、触发消息 | 创建 compact child Run 和 workflow 时间线项；模型 ID 与上下文快照同事务落库 | Worker 后续读取 child Run；幂等键避免重复创建 |
+| 资料规划 | `backend/app/modules/agent/model_runtime/explanation.py` | `ExplanationRuntime.decide` | L62-L101 | 问题、有效资料数、`ExplanationDeps.run_id` | 调用 `open_agent_model` 后执行 Pydantic AI `evidence_decision_agent` | 返回严格的 `LoopDecision`；配置或供应商异常向节点传播 |
+| 绑定模型配置 | `backend/app/modules/agent/model_runtime/config.py` | `open_agent_model` | L165-L217 | child Run ID | 按 `model_config_id` 读取模型、Key、Base URL、Token 和超时，创建独立客户端并写审计元数据 | 不再依赖进程 `OPENAI_API_KEY`；退出时关闭客户端 |
+| 执行 evidence loop | `backend/app/modules/agent/workflows/explain.py` | `_evidence_loop_node` | L40-L156 | 用户问题、模型调用预算、结构化动作 | 首次必须真实检索；每轮决策和 observation 写 `agent_loop_turns`；只有成功且非空结果进入 evidence | 模型异常返回 `NodeResult.failure`，WorkflowEngine 写 `step.failed`；不再假完成 |
+| 公开检索结果 | `backend/app/modules/agent/tools/retrieve_knowledge.py` | `retrieve_knowledge` | L19-L180 | query、范围、limit、run ID | 调用 Qdrant+MySQL 检索并写成对工具事件；正文只在内部返回，公开载荷只含安全摘要 | 零命中显示“没有检索到相关文档”；服务异常显示“暂时无法检索相关文档” |
+| 证据判定 | `backend/app/modules/agent/workflows/explain.py` | `_evidence_gate_node` | L159-L175 | 已过滤的 evidence | 仅非空资料通过；零命中不会被“调用成功”误判成有证据 | 输出公开原因后继续生成，不向用户解释内部容错策略 |
+| 生成讲解 | `backend/app/modules/agent/workflows/explain.py` | `_generate_explanation_node` | L178-L225 | 用户问题、截断后的文档标题和正文 | 无资料时明确禁止伪造引用，再调用 `ExplanationRuntime.generate` | 返回 `ExplanationOutput` 或失败；后续 citation gate 消费 |
+| 结构化正文 | `backend/app/modules/agent/model_runtime/explanation.py` | `ExplanationRuntime.generate` | L103-L143 | 问题、evidence text、同一 child Run ID | 再次通过 `open_agent_model` 使用同一模型配置，输出提纲、Markdown、引用和总结 | `_render_artifact_node` 最终持久化 explanation artifact |
+
+“至少检索一次”是服务端不变量，不只依赖提示词。`_evidence_loop_node` 在尚未发生检索时，会把
+模型过早返回的 `finish/need_scope` 收敛为使用原问题的首次查询；之后仍允许模型根据有效资料数决定
+是否继续。检索返回 `status=success` 但 `results=[]` 时，只记录检索已发生，不加入有效 evidence，
+因此 evidence gate 能准确区分“查过但没有文档”和“已有可用于讲解的资料”。
+
+没有文档不等于整个讲解必须失败。用户已经请求解释知识点时，系统仍可使用可靠的模型通用知识生成
+正文，但 `ExplanationRuntime` 明确要求不伪造引用；用户在实时执行记录中看到的是具体、可理解的
+“没有检索到相关文档”，而不是“降级”“fallback”或内部异常策略。检索服务本身异常则使用另一条
+公开文案，管理员仍可从 Run Event、loop turn 和服务日志查看真实错误。
+
+回归测试定位如下：
+
+| 验证目标 | 文件 | 符号 | 代码范围 |
+| --- | --- | --- | --- |
+| 结构化决策/正文与 Run 绑定模型 | `backend/tests/test_agent_explanation_runtime.py` | `test_explanation_runtime_returns_structured_decision_and_content` / `test_explanation_runtime_uses_run_bound_agent_model_config` | L22-L57 / L60-L97 |
+| 模型错误、零命中、首次检索和正文生成 | `backend/tests/test_agent_explain_workflow.py` | `test_evidence_loop_reports_model_failure_instead_of_false_completion` 至 `test_generate_explanation_uses_structured_runtime` | L47-L167 |
+| 用户可读的零命中与异常提示 | `backend/tests/test_agent_retrieve_activity.py` | `test_retrieve_knowledge_explains_empty_result_without_internal_jargon` / `test_retrieve_knowledge_failure_hides_internal_degradation_wording` | L54-L84 / L87-L107 |
+| child Run 继承模型 | `backend/tests/test_agent_conversation_workflow.py` | `test_business_action_creates_context_bound_inline_workflow` | L323-L381 |
+
 ## 6. 时间处理
 
 ### 6.1 为什么历史时间刚好差几个小时
@@ -601,7 +643,7 @@ Agent 页面仍保留 `--chat-*` 语义变量，目的是让组件样式能表�
 }
 ```
 
-页面不再声明局部字体栈，正文直接继承全��无衬线字体；页面标题和空状态标题使用全局
+页面不再声明局部字体栈，正文直接继承全局无衬线字体；页面标题和空状态标题使用全局
 `--serif`，运行元信息使用 `--mono`。用户气泡改用 `--blue-soft`，发送按钮与 focus 状态使用
 绿色系 `--blue` / `--blue-dark`，等待交互和错误区域分别使用 `--amber-soft`、`--red-soft`。
 边框统一来自 `--line` / `--line-strong`，控件圆角收敛到项目常见的 6–10px。

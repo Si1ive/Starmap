@@ -160,9 +160,13 @@ async def _clarify_node(context: ExecutionContext, db: AsyncSession) -> NodeResu
     )
 
 
-def _child_context_metadata(agent_context: AgentRunContext) -> dict[str, Any]:
+def _child_context_metadata(
+    agent_context: AgentRunContext,
+    *,
+    model_config_id: str | None,
+) -> dict[str, Any]:
     """只向 child run 传递经过上下文策略筛选后的引用和审计信息。"""
-    return {
+    metadata = {
         "context_policy_version": agent_context.policy_version,
         "context_snapshot": {
             "selected_message_ids": agent_context.selected_message_ids,
@@ -177,6 +181,9 @@ def _child_context_metadata(agent_context: AgentRunContext) -> dict[str, Any]:
             "token_budget": agent_context.token_budget,
         },
     }
+    if model_config_id:
+        metadata["model_config_id"] = model_config_id
+    return metadata
 
 
 async def _dispatch_workflow_node(
@@ -208,7 +215,10 @@ async def _dispatch_workflow_node(
         root_run_id=parent_run.root_run_id or parent_run.id,
         presentation="compact",
         public_title=route["title"],
-        metadata_json=_child_context_metadata(agent_context),
+        metadata_json=_child_context_metadata(
+            agent_context,
+            model_config_id=(parent_run.metadata_json or {}).get("model_config_id"),
+        ),
     )
     await AgentTimelineService(db).ensure_workflow_item(
         thread_id=parent_run.thread_id,
