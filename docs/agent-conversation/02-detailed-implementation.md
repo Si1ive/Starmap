@@ -411,6 +411,21 @@ max_tokens”不会覆盖旧值，而“明确提交 null”会写成无限。OR
 只把列改为 nullable，不改写已有数值；`downgrade`（L30-L43）先把无限记录恢复为 2000，再恢复非空
 约束，保证降级 DDL 可执行。
 
+2026-07-25 实际保存 500 的根因不是前端丢失字段，而是运行数据库仍停在
+`20260723_agent_model_configs`，比代码要求的 `20260724_agent_unlimited` 落后一个 revision。此时 ORM
+会正确发送 SQL `NULL`，但 MySQL 旧列仍是 `NOT NULL`，所以事务在 commit 时回滚，全局异常处理最终
+只向管理端显示“服务器内部错误”。修复必须在后端目录执行 `alembic upgrade head`；本次数据库已
+从旧 revision 正常升级到 `20260724_agent_unlimited (head)`，不能用 `stamp head` 假装执行过 DDL。
+
+启动校验 `backend/app/modules/operations/schema_guard.py` 的 `get_expected_revisions`（L21-L26）从真实
+迁移图读取 head；`verify_database_schema`（L29-L138）除比较 revision、检查必需列和真表外，还查询
+`information_schema.columns.is_nullable`，要求 `AgentModelConfigRecord.max_tokens` 对应列允许 NULL。
+因此今后即使有人错误 stamp 或人工改回非空约束，后端也会在启动时给出执行迁移的明确提示，而
+不是等管理员保存无限配置时再返回泛化 500。回归测试位于
+`backend/tests/test_schema_guard.py` 的
+`test_schema_guard_rejects_non_nullable_agent_model_token_limit`（L104-L129）和
+`test_schema_guard_reads_the_project_migration_heads`（L132-L133），分别锁定真实约束和当前 head。
+
 运行时 `AgentModelConfig.model_settings`（`backend/app/modules/agent/model_runtime/config.py` L29-L51）
 只在值非空时加入 `max_tokens`。Router 和 Answer 分别在
 `backend/app/modules/agent/model_runtime/router.py` 的 `RouterRuntime.route`（L75-L100）以及
@@ -422,7 +437,7 @@ max_tokens”不会覆盖旧值，而“明确提交 null”会写成无限。OR
 `BaseLLMClient._chat`（L111-L137）：前者区分缺失和显式空值，后者按条件构造 SDK 参数。
 `OutlineLLMClient.__init__`（L154-L160）也只在字段缺失时套用 16000，显式 `null` 不会被覆盖。
 
-排障时先在管理端确认表格显示“无限”，再检查数据库值是否为 SQL `NULL`，最后查看调用监控中的
+排障时先在管理端确认表格显示“不设上限”，再检查数据库值是否为 SQL `NULL`，最后查看调用监控中的
 请求参数是否不存在 `max_tokens`。若仍看到越界数字，说明运行实例尚未更新、配置未保存成功，或
 调用走了另一条仍带硬编码预算的任务链路；不要通过 `alembic stamp head` 或修改供应商错误响应规避。
 

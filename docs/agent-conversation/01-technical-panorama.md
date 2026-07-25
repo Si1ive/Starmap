@@ -95,13 +95,14 @@ Redis 在当前 Agent 核心执行链路中不是事实来源。Agent 的可靠�
 | 执行序号 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `docker-compose.podman.yml` | `services.backend.command` | L190-L190 | 后端容器启动 | 先执行 `alembic upgrade head`，成功后才启动 Uvicorn | 数据库推进到当前 head；迁移失败则后端不启动 | `20260723_agent_model_configs.upgrade` |
-| 2 | `backend/alembic/versions/20260723_agent_model_configs.py` | `upgrade` | L21-L90 | 旧数据库位于 `20260723_repair_agent_parent` | 创建 `agent_model_configs`、唯一约束和索引，并从启用的 `system_configs.llm` 回填默认模型 | 新表和可选默认记录落库，Alembic revision 前移 | `lifespan` |
-| 3 | `backend/app/main.py` | `lifespan` | L77-L107 | FastAPI 进程启动 | 连接 MySQL，并在调度器、日志 sink 和 Worker 启动前执行结构校验 | 结构正确则继续启动；版本落后或缺表则关闭连接并抛出 `DatabaseSchemaError` | `verify_database_schema` |
-| 4 | `backend/app/modules/operations/schema_guard.py` | `verify_database_schema` | L28-L104 | 当前 `AsyncSession` 与迁移图 heads | 比较 `alembic_version`，检查 `agent_runs` 必需列和 `agent_model_configs` 真表 | 返回当前 revisions；结构漂移时明确提示执行 `alembic upgrade head` | Agent 页面加载模型 |
-| 5 | `frontend/src/pages/AgentPage.tsx` | `AgentPage.loadModels` | L60-L77 | Agent 页面挂载或用户点击重试 | 请求公开模型列表，保留仍有效的选择，否则选默认项或第一项 | 更新 `models`、`selectedModelId`、loading 和错误状态 | `listSelectableAgentModels` |
-| 6 | `frontend/src/api/agent.ts` | `listSelectableAgentModels` | L345-L349 | 浏览器认证态 | 请求 `GET /api/v1/app/agent/models` | 返回公开模型数组，不包含 API Key、Base URL 等凭据 | `list_selectable_models` |
-| 7 | `backend/app/modules/agent/router.py` | `list_selectable_models` | L55-L63 | 当前用户和请求级数据库 session | 创建配置服务并查询公开记录 | 返回 `{items}` | `AgentModelConfigService.list_public` |
-| 8 | `backend/app/modules/agent/model_configs.py` | `AgentModelConfigService.list_public` | L168-L180 | `agent_model_configs` 表 | 筛选 `online=true` 且 `selectable=true`，默认模型优先、显示名称次序 | ORM 记录列表 | `AgentPage.loadModels` 消费响应 |
+| 2 | `backend/alembic/versions/20260723_agent_model_configs.py` | `upgrade` | L21-L90 | 旧数据库位于 `20260723_repair_agent_parent` | 创建 `agent_model_configs`、唯一约束和索引，并从启用的 `system_configs.llm` 回填默认模型 | 新表和可选默认记录落库，Alembic revision 前移 | `20260724_agent_unlimited_tokens.upgrade` |
+| 3 | `backend/alembic/versions/20260724_agent_unlimited_tokens.py` | `upgrade` | L20-L27 | 数据库已存在 `agent_model_configs` | 把 `max_tokens` 从 `NOT NULL` 改为 nullable，保留已有数字 | 数据库可持久化代表“不设上限”的 SQL `NULL` | `lifespan` |
+| 4 | `backend/app/main.py` | `lifespan` | L77-L107 | FastAPI 进程启动 | 连接 MySQL，并在调度器、日志 sink 和 Worker 启动前执行结构校验 | 结构正确则继续启动；版本落后或约束漂移则关闭连接并抛出 `DatabaseSchemaError` | `verify_database_schema` |
+| 5 | `backend/app/modules/operations/schema_guard.py` | `verify_database_schema` | L29-L138 | 当前 `AsyncSession` 与迁移图 heads | 比较 `alembic_version`，检查 `agent_runs` 必需列、`agent_model_configs` 真表及 `max_tokens` nullable 约束 | 返回当前 revisions；结构漂移时明确提示执行 `alembic upgrade head` | Agent 页面加载模型 |
+| 6 | `frontend/src/pages/AgentPage.tsx` | `AgentPage.loadModels` | L60-L77 | Agent 页面挂载或用户点击重试 | 请求公开模型列表，保留仍有效的选择，否则选默认项或第一项 | 更新 `models`、`selectedModelId`、loading 和错误状态 | `listSelectableAgentModels` |
+| 7 | `frontend/src/api/agent.ts` | `listSelectableAgentModels` | L345-L349 | 浏览器认证态 | 请求 `GET /api/v1/app/agent/models` | 返回公开模型数组，不包含 API Key、Base URL 等凭据 | `list_selectable_models` |
+| 8 | `backend/app/modules/agent/router.py` | `list_selectable_models` | L55-L63 | 当前用户和请求级数据库 session | 创建配置服务并查询公开记录 | 返回 `{items}` | `AgentModelConfigService.list_public` |
+| 9 | `backend/app/modules/agent/model_configs.py` | `AgentModelConfigService.list_public` | L168-L180 | `agent_model_configs` 表 | 筛选 `online=true` 且 `selectable=true`，默认模型优先、显示名称次序 | ORM 记录列表 | `AgentPage.loadModels` 消费响应 |
 
 这里的关键边界是：模型选择器不是静态配置。页面每次加载都会查询真实数据库；因此出现
 MySQL `1146 Table '...agent_model_configs' doesn't exist` 时，根因在数据库迁移状态，不在下拉框

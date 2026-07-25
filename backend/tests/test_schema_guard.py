@@ -21,7 +21,14 @@ async def test_schema_guard_accepts_database_at_all_alembic_heads():
     ]
     tables_result = Mock()
     tables_result.scalars.return_value.all.return_value = ["agent_model_configs"]
-    session.execute.side_effect = [revision_result, columns_result, tables_result]
+    nullable_result = Mock()
+    nullable_result.all.return_value = [("max_tokens", "YES")]
+    session.execute.side_effect = [
+        revision_result,
+        columns_result,
+        tables_result,
+        nullable_result,
+    ]
 
     revisions = await verify_database_schema(
         session,
@@ -94,5 +101,33 @@ async def test_schema_guard_rejects_missing_agent_model_configs_table():
         )
 
 
+@pytest.mark.asyncio
+async def test_schema_guard_rejects_non_nullable_agent_model_token_limit():
+    session = AsyncMock()
+    revision_result = Mock()
+    revision_result.scalars.return_value.all.return_value = ["current_revision"]
+    columns_result = Mock()
+    columns_result.scalars.return_value.all.return_value = [
+        "parent_run_id",
+        "root_run_id",
+    ]
+    tables_result = Mock()
+    tables_result.scalars.return_value.all.return_value = ["agent_model_configs"]
+    nullable_result = Mock()
+    nullable_result.all.return_value = [("max_tokens", "NO")]
+    session.execute.side_effect = [
+        revision_result,
+        columns_result,
+        tables_result,
+        nullable_result,
+    ]
+
+    with pytest.raises(DatabaseSchemaError, match="max_tokens"):
+        await verify_database_schema(
+            session,
+            expected_revisions={"current_revision"},
+        )
+
+
 def test_schema_guard_reads_the_project_migration_heads():
-    assert get_expected_revisions() == frozenset({"20260723_agent_model_configs"})
+    assert get_expected_revisions() == frozenset({"20260724_agent_unlimited"})

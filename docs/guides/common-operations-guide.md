@@ -226,6 +226,49 @@ GET /api/v1/app/agent/models
 head 但表仍缺失，说明数据库曾被错误 stamp 或结构被人工删除；应先备份数据库，再根据完整
 迁移日志修复版本与真实结构的漂移。应用启动校验会主动检查该表是否存在。
 
+### Agent 模型“不设上限”保存 500 专项修复
+
+适用现象：`agent_model_configs` 表已经存在，但 Agent 模型配置选择“不设上限”后保存，管理端只显示
+“服务器内部错误”；后端日志包含 `IntegrityError`、事务回滚，或提示 `max_tokens` 不能为 NULL。
+
+代码定位：
+
+| 阶段 | 文件 | 符号 | 代码范围 | 作用 |
+| --- | --- | --- | --- | --- |
+| nullable 前向迁移 | `backend/alembic/versions/20260724_agent_unlimited_tokens.py` | `upgrade` | L20-L27 | 把 `agent_model_configs.max_tokens` 改为允许 SQL `NULL` |
+| 启动期真实约束检查 | `backend/app/modules/operations/schema_guard.py` | `verify_database_schema` | L29-L138 | 同时核对 Alembic head、真表与 `max_tokens.is_nullable`，发现漂移时中止启动 |
+| 约束与 head 回归测试 | `backend/tests/test_schema_guard.py` | `test_schema_guard_rejects_non_nullable_agent_model_token_limit` / `test_schema_guard_reads_the_project_migration_heads` | L104-L133 | 防止后续迁移后遗漏真实列约束或仍断言旧 head |
+
+先比较当前 revision 与代码 head：
+
+```bash
+cd backend
+source venv/bin/activate
+alembic current
+alembic heads
+```
+
+如果 current 是 `20260723_agent_model_configs`、heads 是 `20260724_agent_unlimited`，执行：
+
+```bash
+alembic upgrade head
+alembic current
+```
+
+成功结果应为 `20260724_agent_unlimited (head)`。再用 MySQL 核对真实列，而不只看版本表：
+
+```sql
+SELECT column_name, is_nullable, column_default
+FROM information_schema.columns
+WHERE table_schema = DATABASE()
+  AND table_name = 'agent_model_configs'
+  AND column_name = 'max_tokens';
+```
+
+`is_nullable` 必须为 `YES`。随后重新保存“不设上限”，记录的 `max_tokens` 应为 SQL `NULL`。若
+Alembic 已是 head 但列仍为 `NO`，说明版本记录和真实结构发生漂移；先备份并调查迁移日志，不得用
+`stamp head`，也不要把 null 临时改成超大数字，否则仍可能触发供应商输出上限校验。
+
 ### 禁止使用 `stamp head` 代替修复
 
 以下命令不会执行任何建表或加字段操作：

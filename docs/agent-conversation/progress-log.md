@@ -479,3 +479,35 @@
 ### 提交信息
 
 `统一 LLM 输出配额控件设计`
+
+## 2026-07-25：修复 Agent 无限 Token 保存数据库漂移
+
+### 目标
+
+修复 Agent 模型选择“不设上限”后保存返回“服务器内部错误”的问题，并让同类列约束漂移在后端
+启动阶段被明确发现。
+
+### 根因与实现
+
+- 实际数据库停在 `20260723_agent_model_configs`，落后最新 `20260724_agent_unlimited` 一个 revision，
+  导致 ORM 写入 `NULL` 时触发旧 `NOT NULL` 约束。
+- 使用现有 Alembic 前向迁移升级真实数据库到 `20260724_agent_unlimited (head)`，未使用 stamp。
+- 启动期结构校验新增 `agent_model_configs.max_tokens` nullable 检查，版本表与真实约束漂移时中止启动。
+- 更新 schema guard 的迁移 head 断言，并新增非 nullable 漂移回归测试。
+- 通用操作指南补充该 500 的诊断命令、真实列核对方式和安全修复步骤。
+
+### 教学文档
+
+- 全景文档补齐建表迁移、nullable 迁移、FastAPI lifespan 与真实结构校验的启动链。
+- 细致讲解记录本次 revision 差异、事务回滚原因、前向迁移与启动期防护。
+- 所有新增代码说明均标注仓库相对路径、完整符号及最终精确代码范围。
+
+### 验证
+
+- 数据库 `alembic current` 返回 `20260724_agent_unlimited (head)`。
+- schema guard、迁移、模型配置和无限 Token 相关测试：43 项通过。
+- `git diff --check` 通过。
+
+### 提交信息
+
+`修复 Agent 无限 Token 保存数据库漂移`

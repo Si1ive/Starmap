@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 BACKEND_DIR = Path(__file__).resolve().parents[3]
 AGENT_RUN_WORKER_COLUMNS = frozenset({"parent_run_id", "root_run_id"})
 AGENT_REQUIRED_TABLES = frozenset({"agent_model_configs"})
+AGENT_MODEL_NULLABLE_COLUMNS = frozenset({"max_tokens"})
 
 
 class DatabaseSchemaError(RuntimeError):
@@ -99,6 +100,39 @@ async def verify_database_schema(
             "数据库结构与 Alembic 版本记录不一致："
             f"缺少 Agent 数据表 [{missing_label}]；"
             "请先在 backend 目录执行 `alembic upgrade head`。"
+        )
+
+    try:
+        result = await session.execute(
+            text(
+                "SELECT column_name, is_nullable "
+                "FROM information_schema.columns "
+                "WHERE table_schema = DATABASE() "
+                "AND table_name = 'agent_model_configs' "
+                "AND column_name IN ('max_tokens')"
+            )
+        )
+        nullable_columns = {
+            str(row[0]): str(row[1]).upper() == "YES"
+            for row in result.all()
+        }
+    except Exception as exc:
+        raise DatabaseSchemaError(
+            "无法校验 agent_model_configs 列约束；"
+            "请先在 backend 目录执行 `alembic upgrade head`。"
+        ) from exc
+
+    invalid_nullable_columns = {
+        column
+        for column in AGENT_MODEL_NULLABLE_COLUMNS
+        if not nullable_columns.get(column, False)
+    }
+    if invalid_nullable_columns:
+        invalid_label = ", ".join(sorted(invalid_nullable_columns))
+        raise DatabaseSchemaError(
+            "数据库结构与 Alembic 版本记录不一致："
+            "agent_model_configs 以下列必须允许 NULL "
+            f"[{invalid_label}]；请先在 backend 目录执行 `alembic upgrade head`。"
         )
 
     return current
