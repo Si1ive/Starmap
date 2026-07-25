@@ -1,6 +1,6 @@
 """
 retrieve_knowledge 工具适配器
-+
+
 调用 RetrievalService 的 RAG 检索，封装为 Tool。
 """
 
@@ -14,6 +14,59 @@ from ..time_utils import utc_isoformat, utc_now
 from .registry import ToolRegistry, ToolSpec
 
 logger = get_logger(__name__)
+
+
+def _agent_result_title(item: Dict[str, Any]) -> str:
+    entity = item.get("entity") or {}
+    title = item.get("title") or entity.get("title")
+    if isinstance(title, str) and title.strip():
+        return title.strip()
+    content_text = str(item.get("content_text") or "").strip()
+    if content_text:
+        return content_text[:80]
+    return "未命名资料"
+
+
+def _normalize_agent_result(item: Dict[str, Any]) -> Dict[str, Any]:
+    entity = item.get("entity") or {}
+    return {
+        "entity_id": item.get("entity_id"),
+        "entity_type": item.get("entity_type"),
+        "entity_title": _agent_result_title(item),
+        "entity": {
+            "id": entity.get("id") or item.get("entity_id"),
+            "type": entity.get("type") or item.get("entity_type"),
+            "title": entity.get("title") or _agent_result_title(item),
+            "review_status": entity.get("review_status"),
+            "status": entity.get("status"),
+        },
+        "segment_id": item.get("segment_id"),
+        "segment_type": item.get("segment_type"),
+        "content_text": str(item.get("content_text") or "")[:500],
+        "context_text": str(item.get("context_text") or "")[:800],
+        "score": item.get("score"),
+        "subject_id": item.get("subject_id"),
+        "chapter_ids": item.get("chapter_ids") or [],
+        "source": item.get("source") or {},
+        "question_meta": item.get("question_meta"),
+        "knowledge_point_meta": item.get("knowledge_point_meta"),
+    }
+
+
+def _sort_agent_results(
+    items: List[Dict[str, Any]],
+    *,
+    entity_type: Optional[str],
+) -> List[Dict[str, Any]]:
+    if entity_type is not None:
+        return items
+
+    def sort_key(item: Dict[str, Any]) -> tuple[int, float]:
+        priority = 0 if item.get("entity_type") == "knowledge_point" else 1
+        score = float(item.get("score") or 0.0)
+        return (priority, -score)
+
+    return sorted(items, key=sort_key)
 
 
 async def retrieve_knowledge(
@@ -84,17 +137,11 @@ async def retrieve_knowledge(
             limit=limit,
         )
         
-        # 精简结果，只保留关键字段
-        simplified = []
-        for item in result.get("results", []):
-            simplified.append({
-                "id": item.get("id"),
-                "title": item.get("title"),
-                "content": item.get("content", "")[:500],  # 截断
-                "source_type": item.get("source_type"),
-                "score": item.get("score"),
-                "entity_type": item.get("entity_type"),
-            })
+        normalized = [
+            _normalize_agent_result(item)
+            for item in result.get("results", [])
+        ]
+        simplified = _sort_agent_results(normalized, entity_type=entity_type)
         
         response = {
             "status": "success",
@@ -107,11 +154,11 @@ async def retrieve_knowledge(
         if run_id:
             document_summaries = [
                 {
-                    "id": item.get("id"),
-                    "title": item.get("title") or "未命名资料",
-                    "source_type": item.get("source_type"),
+                    "id": item.get("entity_id"),
+                    "title": item.get("entity_title") or "未命名资料",
                     "entity_type": item.get("entity_type"),
                     "score": item.get("score"),
+                    "source": item.get("source") or {},
                 }
                 for item in simplified[:5]
             ]

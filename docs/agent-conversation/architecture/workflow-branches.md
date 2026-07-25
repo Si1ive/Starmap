@@ -18,23 +18,23 @@
 
 | 执行阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 资料范围加载 | `backend/app/modules/agent/workflows/explain.py` | `_load_scope_node` | L25-L37 | child run context | 读取允许学科与章节范围并写入上下文 | `scope` | `_evidence_loop_node` |
+| 资料范围加载 | `backend/app/modules/agent/workflows/explain.py` | `_load_scope_node` | L26-L37 | child run context | 读取允许学科与章节范围并写入上下文 | `scope` | `_evidence_loop_node` |
 | 有界资料探索 | `backend/app/modules/agent/workflows/explain.py` | `_evidence_loop_node` | L40-L156 | 用户问题、预算和 child run ID | 首次无论模型是否想结束都至少检索一次；只把成功且非空结果记为 evidence；每轮决策和 observation 写 `agent_loop_turns` | 有效 evidence、`retrieval_attempted` | `ExplanationRuntime.decide` / `retrieve_knowledge` |
-| 检索工具 | `backend/app/modules/agent/tools/retrieve_knowledge.py` | `retrieve_knowledge` | L19-L181 | explain/validate 的 query、范围、run ID | 检索前写 `tool.called`，完成后写 `tool.result`，公开零命中或异常的安全提示 | 公开活动 + 内部检索结果 | `RetrievalService.search_with_outline_expansion` |
+| 检索工具 | `backend/app/modules/agent/tools/retrieve_knowledge.py` | `retrieve_knowledge` | L72-L227 | explain/validate 的 query、范围、run ID | 检索前写 `tool.called`，完成后统一返回带 `entity`/`question_meta`/`knowledge_point_meta` 的 Agent DTO；公开零命中或异常的安全提示 | 公开活动 + 内部检索结果 | `RetrievalService.search_with_outline_expansion` |
 | 零证据门禁 | `backend/app/modules/agent/workflows/explain.py` | `_evidence_gate_node` | L159-L175 | 已筛选 evidence | 非空资料直接通过；零命中记录“没有检索到相关文档”，但继续生成通用知识回答 | `gate_passed` 与原因 | `_generate_explanation_node` |
-| 结构化讲解生成 | `backend/app/modules/agent/workflows/explain.py` | `_generate_explanation_node` | L178-L225 | 用户问题和证据列表 | 截断资料正文；无资料时明确禁止伪造引用；调用结构化讲解运行时 | `ExplanationOutput` | `_citation_gate_node` |
-| 正文/引用校验 | `backend/app/modules/agent/workflows/explain.py` | `_citation_gate_node` | L228-L241 | 结构化讲解结果 | 只要正文非空即通过，引用列表可为空 | 可渲染 explanation | `_render_artifact_node` |
-| Artifact 渲染与结束 | `backend/app/modules/agent/workflows/explain.py` | `_render_artifact_node`、`_completed_node` | L243-L270 | outline、body、citations、summary | 组装 explanation artifact，并把最终 artifact 挂到 NodeResult 和上下文 | `agent_artifacts`、completed run | `AgentWorker.process_run` |
+| 结构化讲解生成 | `backend/app/modules/agent/workflows/explain.py` | `_generate_explanation_node` | L178-L230 | 用户问题和证据列表 | 截断证据正文并保留 `entity_title`、`entity_type`、`source`；无资料时明确禁止伪造引用；调用结构化讲解运行时 | `ExplanationOutput` | `_citation_gate_node` |
+| 正文/引用校验 | `backend/app/modules/agent/workflows/explain.py` | `_citation_gate_node` | L233-L245 | 结构化讲解结果 | 只要正文非空即通过，引用列表可为空 | 可渲染 explanation | `_render_artifact_node` |
+| Artifact 渲染与结束 | `backend/app/modules/agent/workflows/explain.py` | `_render_artifact_node`、`_completed_node` | L248-L275 | outline、body、citations、summary | 组装 explanation artifact，并把最终 artifact 挂到 NodeResult 和上下文 | `agent_artifacts`、completed run | `AgentWorker.process_run` |
 
 ## Validate：候选题检索到练习产物
 
 | 执行阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 学习证据读取 | `backend/app/modules/agent/workflows/validate.py` | `_load_learning_evidence_node` | L17-L30 | user/context | 读取弱项、强项和近期主题，并写入 `learning_evidence` | 学习证据 | `_question_discovery_node` |
-| 候选题检索 | `backend/app/modules/agent/workflows/validate.py` | `_question_discovery_node` | L33-L52 | `weak_areas` 与 run ID | 拼查询词并调用 `retrieve_knowledge(entity_type="question")` | `candidates` | `_question_gate_node` |
-| 题目资格门 | `backend/app/modules/agent/workflows/validate.py` | `_question_gate_node` | L55-L72 | 候选题列表 | 过滤来源类型，失败则 workflow 直接报错 | `valid_questions` | `_composition_gate_node` |
-| 组合校验 | `backend/app/modules/agent/workflows/validate.py` | `_composition_gate_node` | L75-L102 | 有效题目 | 汇总题型、难度、学科分布，供后续产物使用 | `composition` | `_create_draft_node` |
-| 练习草稿与 Artifact | `backend/app/modules/agent/workflows/validate.py` | `_create_draft_node`、`_render_artifact_node` | L105-L144 | 有效题目与组合信息 | 生成 practice draft，再渲染 practice artifact | `agent_artifacts` 与 completed run | `_completed_node` |
+| 学习证据读取 | `backend/app/modules/agent/workflows/validate.py` | `_load_learning_evidence_node` | L38-L49 | user/context | 读取弱项、强项和近期主题，并写入 `learning_evidence` | 学习证据 | `_question_discovery_node` |
+| 候选题检索 | `backend/app/modules/agent/workflows/validate.py` | `_question_discovery_node` | L52-L73 | `weak_areas` 与 run ID | 拼查询词并调用 `retrieve_knowledge(entity_type="question")`，直接拿到题目实体元数据 | `candidates` | `_question_gate_node` |
+| 题目资格门 | `backend/app/modules/agent/workflows/validate.py` | `_question_is_eligible`、`_question_gate_node` | L20-L35、L76-L89 | 候选题列表 | 校验实体类型、审核/状态、题型、难度和真实来源字段；不再依赖虚构的 `source_type` | `valid_questions` | `_composition_gate_node` |
+| 组合校验 | `backend/app/modules/agent/workflows/validate.py` | `_composition_gate_node` | L92-L116 | 有效题目 | 汇总 `question_meta.question_type`、`question_meta.difficulty` 和 `subject_id`，供后续产物使用 | `composition` | `_create_draft_node` |
+| 练习草稿与 Artifact | `backend/app/modules/agent/workflows/validate.py` | `_create_draft_node`、`_render_artifact_node` | L119-L161 | 有效题目与组合信息 | 生成 practice draft，再渲染 practice artifact | `agent_artifacts` 与 completed run | `_completed_node` |
 
 ## Grade：作答快照到反馈产物
 

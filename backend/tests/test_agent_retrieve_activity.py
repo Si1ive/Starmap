@@ -13,12 +13,32 @@ async def test_retrieve_knowledge_emits_public_running_and_completed_activity(mo
             "outline_expansion": {"matched_chapters": [{"title": "循环队列"}]},
             "results": [
                 {
-                    "id": "kp_001",
+                    "segment_id": "segment_001",
+                    "entity_id": "kp_001",
                     "title": "循环队列",
-                    "content": "循环队列通过取模复用数组空间。",
-                    "source_type": "knowledge_point",
+                    "content_text": "循环队列通过取模复用数组空间。",
+                    "context_text": "循环队列通过取模复用数组空间。",
                     "score": 0.91,
                     "entity_type": "knowledge_point",
+                    "subject_id": "subject_ds",
+                    "chapter_ids": ["chapter_queue"],
+                    "entity": {
+                        "id": "kp_001",
+                        "type": "knowledge_point",
+                        "title": "循环队列",
+                        "review_status": "approved",
+                        "status": "active",
+                    },
+                    "source": {
+                        "document_id": "document_001",
+                        "filename": "王道教材",
+                        "page_no": 12,
+                    },
+                    "question_meta": None,
+                    "knowledge_point_meta": {
+                        "difficulty": "medium",
+                        "source": "王道教材",
+                    },
                 }
             ],
         }
@@ -41,6 +61,10 @@ async def test_retrieve_knowledge_emits_public_running_and_completed_activity(mo
 
     assert result["status"] == "success"
     assert result["total"] == 1
+    assert result["results"][0]["entity_id"] == "kp_001"
+    assert result["results"][0]["entity_title"] == "循环队列"
+    assert result["results"][0]["content_text"] == "循环队列通过取模复用数组空间。"
+    assert result["results"][0]["source"]["filename"] == "王道教材"
     assert [call.args[2] for call in append.await_args_list] == [
         "tool.called",
         "tool.result",
@@ -105,3 +129,81 @@ async def test_retrieve_knowledge_failure_hides_internal_degradation_wording(mon
     assert result["status"] == "error"
     assert failed["detail"] == "暂时无法检索相关文档"
     assert "降级" not in failed["detail"]
+
+
+@pytest.mark.asyncio
+async def test_retrieve_knowledge_prefers_knowledge_points_for_mixed_explain_results(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        retrieve_module.RetrievalService,
+        "search_with_outline_expansion",
+        AsyncMock(
+            return_value={
+                "mode": "hybrid",
+                "outline_expansion": {"matched_chapters": []},
+                "results": [
+                    {
+                        "segment_id": "segment_q_001",
+                        "entity_id": "q_001",
+                        "title": "[3] 二分查找题",
+                        "content_text": "请分析二分查找的时间复杂度。",
+                        "context_text": "请分析二分查找的时间复杂度。",
+                        "score": 0.97,
+                        "entity_type": "question",
+                        "subject_id": "subject_ds",
+                        "chapter_ids": ["chapter_search"],
+                        "entity": {
+                            "id": "q_001",
+                            "type": "question",
+                            "title": "[3] 二分查找题",
+                            "review_status": "approved",
+                            "status": "active",
+                        },
+                        "source": {"filename": "数据结构真题"},
+                        "question_meta": {
+                            "question_type": "analysis",
+                            "difficulty": "medium",
+                            "source": "2024 年 408 真题",
+                        },
+                        "knowledge_point_meta": None,
+                    },
+                    {
+                        "segment_id": "segment_kp_001",
+                        "entity_id": "kp_001",
+                        "title": "二分查找",
+                        "content_text": "二分查找要求目标序列有序。",
+                        "context_text": "二分查找要求目标序列有序。",
+                        "score": 0.82,
+                        "entity_type": "knowledge_point",
+                        "subject_id": "subject_ds",
+                        "chapter_ids": ["chapter_search"],
+                        "entity": {
+                            "id": "kp_001",
+                            "type": "knowledge_point",
+                            "title": "二分查找",
+                            "review_status": "approved",
+                            "status": "active",
+                        },
+                        "source": {"filename": "算法教材"},
+                        "question_meta": None,
+                        "knowledge_point_meta": {
+                            "difficulty": "medium",
+                            "source": "算法教材",
+                        },
+                    },
+                ],
+            }
+        ),
+    )
+
+    result = await retrieve_module.retrieve_knowledge(
+        AsyncMock(),
+        query="二分查找",
+        limit=5,
+    )
+
+    assert [item["entity_type"] for item in result["results"][:2]] == [
+        "knowledge_point",
+        "question",
+    ]

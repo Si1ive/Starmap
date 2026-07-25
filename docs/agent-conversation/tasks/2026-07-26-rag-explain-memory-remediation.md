@@ -19,10 +19,11 @@
 | 1. 工具重试三次，用户端也展示三次 | ACT-001 | 每次调用都生成新的 `activity_id`，前端按不同 ID 正确显示成三个活动 | 已定位 | 后台保留每次 attempt；用户端以稳定逻辑活动 ID 只展示一个持续更新的活动 |
 | 2. Explain 无资料时由 LLM 回答 | EXP-001 | 无证据继续进入模型生成的路径已存在，且本次 Run 确实生成了正文 | 待实现完整验收 | 正常零命中和检索异常均可按策略继续回答；无伪造引用；最终内容成功展示 |
 | 3. LLM 已生成长回答但最终显示失败 | FLOW-001 | `NodeResult.success()` 已支持 `artifact`，Explain 渲染链已补最终节点回归测试 | 已完成 | Explain/Validate/Grade/Plan 均可创建 Artifact；失败回归测试覆盖最终节点 |
-| 4. 题目和知识点看似走同一路检索 | RAG-002 | MySQL 实体和 Qdrant Collection 已分类；共享工具按 `entity_type` 路由，但 Agent DTO 和业务语义不完整 | 已定位 | 统一类型化 DTO；Explain 与 Validate 使用明确实体类型、字段和用户可见名称 |
-| 5. 二分查找题明明存在却未检索到 | RAG-001、RAG-002 | RAG-001 已修复 MySQL 来源回填；剩余阻塞在 Agent DTO 转换与 Validate 资格门 | 已定位 | 修复来源字段和 DTO；真实二分查找题通过混合检索进入 Validate 候选集 |
+| 4. 题目和知识点看似走同一路检索 | RAG-002 | 已统一题目/知识点 DTO，Explain 混合结果优先知识点，Validate 改读 `question_meta` 与实体状态字段 | 已完成 | 统一类型化 DTO；Explain 与 Validate 使用明确实体类型、字段和用户可见名称 |
+| 5. 二分查找题明明存在却未检索到 | RAG-001、RAG-002 | RAG-001、RAG-002 已修复来源回填、DTO 和 Validate 资格门；剩余只差结合真实二分查找检索链做整体验收 | 待完整验收 | 修复来源字段和 DTO；真实二分查找题通过混合检索进入 Validate 候选集 |
 
-结论：五个问题均已登记，没有遗漏；目前尚不能把任何一项标记为产品修复完成。
+结论：五个问题均已登记，没有遗漏；其中 `FLOW-001`、`RAG-002` 的代码修复已完成，`RAG-001 + RAG-002`
+已解除二分查找题在装配层的阻塞，但仍待结合真实检索场景做最终产品验收。
 
 ## `run_5c6c46d3` 已确认故障链
 
@@ -58,16 +59,16 @@ load_scope completed
 
 | 执行阶段 | 文件 | 符号 | 代码范围 | 当前职责与问题 |
 | --- | --- | --- | --- | --- |
-| 工具活动创建 | `backend/app/modules/agent/tools/retrieve_knowledge.py` | `retrieve_knowledge` | L19-L75 | 每次调用随机创建 `activity_id` 并公开 `tool.called`，重试因此成为多个用户活动 |
-| 工具结果与异常 | `backend/app/modules/agent/tools/retrieve_knowledge.py` | `retrieve_knowledge` | L77-L181 | 调用检索、临时转换 DTO、公开零命中或异常结果；正常空结果与异常需要保持不同语义 |
+| 工具活动创建 | `backend/app/modules/agent/tools/retrieve_knowledge.py` | `retrieve_knowledge` | L72-L128 | 每次调用随机创建 `activity_id` 并公开 `tool.called`，重试因此成为多个用户活动 |
+| 工具结果与异常 | `backend/app/modules/agent/tools/retrieve_knowledge.py` | `_normalize_agent_result`、`_sort_agent_results`、`retrieve_knowledge` | L19-L69、L130-L227 | 已统一 Agent DTO，公开零命中和异常结果；Explain 混合检索默认把知识点排在题目前面 |
 | 用户活动归并 | `backend/app/modules/agent/timeline.py` | `AgentTimelineService._activity_views` | L506-L538 | 按 `activity_id` 聚合；不同 ID 必然生成不同活动 |
-| 检索结果契约 | `backend/app/modules/retrieval/search_engine.py` | `RetrievalResult.to_dict` | L15-L62 | 返回 `entity_id`、`content_text` 和嵌套 `source`，与 Agent 工具读取字段不一致 |
-| Collection 路由 | `backend/app/modules/retrieval/search_engine.py` | `RetrievalSearchEngine.get_collections` | L118-L128 | `knowledge_point` 和 `question` 分别进入不同 Qdrant Collection；空类型同时查两者 |
-| 命中内容回填 | `backend/app/modules/retrieval/search_engine.py` | `RetrievalSearchEngine.hydrate_results`、`RetrievalSearchEngine._document_source_name` | L222-L296 | 已改为 `source_label -> title -> None` 回退链，从 MySQL 补全文档来源，不再访问不存在字段 |
-| 无证据生成 | `backend/app/modules/agent/workflows/explain.py` | `_evidence_gate_node`、`_generate_explanation_node` | L159-L225 | 无证据仍进入模型生成，并要求使用通用知识且不伪造引用 |
-| Explain 产物渲染 | `backend/app/modules/agent/workflows/explain.py` | `_render_artifact_node`、`_completed_node` | L243-L270 | 将成功正文组装为 Artifact，但传入了工厂方法不支持的 `artifact` 参数 |
+| 检索结果契约 | `backend/app/modules/retrieval/search_engine.py` | `RetrievalResult.to_dict` | L20-L95 | 已统一输出 `entity`、`source`、`question_meta`、`knowledge_point_meta` 与学科章节字段，供 Agent 与检索调试共用 |
+| Collection 路由 | `backend/app/modules/retrieval/search_engine.py` | `RetrievalSearchEngine.get_collections` | L151-L161 | `knowledge_point` 和 `question` 分别进入不同 Qdrant Collection；空类型同时查两者 |
+| 命中内容回填 | `backend/app/modules/retrieval/search_engine.py` | `RetrievalSearchEngine.hydrate_results`、`RetrievalSearchEngine._document_source_name`、`RetrievalSearchEngine._load_knowledge_point_details`、`RetrievalSearchEngine._load_question_details`、`RetrievalSearchEngine._question_title` | L255-L423 | 已从 MySQL 同步补全文档来源、实体标题、审核状态和题目/知识点元数据，消除 `source_type` 猜测映射 |
+| 无证据生成 | `backend/app/modules/agent/workflows/explain.py` | `_evidence_gate_node`、`_generate_explanation_node` | L159-L230 | 无证据仍进入模型生成；有证据时会使用新的 `entity_title`、`content_text` 和 `source` 字段组织输入，且不伪造引用 |
+| Explain 产物渲染 | `backend/app/modules/agent/workflows/explain.py` | `_render_artifact_node`、`_completed_node` | L248-L275 | 已通过统一 `artifact` 契约把成功正文挂回上下文并交给 worker 持久化 |
 | 节点结果契约 | `backend/app/modules/agent/workflows/contracts.py` | `NodeResult.success` | L27-L48 | 已支持 `artifact` 参数，render 节点可通过统一工厂方法把最终产物传给引擎与 worker |
-| Validate 检索 | `backend/app/modules/agent/workflows/validate.py` | `_load_learning_evidence_node`、`_question_discovery_node`、`_question_gate_node` | L20-L76 | 使用硬编码薄弱点生成查询；虽限定 `question`，但未使用当前主题且资格字段与 DTO 不兼容 |
+| Validate 检索 | `backend/app/modules/agent/workflows/validate.py` | `_question_is_eligible`、`_load_learning_evidence_node`、`_question_discovery_node`、`_question_gate_node`、`_composition_gate_node` | L20-L116 | 仍使用硬编码薄弱点生成查询，但题目资格门已改读 `question_meta` / `entity` 的审核、状态、题型、难度与来源字段，组合门同步改读真实 DTO |
 | 当前上下文构建 | `backend/app/modules/agent/context_builder.py` | `AgentRunContext`、`ThreadContextBuilder.build` | L82-L116、L133-L246 | 能选择近期消息和 Artifact，但没有填充主题状态、独立请求和分层记忆 |
 | Router 与子 Run 交接 | `backend/app/modules/agent/workflows/conversation.py` | `_route_node`、`_child_context_metadata`、`_dispatch_workflow_node` | L45-L100、L163-L234 | Router 收到消息历史；子 Run 只拿选中 ID，没有可消费的主题快照 |
 | Run 最终持久化 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | L150-L222 | 执行工作流并创建 Artifact/最终消息；未来在完成事务中写记忆更新 Outbox |
@@ -90,11 +91,11 @@ load_scope completed
 
 ### RAG-002 统一题目/知识点检索 DTO
 
-- 定义唯一类型化 DTO，至少包含实体、片段、正文、分数、学科章节、来源和题目元数据。
-- 删除 Agent 工具中的临时 `id/title/content/source_type` 猜测式映射。
-- Explain 默认优先知识点，可按策略补充题目示例；Validate 强制查询题目。
-- 修改 Validate 资格门，使用 DTO 中真实的题目来源、审核状态、题型和难度字段。
-- 验收：知识点与题目分别路由；二分查找题真实进入 Validate 候选，不因空 `source_type` 被过滤。
+- 状态：已完成（2026-07-25）。
+- 已在 `RetrievalResult.to_dict()` 中统一输出 `entity`、`source`、`question_meta`、`knowledge_point_meta`、学科章节和正文字段，并在 `hydrate_results()` 阶段从 `questions` / `knowledge_points` 补齐标题、审核状态和题目元数据。
+- 已删除 Agent 工具中的 `id/title/content/source_type` 猜测式映射，改为统一归一化 DTO；Explain 混合检索结果默认把知识点排在题目前面，Validate 继续强制 `entity_type="question"`。
+- 已修改 Validate 资格门与组合门，改读 DTO 中真实的题目来源、审核状态、题型、难度和学科字段，不再依赖空 `source_type`。
+- 验证：`cd backend && ./venv/bin/pytest tests/test_retrieval_service.py tests/test_agent_retrieve_activity.py tests/test_agent_validate_workflow.py tests/test_agent_explain_workflow.py tests/test_relation_expansion.py -q` 通过。
 
 ### ACT-001 折叠用户端工具重试
 

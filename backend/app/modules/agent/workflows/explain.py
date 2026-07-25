@@ -1,6 +1,6 @@
 """
 explain@v1 节点和图
-+
+
 核心讲解工作流：
 load_scope -> evidence_exploration_loop -> evidence_gate -> 
 generate_explanation -> citation_gate -> render_artifact -> completed
@@ -185,9 +185,14 @@ async def _generate_explanation_node(context: ExecutionContext, db: AsyncSession
         for item in entry.get("result", {}).get("results", []):
             evidence_items.append(
                 {
-                    "title": item.get("title") or "未命名资料",
-                    "content": str(item.get("content") or "")[:800],
-                    "source_type": item.get("source_type"),
+                    "title": item.get("entity_title") or item.get("title") or "未命名资料",
+                    "content": str(
+                        item.get("content_text")
+                        or item.get("content")
+                        or ""
+                    )[:800],
+                    "entity_type": item.get("entity_type"),
+                    "source": item.get("source") or {},
                 }
             )
     evidence_text = (

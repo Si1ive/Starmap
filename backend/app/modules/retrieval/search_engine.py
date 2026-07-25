@@ -9,7 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.db.qdrant import QdrantManager
-from app.models.mysql_models import Document, RetrievalSegment
+from app.models.mysql_models import (
+    Document,
+    KnowledgePoint,
+    Question,
+    RetrievalSegment,
+)
 
 
 class RetrievalResult:
@@ -29,6 +34,10 @@ class RetrievalResult:
         source_document_id: Optional[str] = None,
         source_filename: Optional[str] = None,
         page_no: Optional[int] = None,
+        title: Optional[str] = None,
+        review_status: Optional[str] = None,
+        status: Optional[str] = None,
+        entity_metadata: Optional[Dict[str, Any]] = None,
     ):
         self.segment_id = segment_id
         self.entity_type = entity_type
@@ -42,23 +51,47 @@ class RetrievalResult:
         self.source_document_id = source_document_id
         self.source_filename = source_filename
         self.page_no = page_no
+        self.title = title
+        self.review_status = review_status
+        self.status = status
+        self.entity_metadata = entity_metadata or {}
 
     def to_dict(self) -> Dict[str, Any]:
+        question_meta = (
+            dict(self.entity_metadata)
+            if self.entity_type == "question"
+            else None
+        )
+        knowledge_point_meta = (
+            dict(self.entity_metadata)
+            if self.entity_type == "knowledge_point"
+            else None
+        )
         return {
             "segment_id": self.segment_id,
             "entity_type": self.entity_type,
             "entity_id": self.entity_id,
             "segment_type": self.segment_type,
+            "title": self.title,
             "content_text": self.content_text,
             "context_text": self.context_text,
             "score": self.score,
             "subject_id": self.subject_id,
             "chapter_ids": self.chapter_ids,
+            "entity": {
+                "id": self.entity_id,
+                "type": self.entity_type,
+                "title": self.title,
+                "review_status": self.review_status,
+                "status": self.status,
+            },
             "source": {
                 "document_id": self.source_document_id,
                 "filename": self.source_filename,
                 "page_no": self.page_no,
             },
+            "question_meta": question_meta,
+            "knowledge_point_meta": knowledge_point_meta,
         }
 
 
@@ -259,6 +292,20 @@ class RetrievalSearchEngine:
                 document.id: self._document_source_name(document)
                 for document in document_result.scalars().all()
             }
+        knowledge_point_details = await self._load_knowledge_point_details(
+            [
+                segment.entity_id
+                for segment in segments_by_id.values()
+                if segment.entity_type == "knowledge_point"
+            ]
+        )
+        question_details = await self._load_question_details(
+            [
+                segment.entity_id
+                for segment in segments_by_id.values()
+                if segment.entity_type == "question"
+            ]
+        )
 
         retrieval_results: List[RetrievalResult] = []
         for hit in hits:
@@ -266,6 +313,11 @@ class RetrievalSearchEngine:
             segment = segments_by_id.get(segment_id)
             if not segment:
                 continue
+            entity_details = (
+                question_details.get(segment.entity_id)
+                if segment.entity_type == "question"
+                else knowledge_point_details.get(segment.entity_id)
+            ) or {}
             retrieval_results.append(
                 RetrievalResult(
                     segment_id=segment.id,
@@ -280,6 +332,10 @@ class RetrievalSearchEngine:
                     source_document_id=segment.document_id,
                     source_filename=document_names.get(segment.document_id),
                     page_no=segment.page_no,
+                    title=entity_details.get("title"),
+                    review_status=entity_details.get("review_status"),
+                    status=entity_details.get("status"),
+                    entity_metadata=entity_details.get("metadata"),
                 )
             )
         return retrieval_results
@@ -294,6 +350,77 @@ class RetrievalSearchEngine:
             if isinstance(value, str) and value.strip():
                 return value.strip()
         return None
+
+    async def _load_knowledge_point_details(
+        self,
+        knowledge_point_ids: List[str],
+    ) -> Dict[str, Dict[str, Any]]:
+        unique_ids = list(dict.fromkeys(knowledge_point_ids))
+        if not unique_ids:
+            return {}
+
+        result = await self.db.execute(
+            select(KnowledgePoint).where(KnowledgePoint.id.in_(unique_ids))
+        )
+        return {
+            knowledge_point.id: {
+                "title": knowledge_point.title,
+                "review_status": knowledge_point.review_status,
+                "status": knowledge_point.status,
+                "metadata": {
+                    "difficulty": knowledge_point.difficulty,
+                    "exam_frequency": knowledge_point.exam_frequency,
+                    "source": knowledge_point.source,
+                    "source_page": knowledge_point.source_page,
+                    "review_status": knowledge_point.review_status,
+                    "status": knowledge_point.status,
+                    "aliases": knowledge_point.aliases or [],
+                    "tags": knowledge_point.tags or [],
+                },
+            }
+            for knowledge_point in result.scalars().all()
+        }
+
+    async def _load_question_details(
+        self,
+        question_ids: List[str],
+    ) -> Dict[str, Dict[str, Any]]:
+        unique_ids = list(dict.fromkeys(question_ids))
+        if not unique_ids:
+            return {}
+
+        result = await self.db.execute(
+            select(Question).where(Question.id.in_(unique_ids))
+        )
+        return {
+            question.id: {
+                "title": self._question_title(question),
+                "review_status": question.review_status,
+                "status": question.status,
+                "metadata": {
+                    "question_type": question.type,
+                    "difficulty": question.difficulty,
+                    "source": question.source,
+                    "paper_name": question.paper_name,
+                    "question_no": question.question_no,
+                    "exam_year": question.exam_year,
+                    "exam_scope": question.exam_scope,
+                    "answer_source": question.answer_source,
+                    "review_status": question.review_status,
+                    "status": question.status,
+                    "knowledge_point_ids": question.knowledge_point_ids or [],
+                    "tags": question.tags or [],
+                },
+            }
+            for question in result.scalars().all()
+        }
+
+    @staticmethod
+    def _question_title(question: Question) -> str:
+        title = (question.content or "").strip()
+        if question.question_no:
+            return f"[{question.question_no}] {title}"
+        return title
 
     @staticmethod
     def _build_sparse_conditions(

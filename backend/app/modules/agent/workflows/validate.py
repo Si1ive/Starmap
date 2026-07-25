@@ -17,6 +17,24 @@ from ..time_utils import utc_isoformat, utc_now
 logger = get_logger(__name__)
 
 
+def _question_is_eligible(candidate: Dict[str, Any]) -> bool:
+    meta = candidate.get("question_meta") or {}
+    entity = candidate.get("entity") or {}
+    review_status = entity.get("review_status") or meta.get("review_status")
+    status = entity.get("status") or meta.get("status")
+    if candidate.get("entity_type") != "question":
+        return False
+    if review_status == "rejected":
+        return False
+    if status == "deleted":
+        return False
+    if not meta.get("question_type") or not meta.get("difficulty"):
+        return False
+    has_source = bool(meta.get("source") or meta.get("paper_name"))
+    answer_source = meta.get("answer_source")
+    return has_source or answer_source in {"extracted", "manual", "llm"}
+
+
 async def _load_learning_evidence_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
     """读取用户学习证据"""
     # P1 简化：从上下文获取
@@ -59,12 +77,7 @@ async def _question_gate_node(context: ExecutionContext, db: AsyncSession) -> No
     """题目资格校验"""
     candidates = context.get("candidates", [])
     
-    # P1 简化：过滤掉不符合条件的题目
-    valid = []
-    for q in candidates:
-        # 检查题目质量
-        if q.get("source_type") in ["exam", "textbook", "practice"]:
-            valid.append(q)
+    valid = [q for q in candidates if _question_is_eligible(q)]
     
     # 如果没有有效题目，返回降级
     if not valid:
@@ -90,9 +103,10 @@ async def _composition_gate_node(context: ExecutionContext, db: AsyncSession) ->
     }
     
     for q in valid_questions:
-        q_type = q.get("type", "unknown")
-        difficulty = q.get("difficulty", "unknown")
-        subject = q.get("subject", "unknown")
+        meta = q.get("question_meta") or {}
+        q_type = meta.get("question_type", "unknown")
+        difficulty = meta.get("difficulty", "unknown")
+        subject = q.get("subject_id") or "unknown"
         composition["types"][q_type] = composition["types"].get(q_type, 0) + 1
         composition["difficulties"][difficulty] = composition["difficulties"].get(difficulty, 0) + 1
         composition["subjects"][subject] = composition["subjects"].get(subject, 0) + 1

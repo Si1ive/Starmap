@@ -86,8 +86,32 @@ async def test_hydrate_results_preserves_hit_order_and_adds_source_display_name(
             ]
         ),
     )
+    question_result = SimpleNamespace(
+        scalars=lambda: SimpleNamespace(
+            all=lambda: [
+                SimpleNamespace(
+                    id="question-1",
+                    content="进程调度题",
+                    question_no="12",
+                    review_status="approved",
+                    status="active",
+                    type="choice",
+                    difficulty="medium",
+                    source="2024 年 408 真题",
+                    paper_name="操作系统真题",
+                    exam_year=2024,
+                    exam_scope="408",
+                    answer_source="extracted",
+                    knowledge_point_ids=["kp-1"],
+                    tags=["真题"],
+                )
+            ]
+        ),
+    )
     db = SimpleNamespace(
-        execute=AsyncMock(side_effect=[segment_result, document_result]),
+        execute=AsyncMock(
+            side_effect=[segment_result, document_result, question_result]
+        ),
     )
 
     results = await RetrievalSearchEngine(db).hydrate_results(
@@ -110,6 +134,11 @@ async def test_hydrate_results_preserves_hit_order_and_adds_source_display_name(
     assert results[0].score == 0.92
     assert results[0].source_filename == "2024 年 408 真题"
     assert results[0].page_no == 3
+    payload = results[0].to_dict()
+    assert payload["entity"]["title"] == "[12] 进程调度题"
+    assert payload["entity"]["review_status"] == "approved"
+    assert payload["question_meta"]["question_type"] == "choice"
+    assert payload["question_meta"]["paper_name"] == "操作系统真题"
 
 
 @pytest.mark.asyncio
@@ -150,8 +179,40 @@ async def test_hydrate_results_falls_back_to_title_and_handles_missing_source():
             ]
         ),
     )
+    knowledge_result = SimpleNamespace(
+        scalars=lambda: SimpleNamespace(
+            all=lambda: [
+                SimpleNamespace(
+                    id="kp-1",
+                    title="二分查找",
+                    review_status="approved",
+                    status="active",
+                    difficulty="medium",
+                    exam_frequency="high",
+                    source="算法教材",
+                    source_page="12",
+                    aliases=["折半查找"],
+                    tags=["查找"],
+                ),
+                SimpleNamespace(
+                    id="kp-2",
+                    title="哈希查找",
+                    review_status="approved",
+                    status="active",
+                    difficulty="medium",
+                    exam_frequency="medium",
+                    source=None,
+                    source_page=None,
+                    aliases=[],
+                    tags=[],
+                ),
+            ]
+        ),
+    )
     db = SimpleNamespace(
-        execute=AsyncMock(side_effect=[segment_result, document_result]),
+        execute=AsyncMock(
+            side_effect=[segment_result, document_result, knowledge_result]
+        ),
     )
 
     results = await RetrievalSearchEngine(db).hydrate_results(
@@ -172,6 +233,9 @@ async def test_hydrate_results_falls_back_to_title_and_handles_missing_source():
     assert [result.segment_id for result in results] == ["segment-1", "segment-2"]
     assert results[0].source_filename == "算法教材"
     assert results[1].source_filename is None
+    payload = results[0].to_dict()
+    assert payload["knowledge_point_meta"]["difficulty"] == "medium"
+    assert payload["knowledge_point_meta"]["aliases"] == ["折半查找"]
 
 
 @pytest.mark.asyncio
