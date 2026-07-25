@@ -23,6 +23,15 @@ from ..tools.retrieve_knowledge import retrieve_knowledge
 logger = get_logger(__name__)
 
 
+def _fallback_evidence_text(retrieval_outcome: str) -> str:
+    if retrieval_outcome == "error":
+        return (
+            "资料检索暂时不可用。请基于可靠的通用知识回答，明确不要伪造引用，"
+            "也不要暗示已经查到了具体资料。"
+        )
+    return "没有检索到相关文档。请使用可靠的通用知识回答，不要伪造引用。"
+
+
 async def _load_scope_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
     """读取用户授权的资料范围"""
     # P0 简化：从上下文获取学科范围（如果有）
@@ -47,6 +56,7 @@ async def _evidence_loop_node(context: ExecutionContext, db: AsyncSession) -> No
     max_turns = min(3, context.max_loop_turns)
     collected_evidence = []
     retrieval_attempted = False
+    retrieval_statuses: list[str] = []
 
     for turn in range(max_turns):
         # 预算校验：模型调用前扣减，超限则用已收集资料继续。
@@ -100,7 +110,9 @@ async def _evidence_loop_node(context: ExecutionContext, db: AsyncSession) -> No
                     limit=params.get("limit", 5),
                     run_id=context.run_id,
                 )
-                observation = {"total": result.get("total", 0), "status": result.get("status")}
+                status = str(result.get("status") or "error")
+                retrieval_statuses.append(status)
+                observation = {"total": result.get("total", 0), "status": status}
                 if result.get("status") == "success" and result.get("results"):
                     collected_evidence.append({
                         "turn": turn,
@@ -146,6 +158,14 @@ async def _evidence_loop_node(context: ExecutionContext, db: AsyncSession) -> No
             return NodeResult.failure(str(e))
 
     context.set("evidence", collected_evidence)
+    retrieval_outcome = "not_attempted"
+    if collected_evidence:
+        retrieval_outcome = "evidence"
+    elif any(status == "error" for status in retrieval_statuses):
+        retrieval_outcome = "error"
+    elif retrieval_attempted:
+        retrieval_outcome = "empty"
+    context.set("retrieval_outcome", retrieval_outcome)
     logger.info("证据收集完成", run_id=context.run_id, evidence_count=len(collected_evidence))
     return NodeResult.success(
         {
@@ -159,12 +179,20 @@ async def _evidence_loop_node(context: ExecutionContext, db: AsyncSession) -> No
 async def _evidence_gate_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
     """证据校验"""
     evidence = context.get("evidence", [])
+    retrieval_outcome = context.get("retrieval_outcome", "not_attempted")
     
     # P0 简化：简单校验
     if len(evidence) == 0:
         logger.warning("证据不足", run_id=context.run_id)
         return NodeResult.success(
-            {"gate_passed": False, "reason": "没有检索到相关文档"},
+            {
+                "gate_passed": False,
+                "reason": (
+                    "暂时无法检索相关文档"
+                    if retrieval_outcome == "error"
+                    else "没有检索到相关文档"
+                ),
+            },
             next_node="generate_explanation",
         )
     
@@ -179,6 +207,7 @@ async def _generate_explanation_node(context: ExecutionContext, db: AsyncSession
     """生成结构化讲解"""
     input_msg = context.get("input_message", "")
     evidence = context.get("evidence", [])
+    retrieval_outcome = context.get("retrieval_outcome", "not_attempted")
     
     evidence_items: list[dict[str, Any]] = []
     for entry in evidence:
@@ -198,7 +227,7 @@ async def _generate_explanation_node(context: ExecutionContext, db: AsyncSession
     evidence_text = (
         json.dumps(evidence_items, ensure_ascii=False)
         if evidence_items
-        else "没有检索到相关文档。请使用可靠的通用知识回答，不要伪造引用。"
+        else _fallback_evidence_text(retrieval_outcome)
     )
 
     from .contracts import ModelBudgetExceeded
@@ -221,6 +250,8 @@ async def _generate_explanation_node(context: ExecutionContext, db: AsyncSession
             db=db,
         )
         data = response.model_dump()
+        if not evidence_items:
+            data["citations"] = []
         context.set("explanation", data)
         logger.info("讲解生成完成", run_id=context.run_id)
         return NodeResult.success(data, next_node="citation_gate")

@@ -18,13 +18,13 @@
 
 | 执行阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 资料范围加载 | `backend/app/modules/agent/workflows/explain.py` | `_load_scope_node` | L26-L37 | child run context | 读取允许学科与章节范围并写入上下文 | `scope` | `_evidence_loop_node` |
-| 有界资料探索 | `backend/app/modules/agent/workflows/explain.py` | `_evidence_loop_node` | L40-L156 | 用户问题、预算和 child run ID | 首次无论模型是否想结束都至少检索一次；只把成功且非空结果记为 evidence；每轮决策和 observation 写 `agent_loop_turns` | 有效 evidence、`retrieval_attempted` | `ExplanationRuntime.decide` / `retrieve_knowledge` |
+| 资料范围加载 | `backend/app/modules/agent/workflows/explain.py` | `_load_scope_node` | L35-L46 | child run context | 读取允许学科与章节范围并写入上下文 | `scope` | `_evidence_loop_node` |
+| 有界资料探索 | `backend/app/modules/agent/workflows/explain.py` | `_evidence_loop_node` | L49-L176 | 用户问题、预算和 child run ID | 首次无论模型是否想结束都至少检索一次；只把成功且非空结果记为 evidence；同时记录 `retrieval_outcome=evidence|empty|error`；每轮决策和 observation 写 `agent_loop_turns` | 有效 evidence、`retrieval_attempted`、`retrieval_outcome` | `ExplanationRuntime.decide` / `retrieve_knowledge` |
 | 检索工具 | `backend/app/modules/agent/tools/retrieve_knowledge.py` | `_logical_activity_id`、`_next_attempt_number`、`retrieve_knowledge` | L77-L313 | explain/validate 的 query、范围、run ID | 检索前写 `tool.called`，同一逻辑检索的重试复用稳定 `activity_id`，后台额外保留 `attempt_id` / `attempt_no`；完成后统一返回带 `entity`/`question_meta`/`knowledge_point_meta` 的 Agent DTO，并公开零命中或异常的安全提示 | 公开活动 + 内部检索结果 | `RetrievalService.search_with_outline_expansion` |
-| 零证据门禁 | `backend/app/modules/agent/workflows/explain.py` | `_evidence_gate_node` | L159-L175 | 已筛选 evidence | 非空资料直接通过；零命中记录“没有检索到相关文档”，但继续生成通用知识回答 | `gate_passed` 与原因 | `_generate_explanation_node` |
-| 结构化讲解生成 | `backend/app/modules/agent/workflows/explain.py` | `_generate_explanation_node` | L178-L230 | 用户问题和证据列表 | 截断证据正文并保留 `entity_title`、`entity_type`、`source`；无资料时明确禁止伪造引用；调用结构化讲解运行时 | `ExplanationOutput` | `_citation_gate_node` |
-| 正文/引用校验 | `backend/app/modules/agent/workflows/explain.py` | `_citation_gate_node` | L233-L245 | 结构化讲解结果 | 只要正文非空即通过，引用列表可为空 | 可渲染 explanation | `_render_artifact_node` |
-| Artifact 渲染与结束 | `backend/app/modules/agent/workflows/explain.py` | `_render_artifact_node`、`_completed_node` | L248-L275 | outline、body、citations、summary | 组装 explanation artifact，并把最终 artifact 挂到 NodeResult 和上下文 | `agent_artifacts`、completed run | `AgentWorker.process_run` |
+| 零证据门禁 | `backend/app/modules/agent/workflows/explain.py` | `_evidence_gate_node` | L179-L203 | 已筛选 evidence 与 `retrieval_outcome` | 非空资料直接通过；零命中记录“没有检索到相关文档”，检索异常记录“暂时无法检索相关文档”，但两者都继续生成通用知识回答 | `gate_passed` 与原因 | `_generate_explanation_node` |
+| 结构化讲解生成 | `backend/app/modules/agent/workflows/explain.py` | `_fallback_evidence_text`、`_generate_explanation_node` | L26-L32、L206-L261 | 用户问题、证据列表和 `retrieval_outcome` | 截断证据正文并保留 `entity_title`、`entity_type`、`source`；无资料时按零命中/异常选择不同 fallback 文案；调用结构化讲解运行时后清空无资料场景的 citations | `ExplanationOutput` | `_citation_gate_node` |
+| 正文/引用校验 | `backend/app/modules/agent/workflows/explain.py` | `_citation_gate_node` | L264-L276 | 结构化讲解结果 | 只要正文非空即通过，引用列表在无资料场景下已被上游清空 | 可渲染 explanation | `_render_artifact_node` |
+| Artifact 渲染与结束 | `backend/app/modules/agent/workflows/explain.py` | `_render_artifact_node`、`_completed_node` | L279-L306 | outline、body、citations、summary | 组装 explanation artifact，并把最终 artifact 挂到 NodeResult 和上下文 | `agent_artifacts`、completed run | `AgentWorker.process_run` |
 
 ## Validate：候选题检索到练习产物
 

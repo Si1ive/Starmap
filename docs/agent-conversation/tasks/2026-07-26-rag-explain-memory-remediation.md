@@ -17,13 +17,14 @@
 | 原问题 | 任务 ID | 当前结论 | 状态 | 完成条件 |
 | --- | --- | --- | --- | --- |
 | 1. 工具重试三次，用户端也展示三次 | ACT-001 | 已为同一逻辑检索复用稳定 `activity_id`，后台额外保留 `attempt_id` / `attempt_no`，时间线与前端按同一 ID 归并成单个活动 | 已完成 | 后台保留每次 attempt；用户端以稳定逻辑活动 ID 只展示一个持续更新的活动 |
-| 2. Explain 无资料时由 LLM 回答 | EXP-001 | 无证据继续进入模型生成的路径已存在，且本次 Run 确实生成了正文 | 待实现完整验收 | 正常零命中和检索异常均可按策略继续回答；无伪造引用；最终内容成功展示 |
+| 2. Explain 无资料时由 LLM 回答 | EXP-001 | 已区分零命中与检索异常的 fallback 文案，并在无资料时强制清空 citations；剩余工作是走完整持久化链做最终产品验收 | 待完整验收 | 正常零命中和检索异常均可按策略继续回答；无伪造引用；最终内容成功展示 |
 | 3. LLM 已生成长回答但最终显示失败 | FLOW-001 | `NodeResult.success()` 已支持 `artifact`，Explain 渲染链已补最终节点回归测试 | 已完成 | Explain/Validate/Grade/Plan 均可创建 Artifact；失败回归测试覆盖最终节点 |
 | 4. 题目和知识点看似走同一路检索 | RAG-002 | 已统一题目/知识点 DTO，Explain 混合结果优先知识点，Validate 改读 `question_meta` 与实体状态字段 | 已完成 | 统一类型化 DTO；Explain 与 Validate 使用明确实体类型、字段和用户可见名称 |
 | 5. 二分查找题明明存在却未检索到 | RAG-001、RAG-002 | RAG-001、RAG-002 已修复来源回填、DTO 和 Validate 资格门；剩余只差结合真实二分查找检索链做整体验收 | 待完整验收 | 修复来源字段和 DTO；真实二分查找题通过混合检索进入 Validate 候选集 |
 
 结论：五个问题均已登记，没有遗漏；其中 `ACT-001`、`FLOW-001`、`RAG-002` 的代码修复已完成，
-`RAG-001 + RAG-002` 已解除二分查找题在装配层的阻塞，但仍待结合真实检索场景做最终产品验收。
+`EXP-001` 已完成代码侧 fallback 修复但仍待端到端验收，`RAG-001 + RAG-002` 已解除二分查找题在装配层的阻塞，
+仍待结合真实检索场景做最终产品验收。
 
 ## `run_5c6c46d3` 已确认故障链
 
@@ -65,8 +66,8 @@ load_scope completed
 | 检索结果契约 | `backend/app/modules/retrieval/search_engine.py` | `RetrievalResult.to_dict` | L20-L95 | 已统一输出 `entity`、`source`、`question_meta`、`knowledge_point_meta` 与学科章节字段，供 Agent 与检索调试共用 |
 | Collection 路由 | `backend/app/modules/retrieval/search_engine.py` | `RetrievalSearchEngine.get_collections` | L151-L161 | `knowledge_point` 和 `question` 分别进入不同 Qdrant Collection；空类型同时查两者 |
 | 命中内容回填 | `backend/app/modules/retrieval/search_engine.py` | `RetrievalSearchEngine.hydrate_results`、`RetrievalSearchEngine._document_source_name`、`RetrievalSearchEngine._load_knowledge_point_details`、`RetrievalSearchEngine._load_question_details`、`RetrievalSearchEngine._question_title` | L255-L423 | 已从 MySQL 同步补全文档来源、实体标题、审核状态和题目/知识点元数据，消除 `source_type` 猜测映射 |
-| 无证据生成 | `backend/app/modules/agent/workflows/explain.py` | `_evidence_gate_node`、`_generate_explanation_node` | L159-L230 | 无证据仍进入模型生成；有证据时会使用新的 `entity_title`、`content_text` 和 `source` 字段组织输入，且不伪造引用 |
-| Explain 产物渲染 | `backend/app/modules/agent/workflows/explain.py` | `_render_artifact_node`、`_completed_node` | L248-L275 | 已通过统一 `artifact` 契约把成功正文挂回上下文并交给 worker 持久化 |
+| 无证据生成 | `backend/app/modules/agent/workflows/explain.py` | `_fallback_evidence_text`、`_evidence_loop_node`、`_evidence_gate_node`、`_generate_explanation_node` | L26-L261 | 无证据仍进入模型生成；零命中与检索异常会走不同 fallback 文案；无资料时强制清空 citations，避免伪造引用 |
+| Explain 产物渲染 | `backend/app/modules/agent/workflows/explain.py` | `_render_artifact_node`、`_completed_node` | L279-L306 | 已通过统一 `artifact` 契约把成功正文挂回上下文并交给 worker 持久化 |
 | 节点结果契约 | `backend/app/modules/agent/workflows/contracts.py` | `NodeResult.success` | L27-L48 | 已支持 `artifact` 参数，render 节点可通过统一工厂方法把最终产物传给引擎与 worker |
 | Validate 检索 | `backend/app/modules/agent/workflows/validate.py` | `_question_is_eligible`、`_load_learning_evidence_node`、`_question_discovery_node`、`_question_gate_node`、`_composition_gate_node` | L20-L116 | 仍使用硬编码薄弱点生成查询，但题目资格门已改读 `question_meta` / `entity` 的审核、状态、题型、难度与来源字段，组合门同步改读真实 DTO |
 | 当前上下文构建 | `backend/app/modules/agent/context_builder.py` | `AgentRunContext`、`ThreadContextBuilder.build` | L82-L116、L133-L246 | 能选择近期消息和 Artifact，但没有填充主题状态、独立请求和分层记忆 |
@@ -107,10 +108,12 @@ load_scope completed
 
 ### EXP-001 固化 Explain 无资料回答
 
-- 保留当前无证据进入 `generate_explanation` 的行为。
-- 区分正常零命中与检索服务异常，但两者默认都允许通用知识回答；用户限定资料范围时遵守限制。
-- 无资料时引用列表必须为空，正文不能出现伪造资料来源。
-- 验收：零命中和工具异常各有端到端测试，最终回答都能持久化且刷新后可恢复。
+- 状态：待完整验收（2026-07-25 已完成代码修复）。
+- 已保留无证据进入 `generate_explanation` 的行为，并在 `evidence_loop -> evidence_gate` 之间区分 `retrieval_outcome=empty|error`；零命中继续提示“没有检索到相关文档”，检索异常则提示“暂时无法检索相关文档”。
+- 已在 `_fallback_evidence_text()` 中为零命中和检索异常生成不同 fallback 文案，并在无资料场景下强制清空 `citations`，避免模型把通用知识回答伪装成有来源答案。
+- 已补 `backend/tests/test_agent_explain_workflow.py::test_evidence_gate_distinguishes_retrieval_error_from_zero_hits` 与 `test_generate_explanation_clears_citations_when_no_evidence`，覆盖两类 fallback 和无资料引用清理。
+- 待完成验收：把这两条 fallback 跑过完整 worker 持久化链，确认刷新后正文可恢复且 citations 仍为空。
+- 当前验证：`cd backend && ./venv/bin/pytest tests/test_agent_explain_workflow.py -q` 通过。
 
 ## 第二组：分层长期记忆最小闭环
 

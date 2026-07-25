@@ -97,6 +97,7 @@ async def test_evidence_loop_keeps_zero_hits_out_of_valid_evidence(monkeypatch):
     assert result.status == NodeStatus.COMPLETED
     assert result.output == {"evidence_count": 0, "retrieval_attempted": True}
     assert context.get("evidence") == []
+    assert context.get("retrieval_outcome") == "empty"
     assert gate.output == {
         "gate_passed": False,
         "reason": "没有检索到相关文档",
@@ -165,3 +166,71 @@ async def test_generate_explanation_uses_structured_runtime(monkeypatch):
     assert result.output["body"] == "红黑树通过颜色约束维持近似平衡。"
     assert runtime.generate_calls[0]["run_id"] == "run_explain_001"
     assert "红黑树具有五条性质" in runtime.generate_calls[0]["evidence_text"]
+
+
+@pytest.mark.asyncio
+async def test_evidence_gate_distinguishes_retrieval_error_from_zero_hits(monkeypatch):
+    runtime = ExplanationRuntimeStub(
+        decisions=[
+            LoopDecision(
+                action=ActionType.RETRIEVE_KNOWLEDGE,
+                parameters={"query": "红黑树", "limit": 5},
+                reasoning="先查询资料",
+                confidence=0.95,
+            ),
+            LoopDecision(
+                action=ActionType.FINISH,
+                parameters={},
+                reasoning="结束查询",
+                confidence=0.8,
+            ),
+        ]
+    )
+    monkeypatch.setattr(explain, "explanation_runtime", runtime)
+    monkeypatch.setattr(explain.loop_turn_store, "record", AsyncMock())
+    monkeypatch.setattr(
+        explain,
+        "retrieve_knowledge",
+        AsyncMock(
+            return_value={
+                "status": "error",
+                "query": "红黑树",
+                "results": [],
+                "total": 0,
+                "error": "qdrant unavailable",
+            }
+        ),
+    )
+    context = _context()
+
+    result = await explain._evidence_loop_node(context, AsyncMock())
+    gate = await explain._evidence_gate_node(context, AsyncMock())
+
+    assert result.status == NodeStatus.COMPLETED
+    assert context.get("retrieval_outcome") == "error"
+    assert gate.output == {
+        "gate_passed": False,
+        "reason": "暂时无法检索相关文档",
+    }
+
+
+@pytest.mark.asyncio
+async def test_generate_explanation_clears_citations_when_no_evidence(monkeypatch):
+    runtime = ExplanationRuntimeStub(
+        output=ExplanationOutput(
+            outline=["定义"],
+            body="红黑树是一种自平衡二叉搜索树。",
+            citations=["不存在的教材"],
+            summary="给出概念性说明。",
+        )
+    )
+    monkeypatch.setattr(explain, "explanation_runtime", runtime)
+    context = _context()
+    context.set("evidence", [])
+    context.set("retrieval_outcome", "error")
+
+    result = await explain._generate_explanation_node(context, AsyncMock())
+
+    assert result.status == NodeStatus.COMPLETED
+    assert result.output["citations"] == []
+    assert "资料检索暂时不可用" in runtime.generate_calls[0]["evidence_text"]
