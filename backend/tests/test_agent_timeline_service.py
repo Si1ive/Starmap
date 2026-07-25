@@ -344,6 +344,154 @@ async def test_timeline_aggregates_child_workflow_into_root_item(db_session):
 
 
 @pytest.mark.asyncio
+async def test_timeline_merges_retry_attempts_into_single_public_activity(db_session):
+    await _create_thread(db_session)
+    creation = await _create_turn(db_session)
+    creation.run.status = "completed"
+
+    child = await AgentService(db_session).create_run(
+        user_id="user_001",
+        thread_id="thread_001",
+        workflow_name="explain",
+        input_message="解释红黑树",
+        workflow_key="explain",
+        workflow_version="v1",
+        trigger_message_id=creation.message.id,
+        parent_run_id=creation.run.id,
+        root_run_id=creation.run.id,
+        presentation="compact",
+        public_title="整理讲解",
+    )
+    child.status = "running"
+    child.current_public_step = "evidence_loop"
+    await AgentTimelineService(db_session).ensure_workflow_item(
+        thread_id="thread_001",
+        root_run_id=creation.run.id,
+        run_id=child.id,
+    )
+
+    await event_store.append(
+        db_session,
+        child.id,
+        "tool.called",
+        {
+            "activity_id": "activity_retry_001",
+            "logical_activity_id": "activity_retry_001",
+            "attempt_id": "attempt_001",
+            "attempt_no": 1,
+            "activity_type": "retrieval",
+            "title": "检索 408 知识库",
+            "detail": "正在使用混合检索查询“红黑树”",
+            "public_metadata": {
+                "query": "红黑树",
+                "attempt_no": 1,
+            },
+        },
+    )
+    await event_store.append(
+        db_session,
+        child.id,
+        "tool.result",
+        {
+            "activity_id": "activity_retry_001",
+            "logical_activity_id": "activity_retry_001",
+            "attempt_id": "attempt_001",
+            "attempt_no": 1,
+            "activity_type": "retrieval",
+            "title": "检索 408 知识库",
+            "detail": "暂时无法检索相关文档",
+            "status": "failed",
+            "public_metadata": {
+                "query": "红黑树",
+                "attempt_no": 1,
+            },
+        },
+    )
+    await event_store.append(
+        db_session,
+        child.id,
+        "tool.called",
+        {
+            "activity_id": "activity_retry_001",
+            "logical_activity_id": "activity_retry_001",
+            "attempt_id": "attempt_002",
+            "attempt_no": 2,
+            "activity_type": "retrieval",
+            "title": "检索 408 知识库",
+            "detail": "正在第 2 次尝试检索“红黑树”",
+            "public_metadata": {
+                "query": "红黑树",
+                "attempt_no": 2,
+            },
+        },
+    )
+    await event_store.append(
+        db_session,
+        child.id,
+        "tool.result",
+        {
+            "activity_id": "activity_retry_001",
+            "logical_activity_id": "activity_retry_001",
+            "attempt_id": "attempt_002",
+            "attempt_no": 2,
+            "activity_type": "retrieval",
+            "title": "检索 408 知识库",
+            "detail": "混合检索完成，命中 1 份资料",
+            "status": "completed",
+            "public_metadata": {
+                "query": "红黑树",
+                "attempt_no": 2,
+                "total": 1,
+                "documents": [{"id": "kp_rb_tree", "title": "红黑树"}],
+            },
+        },
+    )
+
+    page = await AgentTimelineService(db_session).get_timeline(
+        user_id="user_001",
+        thread_id="thread_001",
+        before=None,
+        limit=50,
+    )
+
+    workflow = page.items[1]["workflow"]
+    assert workflow["activities"] == [
+        {
+            "id": "activity_retry_001",
+            "activity_type": "retrieval",
+            "title": "检索 408 知识库",
+            "detail": "混合检索完成，命中 1 份资料",
+            "status": "completed",
+            "metadata": {
+                "query": "红黑树",
+                "attempt_no": 2,
+                "total": 1,
+                "documents": [{"id": "kp_rb_tree", "title": "红黑树"}],
+            },
+            "started_at": workflow["activities"][0]["started_at"],
+            "completed_at": workflow["activities"][0]["completed_at"],
+        }
+    ]
+
+    projected_activities = [
+        event for event in (
+            await thread_event_store.get_events(
+                db_session,
+                "thread_001",
+                after_sequence=creation.timeline_cursor,
+                limit=50,
+            )
+        )
+        if event.event_type == "workflow.activity.updated"
+    ]
+    assert len(projected_activities) == 4
+    assert [
+        event.payload["activity"]["metadata"]["attempt_no"]
+        for event in projected_activities
+    ] == [1, 1, 2, 2]
+
+
+@pytest.mark.asyncio
 async def test_workflow_interactions_emit_thread_events(db_session):
     await _create_thread(db_session)
     creation = await _create_turn(db_session)

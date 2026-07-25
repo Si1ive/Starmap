@@ -50,6 +50,11 @@ async def test_retrieve_knowledge_emits_public_running_and_completed_activity(mo
     )
     append = AsyncMock()
     monkeypatch.setattr(retrieve_module.event_store, "append", append)
+    monkeypatch.setattr(
+        retrieve_module,
+        "_next_attempt_number",
+        AsyncMock(return_value=1),
+    )
     db = AsyncMock()
 
     result = await retrieve_module.retrieve_knowledge(
@@ -71,6 +76,7 @@ async def test_retrieve_knowledge_emits_public_running_and_completed_activity(mo
     ]
     completed = append.await_args_list[1].args[3]
     assert completed["detail"] == "混合检索完成，命中 1 份资料"
+    assert completed["attempt_no"] == 1
     assert completed["public_metadata"]["documents"][0]["title"] == "循环队列"
     assert db.commit.await_count == 2
 
@@ -92,6 +98,11 @@ async def test_retrieve_knowledge_explains_empty_result_without_internal_jargon(
     )
     append = AsyncMock()
     monkeypatch.setattr(retrieve_module.event_store, "append", append)
+    monkeypatch.setattr(
+        retrieve_module,
+        "_next_attempt_number",
+        AsyncMock(return_value=1),
+    )
     db = AsyncMock()
 
     result = await retrieve_module.retrieve_knowledge(
@@ -117,6 +128,11 @@ async def test_retrieve_knowledge_failure_hides_internal_degradation_wording(mon
     )
     append = AsyncMock()
     monkeypatch.setattr(retrieve_module.event_store, "append", append)
+    monkeypatch.setattr(
+        retrieve_module,
+        "_next_attempt_number",
+        AsyncMock(return_value=1),
+    )
     db = AsyncMock()
 
     result = await retrieve_module.retrieve_knowledge(
@@ -207,3 +223,54 @@ async def test_retrieve_knowledge_prefers_knowledge_points_for_mixed_explain_res
         "knowledge_point",
         "question",
     ]
+
+
+@pytest.mark.asyncio
+async def test_retrieve_knowledge_reuses_logical_activity_id_across_retries(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        retrieve_module.RetrievalService,
+        "search_with_outline_expansion",
+        AsyncMock(
+            side_effect=[
+                RuntimeError("qdrant unavailable"),
+                {
+                    "mode": "hybrid",
+                    "outline_expansion": {"matched_chapters": []},
+                    "results": [],
+                },
+            ]
+        ),
+    )
+    append = AsyncMock()
+    monkeypatch.setattr(retrieve_module.event_store, "append", append)
+    monkeypatch.setattr(
+        retrieve_module,
+        "_next_attempt_number",
+        AsyncMock(side_effect=[1, 2]),
+    )
+    db = AsyncMock()
+
+    await retrieve_module.retrieve_knowledge(
+        db,
+        query="红黑树",
+        run_id="run_retry_001",
+    )
+    await retrieve_module.retrieve_knowledge(
+        db,
+        query="红黑树",
+        run_id="run_retry_001",
+    )
+
+    first_called = append.await_args_list[0].args[3]
+    first_result = append.await_args_list[1].args[3]
+    second_called = append.await_args_list[2].args[3]
+    second_result = append.await_args_list[3].args[3]
+
+    assert first_called["activity_id"] == second_called["activity_id"]
+    assert first_result["activity_id"] == second_result["activity_id"]
+    assert first_called["attempt_id"] != second_called["attempt_id"]
+    assert first_called["attempt_no"] == 1
+    assert second_called["attempt_no"] == 2
+    assert second_called["detail"] == "正在第 2 次尝试检索“红黑树”"

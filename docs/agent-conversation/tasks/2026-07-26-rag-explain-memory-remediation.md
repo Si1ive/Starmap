@@ -16,14 +16,14 @@
 
 | 原问题 | 任务 ID | 当前结论 | 状态 | 完成条件 |
 | --- | --- | --- | --- | --- |
-| 1. 工具重试三次，用户端也展示三次 | ACT-001 | 每次调用都生成新的 `activity_id`，前端按不同 ID 正确显示成三个活动 | 已定位 | 后台保留每次 attempt；用户端以稳定逻辑活动 ID 只展示一个持续更新的活动 |
+| 1. 工具重试三次，用户端也展示三次 | ACT-001 | 已为同一逻辑检索复用稳定 `activity_id`，后台额外保留 `attempt_id` / `attempt_no`，时间线与前端按同一 ID 归并成单个活动 | 已完成 | 后台保留每次 attempt；用户端以稳定逻辑活动 ID 只展示一个持续更新的活动 |
 | 2. Explain 无资料时由 LLM 回答 | EXP-001 | 无证据继续进入模型生成的路径已存在，且本次 Run 确实生成了正文 | 待实现完整验收 | 正常零命中和检索异常均可按策略继续回答；无伪造引用；最终内容成功展示 |
 | 3. LLM 已生成长回答但最终显示失败 | FLOW-001 | `NodeResult.success()` 已支持 `artifact`，Explain 渲染链已补最终节点回归测试 | 已完成 | Explain/Validate/Grade/Plan 均可创建 Artifact；失败回归测试覆盖最终节点 |
 | 4. 题目和知识点看似走同一路检索 | RAG-002 | 已统一题目/知识点 DTO，Explain 混合结果优先知识点，Validate 改读 `question_meta` 与实体状态字段 | 已完成 | 统一类型化 DTO；Explain 与 Validate 使用明确实体类型、字段和用户可见名称 |
 | 5. 二分查找题明明存在却未检索到 | RAG-001、RAG-002 | RAG-001、RAG-002 已修复来源回填、DTO 和 Validate 资格门；剩余只差结合真实二分查找检索链做整体验收 | 待完整验收 | 修复来源字段和 DTO；真实二分查找题通过混合检索进入 Validate 候选集 |
 
-结论：五个问题均已登记，没有遗漏；其中 `FLOW-001`、`RAG-002` 的代码修复已完成，`RAG-001 + RAG-002`
-已解除二分查找题在装配层的阻塞，但仍待结合真实检索场景做最终产品验收。
+结论：五个问题均已登记，没有遗漏；其中 `ACT-001`、`FLOW-001`、`RAG-002` 的代码修复已完成，
+`RAG-001 + RAG-002` 已解除二分查找题在装配层的阻塞，但仍待结合真实检索场景做最终产品验收。
 
 ## `run_5c6c46d3` 已确认故障链
 
@@ -59,8 +59,8 @@ load_scope completed
 
 | 执行阶段 | 文件 | 符号 | 代码范围 | 当前职责与问题 |
 | --- | --- | --- | --- | --- |
-| 工具活动创建 | `backend/app/modules/agent/tools/retrieve_knowledge.py` | `retrieve_knowledge` | L72-L128 | 每次调用随机创建 `activity_id` 并公开 `tool.called`，重试因此成为多个用户活动 |
-| 工具结果与异常 | `backend/app/modules/agent/tools/retrieve_knowledge.py` | `_normalize_agent_result`、`_sort_agent_results`、`retrieve_knowledge` | L19-L69、L130-L227 | 已统一 Agent DTO，公开零命中和异常结果；Explain 混合检索默认把知识点排在题目前面 |
+| 工具活动创建 | `backend/app/modules/agent/tools/retrieve_knowledge.py` | `_logical_activity_id`、`_next_attempt_number`、`retrieve_knowledge` | L77-L205 | 已为同一逻辑检索生成稳定 `activity_id`，并在 `tool.called` 中追加 `attempt_id` / `attempt_no`，供后台保留每次 attempt |
+| 工具结果与异常 | `backend/app/modules/agent/tools/retrieve_knowledge.py` | `_normalize_agent_result`、`_sort_agent_results`、`retrieve_knowledge` | L24-L74、L207-L313 | 已统一 Agent DTO，公开零命中和异常结果；Explain 混合检索默认把知识点排在题目前面；失败 attempt 的原始错误保留在后台事件中 |
 | 用户活动归并 | `backend/app/modules/agent/timeline.py` | `AgentTimelineService._activity_views` | L506-L538 | 按 `activity_id` 聚合；不同 ID 必然生成不同活动 |
 | 检索结果契约 | `backend/app/modules/retrieval/search_engine.py` | `RetrievalResult.to_dict` | L20-L95 | 已统一输出 `entity`、`source`、`question_meta`、`knowledge_point_meta` 与学科章节字段，供 Agent 与检索调试共用 |
 | Collection 路由 | `backend/app/modules/retrieval/search_engine.py` | `RetrievalSearchEngine.get_collections` | L151-L161 | `knowledge_point` 和 `question` 分别进入不同 Qdrant Collection；空类型同时查两者 |
@@ -99,10 +99,11 @@ load_scope completed
 
 ### ACT-001 折叠用户端工具重试
 
-- 区分稳定 `logical_activity_id` 与后台 `attempt_id/attempt_no`。
-- 同一逻辑检索的重试复用公开活动 ID；后台事件保留每次尝试、原始异常和耗时。
-- 用户端正常零命中显示“没有检索到相关文档”；重试后仍异常显示“暂时无法检索相关文档”。
-- 验收：三次后台尝试在 Agent Runs 中可见，用户端只显示一个活动卡片。
+- 状态：已完成（2026-07-25）。
+- 已在 `retrieve_knowledge()` 中按 run/query/scope/entity_type 生成稳定 `logical_activity_id`，并让公开 `activity_id` 复用该逻辑 ID；每次真实调用仍保留独立 `attempt_id` 与 `attempt_no`。
+- 已保持 `tool.called` / `tool.result` 的公开提示语义不变：零命中仍显示“没有检索到相关文档”，异常仍显示“暂时无法检索相关文档”；同一逻辑检索的后续 attempt 只会更新同一张活动卡片。
+- 已补 `backend/tests/test_agent_retrieve_activity.py::test_retrieve_knowledge_reuses_logical_activity_id_across_retries` 与 `backend/tests/test_agent_timeline_service.py::test_timeline_merges_retry_attempts_into_single_public_activity`，分别覆盖后台事件 attempt 信息和线程时间线单卡片归并。
+- 验证：`cd backend && ./venv/bin/pytest tests/test_agent_retrieve_activity.py tests/test_agent_timeline_service.py -q` 通过。
 
 ### EXP-001 固化 Explain 无资料回答
 

@@ -4,10 +4,15 @@ retrieve_knowledge 工具适配器
 调用 RetrievalService 的 RAG 检索，封装为 Tool。
 """
 
+import hashlib
+import json
 import uuid
 from typing import Any, Dict, Optional, List
 
+from sqlalchemy import select
+
 from app.core.logging import get_logger
+from app.modules.agent.models import AgentEvent
 from app.modules.retrieval.service import RetrievalService
 from ..events import event_store
 from ..time_utils import utc_isoformat, utc_now
@@ -69,6 +74,53 @@ def _sort_agent_results(
     return sorted(items, key=sort_key)
 
 
+def _logical_activity_id(
+    *,
+    run_id: Optional[str],
+    query: str,
+    subject_id: Optional[str],
+    chapter_ids: Optional[List[str]],
+    entity_type: Optional[str],
+) -> str:
+    normalized = {
+        "tool": "retrieve_knowledge",
+        "run_id": run_id or "",
+        "query": query.strip(),
+        "subject_id": subject_id or "",
+        "chapter_ids": sorted(set(chapter_ids or [])),
+        "entity_type": entity_type or "",
+    }
+    digest = hashlib.sha1(
+        json.dumps(normalized, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:20]
+    return f"activity_{digest}"
+
+
+async def _next_attempt_number(
+    db,
+    *,
+    run_id: str,
+    logical_activity_id: str,
+) -> int:
+    result = await db.execute(
+        select(AgentEvent)
+        .where(
+            AgentEvent.run_id == run_id,
+            AgentEvent.event_type == "tool.called",
+        )
+        .order_by(AgentEvent.sequence)
+    )
+    attempts = 0
+    for event in result.scalars().all():
+        payload = event.payload or {}
+        activity_id = str(
+            payload.get("logical_activity_id") or payload.get("activity_id") or ""
+        )
+        if activity_id == logical_activity_id:
+            attempts += 1
+    return attempts + 1
+
+
 async def retrieve_knowledge(
     db,
     query: str,
@@ -93,7 +145,23 @@ async def retrieve_knowledge(
         检索结果字典
     """
     service = RetrievalService(db)
-    activity_id = f"activity_{uuid.uuid4().hex[:20]}"
+    attempt_id = f"attempt_{uuid.uuid4().hex[:20]}"
+    activity_id = _logical_activity_id(
+        run_id=run_id,
+        query=query,
+        subject_id=subject_id,
+        chapter_ids=chapter_ids,
+        entity_type=entity_type,
+    )
+    attempt_no = (
+        await _next_attempt_number(
+            db,
+            run_id=run_id,
+            logical_activity_id=activity_id,
+        )
+        if run_id
+        else 1
+    )
     started_at = utc_now()
     
     logger.info(
@@ -104,15 +172,23 @@ async def retrieve_knowledge(
     )
     
     if run_id:
+        detail = (
+            f"正在第 {attempt_no} 次尝试检索“{query[:120]}”"
+            if attempt_no > 1
+            else f"正在使用混合检索查询“{query[:120]}”"
+        )
         await event_store.append(
             db,
             run_id,
             "tool.called",
             {
                 "activity_id": activity_id,
+                "logical_activity_id": activity_id,
+                "attempt_id": attempt_id,
+                "attempt_no": attempt_no,
                 "activity_type": "retrieval",
                 "title": "检索 408 知识库",
-                "detail": f"正在使用混合检索查询“{query[:120]}”",
+                "detail": detail,
                 "started_at": utc_isoformat(started_at),
                 "public_metadata": {
                     "tool": "retrieve_knowledge",
@@ -122,6 +198,7 @@ async def retrieve_knowledge(
                     "chapter_ids": chapter_ids or [],
                     "entity_type": entity_type,
                     "limit": limit,
+                    "attempt_no": attempt_no,
                 },
             },
         )
@@ -169,6 +246,9 @@ async def retrieve_knowledge(
                 "tool.result",
                 {
                     "activity_id": activity_id,
+                    "logical_activity_id": activity_id,
+                    "attempt_id": attempt_id,
+                    "attempt_no": attempt_no,
                     "activity_type": "retrieval",
                     "title": "检索 408 知识库",
                     "detail": (
@@ -185,6 +265,7 @@ async def retrieve_knowledge(
                         "query": query[:200],
                         "total": len(simplified),
                         "documents": document_summaries,
+                        "attempt_no": attempt_no,
                         "matched_chapters": (
                             response["outline_expansion"].get("matched_chapters", [])[:5]
                         ),
@@ -210,16 +291,21 @@ async def retrieve_knowledge(
                 "tool.result",
                 {
                     "activity_id": activity_id,
+                    "logical_activity_id": activity_id,
+                    "attempt_id": attempt_id,
+                    "attempt_no": attempt_no,
                     "activity_type": "retrieval",
                     "title": "检索 408 知识库",
                     "detail": "暂时无法检索相关文档",
                     "status": "failed",
                     "started_at": utc_isoformat(started_at),
                     "completed_at": utc_isoformat(completed_at),
+                    "error": str(e),
                     "public_metadata": {
                         "tool": "retrieve_knowledge",
                         "backend": "Qdrant 混合检索 + MySQL 内容索引",
                         "query": query[:200],
+                        "attempt_no": attempt_no,
                     },
                 },
             )
