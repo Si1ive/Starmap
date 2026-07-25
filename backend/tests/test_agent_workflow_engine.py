@@ -1,5 +1,7 @@
 """工作流引擎公开进度持久化测试。"""
 
+from unittest.mock import AsyncMock
+
 import pytest
 import pytest_asyncio
 from sqlalchemy import select
@@ -7,6 +9,11 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from app.db.mysql import Base
+from app.modules.agent.model_runtime.schema import (
+    ActionType,
+    ExplanationOutput,
+    LoopDecision,
+)
 from app.modules.agent.models import (
     AgentApproval,
     AgentArtifact,
@@ -21,6 +28,7 @@ from app.modules.agent.models import (
     AgentThreadItem,
 )
 from app.modules.agent.timeline import AgentTimelineService
+from app.modules.agent.workflows import explain
 from app.modules.agent.workflows.contracts import (
     ExecutionContext,
     Node,
@@ -107,8 +115,6 @@ async def test_engine_persists_public_step_for_timeline_snapshot(db_session, mon
         )
     )
 
-    from unittest.mock import AsyncMock
-
     commit = AsyncMock(wraps=db_session.commit)
     monkeypatch.setattr(db_session, "commit", commit)
     result = await WorkflowEngine(db_session).execute(
@@ -135,3 +141,117 @@ async def test_engine_persists_public_step_for_timeline_snapshot(db_session, mon
     assert commit.await_count >= 2
     assert persisted_run.current_public_step == "generate_explanation"
     assert page.items[0]["workflow"]["current_step"] == "组织讲解"
+
+
+class ExplanationRuntimeStub:
+    def __init__(self, *, decisions, output):
+        self.decisions = list(decisions)
+        self.output = output
+
+    async def decide(self, current_input, *, evidence_count, deps, db=None):
+        return self.decisions.pop(0)
+
+    async def generate(self, current_input, *, evidence_text, deps, db=None):
+        return self.output
+
+
+@pytest.mark.asyncio
+async def test_explain_workflow_keeps_artifact_through_render_and_completion(
+    db_session,
+    monkeypatch,
+):
+    thread = AgentThread(
+        id="thread_explain_001",
+        user_id="user_001",
+        title="会话",
+        status="active",
+    )
+    run = AgentRun(
+        id="run_explain_001",
+        thread_id=thread.id,
+        user_id="user_001",
+        workflow_name="explain",
+        workflow_key="explain",
+        workflow_version="v1",
+        status="running",
+        presentation="compact",
+        public_title="整理讲解",
+    )
+    db_session.add(thread)
+    await db_session.flush()
+    db_session.add(run)
+    await db_session.flush()
+    run.root_run_id = run.id
+
+    monkeypatch.setattr(
+        explain,
+        "explanation_runtime",
+        ExplanationRuntimeStub(
+            decisions=[
+                LoopDecision(
+                    action=ActionType.RETRIEVE_KNOWLEDGE,
+                    parameters={"query": "二分查找", "limit": 5},
+                    reasoning="先检索资料",
+                    confidence=0.95,
+                ),
+                LoopDecision(
+                    action=ActionType.FINISH,
+                    parameters={},
+                    reasoning="资料足够",
+                    confidence=0.9,
+                ),
+            ],
+            output=ExplanationOutput(
+                outline=["定义", "步骤"],
+                body="二分查找每次把搜索区间缩小一半。",
+                citations=["教材"],
+                summary="说明二分查找的核心过程。",
+            ),
+        ),
+    )
+    monkeypatch.setattr(explain.loop_turn_store, "record", AsyncMock())
+    monkeypatch.setattr(
+        explain,
+        "retrieve_knowledge",
+        AsyncMock(
+            return_value={
+                "status": "success",
+                "query": "二分查找",
+                "results": [
+                    {
+                        "title": "教材",
+                        "content": "二分查找要求序列有序。",
+                        "source_type": "textbook",
+                    }
+                ],
+                "total": 1,
+            }
+        ),
+    )
+
+    context = ExecutionContext(run.id, run.user_id, db_session)
+    context.set("input_message", "给我讲解一下二分查找")
+    result = await WorkflowEngine(db_session).execute(
+        explain.build_explain_workflow(),
+        context,
+        run,
+    )
+
+    step_names = (
+        await db_session.execute(
+            select(AgentStep.node_name).where(AgentStep.run_id == run.id)
+        )
+    ).scalars().all()
+
+    assert result.status.value == "completed"
+    assert result.artifact == {
+        "type": "explanation",
+        "title": "知识点讲解：给我讲解一下二分查找",
+        "content": "二分查找每次把搜索区间缩小一半。",
+        "citations": ["教材"],
+        "outline": ["定义", "步骤"],
+        "summary": "说明二分查找的核心过程。",
+    }
+    assert context.artifacts == [result.artifact]
+    assert "render_artifact" in step_names
+    assert "completed" in step_names

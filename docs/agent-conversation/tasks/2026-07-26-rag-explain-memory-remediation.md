@@ -18,7 +18,7 @@
 | --- | --- | --- | --- | --- |
 | 1. 工具重试三次，用户端也展示三次 | ACT-001 | 每次调用都生成新的 `activity_id`，前端按不同 ID 正确显示成三个活动 | 已定位 | 后台保留每次 attempt；用户端以稳定逻辑活动 ID 只展示一个持续更新的活动 |
 | 2. Explain 无资料时由 LLM 回答 | EXP-001 | 无证据继续进入模型生成的路径已存在，且本次 Run 确实生成了正文 | 待实现完整验收 | 正常零命中和检索异常均可按策略继续回答；无伪造引用；最终内容成功展示 |
-| 3. LLM 已生成长回答但最终显示失败 | FLOW-001 | `NodeResult.success()` 不接受 `artifact`，`render_artifact` 抛错导致正文未持久化 | 已定位 | Explain/Validate/Grade/Plan 均可创建 Artifact；失败回归测试覆盖最终节点 |
+| 3. LLM 已生成长回答但最终显示失败 | FLOW-001 | `NodeResult.success()` 已支持 `artifact`，Explain 渲染链已补最终节点回归测试 | 已完成 | Explain/Validate/Grade/Plan 均可创建 Artifact；失败回归测试覆盖最终节点 |
 | 4. 题目和知识点看似走同一路检索 | RAG-002 | MySQL 实体和 Qdrant Collection 已分类；共享工具按 `entity_type` 路由，但 Agent DTO 和业务语义不完整 | 已定位 | 统一类型化 DTO；Explain 与 Validate 使用明确实体类型、字段和用户可见名称 |
 | 5. 二分查找题明明存在却未检索到 | RAG-001、RAG-002 | 数据、检索片段、稀疏召回和向量召回均命中；失败发生在 MySQL 回填和 Agent DTO 转换 | 已定位 | 修复来源字段和 DTO；真实二分查找题通过混合检索进入 Validate 候选集 |
 
@@ -66,7 +66,7 @@ load_scope completed
 | 命中内容回填 | `backend/app/modules/retrieval/search_engine.py` | `RetrievalSearchEngine.hydrate_results` | L222-L282 | 从 MySQL 补全片段和文档来源；当前错误访问 `Document.filename` |
 | 无证据生成 | `backend/app/modules/agent/workflows/explain.py` | `_evidence_gate_node`、`_generate_explanation_node` | L159-L225 | 无证据仍进入模型生成，并要求使用通用知识且不伪造引用 |
 | Explain 产物渲染 | `backend/app/modules/agent/workflows/explain.py` | `_render_artifact_node`、`_completed_node` | L243-L270 | 将成功正文组装为 Artifact，但传入了工厂方法不支持的 `artifact` 参数 |
-| 节点结果契约 | `backend/app/modules/agent/workflows/contracts.py` | `NodeResult.success` | L27-L38 | 数据类有 `artifact` 字段，工厂方法却没有同名参数 |
+| 节点结果契约 | `backend/app/modules/agent/workflows/contracts.py` | `NodeResult.success` | L27-L48 | 已支持 `artifact` 参数，render 节点可通过统一工厂方法把最终产物传给引擎与 worker |
 | Validate 检索 | `backend/app/modules/agent/workflows/validate.py` | `_load_learning_evidence_node`、`_question_discovery_node`、`_question_gate_node` | L20-L76 | 使用硬编码薄弱点生成查询；虽限定 `question`，但未使用当前主题且资格字段与 DTO 不兼容 |
 | 当前上下文构建 | `backend/app/modules/agent/context_builder.py` | `AgentRunContext`、`ThreadContextBuilder.build` | L82-L116、L133-L246 | 能选择近期消息和 Artifact，但没有填充主题状态、独立请求和分层记忆 |
 | Router 与子 Run 交接 | `backend/app/modules/agent/workflows/conversation.py` | `_route_node`、`_child_context_metadata`、`_dispatch_workflow_node` | L45-L100、L163-L234 | Router 收到消息历史；子 Run 只拿选中 ID，没有可消费的主题快照 |
@@ -76,10 +76,10 @@ load_scope completed
 
 ### FLOW-001 修复工作流 Artifact 契约
 
-- 扩展 `NodeResult.success()`，接收并传递 `artifact`。
-- 审计 Explain、Validate、Grade、Plan 所有 Artifact 节点。
-- 增加真正执行到最终渲染节点的工作流回归测试。
-- 验收：模型正文生成后 Artifact、`message.completed` 和 `run.completed` 全部落库；刷新页面仍可见。
+- 状态：已完成（2026-07-25）。
+- 已扩展 `NodeResult.success()`，接收并传递 `artifact`，Explain / Validate / Grade / Plan 现可继续复用统一工厂方法。
+- 已补 `backend/tests/test_agent_workflow_engine.py::test_explain_workflow_keeps_artifact_through_render_and_completion`，真正执行 explain workflow 到 `render_artifact -> completed`，覆盖此前的 TypeError 回归点。
+- 验证：`./venv/bin/pytest tests/test_agent_workflow_engine.py tests/test_agent_explain_workflow.py -q` 通过。
 
 ### RAG-001 修复命中后的来源信息回填
 

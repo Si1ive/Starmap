@@ -34,8 +34,18 @@ class NodeResult:
     artifact: Optional[Dict[str, Any]] = None
 
     @classmethod
-    def success(cls, output: Dict[str, Any] = None, next_node: Optional[str] = None) -> "NodeResult":
-        return cls(status=NodeStatus.COMPLETED, output=output, next_node=next_node)
+    def success(
+        cls,
+        output: Optional[Dict[str, Any]] = None,
+        next_node: Optional[str] = None,
+        artifact: Optional[Dict[str, Any]] = None,
+    ) -> "NodeResult":
+        return cls(
+            status=NodeStatus.COMPLETED,
+            output=output,
+            next_node=next_node,
+            artifact=artifact,
+        )
 
     @classmethod
     def failure(cls, error: str, output: Optional[Dict[str, Any]] = None) -> "NodeResult":
