@@ -183,10 +183,7 @@ class DirectAnswerRuntime:
             message_history=message_history,
             model=model,
             model_settings=model_settings,
-            usage_limits=UsageLimits(
-                request_limit=2,
-                total_tokens_limit=deps.token_budget,
-            ),
+            usage_limits=UsageLimits(request_limit=2),
         ) as stream:
             async for output in stream.stream_output(debounce_by=0.1):
                 final_output = output
@@ -218,10 +215,7 @@ class DirectAnswerRuntime:
             message_history=message_history,
             model=model,
             model_settings=model_settings,
-            usage_limits=UsageLimits(
-                request_limit=2,
-                total_tokens_limit=deps.token_budget,
-            ),
+            usage_limits=UsageLimits(request_limit=2),
         )
 
 

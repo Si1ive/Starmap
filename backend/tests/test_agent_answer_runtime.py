@@ -63,3 +63,27 @@ async def test_direct_answer_streams_structured_content_as_prefix_deltas():
 
     assert output.content == "循环队列通过取模运算复用数组空间。"
     assert "".join(deltas) == output.content
+
+
+@pytest.mark.asyncio
+async def test_direct_answer_context_selection_budget_does_not_limit_output():
+    runtime = DirectAnswerRuntime(
+        TestModel(
+            custom_output_args={
+                "content": "红黑树通过颜色约束维持近似平衡。" * 20,
+                "public_summary": "讲解红黑树",
+            }
+        )
+    )
+
+    output = await runtime.answer(
+        "讲解红黑树",
+        deps=DirectAnswerDeps(
+            thread_id="thread_001",
+            user_id="user_001",
+            turn_id="run_001",
+            token_budget=1,
+        ),
+    )
+
+    assert output.content.startswith("红黑树通过颜色约束")

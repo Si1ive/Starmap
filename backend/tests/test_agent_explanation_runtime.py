@@ -95,3 +95,40 @@ async def test_explanation_runtime_uses_run_bound_agent_model_config(monkeypatch
 
     assert decision.action.value == "finish"
     assert opened_run_ids == ["run_explain_001"]
+
+
+@pytest.mark.asyncio
+async def test_explanation_context_selection_budget_does_not_limit_output():
+    runtime = ExplanationRuntime(
+        decision_model=TestModel(
+            custom_output_args={
+                "action": "finish",
+                "parameters": {},
+                "reasoning": "资料足够",
+                "confidence": 0.9,
+            }
+        ),
+        generation_model=TestModel(
+            custom_output_args={
+                "outline": ["定义"],
+                "body": "红黑树通过颜色约束维持近似平衡。" * 20,
+                "citations": [],
+                "summary": "讲解红黑树",
+            }
+        ),
+    )
+    deps = ExplanationDeps(
+        run_id="run_explain_001",
+        user_id="user_001",
+        token_budget=1,
+    )
+
+    decision = await runtime.decide("讲解红黑树", evidence_count=0, deps=deps)
+    output = await runtime.generate(
+        "讲解红黑树",
+        evidence_text="没有检索到相关文档",
+        deps=deps,
+    )
+
+    assert decision.action.value == "finish"
+    assert output.body.startswith("红黑树通过颜色约束")

@@ -155,10 +155,7 @@ class ExplanationRuntime:
             deps=deps,
             model=model,
             model_settings=model_settings,
-            usage_limits=UsageLimits(
-                request_limit=2,
-                total_tokens_limit=deps.token_budget,
-            ),
+            usage_limits=UsageLimits(request_limit=2),
         )
 
     @staticmethod
@@ -174,10 +171,7 @@ class ExplanationRuntime:
             deps=deps,
             model=model,
             model_settings=model_settings,
-            usage_limits=UsageLimits(
-                request_limit=2,
-                total_tokens_limit=deps.token_budget,
-            ),
+            usage_limits=UsageLimits(request_limit=2),
         )
 
 

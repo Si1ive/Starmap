@@ -477,7 +477,8 @@ async def test_context_history_can_be_passed_to_pydantic_ai_router(db_session):
         message_history=context.to_message_history(),
     )
 
-    assert decision.action == "direct_answer"
+    assert decision.action == "validate"
+    assert decision.reason_code == "explicit_validate_request"
 
 
 @pytest.mark.asyncio

@@ -73,3 +73,55 @@ async def test_router_rejects_action_outside_runtime_scope():
             "给我安排学习计划",
             deps=_deps(allowed_actions=("direct_answer", "clarify")),
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("current_input", "expected_action"),
+    [
+        ("给我讲解一下红黑树", "explain"),
+        ("讲清楚循环队列 front 的推导", "explain"),
+        ("给我找一道二分查找的题目", "validate"),
+        ("帮我批改这份答案", "grade"),
+        ("给我安排一份操作系统复习计划", "plan"),
+    ],
+)
+async def test_router_honors_explicit_workflow_intent_even_when_model_says_direct(
+    current_input,
+    expected_action,
+):
+    runtime = RouterRuntime(
+        TestModel(
+            custom_output_args={
+                "action": "direct_answer",
+                "confidence": 0.95,
+                "reason_code": "standard_knowledge_question",
+                "public_summary": "可以直接回答",
+            }
+        )
+    )
+
+    decision = await runtime.decide(current_input, deps=_deps())
+
+    assert decision.action == expected_action
+    assert decision.reason_code == f"explicit_{expected_action}_request"
+
+
+@pytest.mark.asyncio
+async def test_router_context_selection_budget_does_not_limit_model_usage():
+    runtime = RouterRuntime(
+        TestModel(
+            custom_output_args={
+                "action": "direct_answer",
+                "confidence": 0.95,
+                "reason_code": "simple_greeting",
+            }
+        )
+    )
+
+    decision = await runtime.decide(
+        "你好",
+        deps=_deps(token_budget=1),
+    )
+
+    assert decision.action == "direct_answer"

@@ -429,7 +429,7 @@ DDL；迁移图后来继续前进到 workflow activity revision，不改变这�
 
 运行时 `AgentModelConfig.model_settings`（`backend/app/modules/agent/model_runtime/config.py` L29-L51）
 只在值非空时加入 `max_tokens`。Router 和 Answer 分别在
-`backend/app/modules/agent/model_runtime/router.py` 的 `RouterRuntime.decide`（L70-L121）以及
+`backend/app/modules/agent/model_runtime/router.py` 的 `RouterRuntime.decide`（L114-L180）以及
 `backend/app/modules/agent/model_runtime/answer.py` 的 `DirectAnswerRuntime.answer`（L91-L166）消费该
 字典。因此无限配置不会再被 Pydantic AI/OpenAI SDK 转成越界的 `max_completion_tokens`。
 
@@ -441,6 +441,41 @@ DDL；迁移图后来继续前进到 workflow activity revision，不改变这�
 排障时先在管理端确认表格显示“不设上限”，再检查数据库值是否为 SQL `NULL`，最后查看调用监控中的
 请求参数是否不存在 `max_tokens`。若仍看到越界数字，说明运行实例尚未更新、配置未保存成功，或
 调用走了另一条仍带硬编码预算的任务链路；不要通过 `alembic stamp head` 或修改供应商错误响应规避。
+
+#### 5.10.1 为什么 4096 Token 会在模型仍能生成时中止回答
+
+故障 Run `run_2be7fce350004103a66b` 的上下文审计显示 `context_estimated_tokens=56`，但最终报
+`Exceeded the total_tokens_limit of 4096 (total_tokens=4863)`。这里的 4096 不是 glm-5.2 的模型窗口；
+它来自 `backend/app/modules/agent/workflows/conversation.py` 的 `_route_node`（L42-L102）传给
+`ThreadContextBuilder.build` 的历史选择预算。该预算的职责只是决定哪些历史消息进入本轮 prompt。
+
+旧实现又把同一个值传给 Pydantic AI `UsageLimits.total_tokens_limit`，于是 56 Token 左右的短输入加上
+持续生成的长回答一旦累计超过 4096，框架就会在供应商仍可继续生成时主动抛错。glm-5.2 此前返回的
+参数校验范围 `[1, 131072]` 也证明它支持的输出上限远高于 4096；两者属于不同层次的限制。
+
+修复后的边界如下：
+
+| 执行阶段 | 文件 | 符号 | 代码范围 | 入口条件 | 处理与副作用 | 最终消费 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 历史选择 | `backend/app/modules/agent/workflows/conversation.py` | `_route_node` | L42-L67 | conversation Run 开始路由 | 用 `token_budget=4096` 筛选历史并记录审计；不会限制本轮模型总用量 | `RouterDeps` 和 `AgentRunContext` |
+| 显式意图护栏 | `backend/app/modules/agent/model_runtime/router.py` | `_explicit_workflow_action` / `RouterRuntime.decide` | L87-L94 / L114-L180 | 模型返回 action | 按 grade → plan → validate → explain 识别明确措辞；模型选择 clarify 时保留澄清，目标 action 未授权时不覆盖 | `_route_node` 使用纠偏后的 `RouterDecision` |
+| Router 调用保护 | `backend/app/modules/agent/model_runtime/router.py` | `RouterRuntime._run` | L182-L198 | 路由模型调用 | `UsageLimits(request_limit=2)` 只防止一次路由发生过多模型请求 | 结构化 Router 输出 |
+| 普通回答调用保护 | `backend/app/modules/agent/model_runtime/answer.py` | `DirectAnswerRuntime._run_stream` / `DirectAnswerRuntime._run` | L168-L201 / L203-L219 | 普通回答流式或非流式调用 | 只限制请求次数；模型输出上限来自 `model_settings.max_tokens`，无限配置时省略该参数 | delta 或完整回答 |
+| 讲解模型调用保护 | `backend/app/modules/agent/model_runtime/explanation.py` | `ExplanationRuntime._run_decision` / `ExplanationRuntime._run_generation` | L145-L159 / L161-L175 | explain 资料规划或正文生成 | 只限制请求次数，不把 `ExplanationDeps.token_budget` 误作输入加输出总上限 | 规划动作或讲解正文 |
+
+Router 提示词也明确了业务边界，但提示词不是唯一保障。`_explicit_workflow_action` 对用户已经明确表达的
+“讲解/讲清楚/推导”“出题/练习/测验”“批改/评分”“学习或复习计划”做确定性纠偏；问候、简短事实和
+普通追问仍走 `direct_answer`。服务端护栏只覆盖模型误判，不覆盖 `clarify`，因为“帮我批改”但未提供
+答案时仍应先追问必要内容。
+
+回归测试分别位于 `backend/tests/test_agent_router_runtime.py` 的
+`test_router_honors_explicit_workflow_intent_even_when_model_says_direct`（L78-L107）和
+`test_router_context_selection_budget_does_not_limit_model_usage`（L110-L127）、
+`backend/tests/test_agent_answer_runtime.py` 的
+`test_direct_answer_context_selection_budget_does_not_limit_output`（L68-L89），以及
+`backend/tests/test_agent_explanation_runtime.py` 的
+`test_explanation_context_selection_budget_does_not_limit_output`（L100-L134）。这些测试用极小的
+`token_budget=1` 证明上下文选择预算不会再提前中止模型调用。
 
 ### 5.11 为什么失败回复曾显示两遍
 
@@ -457,8 +492,8 @@ failed 状态只渲染一个 `agent-message__error`：优先显示后端提供�
 
 | 层次 | 文件 | 符号 | 代码范围 | 当前行为 |
 | --- | --- | --- | --- | --- |
-| 路由决策 | `backend/app/modules/agent/model_runtime/router.py` | `RouterRuntime.decide` / `_run` | L70-L142 | 完整返回并校验 `RouterDecision`，不把 Router reason 或 partial JSON 推给用户 |
-| 模型执行 | `backend/app/modules/agent/model_runtime/answer.py` | `DirectAnswerRuntime._run_stream` | L168-L204 | 使用 `run_stream`，每 100ms partial validate 一次结构化 `DirectAnswerOutput` |
+| 路由决策 | `backend/app/modules/agent/model_runtime/router.py` | `RouterRuntime.decide` / `_run` | L114-L198 | 完整返回、显式意图纠偏并校验 `RouterDecision`，不把 Router reason 或 partial JSON 推给用户 |
+| 模型执行 | `backend/app/modules/agent/model_runtime/answer.py` | `DirectAnswerRuntime._run_stream` | L168-L201 | 使用 `run_stream`，每 100ms partial validate 一次结构化 `DirectAnswerOutput` |
 | 增量持久化 | `backend/app/modules/agent/workflows/conversation.py` | `_direct_answer_node.publish_delta` | L104-L131 | 每批正文写 `message.delta` 并 commit，使独立 SSE session 立即可见 |
 | 最终收敛 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run`（message completed 分支） | L200-L209 | artifact 完整生成后写 `message.completed`，用最终正文覆盖并收敛 streaming message |
 | 公共事件投影 | `backend/app/modules/agent/thread_events.py` | `ThreadEventStore._project_message_event`（delta 分支） | L232-L307 | 第一个 delta 创建 assistant 时间线项，后续 delta 追加正文并发布公开事件 |

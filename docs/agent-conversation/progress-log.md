@@ -677,3 +677,36 @@ Router 的完整结构化决策和最终消息收敛能力。
 ### 提交信息
 
 `收紧 Agent 输入框并增加底部间距`
+
+## 2026-07-25：修正 Agent 路由意图与模型 Token 预算
+
+### 目标
+
+修复“讲解红黑树”等明确业务请求仍被 Router 归为 `direct_answer`，以及项目把 4096 历史上下文预算
+误作 Pydantic AI 输入加输出总量限制，导致长回答在模型能力范围内仍被提前中止的问题。
+
+### 根因与实现
+
+- Router 原提示只说“普通问答”，边界过宽；真实 Run 因此把“给我讲解一下红黑树”判为
+  `standard_knowledge_question`。现在明确 direct/explain/validate/grade/plan/clarify 的语义边界。
+- 增加服务端显式意图护栏，对讲解、出题、批改和学习计划的明确措辞纠偏；保留模型的 clarify 决策，
+  并继续执行 allowed action 授权校验。
+- 4096 继续用于筛选可信历史和记录上下文审计，不再传给 Pydantic AI 的
+  `total_tokens_limit`；Router、DirectAnswer 和 Explanation 只保留每次运行两次模型请求的保护。
+- 输出 Token 继续由本轮 Agent 模型配置控制；管理员设置“不设上限”时不发送 `max_tokens`，由真实
+  模型和供应商上下文窗口决定可生成长度。
+
+### 教学文档
+
+- 全景文档补充 Router 模型调用、显式意图护栏、历史选择预算和模型输出限制的完整边界。
+- 细致讲解记录真实 Run 的 56/4096/4863 Token 证据、为什么它不是 glm-5.2 的模型上限，以及各运行时
+  的精确调用位置和回归测试。
+
+### 验证
+
+- Router、DirectAnswer、Explanation 定向回归：19 项通过。
+- `git diff --check` 通过。
+
+### 提交信息
+
+`修正 Agent 路由意图与模型 Token 预算`

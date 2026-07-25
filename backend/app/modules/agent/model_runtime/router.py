@@ -1,6 +1,7 @@
 """Pydantic AI 类型安全路由运行时。"""
 
 from dataclasses import dataclass
+import re
 from typing import Sequence
 
 from pydantic_ai import Agent, RunContext, UsageLimits
@@ -44,10 +45,53 @@ router_agent = Agent(
     instructions=(
         "你是 408 学习 Agent 的路由器，只判断本轮下一步处理方式，不直接回答用户。"
         "必须返回结构化 RouterDecision，不得输出隐藏推理过程。"
-        "普通问答选择 direct_answer；缺少必要信息选择 clarify；"
-        "需要形成业务执行链路时才选择 explain、validate、grade 或 plan。"
+        "问候、身份询问、简短事实问答和普通追问选择 direct_answer；"
+        "用户要求讲解、讲清楚、详细解释、系统说明、推导或理解原理时选择 explain；"
+        "用户要求出题、找题、专项练习或测验时选择 validate；"
+        "用户要求批改、评分、判断其答案或指出错误时选择 grade；"
+        "用户要求制定学习、复习或备考计划时选择 plan；"
+        "缺少执行上述任务所必需的对象或范围时选择 clarify。"
     ),
 )
+
+
+_EXPLICIT_WORKFLOW_PATTERNS: tuple[tuple[RouterAction, re.Pattern[str]], ...] = (
+    (
+        "grade",
+        re.compile(
+            r"批改|评分|打分|评阅|我的(?:答案|作答)|答案.{0,8}(?:对不对|哪里错|错在哪)"
+        ),
+    ),
+    (
+        "plan",
+        re.compile(
+            r"(?:学习|复习|备考).{0,10}(?:计划|规划|安排)|"
+            r"(?:计划|规划|安排).{0,10}(?:学习|复习|备考)"
+        ),
+    ),
+    (
+        "validate",
+        re.compile(
+            r"(?:给我|帮我).{0,8}(?:找|出|来|推荐).{0,8}(?:题|题目|练习)|"
+            r"(?:给我|帮我).{0,8}(?:一|两|几|道|套).{0,6}(?:题|题目|练习)|"
+            r"专项练习|练习题|测验(?:一下)?"
+        ),
+    ),
+    (
+        "explain",
+        re.compile(r"讲解|讲清楚|详细解释|系统(?:地)?(?:说明|介绍|讲)|推导|原理"),
+    ),
+)
+
+
+def _explicit_workflow_action(current_input: str) -> RouterAction | None:
+    """识别用户明确说出的工作流意图，作为模型路由的确定性护栏。"""
+
+    normalized = " ".join(current_input.strip().split())
+    for action, pattern in _EXPLICIT_WORKFLOW_PATTERNS:
+        if pattern.search(normalized):
+            return action
+    return None
 
 
 @router_agent.instructions
@@ -106,6 +150,21 @@ class RouterRuntime:
                 model=settings.AGENT_ROUTER_MODEL,
             )
         decision = result.output
+        explicit_action = _explicit_workflow_action(current_input)
+        if (
+            decision.action != "clarify"
+            and explicit_action
+            and explicit_action in deps.allowed_actions
+        ):
+            decision = decision.model_copy(
+                update={
+                    "action": explicit_action,
+                    "confidence": max(decision.confidence, 0.99),
+                    "reason_code": f"explicit_{explicit_action}_request",
+                    "public_summary": "已根据用户明确表达的任务类型选择执行流程。",
+                    "clarification_question": None,
+                }
+            )
         if decision.action not in deps.allowed_actions:
             raise ValueError(f"Router 返回了未授权 action: {decision.action}")
         is_clarify = decision.action == "clarify"
@@ -135,10 +194,7 @@ class RouterRuntime:
             message_history=message_history,
             model=model,
             model_settings=model_settings,
-            usage_limits=UsageLimits(
-                request_limit=2,
-                total_tokens_limit=deps.token_budget,
-            ),
+            usage_limits=UsageLimits(request_limit=2),
         )
 
 
