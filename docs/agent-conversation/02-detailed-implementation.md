@@ -651,3 +651,28 @@ Agent 页面仍保留 `--chat-*` 语义变量，目的是让组件样式能表�
 这种“全局 token + Agent 语义别名”的两层方式保留了组件可读性，也避免复制颜色常量。
 以后修改全站品牌色时应优先修改 `index.css`；只有某个 Agent 状态需要新的业务语义时，才在
 全局设计系统增加 token，再由 `--chat-*` 映射使用。
+
+### 7.3 为什么新输入框仍然显得很高
+
+当前 `AgentPage` 已改用 `frontend/src/features/agent/ChatComposer.tsx`，但全局样式中仍保留旧页面的
+同名选择器。`frontend/src/index.css` 的 `.agent-composer textarea`（L1855-L1865）设置过
+`padding: 20px`，`.agent-composer__footer`（L1871-L1878）还设置了 54px 最小高度、上下内边距和
+顶部分隔线。新 `agent-chat.css` 原先只覆盖字体、最小高度和布局，没有重置这些属性；两个样式表
+共同生效后，`ChatComposer` 的自动高度逻辑把 textarea 上下共 40px 的旧 padding 也算入
+`scrollHeight`，即使只有一行文字仍会出现大量空白。
+
+关键代码定位：
+
+| 执行阶段 | 文件 | 符号 | 代码范围 | 入口条件 | 处理与副作用 | 最终消费 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 自动计算高度 | `frontend/src/features/agent/ChatComposer.tsx` | `ChatComposer`（textarea 高度 effect） | L36-L41 | 输入值变化 | 先把高度归零，再把 `scrollHeight` 限制到 180px；不会写后端状态 | 浏览器内联 `height` |
+| 底部安全距离 | `frontend/src/features/agent/agent-chat.css` | `.agent-chat-composer-dock` | L670-L678 | 已有会话使用底部 dock | 桌面底部 padding 提高到 18px，并叠加 `safe-area-inset-bottom` | composer 与视口底部保持小幅安全距离 |
+| 紧凑编辑区 | `frontend/src/features/agent/agent-chat.css` | `.agent-composer` / `.agent-composer textarea` | L687-L715 | 空文本或普通单行输入 | 收紧容器 padding；明确清除旧 textarea padding；单行高度 24px，最多增长到 160px | 用户输入文本和自动增长高度 |
+| 重置旧 footer | `frontend/src/features/agent/agent-chat.css` | `.agent-composer__footer` | L721-L729 | 模型选择与发送按钮渲染 | 显式清除旧 border/padding，把最小高度收敛为 32px | 模型选择、快捷键提示和发送按钮 |
+| 控件与说明 | `frontend/src/features/agent/agent-chat.css` | `.agent-composer__send` / `.agent-chat-disclaimer` | L786-L813 | composer 渲染 | 发送按钮收敛到 32px，说明文字与 composer 保持 6px 间距 | 底部工具行和安全说明 |
+| 移动端适配 | `frontend/src/features/agent/agent-chat.css` | `@media (max-width: 640px)`（composer 分支） | L974-L995 | 视口不超过 640px | 底部距离为 13px 加安全区；快捷键提示隐藏后由发送按钮 `margin-left:auto` 补足右对齐 | 底部导航上方的移动端输入区 |
+
+实际无头浏览器检查覆盖 1440×900 和 390×844：空文本及单行文本的 composer 都为 78px，textarea
+和 footer 分别为 24px、32px；textarea 上下 padding、footer 上下 padding、footer 顶边框都为 0。
+桌面 dock 底部 padding 为 18px，移动端为 13px，两个视口均无横向溢出或运行时异常。多行输入仍由
+原 effect 按真实内容增长，不会为了单行紧凑而失去长文本编辑能力。
