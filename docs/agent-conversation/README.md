@@ -30,6 +30,8 @@ docs/agent-conversation/
 │   └── database-migrations.md         # 表结构、迁移和结构守卫
 ├── incidents/
 │   └── YYYY-MM-DD-主题.md             # 单次复杂故障证据与复盘
+├── tasks/
+│   └── YYYY-MM-DD-主题.md             # 跨阶段待做任务、依赖和验收状态
 └── progress/
     └── YYYY-MM.md                     # 当月提交进展
 ```
@@ -46,8 +48,14 @@ docs/agent-conversation/
 | 用户端交互和样式 | `implementation/frontend-experience.md` | API/SSE 契约改变时再读事件分卷 |
 | ORM、Alembic、结构守卫 | `implementation/database-migrations.md` | 数据所有权改变时再读 `architecture/system-map.md` |
 | 复杂线上故障 | 对应实现分卷 + 新建 `incidents/` 单页 | 只读取相关月份进展，不加载全部历史 |
+| 跨多个提交的待做计划 | `tasks/` 中对应任务单页 | 实施某项任务时再进入对应 architecture/implementation 分卷 |
 
 每个 Agent 提交最后只追加当月 `progress/YYYY-MM.md`，不在进展日志中复制详细正文。
+
+## 当前待做任务
+
+- [RAG、Explain 与分层记忆整改计划](./tasks/2026-07-26-rag-explain-memory-remediation.md)：覆盖
+  `run_5c6c46d3`、检索重试公开投影、Explain 无资料回答、RAG 契约和分层长期记忆。
 
 ## 迁移源
 

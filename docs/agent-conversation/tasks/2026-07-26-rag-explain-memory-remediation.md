@@ -1,0 +1,224 @@
+# RAG、Explain 与分层记忆整改计划
+
+## 文档目的
+
+本任务单用于持续追踪 `run_5c6c46d3` 暴露的检索、工作流产物、用户端活动投影问题，以及后续分层
+长期记忆建设。它是待做任务的权威清单，不表示列出的代码修复已经完成；实施时按任务 ID 更新状态、
+验证结果和对应提交，不依赖历史对话恢复上下文。
+
+状态含义：`已定位` 表示根因已有证据但代码尚未修复；`待设计` 表示仍需冻结契约；`待实现` 表示
+方案已明确；`已完成` 必须同时满足代码、迁移、测试、教学文档和提交要求。
+
+## 用户问题覆盖矩阵
+
+| 原问题 | 任务 ID | 当前结论 | 状态 | 完成条件 |
+| --- | --- | --- | --- | --- |
+| 1. 工具重试三次，用户端也展示三次 | ACT-001 | 每次调用都生成新的 `activity_id`，前端按不同 ID 正确显示成三个活动 | 已定位 | 后台保留每次 attempt；用户端以稳定逻辑活动 ID 只展示一个持续更新的活动 |
+| 2. Explain 无资料时由 LLM 回答 | EXP-001 | 无证据继续进入模型生成的路径已存在，且本次 Run 确实生成了正文 | 待实现完整验收 | 正常零命中和检索异常均可按策略继续回答；无伪造引用；最终内容成功展示 |
+| 3. LLM 已生成长回答但最终显示失败 | FLOW-001 | `NodeResult.success()` 不接受 `artifact`，`render_artifact` 抛错导致正文未持久化 | 已定位 | Explain/Validate/Grade/Plan 均可创建 Artifact；失败回归测试覆盖最终节点 |
+| 4. 题目和知识点看似走同一路检索 | RAG-002 | MySQL 实体和 Qdrant Collection 已分类；共享工具按 `entity_type` 路由，但 Agent DTO 和业务语义不完整 | 已定位 | 统一类型化 DTO；Explain 与 Validate 使用明确实体类型、字段和用户可见名称 |
+| 5. 二分查找题明明存在却未检索到 | RAG-001、RAG-002 | 数据、检索片段、稀疏召回和向量召回均命中；失败发生在 MySQL 回填和 Agent DTO 转换 | 已定位 | 修复来源字段和 DTO；真实二分查找题通过混合检索进入 Validate 候选集 |
+
+结论：五个问题均已登记，没有遗漏；目前尚不能把任何一项标记为产品修复完成。
+
+## `run_5c6c46d3` 已确认故障链
+
+完整子 Run 为 `run_5c6c46d3111c495c831a`，父 conversation Run 为
+`run_379058566cb4408892e3`。实际执行顺序如下：
+
+```text
+load_scope completed
+  → retrieve_knowledge 连续执行三次
+  → 每次均在命中后的文档信息回填处抛出 Document.filename 不存在
+  → evidence_count=0
+  → evidence_gate 允许继续
+  → generate_explanation 成功生成完整二分查找正文
+  → citation_gate 通过
+  → render_artifact 调用 NodeResult.success(artifact=...)
+  → TypeError
+  → run.failed
+  → 用户端未收到最终 Artifact，只显示回复生成失败
+```
+
+二分查找检索分层探测结果：
+
+| 探测层 | 结果 | 证据 |
+| --- | --- | --- |
+| MySQL `questions` | 命中 | 题目 ID `7d600b0198a3425bbe202986885bc877` |
+| MySQL `retrieval_segments` | 命中 | Segment ID `91b0a7f197d44ded848b4a58d6fe8e02` |
+| MySQL 稀疏检索 | 命中 | 查询“二分查找”返回 1 条，分数 `1.0` |
+| Qdrant 题目 Collection | 命中 | 排名第一，分数 `0.6684933` |
+| MySQL 来源信息回填 | 失败 | `'Document' object has no attribute 'filename'` |
+| Agent 工具字段转换 | 不兼容 | 底层返回 `entity_id/content_text/source`，工具读取 `id/content/source_type` |
+
+## 当前代码锚点
+
+| 执行阶段 | 文件 | 符号 | 代码范围 | 当前职责与问题 |
+| --- | --- | --- | --- | --- |
+| 工具活动创建 | `backend/app/modules/agent/tools/retrieve_knowledge.py` | `retrieve_knowledge` | L19-L75 | 每次调用随机创建 `activity_id` 并公开 `tool.called`，重试因此成为多个用户活动 |
+| 工具结果与异常 | `backend/app/modules/agent/tools/retrieve_knowledge.py` | `retrieve_knowledge` | L77-L181 | 调用检索、临时转换 DTO、公开零命中或异常结果；正常空结果与异常需要保持不同语义 |
+| 用户活动归并 | `backend/app/modules/agent/timeline.py` | `AgentTimelineService._activity_views` | L506-L538 | 按 `activity_id` 聚合；不同 ID 必然生成不同活动 |
+| 检索结果契约 | `backend/app/modules/retrieval/search_engine.py` | `RetrievalResult.to_dict` | L15-L62 | 返回 `entity_id`、`content_text` 和嵌套 `source`，与 Agent 工具读取字段不一致 |
+| Collection 路由 | `backend/app/modules/retrieval/search_engine.py` | `RetrievalSearchEngine.get_collections` | L118-L128 | `knowledge_point` 和 `question` 分别进入不同 Qdrant Collection；空类型同时查两者 |
+| 命中内容回填 | `backend/app/modules/retrieval/search_engine.py` | `RetrievalSearchEngine.hydrate_results` | L222-L282 | 从 MySQL 补全片段和文档来源；当前错误访问 `Document.filename` |
+| 无证据生成 | `backend/app/modules/agent/workflows/explain.py` | `_evidence_gate_node`、`_generate_explanation_node` | L159-L225 | 无证据仍进入模型生成，并要求使用通用知识且不伪造引用 |
+| Explain 产物渲染 | `backend/app/modules/agent/workflows/explain.py` | `_render_artifact_node`、`_completed_node` | L243-L270 | 将成功正文组装为 Artifact，但传入了工厂方法不支持的 `artifact` 参数 |
+| 节点结果契约 | `backend/app/modules/agent/workflows/contracts.py` | `NodeResult.success` | L27-L38 | 数据类有 `artifact` 字段，工厂方法却没有同名参数 |
+| Validate 检索 | `backend/app/modules/agent/workflows/validate.py` | `_load_learning_evidence_node`、`_question_discovery_node`、`_question_gate_node` | L20-L76 | 使用硬编码薄弱点生成查询；虽限定 `question`，但未使用当前主题且资格字段与 DTO 不兼容 |
+| 当前上下文构建 | `backend/app/modules/agent/context_builder.py` | `AgentRunContext`、`ThreadContextBuilder.build` | L82-L116、L133-L246 | 能选择近期消息和 Artifact，但没有填充主题状态、独立请求和分层记忆 |
+| Router 与子 Run 交接 | `backend/app/modules/agent/workflows/conversation.py` | `_route_node`、`_child_context_metadata`、`_dispatch_workflow_node` | L45-L100、L163-L234 | Router 收到消息历史；子 Run 只拿选中 ID，没有可消费的主题快照 |
+| Run 最终持久化 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | L150-L222 | 执行工作流并创建 Artifact/最终消息；未来在完成事务中写记忆更新 Outbox |
+
+## 第一组：立即解除现有故障
+
+### FLOW-001 修复工作流 Artifact 契约
+
+- 扩展 `NodeResult.success()`，接收并传递 `artifact`。
+- 审计 Explain、Validate、Grade、Plan 所有 Artifact 节点。
+- 增加真正执行到最终渲染节点的工作流回归测试。
+- 验收：模型正文生成后 Artifact、`message.completed` 和 `run.completed` 全部落库；刷新页面仍可见。
+
+### RAG-001 修复命中后的来源信息回填
+
+- 使用当前 `Document.title`/`source_label` 契约替代不存在的 `filename`，明确空来源回退规则。
+- 增加“Qdrant 命中且存在来源文档”的回填测试，以及没有来源文档的测试。
+- 验收：二分查找题不会在 `hydrate_results` 抛错，稀疏和向量候选均能进入最终结果。
+
+### RAG-002 统一题目/知识点检索 DTO
+
+- 定义唯一类型化 DTO，至少包含实体、片段、正文、分数、学科章节、来源和题目元数据。
+- 删除 Agent 工具中的临时 `id/title/content/source_type` 猜测式映射。
+- Explain 默认优先知识点，可按策略补充题目示例；Validate 强制查询题目。
+- 修改 Validate 资格门，使用 DTO 中真实的题目来源、审核状态、题型和难度字段。
+- 验收：知识点与题目分别路由；二分查找题真实进入 Validate 候选，不因空 `source_type` 被过滤。
+
+### ACT-001 折叠用户端工具重试
+
+- 区分稳定 `logical_activity_id` 与后台 `attempt_id/attempt_no`。
+- 同一逻辑检索的重试复用公开活动 ID；后台事件保留每次尝试、原始异常和耗时。
+- 用户端正常零命中显示“没有检索到相关文档”；重试后仍异常显示“暂时无法检索相关文档”。
+- 验收：三次后台尝试在 Agent Runs 中可见，用户端只显示一个活动卡片。
+
+### EXP-001 固化 Explain 无资料回答
+
+- 保留当前无证据进入 `generate_explanation` 的行为。
+- 区分正常零命中与检索服务异常，但两者默认都允许通用知识回答；用户限定资料范围时遵守限制。
+- 无资料时引用列表必须为空，正文不能出现伪造资料来源。
+- 验收：零命中和工具异常各有端到端测试，最终回答都能持久化且刷新后可恢复。
+
+## 第二组：分层长期记忆最小闭环
+
+### MEM-001 冻结记忆分区和事实边界
+
+记忆分区固定为：当前轮理解、线程主题状态、近期原始对话、历史主题摘要、用户学习画像、Artifact/任务、
+待处理交互、用户明确偏好与目标。原始消息和 Artifact 继续作为事实源；流式 delta、失败输出和 LLM 猜测
+不得直接成为长期用户记忆。
+
+### MEM-002 建立热状态、事件、快照和专业画像存储
+
+通过 Alembic 前向迁移逐步增加：
+
+- `agent_thread_memory_states`：小型结构化活跃主题、主题栈、活跃任务和指代对象；
+- `agent_memory_events`：追加式增量来源和幂等审计；
+- `agent_memory_snapshots`/`agent_memory_snapshot_items`：冻结 Run 实际使用的记忆版本；
+- `agent_memory_update_outbox`：完成事件的可靠异步投影；
+- `user_learning_mastery`：按知识点保存掌握度和真实答题/Grade 证据；
+- `agent_conversation_summaries`：按消息序列范围增量压缩旧对话；
+- `agent_memory_items`：偏好、目标和主题情景摘要，不承载专业学习掌握度。
+
+### MEM-003 新输入的增量处理
+
+1. HTTP 事务只原子保存用户消息、根 Run、时间线和 Run Outbox，不调用 LLM。
+2. Worker 在 Router 前读取热状态、少量近期消息、显式引用和待处理交互。
+3. 确定性解析优先；只有“这个、上一道、难一点”等仍有歧义时调用结构化指代消解模型。
+4. 生成 `TurnUnderstanding`：原始输入、独立请求、意图提示、主题实体、约束和引用来源。
+5. 创建不可变 Turn Memory Snapshot，并以版本号更新线程热状态。
+6. Router 使用独立请求；子 Run 接收 snapshot ID，不再只传消息 ID。
+
+冲突优先级固定为：当前输入明确主题 > 显式引用/附件 > 待处理任务 > 最近活跃主题 > 唯一高优先级
+学习薄弱点 > 请求用户澄清。禁止静默使用“数据结构 操作系统”作为默认主题。
+
+### MEM-004 按工作流选择最小记忆
+
+- 定义类型化 `MemoryNeed` 和 Router/Explain/Validate/Grade/Plan 专用 Bundle。
+- 先做权限和作用域过滤，再按实体 ID 精确查询；只有旧情景摘要缺少实体 ID 时才做向量检索。
+- `message_history` 只承担近期对话连续性；主题、学习画像和 Artifact 使用结构化 Bundle。
+- 快照记录每条选中记忆的来源、版本、选择原因、内容副本、估算 Token 和被丢弃原因。
+
+### MEM-005 Validate 消费记忆并构造工具参数
+
+目标链路：
+
+```text
+“讲解二分查找”完成
+  → 热状态 active_topic=二分查找
+  → 用户输入“给我出道题”
+  → standalone_request=“给用户出一道关于二分查找的练习题”
+  → Router=validate
+  → ValidateMemoryBundle 读取主题、掌握度、出题约束、近期题目排除集
+  → 确定性构造 query="二分查找 折半查找"
+  → retrieve_knowledge(entity_type="question", chapter_ids/knowledge_point_ids/difficulty/exclude_ids)
+```
+
+没有明确主题时：先使用活跃主题；再考虑唯一高优先级薄弱点；仍不唯一则澄清，不随机出题。
+
+### MEM-006 LLM 输出和业务结果的增量回写
+
+- 不把 `message.delta` 写长期记忆，只在 `message.completed`/`artifact.rendered`/`run.completed` 后投影。
+- Run 完成事务同步更新下一轮马上需要的热状态，并写 Memory Outbox。
+- 异步投影历史摘要、Embedding、偏好候选和长期事件，失败可重放且不反向把成功 Run 改成失败。
+- Explain 只更新主题和讲解 Artifact，不提高掌握度；Validate 创建练习和排除集，也不提高掌握度。
+- Grade 的真实得分/错误类型才更新 `user_learning_mastery`；Plan 只有经用户确认后才成为长期目标。
+- `run.failed` 不写 Agent 输出记忆，用户已表达的输入主题仍保留为事实。
+
+### MEM-007 压缩、冲突、失效与删除
+
+- 最近 6～12 轮保留原始消息；更旧消息按连续 sequence 区间增量摘要，不整线程重复总结。
+- 摘要不覆盖原消息，旧摘要被合并后标记 `superseded` 并保留来源范围和版本。
+- 用户明确陈述和真实业务事件优先于模型抽取；低置信度候选不能覆盖高置信度活跃记忆。
+- 线程主题按轮次衰减；临时约束随 Turn/Practice 结束；学习画像长期保存并按时间衰减。
+- 删除线程时失效线程记忆并通过 Outbox 删除向量；用户级学习画像单独控制。
+
+### MEM-008 记忆可观测性与安全
+
+- Agent Runs 展示原始输入、独立请求、主题来源、快照版本、选中/丢弃记忆、Token 和最终工具参数。
+- 记忆正文不塞入公开 SSE；事件只保存快照/调用 ID 和安全摘要。
+- 所有读取校验 `user_id`、`thread_id` 和 Artifact 权限；记忆文本按不可信数据渲染，不能成为系统指令。
+- 支持按 source ID 回查、幂等重放、快照复现和投影失败重试。
+
+## 实施顺序与依赖
+
+```text
+文档分卷迁移
+  → FLOW-001
+  → RAG-001
+  → RAG-002
+  → ACT-001 + EXP-001
+  → MEM-001/002（契约与迁移）
+  → MEM-003/004（输入解析、快照、选择）
+  → MEM-005（Validate 最小闭环）
+  → MEM-006（完成事件增量回写）
+  → MEM-007（摘要、冲突、失效）
+  → MEM-008（完整可观测与治理）
+```
+
+记忆接入 Validate 前必须先完成 FLOW-001、RAG-001 和 RAG-002，否则即使主题选择正确，检索结果仍可能
+在回填/DTO 层丢失，最终 Practice Artifact 也可能无法持久化。
+
+## 端到端验收场景
+
+1. Explain 检索零命中：用户看到一个检索活动和通用知识回答，引用为空，刷新后正文仍在。
+2. Explain 检索连续失败三次：后台显示三次 attempt，用户端只有一个活动，LLM 回答仍正常完成。
+3. 二分查找真实题：MySQL 稀疏和 Qdrant 向量候选经过回填、DTO 和资格门后进入 Practice。
+4. 上下文继承：“讲解二分查找”后说“给我出道题”，工具查询必须包含二分查找且类型为 question。
+5. 明确覆盖：“不要二分查找，出红黑树题”，当前输入覆盖旧主题。
+6. 无法消解：没有主题和唯一薄弱点时进入澄清，不使用硬编码默认主题。
+7. 增量回写：Explain/Validate 不提高掌握度；Grade 完成后以证据 ID 幂等更新掌握度。
+8. 失败隔离：流式中途失败不写长期 Agent 输出记忆；重放 Outbox 不产生重复记忆。
+
+## 任务维护规则
+
+- 每个独立修复使用中文 Git 提交，并在实现提交中把对应任务状态和验证证据更新到本文件。
+- 代码或符号行号发生变化时，同一提交重新使用 `rg -n`、`nl -ba` 核对本文件代码锚点。
+- 复杂实现细节写入对应 `implementation/` 分卷；本文件只保留待做状态、依赖、关键决策和验收入口。
+- 单项只有在代码、迁移、测试、文档和提交全部完成后才能标记 `已完成`。
