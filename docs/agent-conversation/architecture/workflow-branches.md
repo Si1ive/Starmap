@@ -32,11 +32,12 @@
 | 执行阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | PracticeBundle 选择 | `backend/app/modules/agent/memory_selector.py` | `load_practice_bundle` | L81-L158 | child run `run_id` / `user_id`、`memory_snapshot_id`、selected snapshot items | 校验 run 与 snapshot 权限，从 `agent_memory_snapshots`、`agent_memory_snapshot_items` 和 `selection_metadata_json` 读取主题、aliases、difficulty 约束、knowledge point IDs 与选中的 Artifact | `PracticeBundle` | `_load_learning_evidence_node` |
-| 学习证据读取 | `backend/app/modules/agent/workflows/validate.py` | `_load_learning_evidence_node` | L43-L71 | `PracticeBundle`、当前上下文 | 优先用 bundle topic 填充 `weak_areas` / `recent_topics`，并把序列化后的 bundle 写回 `ExecutionContext` 供后续节点继续消费 | `learning_evidence`、`practice_bundle` | `_question_discovery_node` |
-| 候选题检索 | `backend/app/modules/agent/memory_selector.py`、`backend/app/modules/agent/workflows/validate.py` | `build_practice_query`、`build_practice_filters`、`_question_discovery_node` | `memory_selector.py` L161-L193；`validate.py` L74-L106 | `practice_bundle`、`weak_areas`、run ID | 用 bundle topic title + aliases 确定性生成 query；若无主题且无 fallback terms，则直接失败；否则调用 `retrieve_knowledge(entity_type="question")`，同时下发 `knowledge_point_ids`、`difficulty` 和排除题 ID | `candidates` 或缺主题失败 | `_question_gate_node` / workflow failed |
-| 题目资格门 | `backend/app/modules/agent/workflows/validate.py` | `_question_is_eligible`、`_question_gate_node` | L25-L40、L109-L122 | 候选题列表 | 校验实体类型、审核/状态、题型、难度和真实来源字段；不再依赖虚构的 `source_type` | `valid_questions` | `_composition_gate_node` |
-| 组合校验 | `backend/app/modules/agent/workflows/validate.py` | `_composition_gate_node` | L125-L149 | 有效题目 | 汇总 `question_meta.question_type`、`question_meta.difficulty` 和 `subject_id`，供后续产物使用 | `composition` | `_create_draft_node` |
-| 练习草稿与 Artifact | `backend/app/modules/agent/workflows/validate.py` | `_create_draft_node`、`_render_artifact_node` | L152-L189 | 有效题目与组合信息 | 生成 practice draft，再渲染 practice artifact | `agent_artifacts` 与 completed run | `_completed_node` |
+| 学习证据读取 | `backend/app/modules/agent/workflows/validate.py` | `_load_learning_evidence_node` | L47-L75 | `PracticeBundle`、当前上下文 | 优先用 bundle topic 填充 `weak_areas` / `recent_topics`，并把序列化后的 bundle 写回 `ExecutionContext` 供后续节点继续消费 | `learning_evidence`、`practice_bundle` | `_question_discovery_node` |
+| 候选题检索 / 缺主题澄清 | `backend/app/modules/agent/memory_selector.py`、`backend/app/modules/agent/workflows/validate.py`、`backend/app/modules/agent/service.py` | `build_practice_query`、`build_practice_filters`、`_question_discovery_node`、`create_input` | `memory_selector.py` L161-L193；`validate.py` L78-L146；`service.py` L279-L312 | `practice_bundle`、`weak_areas`、run ID | 用 bundle topic title + aliases 确定性生成 query；若无主题且无 fallback terms，则先查找已回答的 `practice_topic` 输入；仍缺主题时创建 `AgentInput`、投影 `workflow.input.required` 并返回 `NodeResult.waiting(next_node="question_discovery")`；有主题后调用 `retrieve_knowledge(entity_type="question")`，同时下发 `knowledge_point_ids`、`difficulty` 和排除题 ID | `candidates` 或等待中的 pending input + checkpoint | `_question_gate_node` / 用户补充输入 |
+| 澄清恢复执行 | `backend/app/modules/agent/service.py` | `submit_input_answer` | L323-L362 | waiting run、`practice_topic` 用户答案 | 校验 run 和输入归属，把输入记为 answered，恢复 run 到 running 并重新投递 outbox | answered input、恢复后的 run | `AgentWorker.process_run` -> `_question_discovery_node` |
+| 题目资格门 | `backend/app/modules/agent/workflows/validate.py` | `_question_is_eligible`、`_question_gate_node` | L29-L44、L149-L162 | 候选题列表 | 校验实体类型、审核/状态、题型、难度和真实来源字段；不再依赖虚构的 `source_type` | `valid_questions` | `_composition_gate_node` |
+| 组合校验 | `backend/app/modules/agent/workflows/validate.py` | `_composition_gate_node` | L165-L189 | 有效题目 | 汇总 `question_meta.question_type`、`question_meta.difficulty` 和 `subject_id`，供后续产物使用 | `composition` | `_create_draft_node` |
+| 练习草稿与 Artifact | `backend/app/modules/agent/workflows/validate.py` | `_create_draft_node`、`_render_artifact_node` | L192-L229 | 有效题目与组合信息 | 生成 practice draft，再渲染 practice artifact | `agent_artifacts` 与 completed run | `_completed_node` |
 
 ## Grade：作答快照到反馈产物
 
@@ -62,7 +63,7 @@
 | 执行阶段 | 文件 | 符号 | 代码范围 | 职责与最终落点 |
 | --- | --- | --- | --- | --- |
 | 用户补充输入 | `frontend/src/store/agent-context.tsx` | `AgentProvider.answerWorkflowInput` | L457-L464 | 提交等待中的工作流输入，成功后刷新 thread 时间线 |
-| 后端接收输入 | `backend/app/modules/agent/router.py` | `submit_input_answer` | L547-L568 | 校验等待项归属，保存用户答案并重新投递 Run |
+| 后端接收输入 | `backend/app/modules/agent/router.py`、`backend/app/modules/agent/service.py` | `submit_input_answer`、`submit_input_answer` | `router.py` L547-L568；`service.py` L323-L362 | 校验等待项归属，保存用户答案并重新投递 Run |
 | 用户审批 | `frontend/src/store/agent-context.tsx` | `AgentProvider.decideWorkflowApproval` | L466-L480 | 调用批准/拒绝 API，成功后刷新时间线 |
 | 后端审批 | `backend/app/modules/agent/router.py` | `approve_approval`、`reject_approval` | L607-L622、L626-L641 | 更新审批事实，并恢复或终止相应 workflow |
 

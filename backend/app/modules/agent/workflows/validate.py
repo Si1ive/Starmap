@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.logging import get_logger
 from .contracts import WorkflowDefinition, Node, NodeResult, ExecutionContext
 from .registry import workflow_registry
+from ..service import AgentService
 from ..memory_selector import (
     build_practice_filters,
     build_practice_query,
@@ -20,6 +21,9 @@ from ..memory_selector import (
 from ..time_utils import utc_isoformat, utc_now
 
 logger = get_logger(__name__)
+
+_PRACTICE_TOPIC_INPUT_KEY = "practice_topic"
+_PRACTICE_TOPIC_PROMPT = "请补充想练习的知识点或题目范围"
 
 
 def _question_is_eligible(candidate: Dict[str, Any]) -> bool:
@@ -74,7 +78,7 @@ async def _load_learning_evidence_node(context: ExecutionContext, db: AsyncSessi
 async def _question_discovery_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
     """检索候选题"""
     from ..tools.retrieve_knowledge import retrieve_knowledge
-    
+
     evidence = context.get("learning_evidence", {})
     weak_areas = evidence.get("weak_areas", [])
     practice_bundle = context.get("practice_bundle", {})
@@ -85,9 +89,45 @@ async def _question_discovery_node(context: ExecutionContext, db: AsyncSession) 
         weak_areas,
     )
     if not query.strip():
-        logger.warning("缺少可用于出题的主题", run_id=context.run_id)
-        context.set("candidates", [])
-        return NodeResult.failure("缺少可用于出题的主题")
+        agent_input = await AgentService(db).get_input(
+            context.run_id,
+            _PRACTICE_TOPIC_INPUT_KEY,
+        )
+        if agent_input and agent_input.status == "answered":
+            clarified_topic = str(agent_input.answer_ref or "").strip()
+            if clarified_topic:
+                weak_areas = [clarified_topic]
+                updated_evidence = dict(evidence)
+                updated_evidence["weak_areas"] = weak_areas
+                updated_evidence["recent_topics"] = weak_areas
+                context.set("learning_evidence", updated_evidence)
+                context.set("clarified_practice_topic", clarified_topic)
+                query = build_practice_query(
+                    practice_bundle if isinstance(practice_bundle, dict) else {},
+                    weak_areas,
+                )
+                logger.info(
+                    "Validate 使用澄清主题继续检索",
+                    run_id=context.run_id,
+                    clarified_topic=clarified_topic,
+                )
+        if not query.strip():
+            if agent_input is None:
+                await AgentService(db).create_input(
+                    context.run_id,
+                    _PRACTICE_TOPIC_INPUT_KEY,
+                    _PRACTICE_TOPIC_PROMPT,
+                )
+            logger.warning("Validate 缺少主题，进入澄清", run_id=context.run_id)
+            context.set("candidates", [])
+            return NodeResult.waiting(
+                next_node="question_discovery",
+                output={
+                    "waiting_for_user": True,
+                    "missing_practice_topic": True,
+                    "clarification_input_key": _PRACTICE_TOPIC_INPUT_KEY,
+                },
+            )
 
     result = await retrieve_knowledge(
         db,

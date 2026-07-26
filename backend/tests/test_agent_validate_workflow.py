@@ -230,6 +230,17 @@ async def test_validate_stops_when_no_topic_or_fallback_terms(monkeypatch):
         "load_practice_bundle",
         AsyncMock(return_value=PracticeBundle()),
     )
+    class _AgentServiceStub:
+        def __init__(self, session):
+            self.session = session
+
+        async def get_input(self, run_id, input_key):
+            return None
+
+        async def create_input(self, run_id, input_key, prompt_ref, input_schema_version="v1", expires_at=None):
+            return None
+
+    monkeypatch.setattr(validate, "AgentService", _AgentServiceStub)
     retrieve = AsyncMock()
     monkeypatch.setattr(retrieve_module, "retrieve_knowledge", retrieve)
 
@@ -238,6 +249,7 @@ async def test_validate_stops_when_no_topic_or_fallback_terms(monkeypatch):
 
     assert loaded.status == NodeStatus.COMPLETED
     assert context.get("learning_evidence")["weak_areas"] == []
-    assert discovered.status == NodeStatus.FAILED
-    assert discovered.error == "缺少可用于出题的主题"
+    assert discovered.status == NodeStatus.WAITING
+    assert discovered.output["waiting_for_user"] is True
+    assert discovered.output["clarification_input_key"] == "practice_topic"
     retrieve.assert_not_awaited()

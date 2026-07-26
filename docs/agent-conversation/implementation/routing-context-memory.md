@@ -28,7 +28,7 @@
 
 1. 当前系统已经能选取近期消息、Artifact、待处理交互，并在 Router 前读取线程热状态中的 `active_topic`。
 2. `MEM-003` 的第一阶段已打通：conversation run 会生成确定性 `TurnUnderstanding`、创建不可变 snapshot，并把 `standalone_request` 与 `memory_snapshot_id` 传给 child run。
-3. `MEM-004` / `MEM-005` 的第二阶段已打通到过滤参数：Validate 会从 snapshot 装载 `PracticeBundle`，继承主题、别名、难度约束、知识点 ID 和选中的 Artifact，并据此生成检索 query 与 retrieval filters。
+3. `MEM-004` / `MEM-005` 的第二阶段已打通到过滤参数和首个澄清闭环：Validate 会从 snapshot 装载 `PracticeBundle`，继承主题、别名、难度约束、知识点 ID 和选中的 Artifact，并据此生成检索 query 与 retrieval filters；若缺少主题，会创建 `practice_topic` 输入项并在用户补充后从断点继续检索。
 4. 当前仍未实现歧义场景下的结构化指代消解模型，也还没有把掌握度、历史摘要和真实排除集真正做成可复用的 bundle。
 
 ## 现状问题与整改入口
@@ -36,8 +36,8 @@
 | 问题 | 当前代码锚点 | 现状 | 任务单对应项 |
 | --- | --- | --- | --- |
 | 主题继承还未消费掌握度/摘要等深层记忆 | `backend/app/modules/agent/context_builder.py` `ThreadContextBuilder.build` L138-L256 | 已能读取 `active_topic`，但还没有选择 `user_learning_mastery`、历史摘要或排除集 | `MEM-003`、`MEM-004` |
-| 只有 Validate 已接入 bundle 化记忆 | `backend/app/modules/agent/memory_selector.py` `load_practice_bundle` L81-L158；`backend/app/modules/agent/workflows/validate.py` `_load_learning_evidence_node` L43-L71 | Validate 已能消费 `PracticeBundle`；Explain / Grade / Plan 仍未声明并装载各自的 bundle | `MEM-004`、`MEM-005` |
-| PracticeBundle 还未接入掌握度、真实排除集和澄清闭环 | `backend/app/modules/agent/memory_selector.py` `PracticeBundle` / `build_practice_filters` L23-L33、L183-L193；`backend/app/modules/agent/workflows/validate.py` `_question_discovery_node` L74-L106 | 当前已能把 topic、difficulty、knowledge point 过滤条件传给检索，但还没有从 `user_learning_mastery`、练习 Artifact 或历史结果中沉淀真实排除题，也还没有把“仍不唯一则澄清”做完 | `MEM-005`、`MEM-006` |
+| 只有 Validate 已接入 bundle 化记忆 | `backend/app/modules/agent/memory_selector.py` `load_practice_bundle` L81-L158；`backend/app/modules/agent/workflows/validate.py` `_load_learning_evidence_node` L47-L75 | Validate 已能消费 `PracticeBundle`；Explain / Grade / Plan 仍未声明并装载各自的 bundle | `MEM-004`、`MEM-005` |
+| PracticeBundle 还未接入掌握度与真实排除集；澄清只覆盖缺主题首轮 | `backend/app/modules/agent/memory_selector.py` `PracticeBundle` / `build_practice_filters` L23-L33、L183-L193；`backend/app/modules/agent/workflows/validate.py` `_question_discovery_node` L78-L146；`backend/app/modules/agent/service.py` `create_input` / `submit_input_answer` L279-L362 | 当前已能把 topic、difficulty、knowledge point 过滤条件传给检索，并在缺主题时创建 `practice_topic` 输入项、等待用户补充后继续执行；但还没有从 `user_learning_mastery`、练习 Artifact 或历史结果中沉淀真实排除题，也还没有接入唯一高优先级薄弱点回退 | `MEM-005`、`MEM-006` |
 | 长期回写尚未实现 | `backend/app/modules/agent/worker.py` `AgentWorker.process_run` L150-L222 | Run 完成时只落消息/Artifact/Event，没有 Memory Outbox | `MEM-006` |
 
 ## 设计约束

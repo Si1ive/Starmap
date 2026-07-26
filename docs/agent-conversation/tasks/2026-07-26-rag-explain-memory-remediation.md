@@ -68,7 +68,8 @@ load_scope completed
 | Explain 产物渲染 | `backend/app/modules/agent/workflows/explain.py` | `_render_artifact_node`、`_completed_node` | L279-L306 | 已通过统一 `artifact` 契约把成功正文挂回上下文并交给 worker 持久化 |
 | Explain 持久化与刷新恢复 | `backend/app/modules/agent/worker.py`、`backend/app/modules/agent/timeline.py` | `AgentWorker.process_run`、`AgentTimelineService.get_timeline`、`AgentTimelineService._activity_views`、`AgentTimelineService.message_view` | `worker.py` L100-L251；`timeline.py` L320-L360、L399-L538、L554-L572 | worker 在 completed 分支创建 artifact、写 `message.completed` / `run.completed`；时间线刷新时按 root run 重建活动、artifact 和最终正文 |
 | 节点结果契约 | `backend/app/modules/agent/workflows/contracts.py` | `NodeResult.success` | L27-L48 | 已支持 `artifact` 参数，render 节点可通过统一工厂方法把最终产物传给引擎与 worker |
-| Validate 检索与首个记忆消费 | `backend/app/modules/agent/memory_selector.py`、`backend/app/modules/agent/workflows/validate.py` | `load_practice_bundle`、`build_practice_query`、`build_practice_filters`、`_question_is_eligible`、`_load_learning_evidence_node`、`_question_discovery_node`、`_question_gate_node`、`_composition_gate_node` | `memory_selector.py` L81-L193；`validate.py` L25-L149 | Validate 已开始按 `PracticeBundle` 消费 snapshot topic、aliases、difficulty、knowledge point IDs 和选中的 Artifact，并把它们转换成题目检索 query 与过滤条件；题目资格门与组合门继续读取真实 DTO。掌握度、真实排除集和澄清闭环仍待补齐 |
+| Validate 检索与首个记忆消费 | `backend/app/modules/agent/memory_selector.py`、`backend/app/modules/agent/workflows/validate.py` | `load_practice_bundle`、`build_practice_query`、`build_practice_filters`、`_question_is_eligible`、`_load_learning_evidence_node`、`_question_discovery_node`、`_question_gate_node`、`_composition_gate_node` | `memory_selector.py` L81-L193；`validate.py` L29-L229 | Validate 已开始按 `PracticeBundle` 消费 snapshot topic、aliases、difficulty、knowledge point IDs 和选中的 Artifact，并把它们转换成题目检索 query 与过滤条件；缺少主题时会创建 `practice_topic` 等待用户补充后恢复执行；题目资格门与组合门继续读取真实 DTO。掌握度、真实排除集和唯一薄弱点回退仍待补齐 |
+| Validate 缺主题澄清与恢复 | `backend/app/modules/agent/service.py`、`backend/app/modules/agent/timeline.py` | `create_input`、`submit_input_answer`、`AgentTimelineService._build_workflow_views` | `service.py` L279-L362；`timeline.py` L462-L500 | waiting run、`practice_topic` 输入、用户答案 | 创建 `AgentInput` 并投影 `workflow.input.required`，时间线把最新 pending input 暴露为 `workflow.pending_input`；用户提交答案后把输入标记为 answered，恢复 run 到 running，worker 从 checkpoint 回到 `_question_discovery_node` | 等待中的工作流卡片、恢复后的检索执行 | 用户补充输入 API / `AgentWorker.process_run` |
 | 当前上下文构建 | `backend/app/modules/agent/context_builder.py` | `AgentRunContext`、`ThreadContextBuilder.build`、`_load_thread_memory_state` | L82-L121、L138-L256、L489-L501 | 已能选择近期消息、Artifact、待处理交互，并读取线程 `active_topic` / `memory_state_version`；仍未按 `MemoryNeed` 选择掌握度、摘要和排除集 |
 | Router 与子 Run 交接 | `backend/app/modules/agent/workflows/conversation.py`、`backend/app/modules/agent/turn_understanding.py` | `_route_node`、`_child_context_metadata`、`_dispatch_workflow_node`、`build_turn_understanding`、`ensure_turn_memory_snapshot` | `conversation.py` L46-L260；`turn_understanding.py` L105-L227 | Router 已先生成 `TurnUnderstanding` 并创建 snapshot，再使用 `standalone_request` 路由；topic aliases、`memory_snapshot_id`、独立请求和 `difficulty:*` 约束都会传给 child run，Validate 已开始消费这些 snapshot 内容 |
 | Run 最终持久化 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | L150-L222 | 执行工作流并创建 Artifact/最终消息；未来在完成事务中写记忆更新 Outbox |
@@ -190,9 +191,9 @@ load_scope completed
 - 状态：进行中（2026-07-26 已让 Validate 使用 `PracticeBundle` 生成题目检索 query 与过滤条件）。
 - 已在 `backend/app/modules/agent/turn_understanding.py` 为 `TopicEntity` 增加 `aliases`，并为“难一点 / 简单点 / 难度适中”这类输入补 `difficulty:*` 约束，让 snapshot topic 与难度条件都能进入后续 bundle。
 - 已在 `backend/app/modules/agent/workflows/validate.py` 的 `_load_learning_evidence_node()` 中装载 `PracticeBundle`，优先使用 bundle topic 填充 `weak_areas` / `recent_topics`，并把 bundle 本身写回 `ExecutionContext`。
-- 已在 `_question_discovery_node()` 中通过 `build_practice_query()` 构造 query，并把 `knowledge_point_ids`、`difficulty` 与 `exclude_entity_ids` 下发到 `retrieve_knowledge()`；当 bundle topic 存在时会发起 `query="二分查找 折半查找"` 的题目检索，当 topic 与 fallback terms 都为空时直接失败，不再静默随机出题。
-- 已补 `backend/tests/test_agent_validate_workflow.py::test_validate_uses_practice_bundle_topic_for_query` 与 `test_validate_stops_when_no_topic_or_fallback_terms`，分别覆盖 topic aliases + knowledge point + difficulty 过滤，以及“缺少主题即失败”的行为；并新增 `backend/tests/test_agent_turn_understanding.py::test_build_turn_understanding_preserves_topic_aliases_and_difficulty_constraint`，覆盖约束抽取。
-- 当前仍未完成：`chapter_ids` 的稳定来源、真实 `exclude_ids` 回写、唯一高优先级薄弱点回退，以及失败后主动进入澄清而不是直接终止。
+- 已在 `_question_discovery_node()` 中通过 `build_practice_query()` 构造 query，并把 `knowledge_point_ids`、`difficulty` 与 `exclude_entity_ids` 下发到 `retrieve_knowledge()`；当 bundle topic 存在时会发起 `query="二分查找 折半查找"` 的题目检索；当 topic 与 fallback terms 都为空时，会创建 `practice_topic` 输入项并进入 waiting，用户补充后从 checkpoint 恢复到同一节点继续检索。
+- 已补 `backend/tests/test_agent_validate_workflow.py::test_validate_uses_practice_bundle_topic_for_query` 与 `test_validate_stops_when_no_topic_or_fallback_terms`，分别覆盖 topic aliases + knowledge point + difficulty 过滤，以及“缺少主题进入 waiting”的行为；并新增 `backend/tests/test_agent_validate_worker.py::test_validate_waits_for_topic_clarification_and_resumes_with_answer`，覆盖输入项创建、时间线 `pending_input` 展示与回答后恢复执行。
+- 当前仍未完成：`chapter_ids` 的稳定来源、真实 `exclude_ids` 回写，以及唯一高优先级薄弱点回退。
 
 `validate` 是首个落地消费者，因为当前“讲解后出题”的痛点最集中、验证成本最低；它只是样板，不是
 记忆内核对 workflow 的硬编码。后续若把 `validate` 拆成新的 workflow，或新增 `drill`、`quiz`、`review`
@@ -211,7 +212,7 @@ load_scope completed
   → retrieve_knowledge(entity_type="question", knowledge_point_ids=["kp_binary_search"], filters={"difficulty":"hard"}, exclude_ids)
 ```
 
-没有明确主题时：先使用活跃主题；再考虑唯一高优先级薄弱点；当前实现已移除静默默认主题，若仍拿不到主题则直接失败，后续再补“请求用户澄清”的显式闭环。
+没有明确主题时：先使用活跃主题；再考虑唯一高优先级薄弱点；当前实现已移除静默默认主题，若仍拿不到主题则创建 `practice_topic` 输入项进入澄清，等待用户补充后再继续检索。
 
 ### MEM-006 按事实事件回写，而不是按 workflow 名写库
 
