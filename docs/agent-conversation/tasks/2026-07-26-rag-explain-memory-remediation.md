@@ -72,8 +72,8 @@ load_scope completed
 | Validate 缺主题澄清与恢复 | `backend/app/modules/agent/service.py`、`backend/app/modules/agent/timeline.py` | `create_input`、`submit_input_answer`、`AgentTimelineService._build_workflow_views` | 缺主题时创建 `AgentInput` 并投影 `workflow.input.required`，时间线把最新 pending input 暴露为 `workflow.pending_input`；用户提交答案后把输入标记为 answered，恢复 run 到 running，worker 从 checkpoint 回到 `_question_discovery_node` 继续检索 |
 | 当前上下文构建 | `backend/app/modules/agent/context_builder.py` | `AgentRunContext`、`ThreadContextBuilder.build`、`_load_thread_memory_state` | 已能选择近期消息、Artifact、待处理交互，并读取线程 `active_topic` / `memory_state_version`；仍未按 `MemoryNeed` 选择掌握度、摘要和排除集 |
 | Router 与子 Run 交接 | `backend/app/modules/agent/workflows/conversation.py`、`backend/app/modules/agent/turn_understanding.py` | `_route_node`、`_child_context_metadata`、`_dispatch_workflow_node`、`build_turn_understanding`、`ensure_turn_memory_snapshot` | Router 已先生成 `TurnUnderstanding` 并创建 snapshot，再使用 `standalone_request` 路由；topic aliases、`memory_snapshot_id`、独立请求和 `difficulty:*` 约束都会传给 child run，Validate 已开始消费这些 snapshot 内容 |
-| Run 最终持久化 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | 执行工作流并创建 Artifact/最终消息；completed 分支已在同一事务调用 `project_completed_run_facts` 按产物类型写事实事件；未来继续补记忆更新 Outbox |
-| 完成事实投影 | `backend/app/modules/agent/memory_projection.py` | `project_completed_run_facts`、`_record_practice_artifact_created` | 按 artifact 类型（非 workflow 名）分派事实事件；practice 产物写幂等 `practice_artifact_created` 事件到 `agent_memory_events`，载荷含 `artifact_id` 与 `question_ids`，供下一次练习装载排除集 |
+| Run 最终持久化 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run`（L183-L224） | 执行工作流并创建 Artifact/最终消息；completed 分支已在同一事务调用 `project_completed_run_facts` 按产物类型写事实事件；未来继续补记忆更新 Outbox |
+| 完成事实投影 | `backend/app/modules/agent/memory_projection.py` | `project_completed_run_facts`、`_record_practice_artifact_created`、`_record_grade_result_confirmed`（L19-L190） | 按 artifact 类型（非 workflow 名）分派事实事件；practice 产物写 `practice_artifact_created`；携带真实结构化评分证据的 feedback 产物按用户 + evidence ID 幂等写 `grade_result_confirmed`，同时增量更新 `user_learning_mastery`。重复知识点只累计一次；固定文案反馈不写掌握度 |
 
 ## 第一组：立即解除现有故障
 
@@ -219,7 +219,10 @@ load_scope completed
 
 ### MEM-006 按事实事件回写，而不是按 workflow 名写库
 
-- 状态：进行中（2026-07-26 已落地首个事实事件）。已固化 `MemoryFactType` 枚举（`memory_contracts.py`），并新增 `backend/app/modules/agent/memory_projection.py`：worker completed 分支在同一事务按 artifact 类型分派，practice 产物写幂等 `practice_artifact_created` 事件；重放不产生重复记忆。其余事实事件、热状态同步更新与 Memory Outbox 投影仍待实现。
+- 状态：进行中（2026-07-26 已落地 practice 与 Grade 投影边界）。已固化 `MemoryFactType` 枚举（`memory_contracts.py`），并在 `backend/app/modules/agent/memory_projection.py::_record_practice_artifact_created`（L33-L83）与 `_record_grade_result_confirmed`（L86-L190）按 Artifact 事实分派：practice 产物写幂等 `practice_artifact_created`；feedback 只有携带 `verdict`、`question_id`、`knowledge_point_ids` 的真实评分证据时，才按用户 + evidence ID 幂等写 `grade_result_confirmed` 并增量更新 `user_learning_mastery`。重复知识点会先去重，固定文案反馈不提高掌握度。
+- Grade Artifact 的证据交接位于 `backend/app/modules/agent/workflows/grade.py::_render_artifact_node`（L108-L137）：只在上下文已有显式 `grading_evidence.verdict` 时写入 `content.grading`。当前 P1 `_objective_grade_node`（L34-L51）仍不读取真实标准答案、不会生产该证据，因此本阶段只完成安全投影契约，不宣称线上 Grade 掌握度闭环已完成。
+- 已由 `backend/tests/test_agent_memory_projection.py::test_grade_projection_updates_mastery_and_replays_idempotently`（L127-L197）、`test_grade_projection_deduplicates_knowledge_points_and_scopes_evidence_by_user`（L200-L261）、`test_feedback_without_structured_grading_is_ignored`（L264-L279）、`test_grade_run_with_canned_feedback_does_not_touch_mastery`（L313-L332）覆盖增量公式、重放幂等、用户隔离、知识点去重和 P1 固定反馈跳过语义。
+- 其余主题确认、讲解 Artifact、计划确认、热状态同步与 Memory Outbox 投影仍待实现。
 - 不把 `message.delta` 写长期记忆，只在 `message.completed`/`artifact.rendered`/`run.completed` 后投影。
 - Run 完成事务同步更新下一轮马上需要的热状态，并写 Memory Outbox。
 - 异步投影历史摘要、Embedding、偏好候选和长期事件，失败可重放且不反向把成功 Run 改成失败。
@@ -299,12 +302,12 @@ Validate/Explain/Grade/Plan 是记忆内核的天然边界。这里把设计口�
 4. 上下文继承：“讲解二分查找”后说“给我出道题”，工具查询必须包含二分查找且类型为 question。
 5. 明确覆盖：“不要二分查找，出红黑树题”，当前输入覆盖旧主题。
 6. 无法消解：没有主题和唯一薄弱点时进入澄清，不使用硬编码默认主题；唯一薄弱点回退与“多薄弱点仍澄清”已由 `test_load_practice_bundle_falls_back_to_unique_weak_point` / `test_load_practice_bundle_skips_weak_point_when_multiple_candidates` 覆盖。
-7. 增量回写：Explain/Validate 不提高掌握度；Grade 完成后以证据 ID 幂等更新掌握度。
+7. 增量回写：Explain/Validate 不提高掌握度；携带真实结构化评分证据的 Feedback Artifact 已能按用户 + evidence ID 幂等更新掌握度，当前 P1 Grade 尚缺真实评分证据生产者，仍待完成端到端验收。
 8. 失败隔离：流式中途失败不写长期 Agent 输出记忆；重放 Outbox 不产生重复记忆。
 
 ## 任务维护规则
 
 - 每个独立修复使用中文 Git 提交，并在实现提交中把对应任务状态和验证证据更新到本文件。
-- 代码锚点只使用「文件路径 + 符号名」，不写行号；重命名、移动或删除符号时，同一提交用 `rg -n` 确认锚点符号仍然存在并更新引用。
+- 代码锚点使用「文件路径 + 完整符号名 + 当前起止行范围」；重命名、移动、删除或插入代码时，同一提交用 `rg -n`、`nl -ba` 重新确认并更新引用。
 - 复杂实现细节写入对应 `implementation/` 分卷；本文件只保留待做状态、依赖、关键决策和验收入口。
 - 单项只有在代码、迁移、测试、文档和提交全部完成后才能标记 `已完成`。

@@ -41,12 +41,14 @@
 
 ## Grade：作答快照到反馈产物
 
-| 执行阶段 | 文件 | 符号 | 输入 | 处理 | 输出/副作用 | 下一步 |
-| --- | --- | --- | --- | --- | --- | --- |
-| 作答快照 | `backend/app/modules/agent/workflows/grade.py` | `_load_attempt_snapshot_node` | `question_id`、`user_answer` | 冻结题目 ID、作答正文和提交时间 | `attempt` | `_objective_grade_node` |
-| 客观判定与 rubric | `backend/app/modules/agent/workflows/grade.py` | `_objective_grade_node`、`_rubric_gate_node` | 尝试快照 | 先做确定性判定，再组装 rubric | `objective_result`、`rubric` | `_generate_feedback_node` |
-| 主观反馈生成 | `backend/app/modules/agent/workflows/grade.py` | `_generate_feedback_node`、`_feedback_gate_node` | attempt 和 rubric | 生成 strengths / weaknesses / suggestions，并校验整体反馈非空 | `feedback` | `_render_artifact_node` |
-| 反馈 Artifact | `backend/app/modules/agent/workflows/grade.py` | `_render_artifact_node`、`_completed_node` | 反馈内容 | 组装 feedback artifact | `agent_artifacts` 与 completed run | worker 完成分支 |
+| 执行阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 作答快照 | `backend/app/modules/agent/workflows/grade.py` | `_load_attempt_snapshot_node` | L20-L31 | `question_id`、`user_answer` | 冻结题目 ID、作答正文和提交时间；当前 worker 只注入 `input_message`，因此 P1 尚无真实题面/答案 Bundle | `attempt` | `_objective_grade_node` |
+| 客观判定与 rubric | `backend/app/modules/agent/workflows/grade.py` | `_objective_grade_node`、`_rubric_gate_node` | L34-L67 | 尝试快照 | 当前 P1 不读取标准答案，所有作答都标为非客观题，再组装完整度 rubric；这里不会产生 `grading_evidence` | `objective_result`、`rubric` | `_generate_feedback_node` |
+| 主观反馈生成 | `backend/app/modules/agent/workflows/grade.py` | `_generate_feedback_node`、`_feedback_gate_node` | L70-L105 | attempt 和 rubric | 生成固定 strengths / weaknesses / suggestions，并校验整体反馈非空 | `feedback`；反馈为空时返回失败并由 worker 投影 `run.failed` | `_render_artifact_node` |
+| 反馈 Artifact | `backend/app/modules/agent/workflows/grade.py` | `_render_artifact_node`、`_completed_node` | L108-L142 | 反馈内容、可选的内部 `grading_evidence` | 组装 feedback artifact；只有已有显式 verdict 时才把完整证据放入 `content.grading`，固定反馈不伪造评分 | `agent_artifacts` 与 completed run | `AgentWorker.process_run` |
+| 完成事实交接 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | L183-L224 | completed 结果与 Feedback Artifact | 先持久化 Artifact，再在同一完成事务调用事实投影，最后写 `run.completed` | Artifact、内部记忆事实或无副作用跳过 | `project_completed_run_facts` |
+| 评分事实与掌握度 | `backend/app/modules/agent/memory_projection.py` | `project_completed_run_facts`、`_record_grade_result_confirmed` | L19-L30、L86-L190 | Feedback Artifact 的 `content.grading` | 校验 verdict / question / knowledge points，知识点去重，按用户 + evidence ID 检查幂等，写 `grade_result_confirmed` 并用增量均值更新掌握度；证据不完整则安全跳过，数据库异常沿完成事务传播 | `agent_memory_events`、`user_learning_mastery` | `memory_selector._load_unique_weak_topic` 在后续练习读取 |
 
 ## Plan：计划草案、审批与恢复执行
 

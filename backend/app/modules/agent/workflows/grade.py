@@ -109,16 +109,23 @@ async def _render_artifact_node(context: ExecutionContext, db: AsyncSession) -> 
     """渲染反馈产物"""
     feedback = context.get("feedback", {})
     attempt = context.get("attempt", {})
-    
+
+    content = {
+        "overall": feedback.get("overall", ""),
+        "strengths": feedback.get("strengths", []),
+        "weaknesses": feedback.get("weaknesses", []),
+        "suggestions": feedback.get("suggestions", []),
+    }
+    # 只有确定性判定产生真实 verdict 时才携带结构化评分证据；
+    # 主观固定文案反馈不进入掌握度回写。
+    grading_evidence = context.get("grading_evidence") or {}
+    if grading_evidence.get("verdict"):
+        content["grading"] = grading_evidence
+
     artifact = {
         "type": "feedback",
         "title": "批改反馈",
-        "content": {
-            "overall": feedback.get("overall", ""),
-            "strengths": feedback.get("strengths", []),
-            "weaknesses": feedback.get("weaknesses", []),
-            "suggestions": feedback.get("suggestions", []),
-        },
+        "content": content,
         "summary": feedback.get("overall", "反馈已生成"),
     }
     
