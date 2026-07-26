@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .context_builder import AgentRunContext
+from .memory_projection import project_topic_confirmed_fact
 from .models import (
     AgentMemorySnapshot,
     AgentMemorySnapshotItem,
@@ -168,6 +169,15 @@ async def ensure_turn_memory_snapshot(
         select(AgentMemorySnapshot).where(AgentMemorySnapshot.run_id == run.id)
     )
     if existing is not None:
+        if understanding.topic_entities:
+            await project_topic_confirmed_fact(
+                db,
+                run,
+                snapshot_id=existing.id,
+                state_version=existing.state_version,
+                source_message_id=agent_context.current_message_id,
+                topic=understanding.topic_entities[0].model_dump(mode="json"),
+            )
         return existing
 
     state = await db.scalar(
@@ -224,4 +234,13 @@ async def ensure_turn_memory_snapshot(
     )
     db.add(snapshot_item)
     await db.flush()
+    if understanding.topic_entities:
+        await project_topic_confirmed_fact(
+            db,
+            run,
+            snapshot_id=snapshot.id,
+            state_version=snapshot.state_version,
+            source_message_id=agent_context.current_message_id,
+            topic=understanding.topic_entities[0].model_dump(mode="json"),
+        )
     return snapshot

@@ -7,7 +7,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from app.db.mysql import Base
-from app.modules.agent.memory_projection import project_completed_run_facts
+from app.modules.agent.memory_projection import (
+    project_completed_run_facts,
+    project_topic_confirmed_fact,
+)
 from app.modules.agent.models import (
     AgentApproval,
     AgentArtifact,
@@ -122,6 +125,58 @@ async def _create_feedback_artifact(
     db_session.add(artifact)
     await db_session.flush()
     return artifact
+
+
+@pytest.mark.asyncio
+async def test_topic_confirmed_projection_is_idempotent_and_skips_inherited_topic(
+    db_session,
+):
+    run = await _create_run(
+        db_session,
+        run_id="run_topic_001",
+        workflow="conversation",
+    )
+    explicit_topic = {
+        "entity_type": "knowledge_point",
+        "entity_id": "kp_binary_search",
+        "title": "二分查找",
+        "source": "context_ref",
+        "aliases": ["折半查找"],
+    }
+
+    for _ in range(2):
+        await project_topic_confirmed_fact(
+            db_session,
+            run,
+            snapshot_id="memsnap_topic_001",
+            state_version=2,
+            source_message_id="msg_topic_001",
+            topic=explicit_topic,
+        )
+
+    inherited_run = await _create_run(
+        db_session,
+        run_id="run_topic_002",
+        workflow="conversation",
+    )
+    await project_topic_confirmed_fact(
+        db_session,
+        inherited_run,
+        snapshot_id="memsnap_topic_002",
+        state_version=3,
+        source_message_id="msg_topic_002",
+        topic={**explicit_topic, "source": "thread_memory"},
+    )
+
+    events = list((await db_session.execute(select(AgentMemoryEvent))).scalars())
+    assert len(events) == 1
+    assert events[0].idempotency_key == "topic_confirmed:run_topic_001"
+    assert events[0].payload_json == {
+        "snapshot_id": "memsnap_topic_001",
+        "state_version": 2,
+        "source_message_id": "msg_topic_001",
+        "topic": explicit_topic,
+    }
 
 
 @pytest.mark.asyncio

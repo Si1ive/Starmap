@@ -1,4 +1,4 @@
-"""Project completed-run facts into layered long-term memory."""
+"""Project trusted Agent facts into layered long-term memory."""
 
 from __future__ import annotations
 
@@ -14,6 +14,63 @@ logger = get_logger(__name__)
 
 # 真实评分结论对掌握度的贡献值；不在表内的 verdict 视为无效证据。
 _VERDICT_CONTRIBUTIONS = {"correct": 1.0, "partial": 0.5, "incorrect": 0.0}
+
+
+async def project_topic_confirmed_fact(
+    db: AsyncSession,
+    run: AgentRun,
+    *,
+    snapshot_id: str,
+    state_version: int,
+    source_message_id: str | None,
+    topic: dict,
+) -> None:
+    """把本轮用户显式选择的主题记为线程事实。
+
+    从线程热状态继承的主题只代表本轮读取了旧事实，不重复写“用户确认”。
+    该投影发生在 Router 调用前，因此后续模型失败也不会丢失用户已表达的主题。
+    """
+    if topic.get("source") != "context_ref":
+        return
+    entity_type = str(topic.get("entity_type") or "").strip()
+    title = str(topic.get("title") or "").strip()
+    if not entity_type or not title:
+        return
+
+    fact_type = MemoryFactType.TOPIC_CONFIRMED.value
+    idempotency_key = f"{fact_type}:{run.id}"
+    existing = await db.scalar(
+        select(AgentMemoryEvent.id).where(
+            AgentMemoryEvent.idempotency_key == idempotency_key
+        )
+    )
+    if existing is not None:
+        return
+
+    db.add(
+        AgentMemoryEvent(
+            user_id=run.user_id,
+            thread_id=run.thread_id,
+            run_id=run.id,
+            memory_scope="thread",
+            source_kind="message",
+            fact_type=fact_type,
+            idempotency_key=idempotency_key,
+            payload_json={
+                "snapshot_id": snapshot_id,
+                "state_version": state_version,
+                "source_message_id": source_message_id,
+                "topic": topic,
+            },
+        )
+    )
+    await db.flush()
+    logger.info(
+        "用户确认主题事实写入",
+        run_id=run.id,
+        snapshot_id=snapshot_id,
+        topic=title,
+    )
 
 
 async def project_completed_run_facts(

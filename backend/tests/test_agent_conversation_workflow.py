@@ -19,6 +19,7 @@ from app.modules.agent.models import (
     AgentCheckpoint,
     AgentEvent,
     AgentInput,
+    AgentMemoryEvent,
     AgentMemorySnapshot,
     AgentMemorySnapshotItem,
     AgentMessage,
@@ -49,6 +50,7 @@ CONVERSATION_TABLES = [
     AgentInput.__table__,
     AgentApproval.__table__,
     AgentThreadMemoryState.__table__,
+    AgentMemoryEvent.__table__,
     AgentMemorySnapshot.__table__,
     AgentMemorySnapshotItem.__table__,
 ]
@@ -156,14 +158,20 @@ async def _create_thread(db_session):
     await db_session.flush()
 
 
-async def _create_turn(db_session, *, content: str, client_message_id: str):
+async def _create_turn(
+    db_session,
+    *,
+    content: str,
+    client_message_id: str,
+    context_refs: list[dict] | None = None,
+):
     return await AgentTimelineService(db_session).create_turn(
         user_id="user_001",
         thread_id="thread_001",
         content=content,
         client_message_id=client_message_id,
         attachments=[],
-        context_refs=[],
+        context_refs=context_refs or [],
     )
 
 
@@ -507,6 +515,10 @@ async def test_follow_up_validate_request_uses_active_topic_snapshot_for_child_r
     assert state is not None
     assert state.version == 4
     assert state.latest_understanding_run_id == creation.run.id
+    inherited_topic_events = list(
+        (await db_session.execute(select(AgentMemoryEvent))).scalars()
+    )
+    assert inherited_topic_events == []
 
 
 @pytest.mark.asyncio
@@ -596,13 +608,38 @@ async def test_model_configuration_failure_creates_visible_failed_message(
     monkeypatch.setattr(conversation, "router_runtime", FailingRouterStub())
     creation = await _create_turn(
         db_session,
-        content="为什么 Agent 没有回复？",
+        content="给我讲解二分查找",
         client_message_id="client_failed",
+        context_refs=[
+            {
+                "type": "knowledge_point",
+                "id": "kp_binary_search",
+                "title": "二分查找",
+                "aliases": ["折半查找"],
+            }
+        ],
     )
 
     assert await AgentWorker().process_run(db_session, creation.run) is True
     assert creation.run.status == "failed"
     assert creation.run.metadata_json["error_code"] == "agent_model_unavailable"
+
+    topic_event = await db_session.scalar(
+        select(AgentMemoryEvent).where(AgentMemoryEvent.run_id == creation.run.id)
+    )
+    assert topic_event is not None
+    assert topic_event.fact_type == "topic_confirmed"
+    assert topic_event.memory_scope == "thread"
+    assert topic_event.source_kind == "message"
+    assert topic_event.idempotency_key == f"topic_confirmed:{creation.run.id}"
+    assert topic_event.payload_json["topic"] == {
+        "entity_type": "knowledge_point",
+        "entity_id": "kp_binary_search",
+        "title": "二分查找",
+        "source": "context_ref",
+        "aliases": ["折半查找"],
+    }
+    assert topic_event.payload_json["source_message_id"] == creation.message.id
 
     page = await AgentTimelineService(db_session).get_timeline(
         user_id="user_001",
