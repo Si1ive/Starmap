@@ -6,7 +6,8 @@
 
 ## 当前状态
 
-`architecture/`、`implementation/`、`tasks/` 和 `progress/` 已在 2026-07-25 完成首轮分卷迁移。
+`architecture/`、`implementation/`、`tasks/` 和 `progress/` 已在 2026-07-25 完成首轮分卷迁移；
+`progress/2026-07.md` 在 2026-07-26 因接近硬上限进一步拆为月份主题分卷。
 `01-technical-panorama.md`、`02-detailed-implementation.md` 和 `progress-log.md` 现仅保留薄索引职责，
 后续 Agent 教学正文只更新对应分卷与当月进展日志。
 
@@ -33,7 +34,9 @@ docs/agent-conversation/
 ├── tasks/
 │   └── YYYY-MM-DD-主题.md             # 跨阶段待做任务、依赖和验收状态
 └── progress/
-    └── YYYY-MM.md                     # 当月提交进展
+    ├── README.md                       # 进展日志总路由
+    ├── YYYY-MM.md                      # 月度兼容薄索引
+    └── YYYY-MM/README.md               # 当月主题分卷路由
 ```
 
 ## 更新路由
@@ -50,7 +53,7 @@ docs/agent-conversation/
 | 复杂线上故障 | 对应实现分卷 + 新建 `incidents/` 单页 | 只读取相关月份进展，不加载全部历史 |
 | 跨多个提交的待做计划 | `tasks/` 中对应任务单页 | 实施某项任务时再进入对应 architecture/implementation 分卷 |
 
-每个 Agent 提交最后只追加当月 `progress/YYYY-MM.md`，不在进展日志中复制详细正文。
+每个 Agent 提交最后更新当月路由指向的最小主题分卷；未拆分月份直接写 `progress/YYYY-MM.md`，已拆分月份不得再向兼容薄索引追加正文。
 
 ## 当前待做任务
 
