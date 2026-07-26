@@ -9,11 +9,12 @@
 
 | 执行阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 上下文数据结构 | `backend/app/modules/agent/context_builder.py` | `AgentRunContext` | L82-L116 | 线程、消息、Artifact、选择审计 | 定义当前可传给 Router/child workflow 的消息、Artifact 和丢弃记录 | `AgentRunContext` | `ThreadContextBuilder.build` |
-| 历史与 Artifact 选择 | `backend/app/modules/agent/context_builder.py` | `ThreadContextBuilder.build` | L133-L246 | thread ID、root run、token budget、可见 Artifact | 选择近期消息、当前轮前后的 Artifact，并记录被丢弃的消息/产物 ID | 受控上下文与审计信息 | `_route_node` |
-| Conversation 路由 | `backend/app/modules/agent/workflows/conversation.py` | `_route_node` | L45-L100 | 当前输入、受控上下文、允许 action | 把筛选后的历史交给 Router，决定 direct/explain/validate/grade/plan/clarify | `RouterDecision` | `_direct_answer_node` / `_dispatch_workflow_node` |
-| Child 元数据交接 | `backend/app/modules/agent/workflows/conversation.py` | `_child_context_metadata` | L163-L186 | 父 run 的上下文审计与模型配置 | 只复制已选消息/Artifact 的 ID 和模型配置 ID，不复制完整主题快照 | child run metadata | `_dispatch_workflow_node` |
-| Child Run 派发 | `backend/app/modules/agent/workflows/conversation.py` | `_dispatch_workflow_node` | L189-L234 | Router action、parent/root run、触发消息 | 创建 child run 和 workflow 时间线项；当前 child 侧主要依赖输入消息和显式参数，不消费独立记忆快照 | queue 中的 child run | worker |
+| 上下文数据结构 | `backend/app/modules/agent/context_builder.py` | `AgentRunContext` | L82-L121 | 线程、消息、Artifact、选择审计 | 定义当前可传给 Router/child workflow 的消息、Artifact、active topic、独立请求和 snapshot ID | `AgentRunContext` | `ThreadContextBuilder.build` |
+| 历史、Artifact 与热状态选择 | `backend/app/modules/agent/context_builder.py` | `ThreadContextBuilder.build`、`_load_thread_memory_state` | L138-L256、L489-L501 | thread ID、root run、token budget、可见 Artifact、线程热状态 | 选择近期消息、当前轮前后的 Artifact、待处理交互，并读取线程 `active_topic` / `memory_state_version` | 受控上下文与热状态 | `_route_node` |
+| 独立请求与快照 | `backend/app/modules/agent/turn_understanding.py` | `build_turn_understanding`、`ensure_turn_memory_snapshot` | L81-L201 | 当前输入、context refs、线程 active topic | 确定性生成 `TurnUnderstanding`，对“给我出道题”这类泛化输入补全 `standalone_request`，并创建 `agent_memory_snapshots` / `agent_memory_snapshot_items`、递增热状态版本 | `TurnUnderstanding`、`snapshot_id`、更新后的热状态 | `_route_node` |
+| Conversation 路由 | `backend/app/modules/agent/workflows/conversation.py` | `_route_node` | L46-L121 | 当前输入、受控上下文、独立请求、允许 action | 先构建并持久化 `TurnUnderstanding`，再把 `standalone_request` 和历史交给 Router，决定 direct/explain/validate/grade/plan/clarify | `RouterDecision`、run metadata 中的 `memory_snapshot_id` / `turn_understanding` | `_direct_answer_node` / `_dispatch_workflow_node` |
+| Child 元数据交接 | `backend/app/modules/agent/workflows/conversation.py` | `_child_context_metadata` | L183-L209 | 父 run 的上下文审计、active topic、独立请求和模型配置 | 复制筛选后的消息/Artifact ID、`active_topic`、`standalone_request`、`memory_snapshot_id` 和模型配置 ID，仍不复制敏感密钥 | child run metadata | `_dispatch_workflow_node` |
+| Child Run 派发 | `backend/app/modules/agent/workflows/conversation.py` | `_dispatch_workflow_node` | L212-L260 | Router action、parent/root run、独立请求 | 创建 child run 和 workflow 时间线项；child run 的 `input_message` 改为 `standalone_request`，从而不再只依赖原始短句和消息 ID | queue 中的 child run | worker |
 
 ## 已落库的记忆基础契约
 
@@ -24,17 +25,16 @@
 
 ## 当前能力边界
 
-1. 当前系统已经能选取近期消息和 Artifact，足以支撑 direct answer 与“本轮紧邻事实”的 explain / plan 等场景。
-2. `MEM-001` / `MEM-002` 已把“活跃主题、待处理任务、用户偏好、学习掌握度、历史主题摘要”落成稳定命名契约和数据库表，但还没有接入 `ThreadContextBuilder.build()` 的实际选择逻辑。
-3. child run 当前继承的是“被选中的消息/Artifact ID + 模型配置 ID”，不是任务单规划中的 `TurnUnderstanding` /
-   `snapshot_id`。
+1. 当前系统已经能选取近期消息、Artifact、待处理交互，并在 Router 前读取线程热状态中的 `active_topic`。
+2. `MEM-003` 的第一阶段已打通：conversation run 会生成确定性 `TurnUnderstanding`、创建不可变 snapshot，并把 `standalone_request` 与 `memory_snapshot_id` 传给 child run。
+3. 当前仍未实现歧义场景下的结构化指代消解模型，也还没有把掌握度、历史摘要和排除集真正做成按 `MemoryNeed` 选择的 bundle。
 
 ## 现状问题与整改入口
 
 | 问题 | 当前代码锚点 | 现状 | 任务单对应项 |
 | --- | --- | --- | --- |
-| 主题继承只靠消息历史 | `backend/app/modules/agent/context_builder.py` `ThreadContextBuilder.build` L133-L246 | 没有显式 `active_topic`、主题栈或独立请求 | `MEM-001`、`MEM-003` |
-| child workflow 只拿已选消息 ID | `backend/app/modules/agent/workflows/conversation.py` `_child_context_metadata` L163-L186 | Validate 无法直接消费主题快照、排除集和约束 | `MEM-003`、`MEM-004` |
+| 主题继承还未消费掌握度/摘要等深层记忆 | `backend/app/modules/agent/context_builder.py` `ThreadContextBuilder.build` L138-L256 | 已能读取 `active_topic`，但还没有选择 `user_learning_mastery`、历史摘要或排除集 | `MEM-003`、`MEM-004` |
+| child workflow 尚未读取 bundle 化记忆 | `backend/app/modules/agent/workflows/conversation.py` `_child_context_metadata` L183-L209 | 现在已传 `snapshot_id` 和 `standalone_request`，但 Validate/Explain 还没有真正按 `MemoryNeed` 读取 snapshot items | `MEM-004`、`MEM-005` |
 | Validate 仍主要使用硬编码薄弱点 | `backend/app/modules/agent/workflows/validate.py` `_load_learning_evidence_node` / `_question_discovery_node` L17-L52 | 不能把“讲解后出题”稳定落到当前主题 | `MEM-005` |
 | 长期回写尚未实现 | `backend/app/modules/agent/worker.py` `AgentWorker.process_run` L150-L222 | Run 完成时只落消息/Artifact/Event，没有 Memory Outbox | `MEM-006` |
 

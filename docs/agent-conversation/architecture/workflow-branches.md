@@ -9,10 +9,11 @@
 
 | 执行序号 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `backend/app/modules/agent/workflows/conversation.py` | `_child_context_metadata` | L163-L186 | 受控上下文与父 Run `model_config_id` | 复制上下文审计和模型配置 ID，不复制 API Key | child run metadata | `_dispatch_workflow_node` |
-| 2 | `backend/app/modules/agent/workflows/conversation.py` | `_dispatch_workflow_node` | L189-L234 | Router action、parent/root run、触发消息 | 幂等创建 compact child run 和对应 workflow timeline item | 队列中的 child run | `AgentWorker.process_run` |
-| 3 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run`（进入 running） | L127-L138 | queued child run | 提交 running 状态和 `run.status_changed`，让用户端先看到真实执行中 | running child run | `WorkflowEngine.execute` |
-| 4 | `backend/app/modules/agent/workflows/engine.py` | `WorkflowEngine.execute` | L61-L212 | workflow 定义与 child run | 每个节点开始/完成/失败分别写 step 事件，并把 `artifact` 收进 `ExecutionContext.artifacts` | 可持久化步骤链和最终产物 | 具体 workflow 节点 |
+| 1 | `backend/app/modules/agent/turn_understanding.py` | `build_turn_understanding`、`ensure_turn_memory_snapshot` | L81-L201 | 当前输入、context refs、线程 `active_topic` | 先生成确定性 `TurnUnderstanding`，再创建 `agent_memory_snapshots` / `agent_memory_snapshot_items` 并递增线程热状态版本 | `standalone_request`、`memory_snapshot_id`、更新后的 `active_topic` | `_route_node` |
+| 2 | `backend/app/modules/agent/workflows/conversation.py` | `_child_context_metadata` | L183-L209 | 受控上下文、独立请求、snapshot ID 与父 Run `model_config_id` | 复制上下文审计、`active_topic`、`standalone_request`、`memory_snapshot_id` 和模型配置 ID，不复制 API Key | child run metadata | `_dispatch_workflow_node` |
+| 3 | `backend/app/modules/agent/workflows/conversation.py` | `_dispatch_workflow_node` | L212-L260 | Router action、parent/root run、独立请求 | 幂等创建 compact child run 和对应 workflow timeline item；child `input_message` 使用 `standalone_request` | 队列中的 child run | `AgentWorker.process_run` |
+| 4 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run`（进入 running） | L127-L138 | queued child run | 提交 running 状态和 `run.status_changed`，让用户端先看到真实执行中 | running child run | `WorkflowEngine.execute` |
+| 5 | `backend/app/modules/agent/workflows/engine.py` | `WorkflowEngine.execute` | L61-L212 | workflow 定义与 child run | 每个节点开始/完成/失败分别写 step 事件，并把 `artifact` 收进 `ExecutionContext.artifacts` | 可持久化步骤链和最终产物 | 具体 workflow 节点 |
 
 ## Explain：资料探索到讲解产物
 

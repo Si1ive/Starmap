@@ -69,8 +69,8 @@ load_scope completed
 | Explain 持久化与刷新恢复 | `backend/app/modules/agent/worker.py`、`backend/app/modules/agent/timeline.py` | `AgentWorker.process_run`、`AgentTimelineService.get_timeline`、`AgentTimelineService._activity_views`、`AgentTimelineService.message_view` | `worker.py` L100-L251；`timeline.py` L320-L360、L399-L538、L554-L572 | worker 在 completed 分支创建 artifact、写 `message.completed` / `run.completed`；时间线刷新时按 root run 重建活动、artifact 和最终正文 |
 | 节点结果契约 | `backend/app/modules/agent/workflows/contracts.py` | `NodeResult.success` | L27-L48 | 已支持 `artifact` 参数，render 节点可通过统一工厂方法把最终产物传给引擎与 worker |
 | Validate 检索 | `backend/app/modules/agent/workflows/validate.py` | `_question_is_eligible`、`_load_learning_evidence_node`、`_question_discovery_node`、`_question_gate_node`、`_composition_gate_node` | L20-L116 | 仍使用硬编码薄弱点生成查询，但题目资格门已改读 `question_meta` / `entity` 的审核、状态、题型、难度与来源字段，组合门同步改读真实 DTO |
-| 当前上下文构建 | `backend/app/modules/agent/context_builder.py` | `AgentRunContext`、`ThreadContextBuilder.build` | L82-L116、L133-L246 | 能选择近期消息和 Artifact，但没有填充主题状态、独立请求和分层记忆 |
-| Router 与子 Run 交接 | `backend/app/modules/agent/workflows/conversation.py` | `_route_node`、`_child_context_metadata`、`_dispatch_workflow_node` | L45-L100、L163-L234 | Router 收到消息历史；子 Run 只拿选中 ID，没有可消费的主题快照 |
+| 当前上下文构建 | `backend/app/modules/agent/context_builder.py` | `AgentRunContext`、`ThreadContextBuilder.build`、`_load_thread_memory_state` | L82-L121、L138-L256、L489-L501 | 已能选择近期消息、Artifact、待处理交互，并读取线程 `active_topic` / `memory_state_version`；仍未按 `MemoryNeed` 选择掌握度、摘要和排除集 |
+| Router 与子 Run 交接 | `backend/app/modules/agent/workflows/conversation.py`、`backend/app/modules/agent/turn_understanding.py` | `_route_node`、`_child_context_metadata`、`_dispatch_workflow_node`、`build_turn_understanding`、`ensure_turn_memory_snapshot` | `conversation.py` L46-L260；`turn_understanding.py` L24-L201 | Router 已先生成 `TurnUnderstanding` 并创建 snapshot，再使用 `standalone_request` 路由；子 Run 已收到 `memory_snapshot_id` 和独立请求，但业务 workflow 还没有消费 snapshot items |
 | Run 最终持久化 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | L150-L222 | 执行工作流并创建 Artifact/最终消息；未来在完成事务中写记忆更新 Outbox |
 
 ## 第一组：立即解除现有故障
@@ -151,12 +151,19 @@ load_scope completed
 
 ### MEM-003 新输入的增量处理
 
+- 状态：进行中（2026-07-26 已完成确定性独立请求与 snapshot 第一阶段）。
 1. HTTP 事务只原子保存用户消息、根 Run、时间线和 Run Outbox，不调用 LLM。
 2. Worker 在 Router 前读取热状态、少量近期消息、显式引用和待处理交互。
 3. 确定性解析优先；只有“这个、上一道、难一点”等仍有歧义时调用结构化指代消解模型。
 4. 生成 `TurnUnderstanding`：原始输入、独立请求、意图提示、主题实体、约束和引用来源。
 5. 创建不可变 Turn Memory Snapshot，并以版本号更新线程热状态。
 6. Router 使用独立请求；子 Run 接收 snapshot ID，不再只传消息 ID。
+
+- 已在 `backend/app/modules/agent/context_builder.py` 为 `AgentRunContext` 增加 `active_topic`、`memory_state_version`、`standalone_request` 和 `memory_snapshot_id`，并在 `ThreadContextBuilder.build()` 中读取 `agent_thread_memory_states`。
+- 已新增 `backend/app/modules/agent/turn_understanding.py`，用确定性规则把 `context_refs` 或线程 `active_topic` 补全为 `TurnUnderstanding`；例如当前活跃主题是“二分查找”且输入“给我出道题”时，会生成 `standalone_request="给用户出一道关于二分查找的练习题"`。
+- 已在 `backend/app/modules/agent/workflows/conversation.py` 的 `_route_node()` 中创建不可变 snapshot，并把 `memory_snapshot_id`、`turn_understanding` 写入父 run metadata；Router 改为消费 `standalone_request`，child run 也改为继承 `standalone_request` 和 `memory_snapshot_id`。
+- 已补 `backend/tests/test_agent_context_builder.py::test_context_loads_active_topic_from_thread_memory_state` 与 `backend/tests/test_agent_conversation_workflow.py::test_follow_up_validate_request_uses_active_topic_snapshot_for_child_run`，覆盖“Router 前读取热状态”和“子 Run 继承 snapshot ID + standalone_request”的第一阶段闭环。
+- 尚未完成项：歧义输入的结构化指代消解模型、基于 `MemoryNeed` 的 bundle 选择器，以及业务 workflow 对 snapshot items 的真实消费，继续留在后续 `MEM-003` / `MEM-004`。
 
 冲突优先级固定为：当前输入明确主题 > 显式引用/附件 > 待处理任务 > 最近活跃主题 > 唯一高优先级
 学习薄弱点 > 请求用户澄清。禁止静默使用“数据结构 操作系统”作为默认主题。

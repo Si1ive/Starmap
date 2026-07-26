@@ -23,6 +23,7 @@ from .models import (
     AgentInput,
     AgentMessage,
     AgentRun,
+    AgentThreadMemoryState,
     AgentThread,
     AgentThreadItem,
 )
@@ -93,6 +94,10 @@ class AgentRunContext(BaseModel):
     attachments: list[dict[str, Any]] = Field(default_factory=list)
     context_refs: list[dict[str, Any]] = Field(default_factory=list)
     pending_interactions: list[PendingInteraction] = Field(default_factory=list)
+    active_topic: dict[str, Any] | None = None
+    memory_state_version: int | None = None
+    standalone_request: str | None = None
+    memory_snapshot_id: str | None = None
     permission_scope: PermissionScope
     token_budget: int
     history_token_budget: int
@@ -184,6 +189,10 @@ class ThreadContextBuilder:
             user_id=user_id,
             thread_id=thread.id,
         )
+        memory_state = await self._load_thread_memory_state(
+            user_id=user_id,
+            thread_id=thread.id,
+        )
 
         current_tokens = self.estimate_tokens(current_input)
         mandatory_tokens = self._estimate_supplemental_tokens(
@@ -226,6 +235,12 @@ class ThreadContextBuilder:
             attachments=attachments,
             context_refs=context_refs,
             pending_interactions=pending_interactions,
+            active_topic=(
+                dict(memory_state.active_topic_json)
+                if memory_state and memory_state.active_topic_json
+                else None
+            ),
+            memory_state_version=memory_state.version if memory_state else None,
             permission_scope=PermissionScope(
                 user_id=user_id,
                 thread_id=thread.id,
@@ -480,6 +495,20 @@ class ThreadContextBuilder:
             for item in approval_result.scalars()
         )
         return interactions
+
+    async def _load_thread_memory_state(
+        self,
+        *,
+        user_id: str,
+        thread_id: str,
+    ) -> AgentThreadMemoryState | None:
+        result = await self.db.execute(
+            select(AgentThreadMemoryState).where(
+                AgentThreadMemoryState.thread_id == thread_id,
+                AgentThreadMemoryState.user_id == user_id,
+            )
+        )
+        return result.scalar_one_or_none()
 
     def _select_recent_artifacts(
         self,

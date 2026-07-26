@@ -19,10 +19,13 @@ from app.modules.agent.models import (
     AgentCheckpoint,
     AgentEvent,
     AgentInput,
+    AgentMemorySnapshot,
+    AgentMemorySnapshotItem,
     AgentMessage,
     AgentRun,
     AgentRunOutbox,
     AgentStep,
+    AgentThreadMemoryState,
     AgentThread,
     AgentThreadEvent,
     AgentThreadItem,
@@ -45,6 +48,9 @@ CONVERSATION_TABLES = [
     AgentArtifact.__table__,
     AgentInput.__table__,
     AgentApproval.__table__,
+    AgentThreadMemoryState.__table__,
+    AgentMemorySnapshot.__table__,
+    AgentMemorySnapshotItem.__table__,
 ]
 
 
@@ -69,8 +75,10 @@ class RouterStub:
     def __init__(self, decisions):
         self.decisions = list(decisions)
         self.histories = []
+        self.inputs = []
 
     async def decide(self, current_input, *, deps, message_history=(), db=None):
+        self.inputs.append(current_input)
         self.histories.append(list(message_history))
         return self.decisions.pop(0)
 
@@ -421,6 +429,84 @@ async def test_business_action_creates_context_bound_inline_workflow(
         "workflow.updated",
         "timeline.item.created",
     ]
+
+
+@pytest.mark.asyncio
+async def test_follow_up_validate_request_uses_active_topic_snapshot_for_child_run(
+    db_session,
+    monkeypatch,
+):
+    await _create_thread(db_session)
+    db_session.add(
+        AgentThreadMemoryState(
+            thread_id="thread_001",
+            user_id="user_001",
+            version=3,
+            active_topic_json={
+                "entity_type": "knowledge_point",
+                "entity_id": "kp_binary_search",
+                "title": "二分查找",
+                "source": "thread_memory",
+            },
+        )
+    )
+    await db_session.flush()
+    router = RouterStub(
+        [
+            RouterDecision(
+                action="validate",
+                confidence=0.91,
+                reason_code="needs_practice",
+            )
+        ]
+    )
+    monkeypatch.setattr(conversation, "router_runtime", router)
+    creation = await _create_turn(
+        db_session,
+        content="给我出道题",
+        client_message_id="client_follow_up_validate",
+    )
+
+    assert await AgentWorker().process_run(db_session, creation.run) is True
+
+    child = await db_session.scalar(
+        select(AgentRun).where(AgentRun.parent_run_id == creation.run.id)
+    )
+    snapshot = await db_session.scalar(
+        select(AgentMemorySnapshot).where(AgentMemorySnapshot.run_id == creation.run.id)
+    )
+    state = await db_session.scalar(
+        select(AgentThreadMemoryState).where(
+            AgentThreadMemoryState.thread_id == "thread_001"
+        )
+    )
+    snapshot_item = await db_session.scalar(
+        select(AgentMemorySnapshotItem).where(
+            AgentMemorySnapshotItem.snapshot_id == snapshot.id
+        )
+    )
+
+    assert router.inputs == ["给用户出一道关于二分查找的练习题"]
+    assert creation.run.metadata_json["memory_snapshot_id"] == snapshot.id
+    assert creation.run.metadata_json["turn_understanding"]["standalone_request"] == (
+        "给用户出一道关于二分查找的练习题"
+    )
+    assert child is not None
+    assert child.input_message == "给用户出一道关于二分查找的练习题"
+    assert child.metadata_json["memory_snapshot_id"] == snapshot.id
+    assert child.metadata_json["context_snapshot"]["active_topic"]["title"] == "二分查找"
+    assert child.metadata_json["context_snapshot"]["standalone_request"] == (
+        "给用户出一道关于二分查找的练习题"
+    )
+    assert snapshot is not None
+    assert snapshot.state_version == 4
+    assert snapshot.standalone_request == "给用户出一道关于二分查找的练习题"
+    assert snapshot.understanding_json["topic_entities"][0]["title"] == "二分查找"
+    assert snapshot_item is not None
+    assert snapshot_item.memory_partition == "current_turn_understanding"
+    assert state is not None
+    assert state.version == 4
+    assert state.latest_understanding_run_id == creation.run.id
 
 
 @pytest.mark.asyncio

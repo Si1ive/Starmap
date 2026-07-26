@@ -14,6 +14,10 @@ from ..model_runtime.router import ROUTER_ACTIONS, RouterDeps, router_runtime
 from ..models import AgentRun
 from ..service import AgentService
 from ..timeline import AgentTimelineService
+from ..turn_understanding import (
+    build_turn_understanding,
+    ensure_turn_memory_snapshot,
+)
 from .contracts import (
     ExecutionContext,
     Node,
@@ -52,9 +56,23 @@ async def _route_node(context: ExecutionContext, db: AsyncSession) -> NodeResult
         current_message_id=run.trigger_message_id,
         token_budget=4096,
     )
+    understanding = build_turn_understanding(agent_context)
+    snapshot = await ensure_turn_memory_snapshot(
+        db,
+        run=run,
+        agent_context=agent_context,
+        understanding=understanding,
+    )
+    agent_context.standalone_request = understanding.standalone_request
+    agent_context.memory_snapshot_id = snapshot.id
+    agent_context.memory_state_version = snapshot.state_version
+    if understanding.topic_entities:
+        agent_context.active_topic = understanding.topic_entities[0].model_dump(
+            mode="json"
+        )
     context.charge_model_call()
     decision = await router_runtime.decide(
-        agent_context.current_input,
+        understanding.standalone_request,
         deps=RouterDeps(
             thread_id=agent_context.thread_id,
             user_id=agent_context.user_id,
@@ -78,6 +96,8 @@ async def _route_node(context: ExecutionContext, db: AsyncSession) -> NodeResult
         "estimated_tokens": agent_context.estimated_tokens,
         "token_budget": agent_context.token_budget,
     }
+    metadata["memory_snapshot_id"] = snapshot.id
+    metadata["turn_understanding"] = understanding.model_dump(mode="json")
     metadata["router_decision"] = decision.model_dump(exclude_none=True)
     run.metadata_json = metadata
 
@@ -123,7 +143,7 @@ async def _direct_answer_node(
 
     context.charge_model_call()
     output = await direct_answer_runtime.answer(
-        agent_context.current_input,
+        agent_context.standalone_request or agent_context.current_input,
         deps=DirectAnswerDeps.from_context(agent_context),
         message_history=agent_context.to_message_history(),
         db=db,
@@ -179,7 +199,10 @@ def _child_context_metadata(
             "permission_scope": agent_context.permission_scope.model_dump(),
             "estimated_tokens": agent_context.estimated_tokens,
             "token_budget": agent_context.token_budget,
+            "active_topic": agent_context.active_topic,
+            "standalone_request": agent_context.standalone_request,
         },
+        "memory_snapshot_id": agent_context.memory_snapshot_id,
     }
     if model_config_id:
         metadata["model_config_id"] = model_config_id
@@ -206,7 +229,11 @@ async def _dispatch_workflow_node(
         user_id=parent_run.user_id,
         thread_id=parent_run.thread_id,
         workflow_name=action,
-        input_message=parent_run.input_message or context.get("input_message", ""),
+        input_message=(
+            agent_context.standalone_request
+            or parent_run.input_message
+            or context.get("input_message", "")
+        ),
         client_idempotency_key=f"dispatch:{parent_run.id}:{action}",
         workflow_key=action,
         workflow_version="v1",

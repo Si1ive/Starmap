@@ -22,6 +22,7 @@ from app.modules.agent.models import (
     AgentInput,
     AgentMessage,
     AgentRun,
+    AgentThreadMemoryState,
     AgentThread,
     AgentThreadItem,
 )
@@ -34,6 +35,7 @@ CONTEXT_TABLES = [
     AgentArtifact.__table__,
     AgentInput.__table__,
     AgentApproval.__table__,
+    AgentThreadMemoryState.__table__,
 ]
 
 
@@ -519,3 +521,35 @@ async def test_context_preserves_explicit_artifact_when_budget_is_tight(db_sessi
     assert context.selected_artifact_ids == ["artifact_explicit"]
     assert context.dropped_artifact_ids == ["artifact_recent"]
     assert context.estimated_tokens > context.token_budget
+
+
+@pytest.mark.asyncio
+async def test_context_loads_active_topic_from_thread_memory_state(db_session):
+    await _add_thread(db_session, thread_id="thread_001", user_id="user_001")
+    _, run = await _add_current_turn(db_session, content="给我出道题")
+    db_session.add(
+        AgentThreadMemoryState(
+            thread_id="thread_001",
+            user_id="user_001",
+            version=5,
+            active_topic_json={
+                "entity_type": "knowledge_point",
+                "entity_id": "kp_binary_search",
+                "title": "二分查找",
+            },
+        )
+    )
+    await db_session.flush()
+
+    context = await ThreadContextBuilder(db_session).build(
+        user_id="user_001",
+        thread_id="thread_001",
+        turn_id=run.id,
+    )
+
+    assert context.active_topic == {
+        "entity_type": "knowledge_point",
+        "entity_id": "kp_binary_search",
+        "title": "二分查找",
+    }
+    assert context.memory_state_version == 5
