@@ -8,16 +8,20 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.mysql_models import KnowledgePoint
+
 from .memory_contracts import MemoryFactType, MemoryNeed
 from .models import (
     AgentMemoryEvent,
     AgentMemorySnapshot,
     AgentMemorySnapshotItem,
     AgentRun,
+    UserLearningMastery,
 )
 
 _EXCLUDED_EVENT_LIMIT = 10
 _EXCLUDED_QUESTION_LIMIT = 50
+_WEAK_MASTERY_THRESHOLD = 0.6
 
 
 class TopicBundle(BaseModel):
@@ -114,6 +118,56 @@ async def _load_excluded_question_ids(db: AsyncSession, *, user_id: str) -> list
     return excluded
 
 
+async def _load_unique_weak_topic(
+    db: AsyncSession,
+    *,
+    user_id: str,
+) -> tuple[TopicBundle | None, list[dict[str, Any]]]:
+    """唯一高优先级薄弱点回退：恰好一个低掌握度知识点时才回退主题，多个则继续澄清。"""
+    weak_rows = list(
+        (
+            await db.execute(
+                select(UserLearningMastery)
+                .where(
+                    UserLearningMastery.user_id == user_id,
+                    UserLearningMastery.mastery_score < _WEAK_MASTERY_THRESHOLD,
+                    UserLearningMastery.evidence_count > 0,
+                )
+                .order_by(UserLearningMastery.mastery_score.asc())
+                .limit(2)
+            )
+        ).scalars()
+    )
+    if len(weak_rows) != 1:
+        return None, []
+    weak = weak_rows[0]
+    knowledge_point = await db.scalar(
+        select(KnowledgePoint).where(KnowledgePoint.id == weak.knowledge_point_id)
+    )
+    if knowledge_point is None:
+        return None, []
+    topic = TopicBundle(
+        title=knowledge_point.title,
+        entity_type="knowledge_point",
+        entity_id=knowledge_point.id,
+        aliases=[
+            str(alias).strip()
+            for alias in (knowledge_point.aliases or [])
+            if str(alias).strip()
+        ],
+        source="learning_mastery",
+    )
+    mastery_signals = [
+        {
+            "knowledge_point_id": weak.knowledge_point_id,
+            "mastery_score": weak.mastery_score,
+            "evidence_count": weak.evidence_count,
+            "last_evidence_id": weak.last_evidence_id,
+        }
+    ]
+    return topic, mastery_signals
+
+
 async def load_practice_bundle(
     db: AsyncSession,
     *,
@@ -133,7 +187,13 @@ async def load_practice_bundle(
     metadata = run.metadata_json or {}
     snapshot_id = metadata.get("memory_snapshot_id")
     if not snapshot_id:
+        topic, mastery_signals = await _load_unique_weak_topic(db, user_id=user_id)
         return PracticeBundle(
+            topic=topic,
+            knowledge_point_ids=(
+                [topic.entity_id] if topic is not None and topic.entity_id else []
+            ),
+            mastery_signals=mastery_signals,
             selected_artifact_ids=list(
                 (metadata.get("context_snapshot") or {}).get("selected_artifact_ids") or []
             ),
@@ -147,8 +207,14 @@ async def load_practice_bundle(
         )
     )
     if snapshot is None:
+        topic, mastery_signals = await _load_unique_weak_topic(db, user_id=user_id)
         return PracticeBundle(
             snapshot_id=str(snapshot_id),
+            topic=topic,
+            knowledge_point_ids=(
+                [topic.entity_id] if topic is not None and topic.entity_id else []
+            ),
+            mastery_signals=mastery_signals,
             excluded_question_ids=excluded_question_ids,
         )
 
@@ -179,6 +245,10 @@ async def load_practice_bundle(
             understanding["reference_sources"] = payload.get("reference_sources")
     context_snapshot = snapshot.selection_metadata_json or metadata.get("context_snapshot") or {}
     topic = _bundle_topic_from_understanding(understanding)
+    mastery_signals: list[dict[str, Any]] = []
+    if topic is None:
+        # 冲突优先级：快照主题（当前输入/引用/活跃主题）优先，全部缺失才回退唯一薄弱点。
+        topic, mastery_signals = await _load_unique_weak_topic(db, user_id=user_id)
     knowledge_point_ids = (
         [topic.entity_id]
         if topic is not None
@@ -196,6 +266,7 @@ async def load_practice_bundle(
         knowledge_point_ids=knowledge_point_ids,
         reference_sources=list(understanding.get("reference_sources") or []),
         selected_artifact_ids=list(context_snapshot.get("selected_artifact_ids") or []),
+        mastery_signals=mastery_signals,
         excluded_question_ids=excluded_question_ids,
     )
 

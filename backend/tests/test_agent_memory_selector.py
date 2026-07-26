@@ -8,6 +8,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from app.db.mysql import Base
+from app.models.mysql_models import (
+    CanonicalChapter,
+    Chapter,
+    Document,
+    KnowledgePoint,
+    Subject,
+)
 from app.modules.agent.memory_selector import load_practice_bundle
 from app.modules.agent.models import (
     AgentMessage,
@@ -16,6 +23,7 @@ from app.modules.agent.models import (
     AgentMemorySnapshotItem,
     AgentRun,
     AgentThread,
+    UserLearningMastery,
 )
 
 SELECTOR_TABLES = [
@@ -25,7 +33,40 @@ SELECTOR_TABLES = [
     AgentMemoryEvent.__table__,
     AgentMemorySnapshot.__table__,
     AgentMemorySnapshotItem.__table__,
+    Subject.__table__,
+    Chapter.__table__,
+    # KnowledgePoint 的可空外键在 SQLite 下也要求父表存在。
+    CanonicalChapter.__table__,
+    Document.__table__,
+    KnowledgePoint.__table__,
+    UserLearningMastery.__table__,
 ]
+
+
+async def _seed_knowledge_point(
+    db_session,
+    *,
+    kp_id: str,
+    title: str,
+    aliases: list[str],
+) -> None:
+    subject = await db_session.get(Subject, "subject_ds")
+    if subject is None:
+        db_session.add(Subject(id="subject_ds", name="数据结构", code="ds"))
+        await db_session.flush()
+        db_session.add(Chapter(id="chapter_ds_01", subject_id="subject_ds", name="查找"))
+        await db_session.flush()
+    db_session.add(
+        KnowledgePoint(
+            id=kp_id,
+            chapter_id="chapter_ds_01",
+            subject_id="subject_ds",
+            title=title,
+            content=f"{title}正文",
+            aliases=aliases,
+        )
+    )
+    await db_session.flush()
 
 
 @pytest_asyncio.fixture
@@ -116,6 +157,19 @@ async def test_load_practice_bundle_uses_snapshot_topic_and_context_metadata(db_
     await db_session.flush()
     db_session.add(snapshot_item)
     await db_session.flush()
+    # 即使存在唯一薄弱点，快照主题也必须优先，不触发掌握度回退。
+    db_session.add(
+        UserLearningMastery(
+            user_id="user_001",
+            subject_id="subject_ds",
+            knowledge_point_id="kp_red_black_tree",
+            mastery_score=0.2,
+            evidence_count=3,
+            correct_count=1,
+            incorrect_count=2,
+        )
+    )
+    await db_session.flush()
 
     bundle = await load_practice_bundle(
         db_session,
@@ -133,6 +187,138 @@ async def test_load_practice_bundle_uses_snapshot_topic_and_context_metadata(db_
     assert bundle.knowledge_point_ids == ["kp_binary_search"]
     assert bundle.selected_artifact_ids == ["artifact_001", "artifact_002"]
     assert bundle.excluded_question_ids == []
+    assert bundle.topic.source == "thread_memory"
+    assert bundle.mastery_signals == []
+
+
+async def _create_run_without_snapshot(db_session, *, run_id: str) -> AgentRun:
+    thread = AgentThread(
+        id=f"thread_{run_id}",
+        user_id="user_001",
+        title="薄弱点回退线程",
+        status="active",
+    )
+    run = AgentRun(
+        id=run_id,
+        thread_id=thread.id,
+        user_id="user_001",
+        workflow_name="validate",
+        workflow_key="validate",
+        workflow_version="v1",
+        status="queued",
+        input_message="给我出道题",
+        metadata_json={},
+    )
+    db_session.add(thread)
+    await db_session.flush()
+    db_session.add(run)
+    await db_session.flush()
+    return run
+
+
+@pytest.mark.asyncio
+async def test_load_practice_bundle_falls_back_to_unique_weak_point(db_session):
+    run = await _create_run_without_snapshot(db_session, run_id="run_weak_unique")
+    await _seed_knowledge_point(
+        db_session,
+        kp_id="kp_red_black_tree",
+        title="红黑树",
+        aliases=["RB树"],
+    )
+    db_session.add_all(
+        [
+            UserLearningMastery(
+                user_id="user_001",
+                subject_id="subject_ds",
+                knowledge_point_id="kp_red_black_tree",
+                mastery_score=0.3,
+                evidence_count=4,
+                correct_count=1,
+                incorrect_count=3,
+                last_evidence_id="grade_evidence_001",
+            ),
+            # 高掌握度知识点不参与薄弱点回退。
+            UserLearningMastery(
+                user_id="user_001",
+                subject_id="subject_ds",
+                knowledge_point_id="kp_binary_search",
+                mastery_score=0.9,
+                evidence_count=10,
+                correct_count=9,
+                incorrect_count=1,
+            ),
+            # 没有真实评分证据的低分行不允许触发回退。
+            UserLearningMastery(
+                user_id="user_001",
+                subject_id="subject_ds",
+                knowledge_point_id="kp_avl_tree",
+                mastery_score=0.1,
+                evidence_count=0,
+            ),
+        ]
+    )
+    await db_session.flush()
+
+    bundle = await load_practice_bundle(
+        db_session,
+        run_id=run.id,
+        user_id="user_001",
+    )
+
+    assert bundle.topic is not None
+    assert bundle.topic.title == "红黑树"
+    assert bundle.topic.aliases == ["RB树"]
+    assert bundle.topic.source == "learning_mastery"
+    assert bundle.knowledge_point_ids == ["kp_red_black_tree"]
+    assert bundle.mastery_signals == [
+        {
+            "knowledge_point_id": "kp_red_black_tree",
+            "mastery_score": 0.3,
+            "evidence_count": 4,
+            "last_evidence_id": "grade_evidence_001",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_load_practice_bundle_skips_weak_point_when_multiple_candidates(db_session):
+    run = await _create_run_without_snapshot(db_session, run_id="run_weak_multi")
+    await _seed_knowledge_point(
+        db_session,
+        kp_id="kp_red_black_tree",
+        title="红黑树",
+        aliases=[],
+    )
+    db_session.add_all(
+        [
+            UserLearningMastery(
+                user_id="user_001",
+                subject_id="subject_ds",
+                knowledge_point_id="kp_red_black_tree",
+                mastery_score=0.3,
+                evidence_count=4,
+            ),
+            UserLearningMastery(
+                user_id="user_001",
+                subject_id="subject_ds",
+                knowledge_point_id="kp_binary_search",
+                mastery_score=0.4,
+                evidence_count=2,
+            ),
+        ]
+    )
+    await db_session.flush()
+
+    bundle = await load_practice_bundle(
+        db_session,
+        run_id=run.id,
+        user_id="user_001",
+    )
+
+    # 多个薄弱点无法确定唯一回退主题，维持澄清路径。
+    assert bundle.topic is None
+    assert bundle.mastery_signals == []
+    assert bundle.knowledge_point_ids == []
 
 
 @pytest.mark.asyncio
