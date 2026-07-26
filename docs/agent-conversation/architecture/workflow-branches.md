@@ -54,13 +54,14 @@
 
 ## Plan：计划草案、审批与恢复执行
 
-| 执行阶段 | 文件 | 符号 | 输入 | 处理 | 输出/副作用 | 下一步 |
-| --- | --- | --- | --- | --- | --- | --- |
-| 学习证据聚合 | `backend/app/modules/agent/workflows/plan.py` | `_aggregate_learning_evidence_node` | user_id | 聚合薄弱项、强项、连续学习天数和每日目标 | `learning_evidence` | `_planning_precondition_gate_node` |
-| 计划草案生成 | `backend/app/modules/agent/workflows/plan.py` | `_planning_precondition_gate_node`、`_propose_plan_delta_node`、`_plan_quality_gate_node` | 学习证据 | 校验薄弱项非空后生成 7 天计划草案，并做质量门禁 | `plan_draft` | `_create_approval_node` |
-| 审批请求 | `backend/app/modules/agent/workflows/plan.py` | `_create_approval_node` | 计划草案 | 调用 `AgentService.create_approval` 创建真实审批记录，保留 diff 内容 | `approval_data` | `_wait_for_approval_node` |
-| WAITING 断点 | `backend/app/modules/agent/workflows/plan.py` | `_wait_for_approval_node` | 当前 run | 返回 `NodeResult.waiting(next_node="apply_plan_change")` | checkpoint 与待审批状态 | 用户审批 API |
-| 恢复应用与 Artifact | `backend/app/modules/agent/workflows/plan.py` | `_apply_plan_change_node`、`_render_plan_result_node` | 审批通过后的 checkpoint | 应用最终计划，并渲染 plan artifact | `agent_artifacts` 与 completed run | `_completed_node` |
+| 执行阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 学习证据聚合 | `backend/app/modules/agent/workflows/plan.py` | `_aggregate_learning_evidence_node` | L25-L42 | user_id | 聚合薄弱项、强项、连续学习天数和每日目标 | `learning_evidence` | `_planning_precondition_gate_node` |
+| 计划草案生成 | `backend/app/modules/agent/workflows/plan.py` | `_planning_precondition_gate_node`、`_propose_plan_delta_node`、`_plan_quality_gate_node` | L45-L99 | 学习证据 | 校验薄弱项非空后生成 7 天计划草案，并做质量门禁 | `plan_draft` | `_create_approval_node` |
+| 审批请求 | `backend/app/modules/agent/workflows/plan.py` | `_create_approval_node` | L102-L155 | 计划草案 | 调用 `AgentService.create_approval` 创建真实审批记录，保留 diff 内容 | `approval_data` | `_wait_for_approval_node` |
+| WAITING 断点 | `backend/app/modules/agent/workflows/plan.py` | `_wait_for_approval_node` | L158-L162 | 当前 run | 返回 `NodeResult.waiting(next_node="apply_plan_change")` | checkpoint 与待审批状态 | 用户审批 API |
+| 审批决定分流 | `backend/app/modules/agent/service.py` | `AgentService.decide_approval` | L424-L476 | waiting run、pending approval、用户决定 | approved 恢复 running 并投递；rejected 转 failed、删除 checkpoint、不投递；错误状态或跨用户无副作用返回 | approved run 或 rejected 终态 | `AgentWorker.process_run` / timeline |
+| 恢复应用与 Artifact | `backend/app/modules/agent/workflows/plan.py` | `_apply_plan_change_node`、`_render_plan_result_node`、`_completed_node` | L165-L218 | 审批通过后的 checkpoint | 应用节点从数据库复核 approval=approved，只有通过才设置 final plan、渲染 Artifact；未批准返回失败，错误沿 worker 传播 | `agent_artifacts` 与 completed run，或无 Artifact 的 failed run | worker 完成分支 |
 
 ## 旁路：等待用户输入与审批
 

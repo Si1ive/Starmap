@@ -12,6 +12,7 @@
 | 内部事件追加 | `backend/app/modules/agent/events.py` | `EventStore.append` | run 事件类型和 payload | 分配 run 内 sequence，写入 `agent_events`，并触发 thread 投影 | 内部事件事实 | `ThreadEventStore.project_run_event` |
 | Thread 投影总入口 | `backend/app/modules/agent/thread_events.py` | `ThreadEventStore.project_run_event` | `run.status_changed`、`step.*`、`tool.*`、`message.*`、`run.failed` | 把内部事件映射成统一的公开 thread 事件，并保持 cursor 单调递增 | `agent_thread_events` | SSE / 时间线刷新 |
 | 消息投影 | `backend/app/modules/agent/thread_events.py` | `_project_message_event` | `message.delta`、`message.completed`、`message.failed` | 第一个 delta 创建 assistant item，后续 delta 追加正文；completed/failed 收敛状态 | 可恢复消息事实 | `AgentTimelineService.get_timeline` |
+| 审批终态分流 | `backend/app/modules/agent/service.py` | `AgentService.decide_approval`（L424-L476） | waiting run、pending approval、用户 approve/reject | 先校验用户、状态、审批归属和 decision；批准时恢复 running 并投递 Outbox，拒绝时转 failed、删除 checkpoint 且不投递，二者都写 `run.status_changed` | 可恢复执行的 approved run，或不会再执行的 rejected run | `AgentWorker.process_run` / timeline |
 | 时间线快照构建 | `backend/app/modules/agent/timeline.py` | `AgentTimelineService.get_timeline`、`message_view`、`_build_workflow_views` | Thread 下消息、Run、步骤、事件、Artifact、审批 | 按 root run 聚合并重建消息、工作流步骤、活动与 Artifact | 刷新可恢复的 timeline snapshot | HTTP / 前端刷新 |
 | SSE 消费 | `frontend/src/store/agent-context.tsx` | `AgentProvider.connectThreadStream` | thread ID、cursor | 连接 EventSource，实时归并消息/工作流事件，必要时回拉快照 | 浏览器状态 | `timeline-state` reducer |
 
@@ -34,6 +35,7 @@
 | 节点进度持久化 | `backend/app/modules/agent/workflows/engine.py` | `WorkflowEngine.execute` | 每个 step 的开始、完成、失败都写 `agent_steps` 和 `agent_events`，并在关键边界 commit |
 | 当前公开步骤 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | run 进入 running 和完成时维护 `current_public_step`、最终 artifact 和消息完成事件 |
 | 最终正文与产物落库 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | workflow 返回 completed 后创建 `AgentArtifact`、写 `artifact.rendered` / `message.completed` / `run.completed`，让刷新可恢复最终正文和 artifact |
+| Plan 恢复审批守卫 | `backend/app/modules/agent/workflows/plan.py` | `_apply_plan_change_node`（L165-L189） | checkpoint 中的 approval ID 与 plan draft | 从数据库重读审批，只有真实状态为 approved 才设置 final plan；pending/rejected/缺失均返回失败，阻止绕过服务层恢复 | approved 计划或失败结果，不会产生未授权 Artifact |
 | 时间线步骤重建 | `backend/app/modules/agent/timeline.py` | `AgentTimelineService._build_workflow_views` | 按 root run 聚合 child runs、steps、tool events、pending input 和 approvals |
 | 活动按 ID 归并 | `backend/app/modules/agent/timeline.py` | `AgentTimelineService._activity_views` | `tool.called` + `tool.result` 共享同一 `activity_id` 时可在刷新后重建成一个活动 |
 
@@ -44,12 +46,14 @@
 | 工作流公开步骤持久化 | `backend/tests/test_agent_workflow_engine.py` | `test_engine_persists_public_step_for_timeline_snapshot` | 校验 step.started / step.completed 真实提交后，时间线刷新仍能恢复当前步骤 |
 | Explain 最终 Artifact 不再丢失 | `backend/tests/test_agent_workflow_engine.py` | `test_explain_workflow_keeps_artifact_through_render_and_completion` | 真正执行 explain workflow 到 `render_artifact -> completed`，确认 `NodeResult.success(..., artifact=...)` 可把 artifact 保留到最终结果 |
 | Explain 无资料回退在 worker 持久化后仍可刷新恢复 | `backend/tests/test_agent_explain_worker.py` | `test_worker_persists_zero_hit_fallback_answer_without_citations`、`test_worker_persists_retrieval_error_fallback_answer_without_citations` | 真实执行 `AgentWorker.process_run`，覆盖零命中和检索异常两条路径的活动卡片、artifact、最终消息与线程刷新恢复 |
+| Plan 拒绝与恢复守卫 | `backend/tests/test_agent_plan_worker.py` | `test_rejected_plan_stops_without_outbox_or_artifact`（L89-L121）、`test_plan_apply_node_rejects_unapproved_checkpoint`（L125-L136）、`test_approved_plan_resumes_and_creates_artifact`（L140-L166） | 覆盖拒绝不重投递/不产物、错误恢复仍被节点拒绝，以及批准后正常恢复并生成计划 |
 
 ## 当前整改关注点
 
 1. `FLOW-001` 已在 2026-07-25 完成：workflow 最终 Artifact 通过 `NodeResult.success(..., artifact=...)` 进入 `context.artifacts`，Explain 渲染链已补回归测试。
 2. `ACT-001` 要稳定逻辑 `activity_id`，否则即便后端只是在重试，时间线刷新和 SSE 都会显示成多张活动卡片。
 3. `EXP-001` 已在 2026-07-26 补齐 worker 级验收：零命中和工具异常两条公开路径都会保留正确活动语义，且最终正文、artifact 与空 citations 均可在刷新后恢复。
+4. Plan 审批已按决定分流：拒绝是用户终止计划变更，不再恢复 checkpoint 或生成 Artifact；应用节点还会从数据库复核 approved 状态，避免任何旁路绕过审批。
 
 ## 下一步阅读
 

@@ -23,6 +23,7 @@ from .models import (
 from .state_machine import RunStatus, state_machine
 from .events import event_store
 from .outbox import outbox_store
+from .checkpoints import checkpoint_store
 from .thread_events import thread_event_store
 from .time_utils import utc_now
 
@@ -428,6 +429,8 @@ class AgentService:
         decided_by: str,
     ) -> Optional["AgentApproval"]:
         """处理审批决定（approve/reject）"""
+        if decision not in {"approved", "rejected"}:
+            return None
         run = await self.get_run(run_id, decided_by)
         if not run or run.status != RunStatus.WAITING_FOR_APPROVAL.value:
             return None
@@ -444,9 +447,18 @@ class AgentService:
         approval.decided_by = decided_by
         approval.updated_at = utc_now()
         await self.db.flush()
-        # 恢复运行状态
-        state_machine.transition(run, RunStatus.RUNNING, reason=f"审批已{decision}")
-        await outbox_store.enqueue(self.db, run_id)
+
+        if decision == "approved":
+            next_status = RunStatus.RUNNING
+            reason = "用户已批准计划变更"
+            state_machine.transition(run, next_status, reason=reason)
+            await outbox_store.enqueue(self.db, run_id)
+        else:
+            next_status = RunStatus.FAILED
+            reason = "用户拒绝了计划变更"
+            state_machine.transition(run, next_status, reason=reason)
+            run.error_message = reason
+            await checkpoint_store.delete_by_run(self.db, run_id)
         # 发送即时状态变更事件
         await event_store.append(
             self.db,
@@ -454,8 +466,8 @@ class AgentService:
             "run.status_changed",
             {
                 "from": "waiting_for_approval",
-                "to": "running",
-                "reason": f"审批已{decision}",
+                "to": next_status.value,
+                "reason": reason,
             },
         )
         logger.info(

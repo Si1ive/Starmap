@@ -164,6 +164,23 @@ async def _wait_for_approval_node(context: ExecutionContext, db: AsyncSession) -
 
 async def _apply_plan_change_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
     """应用计划变更"""
+    from ..service import AgentService
+
+    approval_id = (context.get("approval_data") or {}).get("id")
+    approval = (
+        await AgentService(db).get_approval(context.run_id, approval_id)
+        if approval_id
+        else None
+    )
+    if approval is None or approval.status != "approved":
+        logger.warning(
+            "计划变更未获批准",
+            run_id=context.run_id,
+            approval_id=approval_id,
+            approval_status=approval.status if approval else None,
+        )
+        return NodeResult.failure("计划变更未获用户批准")
+
     plan_draft = context.get("plan_draft", {})
     
     # P1 简化：将计划保存到上下文中
