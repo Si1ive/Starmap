@@ -33,8 +33,8 @@
 | 任务 ID | 文件 | 符号 | 代码范围 | 当前问题 |
 | --- | --- | --- | --- | --- |
 | `ACT-001` | `backend/app/modules/agent/tools/retrieve_knowledge.py` | `_logical_activity_id`、`_next_attempt_number`、`retrieve_knowledge` | L77-L313 | 已完成：同一逻辑检索复用稳定 `activity_id`，后台事件额外保留 `attempt_id`、`attempt_no` 和失败明细，用户端只显示一个持续更新的活动 |
-| `RAG-001` | `backend/app/modules/retrieval/search_engine.py` | `hydrate_results`、`_document_source_name` | L255-L352 | 已改为 `source_label -> title -> None` 回退链，不再访问不存在的 `Document.filename` |
-| `RAG-002` | `backend/app/modules/retrieval/search_engine.py`、`backend/app/modules/agent/tools/retrieve_knowledge.py`、`backend/app/modules/agent/workflows/validate.py`、`backend/app/modules/agent/workflows/explain.py` | `RetrievalResult.to_dict`、`retrieve_knowledge`、`_question_is_eligible`、`_generate_explanation_node` | `search_engine.py` L20-L95、L255-L423；`retrieve_knowledge.py` L24-L313；`validate.py` L20-L116；`explain.py` L206-L261 | 已完成：统一类型化 DTO，Explain 混合结果优先知识点，Validate 改读 `question_meta` 和实体状态字段，不再依赖虚构的 `source_type` |
+| `RAG-001` | `backend/app/modules/retrieval/search_engine.py` | `hydrate_results`、`_document_source_name` | L255-L352 | 已改为 `source_label -> title -> None` 回退链，不再访问不存在的 `Document.filename`；二分查找题的来源展示名已由 Validate 检索链回归覆盖 |
+| `RAG-002` | `backend/app/modules/retrieval/search_engine.py`、`backend/app/modules/agent/tools/retrieve_knowledge.py`、`backend/app/modules/agent/workflows/validate.py`、`backend/app/modules/agent/workflows/explain.py` | `RetrievalResult.to_dict`、`retrieve_knowledge`、`_question_is_eligible`、`_generate_explanation_node` | `search_engine.py` L20-L95、L255-L423；`retrieve_knowledge.py` L24-L313；`validate.py` L20-L116；`explain.py` L206-L261 | 已完成：统一类型化 DTO，Explain 混合结果优先知识点，Validate 改读 `question_meta` 和实体状态字段，不再依赖虚构的 `source_type`；二分查找题进入候选集的整体验收已补齐 |
 | `EXP-001` | `backend/app/modules/agent/workflows/explain.py`、`backend/app/modules/agent/worker.py` | `_fallback_evidence_text`、`_evidence_loop_node`、`_evidence_gate_node`、`_generate_explanation_node`、`AgentWorker.process_run` | `explain.py` L26-L261；`worker.py` L100-L251 | 已完成：零命中与检索异常会进入不同 fallback 文案；无资料时强制清空 citations；worker 会把最终 artifact 和 message 持久化，刷新后仍能恢复 |
 
 ## 现有测试入口
@@ -45,7 +45,7 @@
 | Explain 模型错误、零命中、检索异常区分、首次强制检索和无资料引用清理 | `backend/tests/test_agent_explain_workflow.py` | `test_evidence_loop_reports_model_failure_instead_of_false_completion`、`test_evidence_loop_keeps_zero_hits_out_of_valid_evidence`、`test_evidence_gate_distinguishes_retrieval_error_from_zero_hits`、`test_generate_explanation_clears_citations_when_no_evidence` 等 | L47-L236 |
 | Explain 无资料回答经 worker 持久化后仍可刷新恢复，且 citations 始终为空 | `backend/tests/test_agent_explain_worker.py` | `test_worker_persists_zero_hit_fallback_answer_without_citations`、`test_worker_persists_retrieval_error_fallback_answer_without_citations` | L123-L264 |
 | 检索过滤、回填、题目/知识点元数据回传和服务委托 | `backend/tests/test_retrieval_service.py` | `test_hydrate_results_preserves_hit_order_and_adds_source_display_name` 等 | L61-L267 |
-| Validate 题目资格门读取真实 DTO 元数据 | `backend/tests/test_agent_validate_workflow.py` | `test_question_gate_accepts_rich_question_metadata_without_source_type`、`test_question_gate_filters_deleted_or_source_less_questions` | L15-L83 |
+| Validate 题目资格门读取真实 DTO 元数据，且二分查找题能经检索 DTO 进入候选集 | `backend/tests/test_agent_validate_workflow.py` | `test_question_gate_accepts_rich_question_metadata_without_source_type`、`test_question_gate_filters_deleted_or_source_less_questions`、`test_validate_binary_search_question_survives_retrieval_dto_and_gate` | L17-L167 |
 | 时间线把多次 attempt 归并成一个公开活动 | `backend/tests/test_agent_timeline_service.py` | `test_timeline_merges_retry_attempts_into_single_public_activity` | L346-L491 |
 
 ## 下一步阅读

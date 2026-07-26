@@ -20,10 +20,9 @@
 | 2. Explain 无资料时由 LLM 回答 | EXP-001 | 已完成代码修复与 worker 级验收：零命中和检索异常均走不同 fallback 文案，最终 artifact、message 与空 citations 都能持久化并在刷新后恢复 | 已完成 | 正常零命中和检索异常均可按策略继续回答；无伪造引用；最终内容成功展示 |
 | 3. LLM 已生成长回答但最终显示失败 | FLOW-001 | `NodeResult.success()` 已支持 `artifact`，Explain 渲染链已补最终节点回归测试 | 已完成 | Explain/Validate/Grade/Plan 均可创建 Artifact；失败回归测试覆盖最终节点 |
 | 4. 题目和知识点看似走同一路检索 | RAG-002 | 已统一题目/知识点 DTO，Explain 混合结果优先知识点，Validate 改读 `question_meta` 与实体状态字段 | 已完成 | 统一类型化 DTO；Explain 与 Validate 使用明确实体类型、字段和用户可见名称 |
-| 5. 二分查找题明明存在却未检索到 | RAG-001、RAG-002 | RAG-001、RAG-002 已修复来源回填、DTO 和 Validate 资格门；剩余只差结合真实二分查找检索链做整体验收 | 待完整验收 | 修复来源字段和 DTO；真实二分查找题通过混合检索进入 Validate 候选集 |
+| 5. 二分查找题明明存在却未检索到 | RAG-001、RAG-002 | 已完成代码修复与整体验收：来源回填、DTO 和 Validate 资格门已经打通，真实二分查找题可进入 Validate 候选集 | 已完成 | 修复来源字段和 DTO；真实二分查找题通过混合检索进入 Validate 候选集 |
 
-结论：五个问题均已登记，没有遗漏；其中 `ACT-001`、`EXP-001`、`FLOW-001`、`RAG-002` 已完成代码与验收闭环，
-`RAG-001 + RAG-002` 已解除二分查找题在装配层的阻塞，仍待结合真实检索场景做最终产品验收。
+结论：五个问题均已登记，没有遗漏；其中 `ACT-001`、`EXP-001`、`FLOW-001`、`RAG-001 + RAG-002` 均已完成代码与验收闭环。
 
 ## `run_5c6c46d3` 已确认故障链
 
@@ -97,6 +96,14 @@ load_scope completed
 - 已删除 Agent 工具中的 `id/title/content/source_type` 猜测式映射，改为统一归一化 DTO；Explain 混合检索结果默认把知识点排在题目前面，Validate 继续强制 `entity_type="question"`。
 - 已修改 Validate 资格门与组合门，改读 DTO 中真实的题目来源、审核状态、题型、难度和学科字段，不再依赖空 `source_type`。
 - 验证：`cd backend && ./venv/bin/pytest tests/test_retrieval_service.py tests/test_agent_retrieve_activity.py tests/test_agent_validate_workflow.py tests/test_agent_explain_workflow.py tests/test_relation_expansion.py -q` 通过。
+
+### RAG-001 + RAG-002 验收：二分查找题进入 Validate 候选集
+
+- 状态：已完成（2026-07-26 完成整体验收）。
+- 已新增 `backend/tests/test_agent_validate_workflow.py::test_validate_binary_search_question_survives_retrieval_dto_and_gate`，从 `load_learning_evidence -> question_discovery -> question_gate -> composition_gate` 真实走过 Validate 检索链。
+- 测试使用 `RetrievalResult.to_dict()` 构造二分查找题的底层检索结果，再通过真实 `retrieve_knowledge()` 工具归一化为 Agent DTO，确认 `source.filename`、`question_meta.paper_name` 与题目实体状态都能穿过装配层进入 `candidates` 和 `valid_questions`。
+- 同时校验 Validate 对二分查找的检索参数仍是 `query="二分查找"` 且 `entity_type="question"`，确保该题不会在混合检索装配、DTO 转换或资格门阶段再次丢失。
+- 验证：`cd backend && ./venv/bin/pytest tests/test_agent_validate_workflow.py tests/test_agent_retrieve_activity.py tests/test_retrieval_service.py -q` 通过。
 
 ### ACT-001 折叠用户端工具重试
 
@@ -254,7 +261,7 @@ Validate/Explain/Grade/Plan 是记忆内核的天然边界。这里把设计口�
 
 1. Explain 检索零命中：用户看到一个检索活动和通用知识回答，引用为空，刷新后正文仍在；已由 `backend/tests/test_agent_explain_worker.py::test_worker_persists_zero_hit_fallback_answer_without_citations` 覆盖。
 2. Explain 检索连续失败三次：后台显示三次 attempt，用户端只有一个活动，LLM 回答仍正常完成；公开活动折叠由 `test_timeline_merges_retry_attempts_into_single_public_activity` 覆盖，单次失败回退持久化由 `test_worker_persists_retrieval_error_fallback_answer_without_citations` 覆盖。
-3. 二分查找真实题：MySQL 稀疏和 Qdrant 向量候选经过回填、DTO 和资格门后进入 Practice。
+3. 二分查找真实题：MySQL 稀疏和 Qdrant 向量候选经过回填、DTO 和资格门后进入 Practice；已由 `backend/tests/test_agent_validate_workflow.py::test_validate_binary_search_question_survives_retrieval_dto_and_gate` 覆盖。
 4. 上下文继承：“讲解二分查找”后说“给我出道题”，工具查询必须包含二分查找且类型为 question。
 5. 明确覆盖：“不要二分查找，出红黑树题”，当前输入覆盖旧主题。
 6. 无法消解：没有主题和唯一薄弱点时进入澄清，不使用硬编码默认主题。

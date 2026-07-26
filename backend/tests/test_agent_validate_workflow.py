@@ -1,11 +1,13 @@
-"""validate 工作流的候选题资格门测试。"""
+"""validate 工作流的候选题检索与资格门测试。"""
 
 from unittest.mock import AsyncMock
 
 import pytest
 
+from app.modules.agent.tools import retrieve_knowledge as retrieve_module
 from app.modules.agent.workflows import validate
 from app.modules.agent.workflows.contracts import ExecutionContext, NodeStatus
+from app.modules.retrieval.search_engine import RetrievalResult
 
 
 def _context() -> ExecutionContext:
@@ -81,3 +83,85 @@ async def test_question_gate_filters_deleted_or_source_less_questions():
 
     assert result.status == NodeStatus.FAILED
     assert result.error == "未找到有效候选题"
+
+
+@pytest.mark.asyncio
+async def test_validate_binary_search_question_survives_retrieval_dto_and_gate(
+    monkeypatch,
+):
+    context = _context()
+    context.set("weak_areas", ["二分查找"])
+    db = AsyncMock()
+    search = AsyncMock(
+        return_value={
+            "mode": "hybrid",
+            "outline_expansion": {
+                "matched_chapters": [{"title": "查找"}],
+            },
+            "results": [
+                RetrievalResult(
+                    segment_id="segment_q_binary_search",
+                    entity_type="question",
+                    entity_id="question_binary_search",
+                    segment_type="content",
+                    content_text="请分析二分查找的时间复杂度，并说明前提条件。",
+                    context_text="请分析二分查找的时间复杂度，并说明前提条件。",
+                    score=0.97,
+                    subject_id="subject_ds",
+                    chapter_ids=["chapter_search"],
+                    source_document_id="document_001",
+                    source_filename="2024 年 408 真题",
+                    page_no=3,
+                    title="[12] 二分查找",
+                    review_status="approved",
+                    status="active",
+                    entity_metadata={
+                        "question_type": "analysis",
+                        "difficulty": "medium",
+                        "source": "2024 年 408 真题",
+                        "paper_name": "数据结构试卷",
+                        "answer_source": "extracted",
+                        "review_status": "approved",
+                        "status": "active",
+                    },
+                ).to_dict()
+            ],
+        }
+    )
+    monkeypatch.setattr(
+        retrieve_module.RetrievalService,
+        "search_with_outline_expansion",
+        search,
+    )
+    monkeypatch.setattr(retrieve_module.event_store, "append", AsyncMock())
+    monkeypatch.setattr(
+        retrieve_module,
+        "_next_attempt_number",
+        AsyncMock(return_value=1),
+    )
+
+    loaded = await validate._load_learning_evidence_node(context, db)
+    discovered = await validate._question_discovery_node(context, db)
+    gated = await validate._question_gate_node(context, db)
+    composed = await validate._composition_gate_node(context, db)
+
+    assert loaded.status == NodeStatus.COMPLETED
+    assert discovered.status == NodeStatus.COMPLETED
+    assert gated.status == NodeStatus.COMPLETED
+    assert composed.status == NodeStatus.COMPLETED
+    search.assert_awaited_once()
+    assert search.await_args.kwargs["query"] == "二分查找"
+    assert search.await_args.kwargs["entity_type"] == "question"
+    assert search.await_args.kwargs["mode"] == "hybrid"
+    candidate = context.get("candidates")[0]
+    assert candidate["entity_id"] == "question_binary_search"
+    assert candidate["entity_title"] == "[12] 二分查找"
+    assert candidate["source"]["filename"] == "2024 年 408 真题"
+    assert candidate["question_meta"]["paper_name"] == "数据结构试卷"
+    assert context.get("valid_questions")[0]["entity_id"] == "question_binary_search"
+    assert context.get("composition") == {
+        "total": 1,
+        "types": {"analysis": 1},
+        "difficulties": {"medium": 1},
+        "subjects": {"subject_ds": 1},
+    }
