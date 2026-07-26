@@ -1,10 +1,17 @@
 # 2026-07 Agent 对话模块进展
 
+## 2026-07-26：启用可信事实异步派生
+
+- 目标：让 Memory Outbox 产生真实长期记忆落点并进入后台循环，而不是空消费任务。
+- 实现：`memory_item_projection.py::project_trusted_memory_event`（L153-L165）按事实分派，线程主题与批准计划分别物化 `topic_context` / `learning_goal`；`AgentWorker.start`（L368-L392）在 Run 批次后消费记忆任务，异常仍只重试 Outbox。
+- 验证：记忆/迁移组 32 项、workflow/Worker 组 22 项通过；Python 编译与 `git diff --check` 通过。
+- 提交信息：`启用可信事实异步派生`
+
 ## 2026-07-26：建立 Memory Outbox 消费状态机
 
 - 目标：让记忆任务具备可竞争认领、崩溃恢复、延迟重试和失败隔离能力。
-- 实现：新增 `backend/app/modules/agent/memory_outbox.py::MemoryOutboxStore`（L34-L181）与 `MemoryOutboxConsumer`（L184-L285）；processing 复用 `scheduled_at` 作为租约截止，状态更新校验 worker 所有权，投影异常由 SAVEPOINT 隔离，耗尽预算进入 failed。
-- 边界：默认 projector 只验证可信事实，尚未接入 Agent Worker；待实际派生投影完成后再启用，避免 pending 任务被空消费。
+- 实现：新增 `backend/app/modules/agent/memory_outbox.py::MemoryOutboxStore`（L25-L172）与 `MemoryOutboxConsumer`（L175-L276）；processing 复用 `scheduled_at` 作为租约截止，状态更新校验 worker 所有权，投影异常由 SAVEPOINT 隔离，耗尽预算进入 failed。
+- 边界：该提交的默认 projector 只验证可信事实且未接入 Agent Worker；实际派生与运行时启用由后续 `启用可信事实异步派生` 提交完成。
 - 验证：`cd backend && PYTHONPATH=. venv/bin/pytest -q tests/test_agent_memory_outbox.py` 通过（4 passed）；Python 编译与 `git diff --check` 通过。
 - 提交信息：`建立 Memory Outbox 消费状态机`
 

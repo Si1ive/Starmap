@@ -13,9 +13,12 @@ from app.modules.agent.memory_outbox import (
     MemoryOutboxConsumer,
     MemoryOutboxStore,
 )
+from app.modules.agent.memory_item_projection import project_trusted_memory_event
 from app.modules.agent.models import (
     AgentArtifact,
     AgentMemoryEvent,
+    AgentMemoryItem,
+    AgentMemorySnapshot,
     AgentMemoryUpdateOutbox,
     AgentMessage,
     AgentRun,
@@ -29,8 +32,10 @@ MEMORY_OUTBOX_TABLES = [
     AgentMessage.__table__,
     AgentRun.__table__,
     AgentArtifact.__table__,
+    AgentMemorySnapshot.__table__,
     AgentMemoryEvent.__table__,
     AgentMemoryUpdateOutbox.__table__,
+    AgentMemoryItem.__table__,
 ]
 
 
@@ -137,13 +142,9 @@ async def test_claim_is_atomic_and_recovers_expired_processing_task(db_session):
 async def test_consumer_completes_once_and_replay_does_not_project_twice(db_session):
     _, event, outbox = await _create_memory_task(db_session)
     store = MemoryOutboxStore()
-    projected_event_ids: list[int] = []
-
-    async def projector(_db, memory_event):
-        projected_event_ids.append(memory_event.id)
 
     assert await store.claim(db_session, outbox.id, "memory_worker_1") is True
-    consumer = MemoryOutboxConsumer(store=store, projector=projector)
+    consumer = MemoryOutboxConsumer(store=store)
     assert await consumer.process_claimed(
         db_session,
         outbox.id,
@@ -156,10 +157,95 @@ async def test_consumer_completes_once_and_replay_does_not_project_twice(db_sess
     ) is False
 
     await db_session.refresh(outbox)
-    assert projected_event_ids == [event.id]
     assert outbox.status == "completed"
     assert outbox.worker_id == "memory_worker_1"
     assert outbox.processed_at is not None
+    items = list((await db_session.execute(select(AgentMemoryItem))).scalars())
+    assert len(items) == 1
+    assert items[0].scope == "thread"
+    assert items[0].thread_id == outbox.thread_id
+    assert items[0].item_type == "topic_context"
+    assert items[0].item_key == event.idempotency_key
+    assert items[0].content_text == "二分查找"
+    assert items[0].metadata_json == {
+        "source_memory_event_id": event.id,
+        "fact_type": "topic_confirmed",
+        "entity_type": None,
+        "entity_id": None,
+        "aliases": [],
+    }
+    await project_trusted_memory_event(db_session, event)
+    replayed_items = list(
+        (await db_session.execute(select(AgentMemoryItem))).scalars()
+    )
+    assert len(replayed_items) == 1
+
+
+@pytest.mark.asyncio
+async def test_consumer_projects_confirmed_plan_to_user_goal(db_session):
+    _, event, outbox = await _create_memory_task(db_session)
+    artifact = AgentArtifact(
+        id="art_plan_memory_001",
+        run_id=outbox.run_id,
+        artifact_type="plan",
+        content_json={
+            "type": "plan",
+            "approval_id": "approval_plan_001",
+            "title": "数据结构复习计划",
+            "content": {
+                "period": "7天",
+                "goals": [
+                    {
+                        "subject": "二叉树",
+                        "target": "掌握遍历",
+                        "daily_minutes": 30,
+                    }
+                ],
+                "schedule": [],
+            },
+            "summary": "包含 1 个目标",
+        },
+    )
+    db_session.add(artifact)
+    event.memory_scope = "user"
+    event.source_kind = "artifact"
+    event.fact_type = "plan_confirmed"
+    event.idempotency_key = "plan_confirmed:approval_plan_001"
+    event.payload_json = {
+        "artifact_id": artifact.id,
+        "approval_id": "approval_plan_001",
+        "memory_snapshot_id": None,
+    }
+    outbox.event_type = event.fact_type
+    outbox.payload_json = {
+        "memory_event_id": event.id,
+        "fact_type": event.fact_type,
+    }
+    await db_session.flush()
+
+    store = MemoryOutboxStore()
+    assert await store.claim(db_session, outbox.id, "memory_worker_1") is True
+    assert await MemoryOutboxConsumer(store=store).process_claimed(
+        db_session,
+        outbox.id,
+        "memory_worker_1",
+    ) is True
+
+    item = await db_session.scalar(select(AgentMemoryItem))
+    assert item is not None
+    assert item.scope == "user"
+    assert item.thread_id is None
+    assert item.item_type == "learning_goal"
+    assert item.item_key == event.idempotency_key
+    assert item.content_text == "数据结构复习计划\n二叉树：掌握遍历"
+    assert item.metadata_json == {
+        "source_memory_event_id": event.id,
+        "fact_type": "plan_confirmed",
+        "artifact_id": artifact.id,
+        "approval_id": "approval_plan_001",
+        "period": "7天",
+        "goal_count": 1,
+    }
 
 
 @pytest.mark.asyncio

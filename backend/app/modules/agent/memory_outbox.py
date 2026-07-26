@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.logging import get_logger
 from app.db.mysql import mysql_client
 
-from .memory_contracts import MemoryFactType
+from .memory_item_projection import project_trusted_memory_event
 from .models import AgentMemoryEvent, AgentMemoryUpdateOutbox
 from .time_utils import utc_now
 
@@ -20,15 +20,6 @@ logger = get_logger(__name__)
 
 MEMORY_WORKER_ID = f"memory_worker_{uuid.uuid4().hex[:16]}"
 MemoryProjector = Callable[[AsyncSession, AgentMemoryEvent], Awaitable[None]]
-
-
-async def acknowledge_memory_event(
-    _db: AsyncSession,
-    memory_event: AgentMemoryEvent,
-) -> None:
-    """确认事件属于冻结的可信事实集合；具体派生投影由后续 projector 替换。"""
-    if memory_event.fact_type not in {fact.value for fact in MemoryFactType}:
-        raise ValueError(f"不支持的记忆事实类型: {memory_event.fact_type}")
 
 
 class MemoryOutboxStore:
@@ -188,7 +179,7 @@ class MemoryOutboxConsumer:
         self,
         *,
         store: MemoryOutboxStore | None = None,
-        projector: MemoryProjector = acknowledge_memory_event,
+        projector: MemoryProjector = project_trusted_memory_event,
         lease_seconds: int = 300,
         retry_delay_seconds: int = 30,
         max_retries: int = 3,

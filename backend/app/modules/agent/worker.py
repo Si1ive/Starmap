@@ -22,6 +22,7 @@ from .outbox import outbox_store
 from .service import AgentService
 from .checkpoints import checkpoint_store
 from .memory_projection import project_completed_run_facts
+from .memory_outbox import memory_outbox_consumer
 from .workflows.contracts import NodeStatus
 from .public_errors import classify_agent_error
 from .time_utils import utc_now
@@ -377,8 +378,14 @@ class AgentWorker:
         while self.running:
             try:
                 processed = await self.scan_and_process(limit=10)
-                if processed > 0:
-                    logger.info("Worker 处理完成", processed=processed, worker_id=WORKER_ID)
+                memory_processed = await memory_outbox_consumer.scan_and_process(limit=10)
+                if processed > 0 or memory_processed > 0:
+                    logger.info(
+                        "Worker 处理完成",
+                        processed=processed,
+                        memory_processed=memory_processed,
+                        worker_id=WORKER_ID,
+                    )
             except Exception as e:
                 logger.error("Worker 扫描异常", error=str(e))
             
