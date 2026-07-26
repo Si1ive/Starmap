@@ -126,12 +126,16 @@ load_scope completed
 
 ### MEM-001 冻结记忆分区和事实边界
 
+- 状态：已完成（2026-07-26，契约已落库）。
 记忆分区固定为：当前轮理解、线程主题状态、近期原始对话、历史主题摘要、用户学习画像、Artifact/任务、
 待处理交互、用户明确偏好与目标。原始消息和 Artifact 继续作为事实源；流式 delta、失败输出和 LLM 猜测
 不得直接成为长期用户记忆。
+- 已在 `backend/app/modules/agent/memory_contracts.py` 定义 `MemoryPartition`、`MemoryNeed` 和 `MEMORY_NEED_PARTITIONS`，把分区与能力标签固化为 workflow-neutral 的稳定命名契约。
+- 已新增 `backend/tests/test_agent_memory_contracts.py`，覆盖分区全集、能力标签全集，以及“能力标签不出现 explain / validate / grade / plan 等工作流名称”的约束。
 
 ### MEM-002 建立热状态、事件、快照和专业画像存储
 
+- 状态：已完成（2026-07-26，迁移与 ORM 已落库）。
 通过 Alembic 前向迁移逐步增加：
 
 - `agent_thread_memory_states`：小型结构化活跃主题、主题栈、活跃任务和指代对象；
@@ -141,6 +145,9 @@ load_scope completed
 - `user_learning_mastery`：按知识点保存掌握度和真实答题/Grade 证据；
 - `agent_conversation_summaries`：按消息序列范围增量压缩旧对话；
 - `agent_memory_items`：偏好、目标和主题情景摘要，不承载专业学习掌握度。
+- 已在 `backend/app/modules/agent/models.py` 新增上述八张表的 ORM 模型，并通过 `backend/alembic/versions/20260726_agent_memory_foundation.py` 创建对应前向迁移。
+- 已补 `backend/tests/test_migrations.py::test_agent_memory_foundation_migration_renders_mysql_ddl`，验证迁移会创建全部记忆基础表、关键唯一约束和索引；同时更新 Alembic head 断言。
+- 当前仍未接入这些表的实际 selector / projector，后续消费逻辑继续按 `MEM-003` 到 `MEM-006` 推进。
 
 ### MEM-003 新输入的增量处理
 

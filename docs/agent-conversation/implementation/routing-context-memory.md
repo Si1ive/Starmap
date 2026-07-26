@@ -15,10 +15,17 @@
 | Child 元数据交接 | `backend/app/modules/agent/workflows/conversation.py` | `_child_context_metadata` | L163-L186 | 父 run 的上下文审计与模型配置 | 只复制已选消息/Artifact 的 ID 和模型配置 ID，不复制完整主题快照 | child run metadata | `_dispatch_workflow_node` |
 | Child Run 派发 | `backend/app/modules/agent/workflows/conversation.py` | `_dispatch_workflow_node` | L189-L234 | Router action、parent/root run、触发消息 | 创建 child run 和 workflow 时间线项；当前 child 侧主要依赖输入消息和显式参数，不消费独立记忆快照 | queue 中的 child run | worker |
 
+## 已落库的记忆基础契约
+
+| 执行阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 记忆能力与分区命名 | `backend/app/modules/agent/memory_contracts.py` | `MemoryPartition`、`MemoryNeed`、`MEMORY_NEED_PARTITIONS` | L8-L65 | 任务单中的分层记忆边界 | 固化九类分区与六类能力标签，明确能力声明不绑定 explain/validate/grade/plan 名称 | 稳定命名契约 | 快照选择器 / workflow adapter |
+| 记忆 ORM 基础表 | `backend/app/modules/agent/models.py` | `AgentThreadMemoryState`、`AgentMemoryEvent`、`AgentMemorySnapshot`、`AgentMemorySnapshotItem`、`AgentMemoryUpdateOutbox`、`UserLearningMastery`、`AgentConversationSummary`、`AgentMemoryItem` | L487-L754 | 线程、Run、用户和未来投影事件 | 定义热状态、事件、快照、Outbox、掌握度、对话摘要和长期记忆项的单表契约 | Base metadata 中的记忆表结构 | Alembic 迁移 / 后续 selector 与 projector |
+
 ## 当前能力边界
 
 1. 当前系统已经能选取近期消息和 Artifact，足以支撑 direct answer 与“本轮紧邻事实”的 explain / plan 等场景。
-2. 当前系统还没有把“活跃主题、待处理任务、用户偏好、学习掌握度、历史主题摘要”冻结成可复用快照。
+2. `MEM-001` / `MEM-002` 已把“活跃主题、待处理任务、用户偏好、学习掌握度、历史主题摘要”落成稳定命名契约和数据库表，但还没有接入 `ThreadContextBuilder.build()` 的实际选择逻辑。
 3. child run 当前继承的是“被选中的消息/Artifact ID + 模型配置 ID”，不是任务单规划中的 `TurnUnderstanding` /
    `snapshot_id`。
 

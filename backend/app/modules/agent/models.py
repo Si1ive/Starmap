@@ -482,3 +482,273 @@ class AgentApproval(Base):
         Index("idx_agent_approval_run", "run_id"),
         {"comment": "Agent 审批表"}
     )
+
+
+class AgentThreadMemoryState(Base):
+    """线程级热状态：为下一轮输入提供小而可信的主题与任务事实。"""
+
+    __tablename__ = "agent_thread_memory_states"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    thread_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("agent_threads.id", ondelete="CASCADE"),
+        nullable=False, comment="所属线程ID"
+    )
+    user_id: Mapped[str] = mapped_column(String(32), nullable=False, comment="用户ID")
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False, comment="热状态版本")
+    active_topic_json: Mapped[Optional[dict]] = mapped_column(JSON, comment="当前活跃主题")
+    topic_stack_json: Mapped[Optional[list]] = mapped_column(JSON, comment="主题栈")
+    active_task_json: Mapped[Optional[dict]] = mapped_column(JSON, comment="当前活跃任务")
+    referents_json: Mapped[Optional[list]] = mapped_column(JSON, comment="指代对象")
+    latest_understanding_run_id: Mapped[Optional[str]] = mapped_column(
+        String(32), ForeignKey("agent_runs.id", ondelete="SET NULL"),
+        comment="最近一次生成独立请求的运行ID"
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, onupdate=utc_now
+    )
+
+    __table_args__ = (
+        Index("idx_agent_thread_memory_user", "user_id"),
+        UniqueConstraint("thread_id", name="uk_agent_thread_memory_thread"),
+        {"comment": "Agent 线程热记忆状态表"}
+    )
+
+
+class AgentMemoryEvent(Base):
+    """追加式长期记忆事件：记录来源、幂等键与事实载荷。"""
+
+    __tablename__ = "agent_memory_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(32), nullable=False, comment="用户ID")
+    thread_id: Mapped[Optional[str]] = mapped_column(
+        String(32), ForeignKey("agent_threads.id", ondelete="CASCADE"),
+        comment="所属线程ID"
+    )
+    run_id: Mapped[Optional[str]] = mapped_column(
+        String(32), ForeignKey("agent_runs.id", ondelete="SET NULL"),
+        comment="来源运行ID"
+    )
+    memory_scope: Mapped[str] = mapped_column(
+        SAEnum("thread", "user", "run"),
+        nullable=False,
+        comment="事实作用域"
+    )
+    source_kind: Mapped[str] = mapped_column(String(50), nullable=False, comment="来源类型")
+    fact_type: Mapped[str] = mapped_column(String(64), nullable=False, comment="事实类型")
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False, comment="幂等键")
+    payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, comment="事实载荷")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+    __table_args__ = (
+        Index("idx_agent_memory_event_thread", "thread_id", "created_at"),
+        Index("idx_agent_memory_event_user", "user_id", "created_at"),
+        UniqueConstraint("idempotency_key", name="uk_agent_memory_event_idempotency"),
+        {"comment": "Agent 长期记忆事件表"}
+    )
+
+
+class AgentMemorySnapshot(Base):
+    """冻结单次 Run 实际使用的记忆版本与独立请求。"""
+
+    __tablename__ = "agent_memory_snapshots"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("agent_runs.id", ondelete="CASCADE"),
+        nullable=False, comment="所属运行ID"
+    )
+    thread_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("agent_threads.id", ondelete="CASCADE"),
+        nullable=False, comment="所属线程ID"
+    )
+    user_id: Mapped[str] = mapped_column(String(32), nullable=False, comment="用户ID")
+    state_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False, comment="热状态版本")
+    standalone_request: Mapped[Optional[str]] = mapped_column(Text, comment="独立请求")
+    understanding_json: Mapped[dict] = mapped_column(JSON, nullable=False, comment="结构化理解结果")
+    selection_metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, comment="选择审计元数据")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+    __table_args__ = (
+        Index("idx_agent_memory_snapshot_thread", "thread_id", "created_at"),
+        Index("idx_agent_memory_snapshot_run", "run_id"),
+        UniqueConstraint("run_id", name="uk_agent_memory_snapshot_run"),
+        {"comment": "Agent 记忆快照表"}
+    )
+
+
+class AgentMemorySnapshotItem(Base):
+    """快照中的选中或丢弃项，用于复现选择原因。"""
+
+    __tablename__ = "agent_memory_snapshot_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    snapshot_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("agent_memory_snapshots.id", ondelete="CASCADE"),
+        nullable=False, comment="所属快照ID"
+    )
+    memory_need: Mapped[str] = mapped_column(String(64), nullable=False, comment="消费能力标签")
+    memory_partition: Mapped[str] = mapped_column(String(64), nullable=False, comment="记忆分区")
+    source_kind: Mapped[str] = mapped_column(String(50), nullable=False, comment="来源类型")
+    source_id: Mapped[Optional[str]] = mapped_column(String(64), comment="来源ID")
+    item_key: Mapped[str] = mapped_column(String(128), nullable=False, comment="项稳定键")
+    version: Mapped[Optional[int]] = mapped_column(Integer, comment="来源版本")
+    selected: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, comment="是否被选中")
+    selection_reason: Mapped[Optional[str]] = mapped_column(String(255), comment="选择原因")
+    dropped_reason: Mapped[Optional[str]] = mapped_column(String(255), comment="丢弃原因")
+    token_estimate: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="估算 Token")
+    payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, comment="内容副本")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+    __table_args__ = (
+        Index("idx_agent_memory_snapshot_item_snapshot", "snapshot_id"),
+        Index("idx_agent_memory_snapshot_item_need", "memory_need", "memory_partition"),
+        {"comment": "Agent 记忆快照项表"}
+    )
+
+
+class AgentMemoryUpdateOutbox(Base):
+    """记忆投影 Outbox：在 Run 完成后可靠异步回写长期记忆。"""
+
+    __tablename__ = "agent_memory_update_outbox"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("agent_runs.id", ondelete="CASCADE"),
+        nullable=False, comment="来源运行ID"
+    )
+    thread_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("agent_threads.id", ondelete="CASCADE"),
+        nullable=False, comment="所属线程ID"
+    )
+    user_id: Mapped[str] = mapped_column(String(32), nullable=False, comment="用户ID")
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False, comment="待投影事件类型")
+    status: Mapped[str] = mapped_column(
+        SAEnum("pending", "processing", "completed", "failed"),
+        default="pending",
+        comment="处理状态"
+    )
+    payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, comment="投影载荷")
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="重试次数")
+    worker_id: Mapped[Optional[str]] = mapped_column(String(64), comment="处理 Worker 标识")
+    scheduled_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, comment="计划执行时间")
+    processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, comment="处理时间")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+    __table_args__ = (
+        Index("idx_agent_memory_outbox_status", "status", "scheduled_at"),
+        Index("idx_agent_memory_outbox_run", "run_id"),
+        {"comment": "Agent 记忆更新 Outbox 表"}
+    )
+
+
+class UserLearningMastery(Base):
+    """用户级知识点掌握度：只接收真实评分证据。"""
+
+    __tablename__ = "user_learning_mastery"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(32), nullable=False, comment="用户ID")
+    subject_id: Mapped[Optional[str]] = mapped_column(String(64), comment="学科ID")
+    knowledge_point_id: Mapped[str] = mapped_column(String(32), nullable=False, comment="知识点ID")
+    mastery_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False, comment="掌握度分值")
+    evidence_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="证据总数")
+    correct_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="正确次数")
+    incorrect_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="错误次数")
+    last_evidence_id: Mapped[Optional[str]] = mapped_column(String(64), comment="最近一次证据ID")
+    last_graded_at: Mapped[Optional[datetime]] = mapped_column(DateTime, comment="最近评分时间")
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, comment="统计扩展元数据")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, onupdate=utc_now
+    )
+
+    __table_args__ = (
+        Index("idx_user_learning_mastery_subject", "subject_id"),
+        UniqueConstraint("user_id", "knowledge_point_id", name="uk_user_learning_mastery"),
+        {"comment": "用户学习掌握度表"}
+    )
+
+
+class AgentConversationSummary(Base):
+    """线程旧消息的增量摘要，不覆盖原始消息事实。"""
+
+    __tablename__ = "agent_conversation_summaries"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    thread_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("agent_threads.id", ondelete="CASCADE"),
+        nullable=False, comment="所属线程ID"
+    )
+    user_id: Mapped[str] = mapped_column(String(32), nullable=False, comment="用户ID")
+    start_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False, comment="起始消息序号")
+    end_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False, comment="结束消息序号")
+    summary_text: Mapped[str] = mapped_column(Text, nullable=False, comment="摘要正文")
+    source_message_ids_json: Mapped[Optional[list]] = mapped_column(JSON, comment="覆盖的消息ID")
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False, comment="摘要版本")
+    superseded_by_id: Mapped[Optional[str]] = mapped_column(
+        String(32), ForeignKey("agent_conversation_summaries.id", ondelete="SET NULL"),
+        comment="被哪条新摘要替代"
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, onupdate=utc_now
+    )
+
+    __table_args__ = (
+        Index("idx_agent_conversation_summary_thread", "thread_id", "end_sequence"),
+        UniqueConstraint(
+            "thread_id",
+            "start_sequence",
+            "end_sequence",
+            name="uk_agent_conversation_summary_range",
+        ),
+        {"comment": "Agent 对话摘要表"}
+    )
+
+
+class AgentMemoryItem(Base):
+    """偏好、目标与主题摘要等长期记忆项。"""
+
+    __tablename__ = "agent_memory_items"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(32), nullable=False, comment="用户ID")
+    thread_id: Mapped[Optional[str]] = mapped_column(
+        String(32), ForeignKey("agent_threads.id", ondelete="CASCADE"),
+        comment="所属线程ID"
+    )
+    scope: Mapped[str] = mapped_column(
+        SAEnum("user", "thread"),
+        nullable=False,
+        comment="记忆项作用域"
+    )
+    item_type: Mapped[str] = mapped_column(String(64), nullable=False, comment="记忆项类型")
+    item_key: Mapped[str] = mapped_column(String(128), nullable=False, comment="项稳定键")
+    status: Mapped[str] = mapped_column(
+        SAEnum("active", "superseded", "deleted"),
+        default="active",
+        comment="记忆项状态"
+    )
+    content_text: Mapped[str] = mapped_column(Text, nullable=False, comment="记忆正文")
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, comment="结构化扩展元数据")
+    source_snapshot_id: Mapped[Optional[str]] = mapped_column(
+        String(32), ForeignKey("agent_memory_snapshots.id", ondelete="SET NULL"),
+        comment="来源快照ID"
+    )
+    last_confirmed_run_id: Mapped[Optional[str]] = mapped_column(
+        String(32), ForeignKey("agent_runs.id", ondelete="SET NULL"),
+        comment="最近确认该事实的运行ID"
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, onupdate=utc_now
+    )
+
+    __table_args__ = (
+        Index("idx_agent_memory_item_scope", "scope", "user_id", "thread_id"),
+        Index("idx_agent_memory_item_type", "item_type", "status"),
+        {"comment": "Agent 长期记忆项表"}
+    )
