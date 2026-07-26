@@ -133,6 +133,7 @@ async def _question_discovery_node(context: ExecutionContext, db: AsyncSession) 
         db,
         query=query,
         knowledge_point_ids=(practice_bundle or {}).get("knowledge_point_ids"),
+        chapter_ids=(practice_bundle or {}).get("chapter_ids"),
         filters=build_practice_filters(practice_bundle),
         exclude_entity_ids=(practice_bundle or {}).get("excluded_question_ids"),
         entity_type="question",

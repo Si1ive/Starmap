@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.mysql_models import KnowledgePoint
+from app.models.mysql_models import KnowledgePoint, KnowledgePointChapterLink
 
 from .memory_contracts import MemoryFactType, MemoryNeed
 from .models import (
@@ -39,6 +39,7 @@ class PracticeBundle(BaseModel):
     constraints: list[str] = Field(default_factory=list)
     difficulty: str | None = None
     knowledge_point_ids: list[str] = Field(default_factory=list)
+    chapter_ids: list[str] = Field(default_factory=list)
     reference_sources: list[dict[str, Any]] = Field(default_factory=list)
     selected_artifact_ids: list[str] = Field(default_factory=list)
     mastery_signals: list[dict[str, Any]] = Field(default_factory=list)
@@ -118,6 +119,38 @@ async def _load_excluded_question_ids(db: AsyncSession, *, user_id: str) -> list
     return excluded
 
 
+async def _load_chapter_ids(
+    db: AsyncSession,
+    knowledge_point_ids: list[str],
+) -> list[str]:
+    """从知识点章节关联读取标准章节 ID，主章节和高关联度优先。
+
+    没有已解析知识点时返回空列表，把章节定位交给检索层的大纲扩展。
+    """
+    if not knowledge_point_ids:
+        return []
+    links = (
+        await db.execute(
+            select(KnowledgePointChapterLink)
+            .where(
+                KnowledgePointChapterLink.knowledge_point_id.in_(knowledge_point_ids)
+            )
+            .order_by(
+                KnowledgePointChapterLink.is_primary.desc(),
+                KnowledgePointChapterLink.relevance.desc(),
+            )
+        )
+    ).scalars()
+    chapter_ids: list[str] = []
+    seen: set[str] = set()
+    for link in links:
+        if link.canonical_chapter_id in seen:
+            continue
+        seen.add(link.canonical_chapter_id)
+        chapter_ids.append(link.canonical_chapter_id)
+    return chapter_ids
+
+
 async def _load_unique_weak_topic(
     db: AsyncSession,
     *,
@@ -188,11 +221,13 @@ async def load_practice_bundle(
     snapshot_id = metadata.get("memory_snapshot_id")
     if not snapshot_id:
         topic, mastery_signals = await _load_unique_weak_topic(db, user_id=user_id)
+        knowledge_point_ids = (
+            [topic.entity_id] if topic is not None and topic.entity_id else []
+        )
         return PracticeBundle(
             topic=topic,
-            knowledge_point_ids=(
-                [topic.entity_id] if topic is not None and topic.entity_id else []
-            ),
+            knowledge_point_ids=knowledge_point_ids,
+            chapter_ids=await _load_chapter_ids(db, knowledge_point_ids),
             mastery_signals=mastery_signals,
             selected_artifact_ids=list(
                 (metadata.get("context_snapshot") or {}).get("selected_artifact_ids") or []
@@ -208,12 +243,14 @@ async def load_practice_bundle(
     )
     if snapshot is None:
         topic, mastery_signals = await _load_unique_weak_topic(db, user_id=user_id)
+        knowledge_point_ids = (
+            [topic.entity_id] if topic is not None and topic.entity_id else []
+        )
         return PracticeBundle(
             snapshot_id=str(snapshot_id),
             topic=topic,
-            knowledge_point_ids=(
-                [topic.entity_id] if topic is not None and topic.entity_id else []
-            ),
+            knowledge_point_ids=knowledge_point_ids,
+            chapter_ids=await _load_chapter_ids(db, knowledge_point_ids),
             mastery_signals=mastery_signals,
             excluded_question_ids=excluded_question_ids,
         )
@@ -264,6 +301,7 @@ async def load_practice_bundle(
         constraints=constraints,
         difficulty=_bundle_difficulty(constraints),
         knowledge_point_ids=knowledge_point_ids,
+        chapter_ids=await _load_chapter_ids(db, knowledge_point_ids),
         reference_sources=list(understanding.get("reference_sources") or []),
         selected_artifact_ids=list(context_snapshot.get("selected_artifact_ids") or []),
         mastery_signals=mastery_signals,

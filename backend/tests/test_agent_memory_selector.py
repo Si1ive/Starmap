@@ -12,7 +12,9 @@ from app.models.mysql_models import (
     CanonicalChapter,
     Chapter,
     Document,
+    ExamOutline,
     KnowledgePoint,
+    KnowledgePointChapterLink,
     Subject,
 )
 from app.modules.agent.memory_selector import load_practice_bundle
@@ -35,12 +37,47 @@ SELECTOR_TABLES = [
     AgentMemorySnapshotItem.__table__,
     Subject.__table__,
     Chapter.__table__,
-    # KnowledgePoint 的可空外键在 SQLite 下也要求父表存在。
+    # KnowledgePoint / CanonicalChapter 的可空外键在 SQLite 下也要求父表存在。
+    ExamOutline.__table__,
     CanonicalChapter.__table__,
     Document.__table__,
     KnowledgePoint.__table__,
+    KnowledgePointChapterLink.__table__,
     UserLearningMastery.__table__,
 ]
+
+
+_chapter_link_id = 0
+
+
+async def _seed_chapter_link(
+    db_session,
+    *,
+    kp_id: str,
+    chapter_id: str,
+    chapter_name: str,
+    is_primary: bool,
+    relevance: float,
+) -> None:
+    # BigInteger 主键在 SQLite 下不自增，测试里显式分配。
+    global _chapter_link_id
+    _chapter_link_id += 1
+    chapter = await db_session.get(CanonicalChapter, chapter_id)
+    if chapter is None:
+        db_session.add(
+            CanonicalChapter(id=chapter_id, subject_id="subject_ds", name=chapter_name)
+        )
+        await db_session.flush()
+    db_session.add(
+        KnowledgePointChapterLink(
+            id=_chapter_link_id,
+            knowledge_point_id=kp_id,
+            canonical_chapter_id=chapter_id,
+            is_primary=is_primary,
+            relevance=relevance,
+        )
+    )
+    await db_session.flush()
 
 
 async def _seed_knowledge_point(
@@ -170,6 +207,29 @@ async def test_load_practice_bundle_uses_snapshot_topic_and_context_metadata(db_
         )
     )
     await db_session.flush()
+    # 知识点挂载两个标准章节：主章节应排在关联章节前面。
+    await _seed_knowledge_point(
+        db_session,
+        kp_id="kp_binary_search",
+        title="二分查找",
+        aliases=["折半查找"],
+    )
+    await _seed_chapter_link(
+        db_session,
+        kp_id="kp_binary_search",
+        chapter_id="cchap_algo_basic",
+        chapter_name="算法基础",
+        is_primary=False,
+        relevance=0.6,
+    )
+    await _seed_chapter_link(
+        db_session,
+        kp_id="kp_binary_search",
+        chapter_id="cchap_search",
+        chapter_name="查找",
+        is_primary=True,
+        relevance=1.0,
+    )
 
     bundle = await load_practice_bundle(
         db_session,
@@ -185,6 +245,7 @@ async def test_load_practice_bundle_uses_snapshot_topic_and_context_metadata(db_
     assert bundle.constraints == ["难度适中"]
     assert bundle.difficulty == "medium"
     assert bundle.knowledge_point_ids == ["kp_binary_search"]
+    assert bundle.chapter_ids == ["cchap_search", "cchap_algo_basic"]
     assert bundle.selected_artifact_ids == ["artifact_001", "artifact_002"]
     assert bundle.excluded_question_ids == []
     assert bundle.topic.source == "thread_memory"
@@ -224,6 +285,14 @@ async def test_load_practice_bundle_falls_back_to_unique_weak_point(db_session):
         kp_id="kp_red_black_tree",
         title="红黑树",
         aliases=["RB树"],
+    )
+    await _seed_chapter_link(
+        db_session,
+        kp_id="kp_red_black_tree",
+        chapter_id="cchap_tree",
+        chapter_name="树",
+        is_primary=True,
+        relevance=1.0,
     )
     db_session.add_all(
         [
@@ -270,6 +339,7 @@ async def test_load_practice_bundle_falls_back_to_unique_weak_point(db_session):
     assert bundle.topic.aliases == ["RB树"]
     assert bundle.topic.source == "learning_mastery"
     assert bundle.knowledge_point_ids == ["kp_red_black_tree"]
+    assert bundle.chapter_ids == ["cchap_tree"]
     assert bundle.mastery_signals == [
         {
             "knowledge_point_id": "kp_red_black_tree",
