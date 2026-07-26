@@ -1,5 +1,12 @@
 # 2026-07 文档治理与任务规划进展
 
+## 2026-07-26：细分记忆与 Validate 进展卷
+
+- 目标：在 `01-memory-and-validation.md` 达到 300 行软上限后恢复按领域快速读取。
+- 实现：保留旧路径为薄索引，把记忆基础/事实/Outbox 与 Validate 消费历史分别迁入 `01-memory-foundation-and-outbox.md`、`04-validate-memory-consumption.md`，并更新月份 README 路由。
+- 验证：逐条核对 14 个历史标题只出现一次，检查相对链接、文件尺寸和 `git diff --check`。
+- 提交信息：`细分记忆与 Validate 进展日志`
+
 ## 2026-07-26：拆分达到硬上限前的月度进展日志
 
 ### 目标
