@@ -3,7 +3,7 @@
 ## 2026-07-26：让显式章节约束进入 Validate 检索
 
 - 目标：让“第三章的题”形成真实标准章节过滤，不能被知识点默认章节覆盖，也不能在解析失败时退化成宽检索。
-- 实现：`turn_understanding.py::_derive_constraints`（L134-L147）抽取章节序号；`memory_selector.py::_resolve_explicit_chapter_ids`（L160-L211）解析并标记 explicit；`validate.py::_question_discovery_node`（L78-L159）阻止 unresolved 或下发 strict；`retrieve_knowledge`（L132-L345）与 `RetrievalService.search_with_outline_expansion`（L44-L120）保证大纲扩展不注入推测学科或额外章节。
+- 实现：`turn_understanding.py::_derive_constraints`（L139-L152）抽取章节序号；`memory_selector.py::_resolve_explicit_chapter_ids`（L160-L211）解析并标记 explicit；`validate.py::_question_discovery_node`（L78-L159）阻止 unresolved 或下发 strict；`retrieve_knowledge`（L132-L345）与 `RetrievalService.search_with_outline_expansion`（L44-L120）保证大纲扩展不注入推测学科或额外章节。
 - 验证：Validate/记忆组 21 项、检索/上下文组 29 项通过；Python 编译与 `git diff --check` 通过。
 - 提交信息：`让显式章节约束进入 Validate 检索`
 

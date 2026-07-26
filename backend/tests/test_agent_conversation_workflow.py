@@ -8,10 +8,20 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from app.db.mysql import Base
+from app.models.mysql_models import (
+    CanonicalChapter,
+    Chapter,
+    CorpusFile,
+    Document,
+    ExamOutline,
+    Question,
+    Subject,
+)
 from app.modules.agent.model_runtime.schema import (
     DirectAnswerOutput,
     RouterDecision,
 )
+from app.modules.agent.model_runtime.referent import ReferentResolution
 from app.modules.agent.model_runtime.config import AgentModelConfigurationError
 from app.modules.agent.models import (
     AgentApproval,
@@ -55,6 +65,13 @@ CONVERSATION_TABLES = [
     AgentMemoryUpdateOutbox.__table__,
     AgentMemorySnapshot.__table__,
     AgentMemorySnapshotItem.__table__,
+    Subject.__table__,
+    Chapter.__table__,
+    CorpusFile.__table__,
+    Document.__table__,
+    ExamOutline.__table__,
+    CanonicalChapter.__table__,
+    Question.__table__,
 ]
 
 
@@ -85,6 +102,29 @@ class RouterStub:
         self.inputs.append(current_input)
         self.histories.append(list(message_history))
         return self.decisions.pop(0)
+
+
+class ReferentResolverStub:
+    def __init__(self, resolution):
+        self.resolution = resolution
+        self.calls = []
+
+    async def resolve(
+        self,
+        current_input,
+        *,
+        candidates,
+        deps,
+        message_history=(),
+        db=None,
+    ):
+        self.calls.append(
+            {
+                "current_input": current_input,
+                "candidate_keys": [candidate.candidate_key for candidate in candidates],
+            }
+        )
+        return self.resolution
 
 
 class AnswerStub:
@@ -521,6 +561,120 @@ async def test_follow_up_validate_request_uses_active_topic_snapshot_for_child_r
         (await db_session.execute(select(AgentMemoryEvent))).scalars()
     )
     assert inherited_topic_events == []
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_previous_question_uses_structured_resolver_before_snapshot(
+    db_session,
+    monkeypatch,
+):
+    await _create_thread(db_session)
+    practice_run = AgentRun(
+        id="run_practice",
+        thread_id="thread_001",
+        user_id="user_001",
+        workflow_name="validate",
+        workflow_key="validate",
+        status="completed",
+        root_run_id="run_practice",
+        metadata_json={},
+    )
+    db_session.add(practice_run)
+    await db_session.flush()
+    db_session.add_all(
+        [
+            Question(
+                id="question_001",
+                type="choice",
+                content="二分查找每轮把搜索区间缩小多少？",
+                answer="约一半",
+                status="active",
+            ),
+            Question(
+                id="question_002",
+                type="short_answer",
+                content="写出二分查找的循环不变量。",
+                answer="目标若存在则始终位于当前闭区间内",
+                status="active",
+            ),
+        ]
+    )
+    db_session.add(
+        AgentArtifact(
+            id="artifact_practice",
+            run_id=practice_run.id,
+            artifact_type="practice",
+            content_json={
+                "type": "practice",
+                "title": "专项练习",
+                "content": {
+                    "question_ids": ["question_001", "question_002"],
+                },
+                "summary": "共两道题",
+            },
+        )
+    )
+    await db_session.flush()
+    resolver = ReferentResolverStub(
+        ReferentResolution(
+            status="resolved",
+            candidate_key="question:question_002",
+            confidence=0.96,
+            reason_code="context_matches_second_question",
+        )
+    )
+    router = RouterStub(
+        [
+            RouterDecision(
+                action="explain",
+                confidence=0.92,
+                reason_code="explain_previous_question",
+            )
+        ]
+    )
+    monkeypatch.setattr(conversation, "referent_runtime", resolver)
+    monkeypatch.setattr(conversation, "router_runtime", router)
+    creation = await _create_turn(
+        db_session,
+        content="再讲一下上一道题",
+        client_message_id="client_ambiguous_referent",
+    )
+
+    assert await AgentWorker().process_run(db_session, creation.run) is True
+
+    snapshot = await db_session.scalar(
+        select(AgentMemorySnapshot).where(AgentMemorySnapshot.run_id == creation.run.id)
+    )
+    assert resolver.calls == [
+        {
+            "current_input": "再讲一下上一道题",
+            "candidate_keys": [
+                "question:question_001",
+                "question:question_002",
+            ],
+        }
+    ]
+    assert snapshot.understanding_json["reference_sources"] == [
+        {
+            "type": "question",
+            "id": "question_002",
+            "source": "artifact",
+            "artifact_id": "artifact_practice",
+            "resolution_source": "model",
+            "resolution_reason_code": "context_matches_second_question",
+        }
+    ]
+    assert snapshot.understanding_json["reference_resolution"] == {
+        "status": "resolved",
+        "candidate_key": "question:question_002",
+        "confidence": 0.96,
+        "reason_code": "context_matches_second_question",
+        "candidate_keys": [
+            "question:question_001",
+            "question:question_002",
+        ],
+    }
+    assert conversation.build_conversation_workflow().max_model_calls == 3
 
 
 @pytest.mark.asyncio

@@ -10,7 +10,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.mysql_models import Question
+
 from .context_builder import AgentRunContext
+from .model_runtime.referent import ReferentCandidate, ReferentResolution
 from .memory_projection import project_topic_confirmed_fact
 from .models import (
     AgentMemorySnapshot,
@@ -33,6 +36,7 @@ _QUESTION_REFERENT_HINTS = (
     "这个题",
     "这题",
 )
+_BARE_REFERENT_HINTS = ("这个", "那个")
 _CHAPTER_ORDINAL_PATTERN = re.compile(
     r"第\s*([0-9]{1,2}|[一二三四五六七八九十两]{1,3})\s*章"
 )
@@ -65,6 +69,7 @@ class TurnUnderstanding(BaseModel):
     topic_entities: list[TopicEntity] = Field(default_factory=list)
     constraints: list[str] = Field(default_factory=list)
     reference_sources: list[dict[str, Any]] = Field(default_factory=list)
+    reference_resolution: dict[str, Any] | None = None
 
 
 def _topic_from_context_ref(ref: dict[str, Any]) -> TopicEntity | None:
@@ -177,6 +182,166 @@ def _resolve_question_artifact_reference(
             return None
         return next(iter(unique_references.values())).copy()
     return None
+
+
+def build_ambiguous_referent_candidates(
+    agent_context: AgentRunContext,
+    understanding: TurnUnderstanding,
+) -> list[ReferentCandidate]:
+    """只为确定性阶段未解决的指代构造服务端候选白名单。"""
+    raw_input = understanding.raw_input
+    has_question_hint = any(
+        hint in raw_input for hint in _QUESTION_REFERENT_HINTS
+    )
+    has_resolved_question = any(
+        reference.get("type") == "question" and reference.get("id")
+        for reference in understanding.reference_sources
+    )
+    has_bare_hint = any(hint in raw_input for hint in _BARE_REFERENT_HINTS)
+    if has_question_hint and has_resolved_question:
+        return []
+    if has_bare_hint and any(
+        reference.get("id") for reference in agent_context.context_refs
+    ):
+        return []
+    if not has_question_hint and not has_bare_hint:
+        return []
+
+    latest_artifact = next(
+        (
+            artifact
+            for artifact in reversed(agent_context.recent_artifacts)
+            if artifact.artifact_type == "practice"
+        ),
+        None,
+    )
+    candidates = []
+    if latest_artifact is not None:
+        candidates = [
+            ReferentCandidate(
+                candidate_key=f"question:{reference['id'].strip()}",
+                entity_type="question",
+                entity_id=reference["id"].strip(),
+                source="artifact",
+                artifact_id=latest_artifact.id,
+            )
+            for reference in latest_artifact.reference_entities
+            if reference.get("type") == "question"
+            and isinstance(reference.get("id"), str)
+            and reference["id"].strip()
+        ]
+    if has_question_hint:
+        return candidates if len(candidates) > 1 else []
+
+    if latest_artifact is not None:
+        candidates.append(
+            ReferentCandidate(
+                candidate_key=f"artifact:{latest_artifact.id}",
+                entity_type="artifact",
+                entity_id=latest_artifact.id,
+                source="artifact",
+                artifact_id=latest_artifact.id,
+                label=latest_artifact.summary,
+            )
+        )
+    if agent_context.active_topic:
+        entity_id = agent_context.active_topic.get(
+            "entity_id"
+        ) or agent_context.active_topic.get("id")
+        entity_type = agent_context.active_topic.get(
+            "entity_type"
+        ) or agent_context.active_topic.get("type")
+        if entity_id and entity_type:
+            candidates.append(
+                ReferentCandidate(
+                    candidate_key=f"{entity_type}:{entity_id}",
+                    entity_type=str(entity_type),
+                    entity_id=str(entity_id),
+                    source="thread_memory",
+                    label=agent_context.active_topic.get("title"),
+                )
+            )
+    return candidates
+
+
+async def hydrate_referent_candidate_labels(
+    db: AsyncSession,
+    candidates: list[ReferentCandidate],
+) -> list[ReferentCandidate]:
+    """用 active 题面水合 question 候选，并丢弃失效或缺失实体。"""
+    question_ids = [
+        candidate.entity_id
+        for candidate in candidates
+        if candidate.entity_type == "question"
+    ]
+    question_content: dict[str, str] = {}
+    if question_ids:
+        rows = (
+            await db.execute(
+                select(Question.id, Question.content).where(
+                    Question.id.in_(question_ids),
+                    Question.status == "active",
+                )
+            )
+        ).all()
+        question_content = {
+            question_id: content.strip()[:500]
+            for question_id, content in rows
+            if isinstance(content, str) and content.strip()
+        }
+
+    hydrated: list[ReferentCandidate] = []
+    for candidate in candidates:
+        if candidate.entity_type != "question":
+            hydrated.append(candidate)
+            continue
+        label = question_content.get(candidate.entity_id)
+        if label:
+            hydrated.append(candidate.model_copy(update={"label": label}))
+    return hydrated
+
+
+def apply_referent_resolution(
+    understanding: TurnUnderstanding,
+    *,
+    candidates: list[ReferentCandidate],
+    resolution: ReferentResolution,
+) -> TurnUnderstanding:
+    """把通过运行时白名单校验的模型选择转换为快照引用。"""
+    resolution_audit = {
+        "status": resolution.status,
+        "candidate_key": resolution.candidate_key,
+        "confidence": resolution.confidence,
+        "reason_code": resolution.reason_code,
+        "candidate_keys": [candidate.candidate_key for candidate in candidates],
+    }
+    if resolution.status != "resolved" or not resolution.candidate_key:
+        return understanding.model_copy(
+            update={"reference_resolution": resolution_audit}
+        )
+    candidate = next(
+        (
+            item
+            for item in candidates
+            if item.candidate_key == resolution.candidate_key
+        ),
+        None,
+    )
+    if candidate is None:
+        raise ValueError("指代消解结果不属于当前候选")
+    reference = candidate.to_reference_source()
+    reference.update(
+        {
+            "resolution_source": "model",
+            "resolution_reason_code": resolution.reason_code,
+        }
+    )
+    return understanding.model_copy(
+        update={
+            "reference_sources": [*understanding.reference_sources, reference],
+            "reference_resolution": resolution_audit,
+        }
+    )
 
 
 def build_turn_understanding(agent_context: AgentRunContext) -> TurnUnderstanding:

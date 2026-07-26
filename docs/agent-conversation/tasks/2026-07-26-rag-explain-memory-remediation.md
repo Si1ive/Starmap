@@ -72,7 +72,7 @@ load_scope completed
 | Validate 检索与首个记忆消费 | `backend/app/modules/agent/memory_selector.py`、`backend/app/modules/agent/workflows/validate.py` | `_load_excluded_question_ids`、`_load_unique_weak_topic`、`_load_chapter_ids`、`_resolve_explicit_chapter_ids`、`load_practice_bundle`、`build_practice_query`、`build_practice_filters`、`_question_is_eligible`、`_load_learning_evidence_node`、`_question_discovery_node`、`_question_gate_node`、`_composition_gate_node`、`_render_artifact_node` | Validate 消费 snapshot topic、aliases、difficulty、knowledge point、章节和 Artifact；显式“第 N 章”在唯一学科内解析并覆盖知识点默认章节，无法解析时不发起宽检索；同时装载真实排除集、唯一薄弱点，缺主题则等待补充后恢复 |
 | Validate 缺主题澄清与恢复 | `backend/app/modules/agent/service.py`、`backend/app/modules/agent/timeline.py` | `create_input`、`submit_input_answer`、`AgentTimelineService._build_workflow_views` | 缺主题时创建 `AgentInput` 并投影 `workflow.input.required`，时间线把最新 pending input 暴露为 `workflow.pending_input`；用户提交答案后把输入标记为 answered，恢复 run 到 running，worker 从 checkpoint 回到 `_question_discovery_node` 继续检索 |
 | 当前上下文构建 | `backend/app/modules/agent/context_builder.py` | `AgentRunContext`、`ThreadContextBuilder.build`、`_load_thread_memory_state` | 已能选择近期消息、Artifact、待处理交互，并读取线程 `active_topic` / `memory_state_version`；仍未按 `MemoryNeed` 选择掌握度、摘要和排除集 |
-| Router、题目指代、主题事实与子 Run 交接 | `backend/app/modules/agent/workflows/conversation.py`、`backend/app/modules/agent/turn_understanding.py`、`backend/app/modules/agent/memory_projection.py` | `_route_node`（L46-L121）、`_resolve_question_artifact_reference`（L150-L179）、`build_turn_understanding`（L182-L238）、`ensure_turn_memory_snapshot`（L240-L325）、`project_topic_confirmed_fact`（L67-L122）、`_child_context_metadata`（L183-L209）、`_dispatch_workflow_node`（L212-L261） | Router 前生成含难度/章节约束及唯一题目引用的 `TurnUnderstanding`，创建 snapshot 并更新热状态；显式主题按 Run 幂等写事实，继承主题不重复写；随后用 standalone request 路由并把 snapshot 交给 child run |
+| Router、题目指代、主题事实与子 Run 交接 | `backend/app/modules/agent/workflows/conversation.py`、`backend/app/modules/agent/turn_understanding.py`、`backend/app/modules/agent/model_runtime/referent.py`、`backend/app/modules/agent/memory_projection.py` | `_route_node`（L50-L151）、`build_ambiguous_referent_candidates`（L187-L264）、`hydrate_referent_candidate_labels`（L267-L301）、`ReferentRuntime.resolve`（L79-L148）、`build_turn_understanding`（L347-L403）、`ensure_turn_memory_snapshot`（L405-L490）、`project_topic_confirmed_fact`（L67-L122）、`_child_context_metadata`（L213-L239）、`_dispatch_workflow_node`（L242-L291） | Router 前生成含难度/章节约束的 `TurnUnderstanding`；确定性未解时只允许模型选择带真实语义标签的服务端候选，再创建 snapshot 并更新热状态。显式主题按 Run 幂等写事实，继承主题不重复写；随后用 standalone request 路由并把 snapshot 交给 child run |
 | Run 最终持久化 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run`（L183-L224） | 执行 workflow 并创建 Artifact/最终消息；completed 分支调用事实投影，使 Artifact、事实、Memory Outbox 与 Run 终态处在同一外层事务 |
 | 可信事实与 Outbox 生产 | `backend/app/modules/agent/memory_projection.py` | `_ensure_memory_update_outbox`、`project_topic_confirmed_fact`、`project_completed_run_facts`、各 `_record_*`（L27-L413） | 写五类事实后确保 `(run_id,event_type)` 唯一的 pending Memory Outbox；重放已有事实会补建缺失任务，并发冲突只回滚 SAVEPOINT；不满足事实条件时不写事件或任务 |
 
@@ -154,7 +154,7 @@ load_scope completed
 
 ### MEM-003 新输入的增量处理
 
-- 状态：进行中（2026-07-26 已完成确定性独立请求、snapshot 与单题 Artifact 指代阶段）。
+- 状态：已完成（2026-07-26，确定性理解、结构化歧义消解、snapshot 与子 Run 交接已闭环）。
 1. HTTP 事务只原子保存用户消息、根 Run、时间线和 Run Outbox，不调用 LLM。
 2. Worker 在 Router 前读取热状态、少量近期消息、显式引用和待处理交互。
 3. 确定性解析优先；只有“这个、上一道、难一点”等仍有歧义时调用结构化指代消解模型。
@@ -166,9 +166,10 @@ load_scope completed
 - 已新增 `backend/app/modules/agent/turn_understanding.py`，用确定性规则把 `context_refs` 或线程 `active_topic` 补全为 `TurnUnderstanding`；例如当前活跃主题是“二分查找”且输入“给我出一道难一点的题”时，会生成 `standalone_request="给用户出一道关于二分查找的练习题"`，并补 `constraints=["difficulty:hard"]`。
 - 已在 `backend/app/modules/agent/workflows/conversation.py` 的 `_route_node()` 中创建不可变 snapshot，并把 `memory_snapshot_id`、`turn_understanding` 写入父 run metadata；Router 改为消费 `standalone_request`，child run 也改为继承 `standalone_request` 和 `memory_snapshot_id`。
 - 已补 `backend/tests/test_agent_context_builder.py::test_context_loads_active_topic_from_thread_memory_state` 与 `backend/tests/test_agent_conversation_workflow.py::test_follow_up_validate_request_uses_active_topic_snapshot_for_child_run`，覆盖“Router 前读取热状态”和“子 Run 继承 snapshot ID + standalone_request”的第一阶段闭环。
-- 已完成显式章节序号闭环：`_derive_constraints`（L134-L147）把“第三章”冻结为 `chapter_ordinal:3`；`_resolve_explicit_chapter_ids`（L160-L211）只在当前知识点唯一确定学科时解析并标记 explicit；无法解析会阻止工具调用。`retrieve_knowledge`（L132-L345）把 strict 标志交给 `RetrievalService.search_with_outline_expansion`（L44-L120），大纲扩展只增强 query，不注入推测学科或额外章节。
-- 已完成无显式引用时的首个确定性题目 referent：`ThreadContextBuilder._extract_artifact_reference_entities`（L661-L694）只从 practice Artifact 的 `content.question_ids` 暴露可信 question ID；`_resolve_question_artifact_reference`（L150-L179）在“上一道 / 这道题 / 这个题 / 这题”等明确题目短语出现时，只接受最新 practice 恰好一个唯一 ID，并把 Artifact ID 一并写入 snapshot 的 `reference_sources`。多题、零题不会猜测，也不会回退更旧产物；标题和摘要永不作为 ID 来源。
-- 尚未完成项：裸词“这个”、最新 practice 含多题等真正歧义时的结构化模型，以及更多 bundle/workflow consumer，继续留在 `MEM-003` / `MEM-004`。
+- 已完成显式章节序号闭环：`_derive_constraints`（L139-L152）把“第三章”冻结为 `chapter_ordinal:3`；`_resolve_explicit_chapter_ids`（L160-L211）只在当前知识点唯一确定学科时解析并标记 explicit；无法解析会阻止工具调用。`retrieve_knowledge`（L132-L345）把 strict 标志交给 `RetrievalService.search_with_outline_expansion`（L44-L120），大纲扩展只增强 query，不注入推测学科或额外章节。
+- 已完成无显式引用时的首个确定性题目 referent：`ThreadContextBuilder._extract_artifact_reference_entities`（L661-L694）只从 practice Artifact 的 `content.question_ids` 暴露可信 question ID；`_resolve_question_artifact_reference`（L155-L184）在“上一道 / 这道题 / 这个题 / 这题”等明确题目短语出现时，只接受最新 practice 恰好一个唯一 ID，并把 Artifact ID 一并写入 snapshot 的 `reference_sources`。多题、零题不会猜测，也不会回退更旧产物；标题和摘要永不作为 ID 来源。
+- 已完成真正歧义时的结构化模型：`build_ambiguous_referent_candidates`（L187-L264）只在确定性阶段未解决时构造候选；`hydrate_referent_candidate_labels`（L267-L301）只保留题库中 active 且有题面的 question；`ReferentRuntime.resolve`（L79-L148）限制模型只能选择服务端候选键，非法键报错、低于 0.8 降级 unresolved。`_route_node`（L50-L151）把 resolved/unresolved 审计冻结进 snapshot 后再调用 Router。
+- `MEM-003` 已无剩余实现项；更多 bundle/workflow consumer 继续留在 `MEM-004`。
 
 冲突优先级固定为：当前输入明确主题 > 显式引用/附件 > 待处理任务 > 最近活跃主题 > 唯一高优先级
 学习薄弱点 > 请求用户澄清。禁止静默使用“数据结构 操作系统”作为默认主题。

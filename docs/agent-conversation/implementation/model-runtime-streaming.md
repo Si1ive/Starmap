@@ -20,6 +20,8 @@
 | 执行阶段 | 文件 | 符号 | 入口条件 | 处理与副作用 | 最终消费 |
 | --- | --- | --- | --- | --- | --- |
 | 历史选择预算 | `backend/app/modules/agent/workflows/conversation.py` | `_route_node` | conversation run 开始路由 | `token_budget=4096` 只用于筛历史消息，不限制模型最终生成长度 | `AgentRunContext` 与 `RouterDeps` |
+| Conversation 总调用预算 | `backend/app/modules/agent/workflows/conversation.py`（L305-L328） | `build_conversation_workflow` | conversation workflow 注册 | `max_model_calls=3`，容纳可选指代消解 + Router + direct answer；无歧义时不消费指代调用 | `ExecutionContext.charge_model_call` |
+| 指代请求保护 | `backend/app/modules/agent/model_runtime/referent.py`（L73-L169） | `ReferentRuntime.resolve`、`ReferentRuntime._run` | 确定性指代未解且存在语义候选 | 使用 `UsageLimits(request_limit=2)`；非法候选键报错，低置信度降级 unresolved | `TurnUnderstanding.reference_resolution` |
 | Router 请求保护 | `backend/app/modules/agent/model_runtime/router.py` | `RouterRuntime.decide` / `_run` | Router 调用 | 使用 `UsageLimits(request_limit=2)` 防止单次路由无限重试 | 结构化 `RouterDecision` |
 | 普通回答请求保护 | `backend/app/modules/agent/model_runtime/answer.py` | `DirectAnswerRuntime._run_stream` / `_run` | 普通回答流式或非流式调用 | 只限制请求次数；输出上限由模型配置的 `max_tokens` 决定 | 流式 delta 或完整回答 |
 | Explain 请求保护 | `backend/app/modules/agent/model_runtime/explanation.py` | `ExplanationRuntime._run_decision` / `_run_generation` | explain 规划或正文生成 | 只限制请求次数，不把项目内部 Token 预算误作总输出上限 | `LoopDecision` / `ExplanationOutput` |

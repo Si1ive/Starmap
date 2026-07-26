@@ -7,7 +7,10 @@ from app.modules.agent.context_builder import (
     ArtifactContext,
     PermissionScope,
 )
-from app.modules.agent.turn_understanding import build_turn_understanding
+from app.modules.agent.turn_understanding import (
+    build_ambiguous_referent_candidates,
+    build_turn_understanding,
+)
 
 
 def _context(
@@ -15,6 +18,7 @@ def _context(
     current_input: str,
     active_topic: dict | None = None,
     recent_artifacts: list[ArtifactContext] | None = None,
+    context_refs: list[dict] | None = None,
 ) -> AgentRunContext:
     return AgentRunContext(
         thread_id="thread_001",
@@ -24,6 +28,7 @@ def _context(
         current_input=current_input,
         active_topic=active_topic,
         recent_artifacts=recent_artifacts or [],
+        context_refs=context_refs or [],
         permission_scope=PermissionScope(
             user_id="user_001",
             thread_id="thread_001",
@@ -114,6 +119,15 @@ def test_build_turn_understanding_resolves_previous_single_question_from_latest_
             "artifact_id": "artifact_practice",
         }
     ]
+    assert build_ambiguous_referent_candidates(
+        _context(
+            current_input="再讲一下上一道题",
+            recent_artifacts=[
+                _practice_artifact("artifact_practice", "question_001")
+            ],
+        ),
+        understanding,
+    ) == []
 
 
 def test_build_turn_understanding_keeps_multiple_previous_questions_ambiguous():
@@ -163,3 +177,26 @@ def test_build_turn_understanding_never_guesses_question_id_from_artifact_summar
     )
 
     assert understanding.reference_sources == []
+
+
+def test_explicit_reference_prevents_bare_referent_model_candidates():
+    context = _context(
+        current_input="这个再讲一下",
+        context_refs=[
+            {
+                "type": "question",
+                "id": "question_explicit",
+                "title": "用户显式选中的题",
+            }
+        ],
+        recent_artifacts=[
+            _practice_artifact(
+                "artifact_practice",
+                "question_001",
+                "question_002",
+            )
+        ],
+    )
+    understanding = build_turn_understanding(context)
+
+    assert build_ambiguous_referent_candidates(context, understanding) == []

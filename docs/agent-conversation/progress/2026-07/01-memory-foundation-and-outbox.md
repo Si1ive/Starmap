@@ -1,10 +1,19 @@
 # 2026-07 记忆基础、可信事实与 Outbox 进展
 
+## 2026-07-26：仅在真实歧义时调用结构化指代模型
+
+- 目标：完成 `MEM-003`，让裸词“这个”和最新 practice 多题等真正歧义进入受约束模型，同时保证确定性单题、显式引用和无候选场景不增加调用。
+- 实现：`backend/app/modules/agent/turn_understanding.py::build_ambiguous_referent_candidates`（L187-L264）构造候选，`hydrate_referent_candidate_labels`（L267-L301）用 active 题面水合并过滤失效题；`backend/app/modules/agent/model_runtime/referent.py::ReferentRuntime.resolve`（L79-L148）只允许选择候选键，低置信度降级 unresolved；`backend/app/modules/agent/workflows/conversation.py::_route_node`（L50-L151）在 snapshot 前按需调用并记录 `reference_resolution`。总调用预算提高到 3，覆盖可选消歧、Router 和 direct answer。
+- 安全边界：题目 ID 不作为语义证据，候选缺少真实题面时禁止调用；Artifact 摘要和题面均按不可信数据处理；模型不能生成实体 ID，非法键使本轮失败而不是写入 snapshot。
+- 测试：`backend/tests/test_agent_referent_runtime.py`（L1-L128）覆盖白名单、伪造键、低置信度和缺标签；`backend/tests/test_agent_conversation_workflow.py::test_ambiguous_previous_question_uses_structured_resolver_before_snapshot`（L567-L677）覆盖题面水合、按需调用、snapshot 审计和三次调用预算。
+- 验证：指代、理解、上下文、conversation、memory selector 与 Router 组合回归通过（49 passed，47 warnings）；Python 编译与 `git diff --check` 通过。
+- 提交信息：`仅在真实歧义时调用结构化指代模型`
+
 ## 2026-07-26：让上一道题绑定结构化 Artifact 引用
 
 - 目标：继续推进 `MEM-003`，让“上一道题 / 这道题”在无显式引用时使用可信 question ID，同时禁止根据 Artifact 标题或摘要猜题。
-- 实现：`backend/app/modules/agent/context_builder.py::ThreadContextBuilder._load_artifacts`（L381-L449）调用 `_extract_artifact_reference_entities`（L661-L694），只从 practice `content.question_ids` 生成带 Artifact ID 的 question 引用；`backend/app/modules/agent/turn_understanding.py::_resolve_question_artifact_reference`（L150-L179）只解析最新 practice 的唯一题目，多题或缺 ID 保持歧义且不回退旧产物，结果由 `build_turn_understanding`（L182-L238）进入不可变 snapshot。
-- 测试：`backend/tests/test_agent_context_builder.py::test_context_exposes_structured_question_references_from_practice_artifact`（L442-L496）覆盖真实持久化结构读取；`backend/tests/test_agent_turn_understanding.py::test_build_turn_understanding_resolves_previous_single_question_from_latest_artifact`（L99-L116）及 L119-L165 的三个边界测试覆盖单题解析、多题歧义、不回退和不读摘要。
+- 实现：`backend/app/modules/agent/context_builder.py::ThreadContextBuilder._load_artifacts`（L381-L449）调用 `_extract_artifact_reference_entities`（L661-L694），只从 practice `content.question_ids` 生成带 Artifact ID 的 question 引用；`backend/app/modules/agent/turn_understanding.py::_resolve_question_artifact_reference`（L155-L184）只解析最新 practice 的唯一题目，多题或缺 ID 保持歧义且不回退旧产物，结果由 `build_turn_understanding`（L347-L403）进入不可变 snapshot。
+- 测试：`backend/tests/test_agent_context_builder.py::test_context_exposes_structured_question_references_from_practice_artifact`（L442-L496）覆盖真实持久化结构读取；`backend/tests/test_agent_turn_understanding.py::test_build_turn_understanding_resolves_previous_single_question_from_latest_artifact`（L104-L131）及 L133-L179 的三个边界测试覆盖单题解析、多题歧义、不回退和不读摘要。
 - 验证：上下文、理解、conversation snapshot 与 memory selector 组合回归通过（30 passed，43 warnings）；Python 编译与 `git diff --check` 通过。
 - 提交信息：`让上一道题绑定结构化 Artifact 引用`
 
@@ -146,7 +155,7 @@ fallback 也属于成功讲解，且讲解行为不会被误当成学习掌握�
 ### 实现
 
 - 新增 `backend/app/modules/agent/memory_projection.py::project_topic_confirmed_fact`（L67-L122），仅接受 `source=context_ref` 的首个类型化主题，以 `topic_confirmed:{run_id}` 幂等写线程级事件，并记录 snapshot、状态版本和来源消息。
-- 在 `backend/app/modules/agent/turn_understanding.py::ensure_turn_memory_snapshot`（L240-L325）创建或复用 snapshot 时调用主题投影；写入发生在 `_route_node` 的 Router 调用之前，继承自 `thread_memory` 的主题会无副作用跳过。
+- 在 `backend/app/modules/agent/turn_understanding.py::ensure_turn_memory_snapshot`（L405-L490）创建或复用 snapshot 时调用主题投影；写入发生在 `_route_node` 的 Router 调用之前，继承自 `thread_memory` 的主题会无副作用跳过。
 - 更新 `backend/tests/test_agent_conversation_workflow.py::test_model_configuration_failure_creates_visible_failed_message`（L603-L666），证明 Router 模型不可用时显式二分查找主题仍存在；`test_follow_up_validate_request_uses_active_topic_snapshot_for_child_run`（L443-L521）证明继承主题不新增确认事件。
 - 新增 `backend/tests/test_agent_memory_projection.py::test_topic_confirmed_projection_is_idempotent_and_skips_inherited_topic`（L133-L208），覆盖同一 Run 重放、继承跳过与 Outbox 补建。
 

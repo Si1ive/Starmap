@@ -10,13 +10,17 @@ from app.core.logging import get_logger
 from ..context_builder import AgentRunContext, ThreadContextBuilder
 from ..events import event_store
 from ..model_runtime.answer import DirectAnswerDeps, direct_answer_runtime
+from ..model_runtime.referent import ReferentDeps, referent_runtime
 from ..model_runtime.router import ROUTER_ACTIONS, RouterDeps, router_runtime
 from ..models import AgentRun
 from ..service import AgentService
 from ..timeline import AgentTimelineService
 from ..turn_understanding import (
+    apply_referent_resolution,
+    build_ambiguous_referent_candidates,
     build_turn_understanding,
     ensure_turn_memory_snapshot,
+    hydrate_referent_candidate_labels,
 )
 from .contracts import (
     ExecutionContext,
@@ -57,6 +61,32 @@ async def _route_node(context: ExecutionContext, db: AsyncSession) -> NodeResult
         token_budget=4096,
     )
     understanding = build_turn_understanding(agent_context)
+    referent_candidates = build_ambiguous_referent_candidates(
+        agent_context,
+        understanding,
+    )
+    referent_candidates = await hydrate_referent_candidate_labels(
+        db,
+        referent_candidates,
+    )
+    if referent_candidates:
+        context.charge_model_call()
+        resolution = await referent_runtime.resolve(
+            understanding.raw_input,
+            candidates=referent_candidates,
+            deps=ReferentDeps(
+                thread_id=agent_context.thread_id,
+                user_id=agent_context.user_id,
+                turn_id=agent_context.turn_id,
+            ),
+            message_history=agent_context.to_message_history(),
+            db=db,
+        )
+        understanding = apply_referent_resolution(
+            understanding,
+            candidates=referent_candidates,
+            resolution=resolution,
+        )
     snapshot = await ensure_turn_memory_snapshot(
         db,
         run=run,
@@ -277,7 +307,7 @@ def build_conversation_workflow() -> WorkflowDefinition:
         name="conversation",
         version="v1",
         entry_node="route",
-        max_model_calls=2,
+        max_model_calls=3,
     )
     nodes: list[tuple[str, str, Any, str]] = [
         ("route", "router", _route_node, "结合线程上下文判断下一步"),
