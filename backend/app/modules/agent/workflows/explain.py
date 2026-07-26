@@ -15,6 +15,7 @@ from app.core.logging import get_logger
 from .contracts import WorkflowDefinition, Node, NodeResult, ExecutionContext
 from .registry import workflow_registry
 from ..loop_turns import loop_turn_store
+from ..memory_selector import ConversationBundle, load_conversation_bundle
 from ..model_runtime.explanation import ExplanationDeps, explanation_runtime
 from ..model_runtime.policy_gate import policy_gate
 from ..model_runtime.schema import ActionType
@@ -33,24 +34,43 @@ def _fallback_evidence_text(retrieval_outcome: str) -> str:
 
 
 async def _load_scope_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
-    """读取用户授权的资料范围"""
-    # P0 简化：从上下文获取学科范围（如果有）
-    # 实际项目中应从用户配置读取
-    scope = {
-        "subjects": ["data_structure", "computer_organization", "os", "network"],
-        "chapters": [],
-        "mode": "all",
-    }
+    """装载 snapshot 冻结的对话连续性与检索焦点。"""
+    bundle = await load_conversation_bundle(
+        db,
+        run_id=context.run_id,
+        user_id=context.user_id,
+    )
+    context.set("conversation_bundle", bundle.model_dump(mode="json"))
+    scope = {"mode": "snapshot", "snapshot_id": bundle.snapshot_id}
     context.set("scope", scope)
     logger.info("加载用户范围", run_id=context.run_id, scope=scope)
     return NodeResult.success({"scope": scope}, next_node="evidence_loop")
+
+
+def _conversation_inputs(context: ExecutionContext):
+    bundle = ConversationBundle.model_validate(context.get("conversation_bundle") or {})
+    current_input = bundle.standalone_request or context.get("input_message", "")
+    topic_title = bundle.topic.title if bundle.topic is not None else None
+    deps = ExplanationDeps(
+        run_id=context.run_id,
+        user_id=context.user_id,
+        topic_title=topic_title,
+        artifact_summaries=tuple(bundle.artifact_summaries),
+        reference_ids=tuple(
+            str(reference.get("id"))
+            for reference in bundle.reference_sources
+            if reference.get("id")
+        ),
+    )
+    return bundle, current_input, deps, bundle.to_message_history()
 
 
 async def _evidence_loop_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
     """证据探索循环（有界 Agent Loop）"""
     from .contracts import ModelBudgetExceeded
 
-    input_msg = context.get("input_message", "")
+    bundle, input_msg, deps, message_history = _conversation_inputs(context)
+    initial_query = bundle.retrieval_query or input_msg
 
     # P0: 最多3轮决策
     max_turns = min(3, context.max_loop_turns)
@@ -71,20 +91,28 @@ async def _evidence_loop_node(context: ExecutionContext, db: AsyncSession) -> No
                 input_msg,
                 evidence_count=len(collected_evidence),
                 deps=ExplanationDeps(
-                    run_id=context.run_id,
-                    user_id=context.user_id,
+                    run_id=deps.run_id,
+                    user_id=deps.user_id,
+                    topic_title=deps.topic_title,
+                    artifact_summaries=deps.artifact_summaries,
+                    reference_ids=deps.reference_ids,
                 ),
+                message_history=message_history,
                 db=db,
             )
             data = decision.model_dump(mode="json")
             action = decision.action.value
-            if not retrieval_attempted and action != ActionType.RETRIEVE_KNOWLEDGE.value:
+            if not retrieval_attempted:
                 action = ActionType.RETRIEVE_KNOWLEDGE.value
                 data = {
                     **data,
                     "action": action,
-                    "parameters": {"query": input_msg, "limit": 5},
-                    "reasoning": "解释型工作流首次执行必须先查询资料库",
+                    "parameters": {
+                        **(data.get("parameters") or {}),
+                        "query": initial_query,
+                        "limit": (data.get("parameters") or {}).get("limit", 5),
+                    },
+                    "reasoning": "解释型工作流首次执行使用冻结上下文查询资料库",
                 }
 
             # 白名单校验
@@ -205,7 +233,7 @@ async def _evidence_gate_node(context: ExecutionContext, db: AsyncSession) -> No
 
 async def _generate_explanation_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
     """生成结构化讲解"""
-    input_msg = context.get("input_message", "")
+    _, input_msg, deps, message_history = _conversation_inputs(context)
     evidence = context.get("evidence", [])
     retrieval_outcome = context.get("retrieval_outcome", "not_attempted")
     
@@ -243,10 +271,8 @@ async def _generate_explanation_node(context: ExecutionContext, db: AsyncSession
         response = await explanation_runtime.generate(
             input_msg,
             evidence_text=evidence_text,
-            deps=ExplanationDeps(
-                run_id=context.run_id,
-                user_id=context.user_id,
-            ),
+            deps=deps,
+            message_history=message_history,
             db=db,
         )
         data = response.model_dump()

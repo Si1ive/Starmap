@@ -22,6 +22,7 @@ from app.modules.agent.models import (
     AgentEvent,
     AgentInput,
     AgentMemoryEvent,
+    AgentMemorySnapshot,
     AgentMemoryUpdateOutbox,
     AgentMessage,
     AgentRun,
@@ -53,6 +54,7 @@ WORKER_TABLES = [
     AgentApproval.__table__,
     AgentMemoryEvent.__table__,
     AgentMemoryUpdateOutbox.__table__,
+    AgentMemorySnapshot.__table__,
     UserLearningMastery.__table__,
 ]
 
@@ -62,10 +64,10 @@ class ExplanationRuntimeStub:
         self.decisions = list(decisions)
         self.output = output
 
-    async def decide(self, current_input, *, evidence_count, deps, db=None):
+    async def decide(self, current_input, *, evidence_count, deps, message_history=(), db=None):
         return self.decisions.pop(0)
 
-    async def generate(self, current_input, *, evidence_text, deps, db=None):
+    async def generate(self, current_input, *, evidence_text, deps, message_history=(), db=None):
         return self.output
 
 
@@ -284,6 +286,137 @@ async def test_worker_persists_retrieval_error_fallback_answer_without_citations
     assert workflow["artifacts"][0]["content"]["citations"] == []
     assert page.items[1]["message"]["status"] == "completed"
     assert page.items[1]["message"]["content"] == "红黑树是一种自平衡二叉搜索树。"
+
+    thread_events = await thread_event_store.get_events(
+        db_session,
+        run.thread_id,
+        after_sequence=0,
+        limit=50,
+    )
+    assert "workflow.artifact.created" in [
+        event.event_type for event in thread_events
+    ]
+
+
+@pytest.mark.asyncio
+async def test_explain_worker_replays_snapshot_selected_history(db_session, monkeypatch):
+    run = await _create_explain_run(db_session, run_id="run_explain_history_001")
+    history_messages = [
+        AgentMessage(
+            id="msg_explain_history_user",
+            thread_id=run.thread_id,
+            user_id=run.user_id,
+            role="user",
+            status="completed",
+            content_text="什么是二分查找？",
+        ),
+        AgentMessage(
+            id="msg_explain_history_assistant",
+            thread_id=run.thread_id,
+            user_id=run.user_id,
+            role="assistant",
+            status="completed",
+            content_text="它每轮排除一半区间。",
+        ),
+    ]
+    db_session.add_all(history_messages)
+    await db_session.flush()
+    db_session.add_all(
+        [
+            AgentThreadItem(
+                id=f"item_{message.id}",
+                thread_id=run.thread_id,
+                sequence=10 + index,
+                item_type="message",
+                ref_id=message.id,
+                run_id=run.id,
+                visibility="visible",
+            )
+            for index, message in enumerate(history_messages)
+        ]
+    )
+    snapshot = AgentMemorySnapshot(
+        id="snapshot_explain_history_001",
+        run_id=run.id,
+        thread_id=run.thread_id,
+        user_id=run.user_id,
+        state_version=1,
+        standalone_request="给用户继续讲解二分查找",
+        understanding_json={
+            "topic_entities": [
+                {
+                    "entity_type": "knowledge_point",
+                    "entity_id": "kp_binary_search",
+                    "title": "二分查找",
+                    "aliases": ["折半查找"],
+                    "source": "thread_memory",
+                }
+            ],
+            "reference_sources": [],
+        },
+        selection_metadata_json={
+            "selected_message_ids": [message.id for message in history_messages],
+            "selected_artifact_ids": [],
+        },
+    )
+    db_session.add(snapshot)
+    run.metadata_json = {"memory_snapshot_id": snapshot.id}
+    await db_session.flush()
+
+    class RecordingRuntime(ExplanationRuntimeStub):
+        def __init__(self):
+            super().__init__(
+                decisions=[
+                    LoopDecision(
+                        action=ActionType.FINISH,
+                        parameters={},
+                        reasoning="先按冻结主题检索",
+                        confidence=0.9,
+                    ),
+                    LoopDecision(
+                        action=ActionType.FINISH,
+                        parameters={},
+                        reasoning="结束",
+                        confidence=0.9,
+                    ),
+                ],
+                output=_runtime_output(),
+            )
+            self.histories = []
+            self.inputs = []
+
+        async def decide(
+            self,
+            current_input,
+            *,
+            evidence_count,
+            deps,
+            message_history=(),
+            db=None,
+        ):
+            self.inputs.append(current_input)
+            self.histories.append(list(message_history))
+            return await super().decide(
+                current_input,
+                evidence_count=evidence_count,
+                deps=deps,
+                message_history=message_history,
+                db=db,
+            )
+
+    runtime = RecordingRuntime()
+    monkeypatch.setattr(explain, "explanation_runtime", runtime)
+    monkeypatch.setattr(explain.loop_turn_store, "record", AsyncMock())
+    retrieve = AsyncMock(
+        return_value={"status": "success", "results": [], "total": 0}
+    )
+    monkeypatch.setattr(explain, "retrieve_knowledge", retrieve)
+
+    assert await AgentWorker().process_run(db_session, run) is True
+    assert run.status == "completed"
+    assert runtime.inputs[0] == "给用户继续讲解二分查找"
+    assert len(runtime.histories[0]) == 2
+    assert retrieve.await_args.kwargs["query"] == "二分查找 折半查找"
 
     thread_events = await thread_event_store.get_events(
         db_session,

@@ -148,10 +148,10 @@ class ExplanationRuntimeStub:
         self.decisions = list(decisions)
         self.output = output
 
-    async def decide(self, current_input, *, evidence_count, deps, db=None):
+    async def decide(self, current_input, *, evidence_count, deps, message_history=(), db=None):
         return self.decisions.pop(0)
 
-    async def generate(self, current_input, *, evidence_text, deps, db=None):
+    async def generate(self, current_input, *, evidence_text, deps, message_history=(), db=None):
         return self.output
 
 

@@ -151,7 +151,7 @@ load_scope completed
 - 已在 `backend/app/modules/agent/models.py` 新增上述八张表的 ORM 模型，并通过 `backend/alembic/versions/20260726_agent_memory_foundation.py` 创建对应前向迁移。
 - 已补 `backend/tests/test_migrations.py::test_agent_memory_foundation_migration_renders_mysql_ddl`，验证迁移会创建全部记忆基础表、关键唯一约束和索引；同时更新 Alembic head 断言。
 - 2026-07-27 修复运行库漏迁移：实际 `starmap` 从 `20260725_agent_activity` 前向升级到 `20260726_memory_outbox_unique`，真表、复合唯一索引和 `MemoryOutboxStore.scan_due` 均验证通过；`verify_database_schema`（L43-L191）新增八张记忆表与 Outbox 唯一索引门禁，防止错误 stamp/旧备份在 Worker 启动后才循环报错。完整证据见 `incidents/2026-07-27-memory-outbox-table-missing.md`。
-- 这些表现已接入 Turn snapshot、PracticeBundle、EvaluationBundle、PlanningBundle、可信事实、Memory Outbox 和首批 projector；ConversationBundle、摘要及更多投影继续按 `MEM-004`、`MEM-006` 到 `MEM-008` 推进。
+- 这些表现已接入 Turn snapshot、ConversationBundle、PracticeBundle、EvaluationBundle、PlanningBundle、可信事实、Memory Outbox 和首批 projector；摘要及更多投影继续按 `MEM-006` 到 `MEM-008` 推进。
 
 ### MEM-003 新输入的增量处理
 
@@ -177,13 +177,14 @@ load_scope completed
 
 ### MEM-004 按能力声明选择最小记忆
 
-- 状态：进行中（2026-07-27 已落地 `PracticeBundle`、`PlanningBundle` 与 `EvaluationBundle`）。
+- 状态：已完成（2026-07-27，首批 Conversation/Practice/Evaluation/Planning 能力 Bundle 与消费者已闭环）。
 - 已新增 `backend/app/modules/agent/memory_selector.py`，定义 workflow-neutral 的 `TopicBundle` / `PracticeBundle`，并通过 `load_practice_bundle()` 按 `run_id + user_id` 校验 run/snapshot 归属，从 `agent_memory_snapshots`、`agent_memory_snapshot_items` 与 `selection_metadata_json` 读取主题、aliases、约束、difficulty、knowledge point IDs 和已选 Artifact。
 - 已在 `build_practice_query()` 与 `build_practice_filters()` 中把 bundle topic title + aliases、difficulty 确定性转成 query 与 retrieval filters；当既没有 bundle topic 也没有 fallback terms 时返回空 query，避免静默默认“数据结构/操作系统”。
 - 已补 `backend/tests/test_agent_memory_selector.py::test_load_practice_bundle_uses_snapshot_topic_and_context_metadata`，覆盖 snapshot topic aliases、约束、difficulty、knowledge point IDs 和 selected artifacts 都能被组装进 `PracticeBundle`。
 - 已完成 `PlanningBundle`：`PlanningTarget` / `PlanningBundle`（L59-L77）和 `load_planning_bundle`（L185-L337）只从同用户 snapshot 主题、最新 active 已批准目标和有评分证据的低掌握度知识点选取规划目标；`plan._aggregate_learning_evidence_node`（L26-L49）已接入。无真实目标时前置门失败且不创建审批，硬编码的“数据结构 / 操作系统 / 计算机网络 / 60 分钟”已删除。
 - 已完成 `EvaluationBundle`：`EvaluationQuestion` / `EvaluationBundle` / `_extract_user_answer`（L80-L137）和 `load_evaluation_bundle`（L340-L471）按 run/user/thread 校验 snapshot，只接受唯一 question 引用，重读 active、未拒绝且有可信答案来源的题面，并从显式“我的答案是 / 我选”表达提取作答；跨用户、跨线程、多题、失效题、缺答案均返回稳定 unresolved reason。Grade 的 `_load_attempt_snapshot_node`（L40-L78）已接入。
-- 当前仍未完成：`ConversationBundle`、Explain 的 bundle 接入、历史摘要，以及主观题可靠评分能力；客观题掌握度消费已打通。
+- 已完成 `ConversationBundle`：`ConversationTurn`、`ConversationBundle.to_message_history` 与 `load_conversation_bundle`（L800-L956）只按 snapshot 冻结 ID 重读同用户/线程的 visible completed 消息和公开 Artifact；唯一 question 题面、topic title+aliases、standalone request 依次生成首次 query。Explain 的 `_load_scope_node`（L36-L47）已接入，`_evidence_loop_node`（L68-L204）和 `_generate_explanation_node`（L234-L287）把同一份受控 history 传给模型，并阻止模型首个 query 覆盖冻结焦点。
+- `MEM-004` 已无剩余 Bundle/首批消费接入；历史摘要属于 `MEM-007`，主观题可靠评分器属于后续 Grade 能力扩展，不阻塞本任务的分层记忆最小闭环。
 
 - 定义类型化 `MemoryNeed`，把消费能力固定为 `conversation_continuity`、`topic_focus`、`practice_generation`、
   `grading_evidence`、`planning_goal`、`pending_interaction` 等稳定标签；当前 Router/Explain/Validate/Grade/Plan
@@ -230,7 +231,7 @@ load_scope completed
 - Artifact 完成投影由 `project_completed_run_facts`（L125-L140）、`_record_explanation_artifact_created`（L143-L182）、`_record_plan_confirmed`（L185-L251）、`_record_practice_artifact_created`（L254-L305）与 `_record_grade_result_confirmed`（L308-L413）负责。Plan 必须携带 approval ID 且数据库存在同 Run approved 审批；未批准计划不写长期目标。
 - Grade 已完成真实客观题证据生产：`backend/app/modules/agent/workflows/grade.py::_objective_grade_node`（L81-L129）只对 choice/fill/judge 做题型归一化和确定性标准答案比较，产生 correct/incorrect、score、answer_mismatch 与 Run 级 evidence ID；`_render_artifact_node`（L191-L218）把证据写入 `content.grading`。主观题、缺快照、无唯一题目或无可信标准答案在 Artifact 前失败，不能污染掌握度。
 - 已由 `backend/tests/test_agent_memory_projection.py::test_topic_confirmed_projection_is_idempotent_and_skips_inherited_topic`（L133-L208）覆盖主题事实重放、Outbox 幂等和补建；`backend/tests/test_agent_conversation_workflow.py::test_model_configuration_failure_creates_visible_failed_message`（L603-L666）覆盖 Router 失败仍保留显式主题；Grade 投影边界由 `test_grade_projection_updates_mastery_and_replays_idempotently`（L212-L281）、`test_grade_projection_deduplicates_knowledge_points_and_scopes_evidence_by_user`（L285-L345）、`test_feedback_without_structured_grading_is_ignored`（L349-L363）、`test_grade_run_without_snapshot_fails_without_touching_mastery`（L398-L415）覆盖；`backend/tests/test_agent_grade_worker.py`（L153-L243）覆盖真实正确/错误证据到掌握度、主观题拒绝与判断题否定表达归一化。
-- Explain 零命中 fallback 的事实、重放幂等与“不写掌握度”由 `backend/tests/test_agent_explain_worker.py::test_worker_persists_zero_hit_fallback_answer_without_citations`（L129-L227）覆盖。
+- Explain 零命中 fallback 的事实、重放幂等与“不写掌握度”由 `backend/tests/test_agent_explain_worker.py::test_worker_persists_zero_hit_fallback_answer_without_citations`（L133-L232）覆盖。
 - Plan 审批与事实闭环：`AgentService.decide_approval`（L424-L476）只在 approved 时恢复；`backend/app/modules/agent/workflows/plan.py::_apply_plan_change_node`（L171-L195）复核审批，`_render_plan_result_node`（L198-L221）把 approval ID 放入 Artifact；`backend/app/modules/agent/memory_projection.py::_record_plan_confirmed`（L185-L251）再次查询 approved 事实并按 approval ID 幂等写 `plan_confirmed`。`backend/tests/test_agent_plan_worker.py` 覆盖无证据、拒绝、旁路和批准事实闭环。
 - Memory Outbox 生产、消费与首批派生已闭环：`backend/app/modules/agent/memory_projection.py::_ensure_memory_update_outbox`（L27-L64）同事务生产，`backend/app/modules/agent/memory_outbox.py::MemoryOutboxStore`（L25-L172）与 `MemoryOutboxConsumer`（L175-L276）负责认领、租约、重试、事实归属和失败隔离，`backend/app/modules/agent/worker.py::AgentWorker.start`（L368-L392）每轮在 Run 批次后消费记忆任务。
 - `backend/app/modules/agent/memory_item_projection.py::project_trusted_memory_event`（L154-L166）只物化明确可信的两类派生：`_project_topic_context`（L60-L90）按事实键 upsert 线程主题，`_project_confirmed_plan_goal`（L108-L151）复核同 Run Plan Artifact/approval 后写包含结构化 goals 的用户目标；Explain/Practice/Grade 不复制权威正文。`backend/tests/test_agent_memory_outbox.py` 覆盖竞争、租约、topic/plan 物化、重放与失败隔离。历史摘要、Embedding 与偏好候选仍待实现。
@@ -310,7 +311,7 @@ Validate/Explain/Grade/Plan 是记忆内核的天然边界。这里把设计口�
 1. Explain 检索零命中：用户看到一个检索活动和通用知识回答，引用为空，刷新后正文仍在；已由 `backend/tests/test_agent_explain_worker.py::test_worker_persists_zero_hit_fallback_answer_without_citations` 覆盖。
 2. Explain 检索连续失败三次：后台显示三次 attempt，用户端只有一个活动，LLM 回答仍正常完成；公开活动折叠由 `test_timeline_merges_retry_attempts_into_single_public_activity` 覆盖，单次失败回退持久化由 `test_worker_persists_retrieval_error_fallback_answer_without_citations` 覆盖。
 3. 二分查找真实题：MySQL 稀疏和 Qdrant 向量候选经过回填、DTO 和资格门后进入 Practice；已由 `backend/tests/test_agent_validate_workflow.py::test_validate_binary_search_question_survives_retrieval_dto_and_gate` 覆盖。
-4. 上下文继承：“讲解二分查找”后说“给我出道题”，工具查询必须包含二分查找且类型为 question。
+4. 上下文继承：“讲解二分查找”后说“给我出道题”，Validate 工具查询必须包含二分查找且类型为 question；Explain 的继续讲解会重放 snapshot 选中的 history，并用 `二分查找 折半查找` 首次检索。后者已由 `test_explain_worker_replays_snapshot_selected_history` 覆盖。
 5. 明确覆盖：“不要二分查找，出红黑树题”，当前输入覆盖旧主题。
 6. 无法消解：没有主题和唯一薄弱点时进入澄清，不使用硬编码默认主题；唯一薄弱点回退与“多薄弱点仍澄清”已由 `test_load_practice_bundle_falls_back_to_unique_weak_point` / `test_load_practice_bundle_skips_weak_point_when_multiple_candidates` 覆盖。
 7. 增量回写：Explain/Validate 不提高掌握度；Grade 对唯一可信客观题和显式作答确定性产生结构化证据，Feedback Artifact 按用户 + Run evidence ID 幂等更新掌握度；已由 `test_grade_worker_projects_real_objective_verdict_to_mastery` 与 `test_grade_worker_records_incorrect_objective_verdict` 覆盖。主观题仍安全失败，不冒充真实评分。

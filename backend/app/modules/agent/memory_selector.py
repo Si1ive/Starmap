@@ -795,3 +795,162 @@ def build_practice_filters(
     if bundle.difficulty:
         filters["difficulty"] = bundle.difficulty
     return filters
+
+
+class ConversationTurn(BaseModel):
+    message_id: str
+    role: Literal["user", "assistant"]
+    content: str
+    sequence: int
+
+
+class ConversationBundle(BaseModel):
+    snapshot_id: str | None = None
+    standalone_request: str | None = None
+    topic: TopicBundle | None = None
+    messages: list[ConversationTurn] = Field(default_factory=list)
+    artifact_summaries: list[str] = Field(default_factory=list)
+    reference_sources: list[dict[str, Any]] = Field(default_factory=list)
+    retrieval_query: str | None = None
+
+    def to_message_history(self):
+        """把 snapshot 选中的可见消息转换为 Pydantic AI 历史。"""
+        from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
+
+        history = []
+        for message in self.messages:
+            if message.role == "user":
+                history.append(ModelRequest(parts=[UserPromptPart(content=message.content)]))
+            else:
+                history.append(ModelResponse(parts=[TextPart(content=message.content)]))
+        return history
+
+
+async def load_conversation_bundle(
+    db: AsyncSession,
+    *,
+    run_id: str,
+    user_id: str,
+) -> ConversationBundle:
+    """严格复现 snapshot 选中的对话连续性、Artifact 摘要与检索焦点。"""
+    from .models import AgentArtifact, AgentMessage, AgentThreadItem
+
+    run = await db.scalar(
+        select(AgentRun).where(AgentRun.id == run_id, AgentRun.user_id == user_id)
+    )
+    if run is None:
+        return ConversationBundle()
+    snapshot_id = (run.metadata_json or {}).get("memory_snapshot_id")
+    if not snapshot_id:
+        return ConversationBundle(standalone_request=run.input_message)
+    snapshot = await db.scalar(
+        select(AgentMemorySnapshot).where(
+            AgentMemorySnapshot.id == snapshot_id,
+            AgentMemorySnapshot.user_id == user_id,
+            AgentMemorySnapshot.thread_id == run.thread_id,
+        )
+    )
+    if snapshot is None:
+        return ConversationBundle(standalone_request=run.input_message)
+
+    metadata = snapshot.selection_metadata_json or {}
+    selected_message_ids = list(dict.fromkeys(metadata.get("selected_message_ids") or []))
+    message_rows = []
+    if selected_message_ids:
+        message_rows = (
+            await db.execute(
+                select(AgentMessage, AgentThreadItem.sequence)
+                .join(
+                    AgentThreadItem,
+                    (AgentThreadItem.ref_id == AgentMessage.id)
+                    & (AgentThreadItem.thread_id == AgentMessage.thread_id)
+                    & (AgentThreadItem.item_type == "message"),
+                )
+                .where(
+                    AgentMessage.id.in_(selected_message_ids),
+                    AgentMessage.thread_id == run.thread_id,
+                    AgentMessage.user_id == user_id,
+                    AgentMessage.role.in_(("user", "assistant")),
+                    AgentMessage.status == "completed",
+                    AgentThreadItem.visibility == "visible",
+                )
+                .order_by(AgentThreadItem.sequence)
+            )
+        ).all()
+    messages = [
+        ConversationTurn(
+            message_id=message.id,
+            role=message.role,
+            content=content,
+            sequence=sequence,
+        )
+        for message, sequence in message_rows
+        if (content := str(message.content_text or "").strip())
+    ]
+
+    selected_artifact_ids = list(dict.fromkeys(metadata.get("selected_artifact_ids") or []))
+    artifacts = []
+    if selected_artifact_ids:
+        artifacts = list(
+            (
+                await db.execute(
+                    select(AgentArtifact)
+                    .join(AgentRun, AgentRun.id == AgentArtifact.run_id)
+                    .where(
+                        AgentArtifact.id.in_(selected_artifact_ids),
+                        AgentRun.thread_id == run.thread_id,
+                        AgentRun.user_id == user_id,
+                        AgentRun.presentation != "silent",
+                    )
+                    .order_by(AgentArtifact.created_at, AgentArtifact.id)
+                )
+            ).scalars()
+        )
+    artifact_summaries = []
+    for artifact in artifacts:
+        if (artifact.metadata_json or {}).get("visibility") == "hidden":
+            continue
+        content = artifact.content_json or {}
+        summary = str(content.get("summary") or content.get("title") or "").strip()
+        if summary:
+            artifact_summaries.append(summary[:500])
+
+    understanding = snapshot.understanding_json or {}
+    reference_sources = [
+        dict(reference)
+        for reference in understanding.get("reference_sources") or []
+        if isinstance(reference, dict)
+    ]
+    topic = _bundle_topic_from_understanding(understanding)
+    question_ids = list(
+        dict.fromkeys(
+            str(reference.get("id") or "").strip()
+            for reference in reference_sources
+            if reference.get("type") == "question" and reference.get("id")
+        )
+    )
+    question_content = None
+    if len(question_ids) == 1:
+        question_content = await db.scalar(
+            select(Question.content).where(
+                Question.id == question_ids[0],
+                Question.status == "active",
+                Question.review_status != "rejected",
+            )
+        )
+    if question_content and str(question_content).strip():
+        retrieval_query = str(question_content).strip()[:500]
+    elif topic is not None:
+        retrieval_query = " ".join(dict.fromkeys([topic.title, *topic.aliases]))
+    else:
+        retrieval_query = snapshot.standalone_request or run.input_message
+
+    return ConversationBundle(
+        snapshot_id=snapshot.id,
+        standalone_request=snapshot.standalone_request or run.input_message,
+        topic=topic,
+        messages=messages,
+        artifact_summaries=artifact_summaries,
+        reference_sources=reference_sources,
+        retrieval_query=str(retrieval_query).strip() if retrieval_query else None,
+    )

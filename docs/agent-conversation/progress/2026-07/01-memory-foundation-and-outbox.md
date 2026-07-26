@@ -1,10 +1,18 @@
 # 2026-07 记忆基础、可信事实与 Outbox 进展
 
+## 2026-07-27：让 Explain 消费 ConversationBundle 冻结上下文
+
+- 目标：完成 `MEM-004`，让 Explain 真正消费 Router 前按权限和 Token 预算筛选并冻结到 snapshot 的消息、Artifact、主题与引用，移除无实际约束的全学科固定 scope。
+- 实现：`backend/app/modules/agent/memory_selector.py::load_conversation_bundle`（L829-L956）只按 snapshot ID 集合重读同用户/线程的 visible completed 消息和公开 Artifact，并按唯一题面→主题 aliases→standalone request 生成首次 query；`backend/app/modules/agent/workflows/explain.py::_load_scope_node`（L36-L47）接入 bundle，`_evidence_loop_node`（L68-L204）与 `_generate_explanation_node`（L234-L287）向规划/生成模型传入同一 history；`ExplanationRuntime.decide` / `generate`（L88-L177）把 history 交给 Pydantic AI，并用动态 instructions 标记主题、摘要和引用均为不可信数据。
+- 测试：`backend/tests/test_agent_memory_selector.py::test_load_conversation_bundle_replays_only_snapshot_selected_visible_context`（L341-L458）覆盖冻结选择、hidden 丢弃、Artifact 摘要和 aliases query；`backend/tests/test_agent_explain_workflow.py::test_explain_uses_conversation_bundle_history_and_frozen_topic_query`（L145-L198）覆盖模型首个动作无法跳过/改写冻结检索；`backend/tests/test_agent_explain_worker.py::test_explain_worker_replays_snapshot_selected_history`（L302-L429）覆盖 Worker 端到端重放。
+- 验证：全部 Agent 回归通过（185 passed，75 warnings）；Python 编译和 `git diff --check` 通过，旧状态/旧锚点扫描未发现残留。
+- 提交信息：`让 Explain 消费冻结的 ConversationBundle`
+
 ## 2026-07-27：让 Grade 以 EvaluationBundle 产生真实客观题证据
 
 - 目标：推进 `MEM-004` / `MEM-006`，删除 Grade 的固定反馈和伪 attempt，让真实客观题、标准答案与显式作答形成可审计掌握度证据。
 - 实现：`backend/app/modules/agent/memory_selector.py::load_evaluation_bundle`（L340-L471）按 run/user/thread 校验 snapshot，要求唯一 question 引用并重读 active、未拒绝、答案来源可信的题面；`backend/app/modules/agent/workflows/grade.py::_load_attempt_snapshot_node`（L40-L78）装载 bundle，`_objective_grade_node`（L81-L129）只对 choice/fill/judge 确定性比较并生成 verdict/score/error type，`_render_artifact_node`（L191-L218）交给既有事实投影。主观题或不可信/歧义输入在 Artifact 前失败。
-- 测试：`backend/tests/test_agent_memory_selector.py`（L184-L332）覆盖真实题面装载、Artifact 来源、跨用户和多题歧义；`backend/tests/test_agent_grade_worker.py`（L153-L243）覆盖正确/错误 verdict 到 `grade_result_confirmed` / `user_learning_mastery`、主观题零副作用拒绝与判断题否定表达；`test_grade_run_without_snapshot_fails_without_touching_mastery`（L398-L415）覆盖缺快照守卫。
+- 测试：`backend/tests/test_agent_memory_selector.py`（L189-L337）覆盖真实题面装载、Artifact 来源、跨用户和多题歧义；`backend/tests/test_agent_grade_worker.py`（L153-L243）覆盖正确/错误 verdict 到 `grade_result_confirmed` / `user_learning_mastery`、主观题零副作用拒绝与判断题否定表达；`test_grade_run_without_snapshot_fails_without_touching_mastery`（L398-L415）覆盖缺快照守卫。
 - 验证：全部 Agent 回归通过（182 passed，75 warnings）；Python 编译、`git diff --check` 与旧状态/旧锚点扫描通过。
 - 提交信息：`让 Grade 消费真实 EvaluationBundle`
 
@@ -12,7 +20,7 @@
 
 - 目标：推进 `MEM-004`，移除 Plan 固定注入的学科、强弱项和 60 分钟目标，只允许真实记忆产生审批草案。
 - 实现：`backend/app/modules/agent/memory_selector.py::load_planning_bundle`（L185-L337）按用户校验 Run/snapshot，选择当前主题、最新 active 已批准 goals 和带评分证据的低掌握度知识点，按标题去重并保留来源/证据 ID；`backend/app/modules/agent/workflows/plan.py::_aggregate_learning_evidence_node`（L26-L49）接入 bundle，targets 为空时由前置门失败且不创建审批。批准 Plan 的异步投影现保留结构化 goals，供下一轮继续选择。
-- 测试：`backend/tests/test_agent_memory_selector.py::test_load_planning_bundle_uses_approved_goals_and_real_weak_mastery`（L61-L150）覆盖用户隔离、批准目标、周期和真实薄弱点；`backend/tests/test_agent_plan_worker.py::test_plan_without_real_memory_fails_before_creating_approval`（L142-L156）与 `test_approved_plan_resumes_and_creates_artifact`（L219-L278）覆盖无证据零审批和真实目标 Artifact。
+- 测试：`backend/tests/test_agent_memory_selector.py::test_load_planning_bundle_uses_approved_goals_and_real_weak_mastery`（L66-L155）覆盖用户隔离、批准目标、周期和真实薄弱点；`backend/tests/test_agent_plan_worker.py::test_plan_without_real_memory_fails_before_creating_approval`（L142-L156）与 `test_approved_plan_resumes_and_creates_artifact`（L219-L278）覆盖无证据零审批和真实目标 Artifact。
 - 验证：Memory selector、Plan Worker、Memory Outbox、Validate 与 Conversation 组合回归通过（36 passed，53 warnings）；Python 编译与 `git diff --check` 通过。
 - 提交信息：`让 Plan 只消费真实 PlanningBundle`
 
@@ -157,7 +165,7 @@ fallback 也属于成功讲解，且讲解行为不会被误当成学习掌握�
 
 - 在 `backend/app/modules/agent/memory_projection.py::project_completed_run_facts`（L125-L140）增加 explanation Artifact 分派，并由 `_record_explanation_artifact_created`（L143-L182）按 Run 幂等写线程级 `explanation_artifact_created`。
 - 事件载荷只保留 `artifact_id` 与可选 `memory_snapshot_id`，正文、outline 和 citations 继续以 `agent_artifacts` 为唯一权威位置，不复制进长期事件或公开 SSE。
-- 扩展 `backend/tests/test_agent_explain_worker.py::test_worker_persists_zero_hit_fallback_answer_without_citations`（L129-L227），覆盖零命中 fallback 仍写事实、重放不重复、引用为空且 `user_learning_mastery` 不产生记录。
+- 扩展 `backend/tests/test_agent_explain_worker.py::test_worker_persists_zero_hit_fallback_answer_without_citations`（当前 L133-L232），覆盖零命中 fallback 仍写事实、重放不重复、引用为空且 `user_learning_mastery` 不产生记录。
 - 同步更新 Router/记忆实现分卷、Explain 工作流执行全景和任务单，并修正 `memory_projection.py` 插入新函数后受影响的 Grade 代码锚点。
 
 ### 验证

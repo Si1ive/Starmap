@@ -20,11 +20,13 @@ from app.models.mysql_models import (
     Subject,
 )
 from app.modules.agent.memory_selector import (
+    load_conversation_bundle,
     load_evaluation_bundle,
     load_planning_bundle,
     load_practice_bundle,
 )
 from app.modules.agent.models import (
+    AgentArtifact,
     AgentMemoryItem,
     AgentMessage,
     AgentMemoryEvent,
@@ -32,6 +34,7 @@ from app.modules.agent.models import (
     AgentMemorySnapshotItem,
     AgentRun,
     AgentThread,
+    AgentThreadItem,
     UserLearningMastery,
 )
 
@@ -39,6 +42,8 @@ SELECTOR_TABLES = [
     AgentThread.__table__,
     AgentMessage.__table__,
     AgentRun.__table__,
+    AgentThreadItem.__table__,
+    AgentArtifact.__table__,
     AgentMemoryEvent.__table__,
     AgentMemorySnapshot.__table__,
     AgentMemorySnapshotItem.__table__,
@@ -330,6 +335,126 @@ async def test_load_evaluation_bundle_rejects_cross_user_snapshot_and_ambiguous_
         user_id="user_001",
     )
     assert ambiguous_bundle.unresolved_reason == "question_reference_ambiguous"
+
+
+@pytest.mark.asyncio
+async def test_load_conversation_bundle_replays_only_snapshot_selected_visible_context(
+    db_session,
+):
+    thread = AgentThread(
+        id="thread_conversation_bundle",
+        user_id="user_001",
+        title="讲解连续性",
+        status="active",
+    )
+    run = AgentRun(
+        id="run_conversation_bundle",
+        thread_id=thread.id,
+        user_id="user_001",
+        workflow_name="explain",
+        status="queued",
+        input_message="再详细讲一下",
+        metadata_json={"memory_snapshot_id": "snapshot_conversation_bundle"},
+    )
+    db_session.add(thread)
+    await db_session.flush()
+    db_session.add(run)
+    await db_session.flush()
+    messages = [
+        AgentMessage(
+            id="msg_selected_user",
+            thread_id=thread.id,
+            user_id="user_001",
+            role="user",
+            status="completed",
+            content_text="什么是二分查找？",
+        ),
+        AgentMessage(
+            id="msg_selected_assistant",
+            thread_id=thread.id,
+            user_id="user_001",
+            role="assistant",
+            status="completed",
+            content_text="它每轮排除一半区间。",
+        ),
+        AgentMessage(
+            id="msg_hidden",
+            thread_id=thread.id,
+            user_id="user_001",
+            role="user",
+            status="completed",
+            content_text="隐藏消息不得进入模型",
+        ),
+    ]
+    db_session.add_all(messages)
+    await db_session.flush()
+    db_session.add_all(
+        [
+            AgentThreadItem(
+                id=f"item_{message.id}",
+                thread_id=thread.id,
+                sequence=index,
+                item_type="message",
+                ref_id=message.id,
+                visibility="hidden" if message.id == "msg_hidden" else "visible",
+            )
+            for index, message in enumerate(messages, start=1)
+        ]
+    )
+    artifact = AgentArtifact(
+        id="artifact_conversation_bundle",
+        run_id=run.id,
+        artifact_type="explanation",
+        content_json={"summary": "二分查找基础讲解"},
+    )
+    db_session.add(artifact)
+    await db_session.flush()
+    db_session.add(
+        AgentMemorySnapshot(
+            id="snapshot_conversation_bundle",
+            run_id=run.id,
+            thread_id=thread.id,
+            user_id="user_001",
+            state_version=1,
+            standalone_request="给用户详细讲解二分查找",
+            understanding_json={
+                "topic_entities": [
+                    {
+                        "entity_type": "knowledge_point",
+                        "entity_id": "kp_binary_search",
+                        "title": "二分查找",
+                        "aliases": ["折半查找"],
+                        "source": "thread_memory",
+                    }
+                ],
+                "reference_sources": [],
+            },
+            selection_metadata_json={
+                "selected_message_ids": [
+                    "msg_selected_user",
+                    "msg_selected_assistant",
+                    "msg_hidden",
+                ],
+                "selected_artifact_ids": [artifact.id],
+            },
+        )
+    )
+    await db_session.flush()
+
+    bundle = await load_conversation_bundle(
+        db_session,
+        run_id=run.id,
+        user_id="user_001",
+    )
+
+    assert [message.message_id for message in bundle.messages] == [
+        "msg_selected_user",
+        "msg_selected_assistant",
+    ]
+    assert bundle.artifact_summaries == ["二分查找基础讲解"]
+    assert bundle.retrieval_query == "二分查找 折半查找"
+    assert bundle.standalone_request == "给用户详细讲解二分查找"
+    assert len(bundle.to_message_history()) == 2
 
 
 _chapter_link_id = 0

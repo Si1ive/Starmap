@@ -11,6 +11,7 @@ from app.modules.agent.model_runtime.schema import (
 )
 from app.modules.agent.workflows import explain
 from app.modules.agent.workflows.contracts import ExecutionContext, NodeStatus
+from app.modules.agent.memory_selector import ConversationBundle, ConversationTurn, TopicBundle
 
 
 class ExplanationRuntimeStub:
@@ -18,19 +19,24 @@ class ExplanationRuntimeStub:
         self.decisions = list(decisions)
         self.output = output
         self.error = error
+        self.decide_calls = []
         self.generate_calls = []
 
-    async def decide(self, current_input, *, evidence_count, deps, db=None):
+    async def decide(self, current_input, *, evidence_count, deps, message_history=(), db=None):
+        self.decide_calls.append(
+            {"current_input": current_input, "message_history": list(message_history), "deps": deps}
+        )
         if self.error:
             raise self.error
         return self.decisions.pop(0)
 
-    async def generate(self, current_input, *, evidence_text, deps, db=None):
+    async def generate(self, current_input, *, evidence_text, deps, message_history=(), db=None):
         self.generate_calls.append(
             {
                 "current_input": current_input,
                 "evidence_text": evidence_text,
                 "run_id": deps.run_id,
+                "message_history": list(message_history),
             }
         )
         if self.error:
@@ -133,6 +139,62 @@ async def test_evidence_loop_always_retrieves_once_before_finishing(monkeypatch)
     assert result.status == NodeStatus.COMPLETED
     retrieve.assert_awaited_once()
     assert retrieve.await_args.kwargs["query"] == "给我讲解一下红黑树"
+
+
+@pytest.mark.asyncio
+async def test_explain_uses_conversation_bundle_history_and_frozen_topic_query(monkeypatch):
+    bundle = ConversationBundle(
+        snapshot_id="snapshot_explain_001",
+        standalone_request="给用户继续讲解二分查找",
+        topic=TopicBundle(
+            title="二分查找",
+            entity_type="knowledge_point",
+            entity_id="kp_binary_search",
+            aliases=["折半查找"],
+            source="thread_memory",
+        ),
+        messages=[
+            ConversationTurn(
+                message_id="msg_user",
+                role="user",
+                content="什么是二分查找？",
+                sequence=1,
+            ),
+            ConversationTurn(
+                message_id="msg_assistant",
+                role="assistant",
+                content="它每轮排除一半区间。",
+                sequence=2,
+            ),
+        ],
+        artifact_summaries=["二分查找基础讲解"],
+        reference_sources=[{"type": "knowledge_point", "id": "kp_binary_search"}],
+        retrieval_query="二分查找 折半查找",
+    )
+    monkeypatch.setattr(explain, "load_conversation_bundle", AsyncMock(return_value=bundle))
+    finish = LoopDecision(
+        action=ActionType.FINISH,
+        parameters={},
+        reasoning="直接结束",
+        confidence=0.9,
+    )
+    runtime = ExplanationRuntimeStub(decisions=[finish, finish])
+    monkeypatch.setattr(explain, "explanation_runtime", runtime)
+    monkeypatch.setattr(explain.loop_turn_store, "record", AsyncMock())
+    retrieve = AsyncMock(
+        return_value={"status": "success", "results": [], "total": 0}
+    )
+    monkeypatch.setattr(explain, "retrieve_knowledge", retrieve)
+    context = _context()
+
+    await explain._load_scope_node(context, AsyncMock())
+    result = await explain._evidence_loop_node(context, AsyncMock())
+
+    assert result.status == NodeStatus.COMPLETED
+    assert retrieve.await_args.kwargs["query"] == "二分查找 折半查找"
+    assert runtime.decide_calls[0]["current_input"] == "给用户继续讲解二分查找"
+    assert len(runtime.decide_calls[0]["message_history"]) == 2
+    assert runtime.decide_calls[0]["deps"].artifact_summaries == ("二分查找基础讲解",)
 
 
 @pytest.mark.asyncio
