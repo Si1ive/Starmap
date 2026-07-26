@@ -7,6 +7,14 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from app.db.mysql import Base
+from app.models.mysql_models import (
+    CanonicalChapter,
+    Chapter,
+    Document,
+    ExamOutline,
+    KnowledgePoint,
+    Subject,
+)
 from app.modules.agent.memory_projection import project_completed_run_facts
 from app.modules.agent.models import (
     AgentApproval,
@@ -15,6 +23,8 @@ from app.modules.agent.models import (
     AgentEvent,
     AgentInput,
     AgentMemoryEvent,
+    AgentMemoryItem,
+    AgentMemorySnapshot,
     AgentMemoryUpdateOutbox,
     AgentMessage,
     AgentRun,
@@ -23,6 +33,7 @@ from app.modules.agent.models import (
     AgentThread,
     AgentThreadEvent,
     AgentThreadItem,
+    UserLearningMastery,
 )
 from app.modules.agent.service import AgentService
 from app.modules.agent.worker import AgentWorker
@@ -43,6 +54,15 @@ PLAN_TABLES = [
     AgentApproval.__table__,
     AgentMemoryEvent.__table__,
     AgentMemoryUpdateOutbox.__table__,
+    AgentMemorySnapshot.__table__,
+    AgentMemoryItem.__table__,
+    Subject.__table__,
+    Chapter.__table__,
+    ExamOutline.__table__,
+    CanonicalChapter.__table__,
+    Document.__table__,
+    KnowledgePoint.__table__,
+    UserLearningMastery.__table__,
 ]
 
 
@@ -63,7 +83,12 @@ async def db_session():
     await engine.dispose()
 
 
-async def _create_plan_run(db_session, *, run_id: str) -> AgentRun:
+async def _create_plan_run(
+    db_session,
+    *,
+    run_id: str,
+    seed_learning_goal: bool = True,
+) -> AgentRun:
     thread = AgentThread(
         id=f"thread_{run_id}",
         user_id="user_001",
@@ -87,7 +112,48 @@ async def _create_plan_run(db_session, *, run_id: str) -> AgentRun:
     db_session.add(run)
     await db_session.flush()
     run.root_run_id = run.id
+    if seed_learning_goal:
+        db_session.add(
+            AgentMemoryItem(
+                id=f"memory_{run_id}",
+                user_id="user_001",
+                scope="user",
+                item_type="learning_goal",
+                item_key=f"plan_confirmed:seed:{run_id}",
+                status="active",
+                content_text="二分查找复习目标",
+                metadata_json={
+                    "period": "7天",
+                    "goals": [
+                        {
+                            "subject": "二分查找",
+                            "target": "掌握边界条件",
+                            "daily_minutes": 30,
+                        }
+                    ],
+                },
+            )
+        )
+        await db_session.flush()
     return run
+
+
+@pytest.mark.asyncio
+async def test_plan_without_real_memory_fails_before_creating_approval(db_session):
+    run = await _create_plan_run(
+        db_session,
+        run_id="run_plan_without_evidence",
+        seed_learning_goal=False,
+    )
+
+    assert await AgentWorker().process_run(db_session, run) is True
+
+    assert run.status == "failed"
+    assert run.error_message == "缺少学习数据，无法生成计划"
+    approval = await db_session.scalar(
+        select(AgentApproval).where(AgentApproval.run_id == run.id)
+    )
+    assert approval is None
 
 
 @pytest.mark.asyncio
@@ -176,7 +242,17 @@ async def test_approved_plan_resumes_and_creates_artifact(db_session):
     )
     assert artifact is not None
     assert artifact.artifact_type == "plan"
-    assert artifact.content_json["content"]["goals"]
+    assert artifact.content_json["content"]["goals"] == [
+        {
+            "subject": "二分查找",
+            "target": "掌握边界条件",
+            "daily_minutes": 30,
+            "source": "approved_goal",
+            "source_id": f"memory_{run.id}",
+        }
+    ]
+    assert "操作系统" not in str(artifact.content_json)
+    assert "计算机网络" not in str(artifact.content_json)
     assert artifact.content_json["approval_id"] == approval.id
     memory_event = await db_session.scalar(
         select(AgentMemoryEvent).where(AgentMemoryEvent.run_id == run.id)

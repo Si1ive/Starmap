@@ -245,6 +245,13 @@ async def test_consumer_projects_confirmed_plan_to_user_goal(db_session):
         "approval_id": "approval_plan_001",
         "period": "7天",
         "goal_count": 1,
+        "goals": [
+            {
+                "subject": "二叉树",
+                "target": "掌握遍历",
+                "daily_minutes": 30,
+            }
+        ],
     }
 
 

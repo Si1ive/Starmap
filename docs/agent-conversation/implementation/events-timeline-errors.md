@@ -35,7 +35,7 @@
 | 节点进度持久化 | `backend/app/modules/agent/workflows/engine.py` | `WorkflowEngine.execute` | 每个 step 的开始、完成、失败都写 `agent_steps` 和 `agent_events`，并在关键边界 commit |
 | 当前公开步骤 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | run 进入 running 和完成时维护 `current_public_step`、最终 artifact 和消息完成事件 |
 | 最终正文与产物落库 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | workflow 返回 completed 后创建 `AgentArtifact`、写 `artifact.rendered` / `message.completed` / `run.completed`，让刷新可恢复最终正文和 artifact |
-| Plan 恢复审批守卫 | `backend/app/modules/agent/workflows/plan.py` | `_apply_plan_change_node`（L165-L189） | checkpoint 中的 approval ID 与 plan draft | 从数据库重读审批，只有真实状态为 approved 才设置 final plan；pending/rejected/缺失均返回失败，阻止绕过服务层恢复 | approved 计划或失败结果，不会产生未授权 Artifact |
+| Plan 恢复审批守卫 | `backend/app/modules/agent/workflows/plan.py` | `_apply_plan_change_node`（L171-L195） | checkpoint 中的 approval ID 与 plan draft | 从数据库重读审批，只有真实状态为 approved 才设置 final plan；pending/rejected/缺失均返回失败，阻止绕过服务层恢复 | approved 计划或失败结果，不会产生未授权 Artifact |
 | 时间线步骤重建 | `backend/app/modules/agent/timeline.py` | `AgentTimelineService._build_workflow_views` | 按 root run 聚合 child runs、steps、tool events、pending input 和 approvals |
 | 活动按 ID 归并 | `backend/app/modules/agent/timeline.py` | `AgentTimelineService._activity_views` | `tool.called` + `tool.result` 共享同一 `activity_id` 时可在刷新后重建成一个活动 |
 

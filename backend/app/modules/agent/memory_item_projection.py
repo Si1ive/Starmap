@@ -145,6 +145,7 @@ async def _project_confirmed_plan_goal(
             "approval_id": approval_id,
             "period": content.get("period"),
             "goal_count": len(goals),
+            "goals": goals,
         },
         source_snapshot_id=payload.get("memory_snapshot_id"),
     )

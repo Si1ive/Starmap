@@ -16,6 +16,7 @@ from app.core.logging import get_logger
 from .contracts import WorkflowDefinition, Node, NodeResult, NodeStatus, ExecutionContext
 from .registry import workflow_registry
 from ..model_runtime.adapter import model_adapter
+from ..memory_selector import load_planning_bundle
 from ..state_machine import RunStatus, state_machine
 from ..time_utils import utc_now
 
@@ -24,21 +25,27 @@ logger = get_logger(__name__)
 
 async def _aggregate_learning_evidence_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
     """聚合学习证据"""
-    user_id = context.user_id
-    
-    # 简化的学习证据聚合
+    bundle = await load_planning_bundle(
+        db,
+        run_id=context.run_id,
+        user_id=context.user_id,
+    )
     evidence = {
-        "user_id": user_id,
-        "total_practice_sessions": 0,
-        "average_score": 0.0,
-        "weak_areas": ["数据结构", "操作系统"],
-        "strong_areas": ["计算机网络"],
-        "study_streak": 0,
-        "daily_goal_minutes": 60,
+        "user_id": context.user_id,
+        "targets": [target.model_dump(mode="json") for target in bundle.targets],
+        "weak_areas": [target.title for target in bundle.targets],
+        "period": bundle.period,
+        "learning_goal_item_ids": bundle.learning_goal_item_ids,
+        "mastery_signals": bundle.mastery_signals,
     }
-    
+    context.set("planning_bundle", bundle.model_dump(mode="json"))
     context.set("learning_evidence", evidence)
-    logger.info("学习证据聚合", run_id=context.run_id, user_id=user_id)
+    logger.info(
+        "学习证据聚合",
+        run_id=context.run_id,
+        user_id=context.user_id,
+        target_count=len(bundle.targets),
+    )
     return NodeResult.success({"evidence_aggregated": True}, next_node="planning_precondition_gate")
 
 
@@ -46,8 +53,7 @@ async def _planning_precondition_gate_node(context: ExecutionContext, db: AsyncS
     """前置条件校验"""
     evidence = context.get("learning_evidence", {})
     
-    # 检查是否有足够的数据
-    if not evidence.get("weak_areas"):
+    if not evidence.get("targets"):
         return NodeResult.failure("缺少学习数据，无法生成计划")
     
     logger.info("前置条件校验通过", run_id=context.run_id)
@@ -58,23 +64,23 @@ async def _propose_plan_delta_node(context: ExecutionContext, db: AsyncSession) 
     """生成计划变更草案"""
     evidence = context.get("learning_evidence", {})
     
-    # P1 简化：使用可配置规则模板
-    weak_areas = evidence.get("weak_areas", [])
-    
-    # 生成计划草案
+    targets = evidence.get("targets", [])
+    period = evidence.get("period") or "7天"
     plan_draft = {
         "title": f"{context.user_id} 的学习计划",
-        "period": "7天",
+        "period": period,
         "goals": [
             {
-                "subject": area,
-                "target": "掌握基础概念",
-                "daily_minutes": 30,
+                "subject": target["title"],
+                "target": target["target"],
+                "daily_minutes": target.get("daily_minutes") or 30,
+                "source": target["source"],
+                "source_id": target.get("source_id"),
             }
-            for area in weak_areas[:3]  # 最多3个薄弱点
+            for target in targets[:3]
         ],
         "schedule": [
-            {"day": i + 1, "focus": weak_areas[i % len(weak_areas)] if weak_areas else "复习"}
+            {"day": i + 1, "focus": targets[i % len(targets)]["title"]}
             for i in range(7)
         ],
     }

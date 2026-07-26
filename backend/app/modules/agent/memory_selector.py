@@ -17,6 +17,7 @@ from app.models.mysql_models import (
 from .memory_contracts import MemoryFactType, MemoryNeed
 from .models import (
     AgentMemoryEvent,
+    AgentMemoryItem,
     AgentMemorySnapshot,
     AgentMemorySnapshotItem,
     AgentRun,
@@ -50,6 +51,27 @@ class PracticeBundle(BaseModel):
     selected_artifact_ids: list[str] = Field(default_factory=list)
     mastery_signals: list[dict[str, Any]] = Field(default_factory=list)
     excluded_question_ids: list[str] = Field(default_factory=list)
+
+
+class PlanningTarget(BaseModel):
+    title: str
+    target: str
+    source: Literal["snapshot_topic", "approved_goal", "learning_mastery"]
+    entity_type: str | None = None
+    entity_id: str | None = None
+    source_id: str | None = None
+    daily_minutes: int | None = Field(default=None, ge=1, le=1440)
+    mastery_score: float | None = Field(default=None, ge=0, le=1)
+    evidence_id: str | None = None
+
+
+class PlanningBundle(BaseModel):
+    snapshot_id: str | None = None
+    standalone_request: str | None = None
+    period: str | None = None
+    targets: list[PlanningTarget] = Field(default_factory=list)
+    learning_goal_item_ids: list[str] = Field(default_factory=list)
+    mastery_signals: list[dict[str, Any]] = Field(default_factory=list)
 
 
 def _bundle_topic_from_understanding(understanding: dict[str, Any]) -> TopicBundle | None:
@@ -95,6 +117,161 @@ def _bundle_difficulty(constraints: list[str]) -> str | None:
         if "简单点" in constraint or "容易点" in constraint or "基础点" in constraint:
             return "easy"
     return None
+
+
+async def load_planning_bundle(
+    db: AsyncSession,
+    *,
+    run_id: str,
+    user_id: str,
+) -> PlanningBundle:
+    """按当前主题、批准目标和真实掌握度选择最小规划记忆。"""
+    run = await db.scalar(
+        select(AgentRun).where(
+            AgentRun.id == run_id,
+            AgentRun.user_id == user_id,
+        )
+    )
+    if run is None:
+        return PlanningBundle()
+
+    metadata = run.metadata_json or {}
+    snapshot_id = metadata.get("memory_snapshot_id")
+    snapshot = None
+    if snapshot_id:
+        snapshot = await db.scalar(
+            select(AgentMemorySnapshot).where(
+                AgentMemorySnapshot.id == snapshot_id,
+                AgentMemorySnapshot.user_id == user_id,
+            )
+        )
+
+    goal_items = list(
+        (
+            await db.execute(
+                select(AgentMemoryItem)
+                .where(
+                    AgentMemoryItem.user_id == user_id,
+                    AgentMemoryItem.scope == "user",
+                    AgentMemoryItem.thread_id.is_(None),
+                    AgentMemoryItem.item_type == "learning_goal",
+                    AgentMemoryItem.status == "active",
+                )
+                .order_by(AgentMemoryItem.updated_at.desc(), AgentMemoryItem.id.desc())
+                .limit(1)
+            )
+        ).scalars()
+    )
+    weak_rows = (
+        await db.execute(
+            select(UserLearningMastery, KnowledgePoint)
+            .join(
+                KnowledgePoint,
+                KnowledgePoint.id == UserLearningMastery.knowledge_point_id,
+            )
+            .where(
+                UserLearningMastery.user_id == user_id,
+                UserLearningMastery.mastery_score < _WEAK_MASTERY_THRESHOLD,
+                UserLearningMastery.evidence_count > 0,
+                KnowledgePoint.status == "active",
+            )
+            .order_by(
+                UserLearningMastery.mastery_score,
+                UserLearningMastery.evidence_count.desc(),
+                UserLearningMastery.knowledge_point_id,
+            )
+            .limit(10)
+        )
+    ).all()
+
+    targets: list[PlanningTarget] = []
+    seen_titles: set[str] = set()
+
+    def add_target(target: PlanningTarget) -> None:
+        key = target.title.strip().casefold()
+        if not key or key in seen_titles:
+            return
+        seen_titles.add(key)
+        targets.append(target)
+
+    topic = _bundle_topic(snapshot) if snapshot is not None else None
+    if topic is not None:
+        add_target(
+            PlanningTarget(
+                title=topic.title,
+                target="围绕当前主题继续巩固",
+                source="snapshot_topic",
+                entity_type=topic.entity_type,
+                entity_id=topic.entity_id,
+                source_id=snapshot.id,
+            )
+        )
+
+    period = None
+    for item in goal_items:
+        goal_metadata = item.metadata_json or {}
+        if period is None:
+            normalized_period = str(goal_metadata.get("period") or "").strip()
+            period = normalized_period or None
+        goals = goal_metadata.get("goals") or []
+        if not isinstance(goals, list):
+            continue
+        for goal in goals:
+            if not isinstance(goal, dict):
+                continue
+            title = str(goal.get("subject") or goal.get("title") or "").strip()
+            target_text = str(goal.get("target") or "").strip()
+            if not title or not target_text:
+                continue
+            daily_minutes = goal.get("daily_minutes")
+            if (
+                not isinstance(daily_minutes, int)
+                or isinstance(daily_minutes, bool)
+                or not 1 <= daily_minutes <= 1440
+            ):
+                daily_minutes = None
+            add_target(
+                PlanningTarget(
+                    title=title,
+                    target=target_text,
+                    source="approved_goal",
+                    source_id=item.id,
+                    daily_minutes=daily_minutes,
+                )
+            )
+
+    mastery_signals: list[dict[str, Any]] = []
+    for mastery, knowledge_point in weak_rows:
+        signal = {
+            "knowledge_point_id": mastery.knowledge_point_id,
+            "mastery_score": mastery.mastery_score,
+            "evidence_count": mastery.evidence_count,
+            "last_evidence_id": mastery.last_evidence_id,
+        }
+        mastery_signals.append(signal)
+        add_target(
+            PlanningTarget(
+                title=knowledge_point.title,
+                target="针对真实薄弱点进行巩固",
+                source="learning_mastery",
+                entity_type="knowledge_point",
+                entity_id=mastery.knowledge_point_id,
+                source_id=mastery.knowledge_point_id,
+                mastery_score=mastery.mastery_score,
+                evidence_id=mastery.last_evidence_id,
+            )
+        )
+
+    return PlanningBundle(
+        snapshot_id=snapshot.id if snapshot is not None else None,
+        standalone_request=(
+            snapshot.standalone_request if snapshot is not None else run.input_message
+        ),
+        period=period,
+        targets=targets,
+        learning_goal_item_ids=[item.id for item in goal_items],
+        mastery_signals=mastery_signals,
+    )
 
 
 async def _load_excluded_question_ids(db: AsyncSession, *, user_id: str) -> list[str]:

@@ -1,5 +1,13 @@
 # 2026-07 记忆基础、可信事实与 Outbox 进展
 
+## 2026-07-27：让 Plan 消费真实 PlanningBundle
+
+- 目标：推进 `MEM-004`，移除 Plan 固定注入的学科、强弱项和 60 分钟目标，只允许真实记忆产生审批草案。
+- 实现：`backend/app/modules/agent/memory_selector.py::load_planning_bundle`（L122-L274）按用户校验 Run/snapshot，选择当前主题、最新 active 已批准 goals 和带评分证据的低掌握度知识点，按标题去重并保留来源/证据 ID；`backend/app/modules/agent/workflows/plan.py::_aggregate_learning_evidence_node`（L26-L49）接入 bundle，targets 为空时由前置门失败且不创建审批。批准 Plan 的异步投影现保留结构化 goals，供下一轮继续选择。
+- 测试：`backend/tests/test_agent_memory_selector.py::test_load_planning_bundle_uses_approved_goals_and_real_weak_mastery`（L53-L142）覆盖用户隔离、批准目标、周期和真实薄弱点；`backend/tests/test_agent_plan_worker.py::test_plan_without_real_memory_fails_before_creating_approval`（L142-L156）与 `test_approved_plan_resumes_and_creates_artifact`（L219-L278）覆盖无证据零审批和真实目标 Artifact。
+- 验证：Memory selector、Plan Worker、Memory Outbox、Validate 与 Conversation 组合回归通过（36 passed，53 warnings）；Python 编译与 `git diff --check` 通过。
+- 提交信息：`让 Plan 只消费真实 PlanningBundle`
+
 ## 2026-07-27：修复运行库缺失 Memory Outbox 真表
 
 - 目标：消除 Worker 扫描 `agent_memory_update_outbox` 时的 MySQL 1146，并让同类结构漂移在 Worker 启动前失败。
@@ -28,7 +36,7 @@
 ## 2026-07-26：启用可信事实异步派生
 
 - 目标：让 Memory Outbox 产生真实长期记忆落点并进入后台循环，而不是空消费任务。
-- 实现：`memory_item_projection.py::project_trusted_memory_event`（L153-L165）按事实分派，线程主题与批准计划分别物化 `topic_context` / `learning_goal`；`AgentWorker.start`（L368-L392）在 Run 批次后消费记忆任务，异常仍只重试 Outbox。
+- 实现：`memory_item_projection.py::project_trusted_memory_event`（L154-L166）按事实分派，线程主题与批准计划分别物化 `topic_context` / `learning_goal`；`AgentWorker.start`（L368-L392）在 Run 批次后消费记忆任务，异常仍只重试 Outbox。
 - 验证：记忆/迁移组 32 项、workflow/Worker 组 22 项通过；Python 编译与 `git diff --check` 通过。
 - 提交信息：`启用可信事实异步派生`
 
@@ -92,7 +100,7 @@
 
 ### 实现
 
-- 在 `backend/app/modules/agent/workflows/plan.py::_render_plan_result_node`（L192-L215）把已通过守卫的 approval ID 写入 Plan Artifact，使事实投影可以回查真实批准来源。
+- 在 `backend/app/modules/agent/workflows/plan.py::_render_plan_result_node`（L198-L221）把已通过守卫的 approval ID 写入 Plan Artifact，使事实投影可以回查真实批准来源。
 - 扩展 `backend/app/modules/agent/memory_projection.py::project_completed_run_facts`（L125-L140），由 `_record_plan_confirmed`（L185-L251）校验 approval ID、同 Run 归属和数据库 approved 状态，再按 approval ID 幂等写用户级 `plan_confirmed`。
 - 事件只保存 Artifact、approval 和可选 snapshot ID，计划正文仍以 `agent_artifacts` 为权威来源；拒绝与未批准路径维持零 Artifact、零长期事实。
 - 扩展 `backend/tests/test_agent_plan_worker.py`（L92-L200），覆盖拒绝/旁路不写事实、批准后 Artifact 携带审批来源、事实载荷和重放幂等。
@@ -117,7 +125,7 @@
 ### 实现
 
 - 修改 `backend/app/modules/agent/service.py::AgentService.decide_approval`（L424-L476）：只接受 approved/rejected；批准时恢复 running 并写 Run Outbox，拒绝时转 failed、记录用户拒绝原因、删除 checkpoint 且不投递，二者统一投影 `run.status_changed`。
-- 在 `backend/app/modules/agent/workflows/plan.py::_apply_plan_change_node`（L165-L189）增加纵深守卫，从数据库重读 checkpoint 携带的 approval ID，只有状态为 approved 才应用草案；pending、rejected 或缺失均失败且不生成 Artifact。
+- 在 `backend/app/modules/agent/workflows/plan.py::_apply_plan_change_node`（L171-L195）增加纵深守卫，从数据库重读 checkpoint 携带的 approval ID，只有状态为 approved 才应用草案；pending、rejected 或缺失均失败且不生成 Artifact。
 - 新增 `backend/tests/test_agent_plan_worker.py::test_rejected_plan_stops_without_outbox_or_artifact`（L92-L128）、`test_plan_apply_node_rejects_unapproved_checkpoint`（L132-L147）和 `test_approved_plan_resumes_and_creates_artifact`（L151-L200），同时锁定拒绝、旁路恢复和正常批准三条链路。
 - 同步更新事件/错误实现分卷、Plan 执行全景和 `MEM-006` 任务状态，为下一提交的 `plan_confirmed` 事实投影建立可信前置条件。
 

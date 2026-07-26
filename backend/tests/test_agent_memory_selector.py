@@ -17,8 +17,9 @@ from app.models.mysql_models import (
     KnowledgePointChapterLink,
     Subject,
 )
-from app.modules.agent.memory_selector import load_practice_bundle
+from app.modules.agent.memory_selector import load_planning_bundle, load_practice_bundle
 from app.modules.agent.models import (
+    AgentMemoryItem,
     AgentMessage,
     AgentMemoryEvent,
     AgentMemorySnapshot,
@@ -35,6 +36,7 @@ SELECTOR_TABLES = [
     AgentMemoryEvent.__table__,
     AgentMemorySnapshot.__table__,
     AgentMemorySnapshotItem.__table__,
+    AgentMemoryItem.__table__,
     Subject.__table__,
     Chapter.__table__,
     # KnowledgePoint / CanonicalChapter 的可空外键在 SQLite 下也要求父表存在。
@@ -45,6 +47,129 @@ SELECTOR_TABLES = [
     KnowledgePointChapterLink.__table__,
     UserLearningMastery.__table__,
 ]
+
+
+@pytest.mark.asyncio
+async def test_load_planning_bundle_uses_approved_goals_and_real_weak_mastery(
+    db_session,
+):
+    thread = AgentThread(
+        id="thread_plan_bundle",
+        user_id="user_001",
+        title="规划",
+        status="active",
+    )
+    run = AgentRun(
+        id="run_plan_bundle",
+        thread_id=thread.id,
+        user_id="user_001",
+        workflow_name="plan",
+        status="queued",
+        metadata_json={},
+    )
+    db_session.add(thread)
+    await db_session.flush()
+    db_session.add(run)
+    await db_session.flush()
+    await _seed_knowledge_point(
+        db_session,
+        kp_id="kp_graph",
+        title="图的最短路径",
+        aliases=["最短路"],
+    )
+    db_session.add_all(
+        [
+            AgentMemoryItem(
+                id="memory_goal_001",
+                user_id="user_001",
+                scope="user",
+                item_type="learning_goal",
+                item_key="plan_confirmed:approval_001",
+                status="active",
+                content_text="二分查找计划",
+                metadata_json={
+                    "period": "14天",
+                    "goals": [
+                        {
+                            "subject": "二分查找",
+                            "target": "掌握边界条件",
+                            "daily_minutes": 25,
+                        }
+                    ],
+                },
+            ),
+            AgentMemoryItem(
+                id="memory_goal_foreign",
+                user_id="user_002",
+                scope="user",
+                item_type="learning_goal",
+                item_key="plan_confirmed:approval_foreign",
+                status="active",
+                content_text="操作系统计划",
+                metadata_json={
+                    "goals": [{"subject": "操作系统", "target": "掌握调度"}]
+                },
+            ),
+            UserLearningMastery(
+                user_id="user_001",
+                knowledge_point_id="kp_graph",
+                mastery_score=0.4,
+                evidence_count=2,
+                correct_count=0,
+                incorrect_count=2,
+                last_evidence_id="grade_graph_001",
+            ),
+        ]
+    )
+    await db_session.flush()
+
+    bundle = await load_planning_bundle(
+        db_session,
+        run_id=run.id,
+        user_id="user_001",
+    )
+
+    assert bundle.period == "14天"
+    assert [target.title for target in bundle.targets] == [
+        "二分查找",
+        "图的最短路径",
+    ]
+    assert bundle.targets[0].target == "掌握边界条件"
+    assert bundle.targets[0].daily_minutes == 25
+    assert bundle.targets[1].source == "learning_mastery"
+    assert bundle.targets[1].evidence_id == "grade_graph_001"
+    assert "操作系统" not in [target.title for target in bundle.targets]
+
+
+@pytest.mark.asyncio
+async def test_load_planning_bundle_returns_no_targets_without_real_evidence(db_session):
+    thread = AgentThread(
+        id="thread_plan_empty",
+        user_id="user_001",
+        title="空规划",
+        status="active",
+    )
+    run = AgentRun(
+        id="run_plan_empty",
+        thread_id=thread.id,
+        user_id="user_001",
+        workflow_name="plan",
+        status="queued",
+        metadata_json={},
+    )
+    db_session.add(thread)
+    await db_session.flush()
+    db_session.add(run)
+    await db_session.flush()
+
+    bundle = await load_planning_bundle(
+        db_session,
+        run_id=run.id,
+        user_id="user_001",
+    )
+
+    assert bundle.targets == []
+    assert bundle.learning_goal_item_ids == []
 
 
 _chapter_link_id = 0
