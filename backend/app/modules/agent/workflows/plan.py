@@ -192,9 +192,11 @@ async def _apply_plan_change_node(context: ExecutionContext, db: AsyncSession) -
 async def _render_plan_result_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
     """渲染计划产物"""
     final_plan = context.get("final_plan", {})
+    approval_id = (context.get("approval_data") or {}).get("id")
     
     artifact = {
         "type": "plan",
+        "approval_id": approval_id,
         "title": final_plan.get("title", "学习计划"),
         "content": {
             "period": final_plan.get("period", "7天"),

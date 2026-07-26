@@ -7,12 +7,14 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from app.db.mysql import Base
+from app.modules.agent.memory_projection import project_completed_run_facts
 from app.modules.agent.models import (
     AgentApproval,
     AgentArtifact,
     AgentCheckpoint,
     AgentEvent,
     AgentInput,
+    AgentMemoryEvent,
     AgentMessage,
     AgentRun,
     AgentRunOutbox,
@@ -38,6 +40,7 @@ PLAN_TABLES = [
     AgentArtifact.__table__,
     AgentInput.__table__,
     AgentApproval.__table__,
+    AgentMemoryEvent.__table__,
 ]
 
 
@@ -116,9 +119,13 @@ async def test_rejected_plan_stops_without_outbox_or_artifact(db_session):
     )
     outboxes = list((await db_session.execute(select(AgentRunOutbox))).scalars())
     artifacts = list((await db_session.execute(select(AgentArtifact))).scalars())
+    memory_events = list(
+        (await db_session.execute(select(AgentMemoryEvent))).scalars()
+    )
     assert checkpoints == []
     assert outboxes == []
     assert artifacts == []
+    assert memory_events == []
 
 
 @pytest.mark.asyncio
@@ -133,7 +140,11 @@ async def test_plan_apply_node_rejects_unapproved_checkpoint(db_session):
     assert await AgentWorker().process_run(db_session, run) is True
     assert run.status == "failed"
     artifacts = list((await db_session.execute(select(AgentArtifact))).scalars())
+    memory_events = list(
+        (await db_session.execute(select(AgentMemoryEvent))).scalars()
+    )
     assert artifacts == []
+    assert memory_events == []
 
 
 @pytest.mark.asyncio
@@ -164,3 +175,26 @@ async def test_approved_plan_resumes_and_creates_artifact(db_session):
     assert artifact is not None
     assert artifact.artifact_type == "plan"
     assert artifact.content_json["content"]["goals"]
+    assert artifact.content_json["approval_id"] == approval.id
+    memory_event = await db_session.scalar(
+        select(AgentMemoryEvent).where(AgentMemoryEvent.run_id == run.id)
+    )
+    assert memory_event is not None
+    assert memory_event.fact_type == "plan_confirmed"
+    assert memory_event.memory_scope == "user"
+    assert memory_event.source_kind == "artifact"
+    assert memory_event.idempotency_key == f"plan_confirmed:{approval.id}"
+    assert memory_event.payload_json == {
+        "artifact_id": artifact.id,
+        "approval_id": approval.id,
+        "memory_snapshot_id": None,
+    }
+    await project_completed_run_facts(db_session, run, artifact)
+    replayed_events = list(
+        (
+            await db_session.execute(
+                select(AgentMemoryEvent).where(AgentMemoryEvent.run_id == run.id)
+            )
+        ).scalars()
+    )
+    assert len(replayed_events) == 1

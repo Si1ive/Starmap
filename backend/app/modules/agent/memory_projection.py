@@ -7,7 +7,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from .memory_contracts import MemoryFactType
-from .models import AgentArtifact, AgentMemoryEvent, AgentRun, UserLearningMastery
+from .models import (
+    AgentApproval,
+    AgentArtifact,
+    AgentMemoryEvent,
+    AgentRun,
+    UserLearningMastery,
+)
 from .time_utils import utc_now
 
 logger = get_logger(__name__)
@@ -83,6 +89,8 @@ async def project_completed_run_facts(
         return
     if artifact.artifact_type == "explanation":
         await _record_explanation_artifact_created(db, run, artifact)
+    elif artifact.artifact_type == "plan":
+        await _record_plan_confirmed(db, run, artifact)
     elif artifact.artifact_type == "practice":
         await _record_practice_artifact_created(db, run, artifact)
     elif artifact.artifact_type == "feedback":
@@ -127,6 +135,74 @@ async def _record_explanation_artifact_created(
         "讲解产物事实写入",
         run_id=run.id,
         artifact_id=artifact.id,
+    )
+
+
+async def _record_plan_confirmed(
+    db: AsyncSession,
+    run: AgentRun,
+    artifact: AgentArtifact,
+) -> None:
+    """只有数据库中真实批准并已产出 Artifact 的计划才进入长期事实。"""
+    content = artifact.content_json or {}
+    approval_id = str(content.get("approval_id") or "").strip()
+    if not approval_id:
+        logger.warning(
+            "计划产物缺少审批 ID，跳过长期目标事实",
+            run_id=run.id,
+            artifact_id=artifact.id,
+        )
+        return
+    approval = await db.scalar(
+        select(AgentApproval).where(
+            AgentApproval.id == approval_id,
+            AgentApproval.run_id == run.id,
+            AgentApproval.status == "approved",
+        )
+    )
+    if approval is None:
+        logger.warning(
+            "计划产物没有有效批准事实，跳过长期目标",
+            run_id=run.id,
+            artifact_id=artifact.id,
+            approval_id=approval_id,
+        )
+        return
+
+    fact_type = MemoryFactType.PLAN_CONFIRMED.value
+    idempotency_key = f"{fact_type}:{approval_id}"
+    existing = await db.scalar(
+        select(AgentMemoryEvent.id).where(
+            AgentMemoryEvent.idempotency_key == idempotency_key
+        )
+    )
+    if existing is not None:
+        return
+
+    db.add(
+        AgentMemoryEvent(
+            user_id=run.user_id,
+            thread_id=run.thread_id,
+            run_id=run.id,
+            memory_scope="user",
+            source_kind="artifact",
+            fact_type=fact_type,
+            idempotency_key=idempotency_key,
+            payload_json={
+                "artifact_id": artifact.id,
+                "approval_id": approval_id,
+                "memory_snapshot_id": (run.metadata_json or {}).get(
+                    "memory_snapshot_id"
+                ),
+            },
+        )
+    )
+    await db.flush()
+    logger.info(
+        "用户确认计划事实写入",
+        run_id=run.id,
+        artifact_id=artifact.id,
+        approval_id=approval_id,
     )
 
 
