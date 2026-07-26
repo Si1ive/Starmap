@@ -173,6 +173,42 @@ alembic -c alembic.ini upgrade head
 执行成功后，当前 migration head 至少应包含 `20260723_repair_agent_parent`。以后仓库
 新增迁移时，head 名称会继续变化，应始终以 `alembic heads` 的实际输出为准。
 
+### `agent_memory_update_outbox` 缺失专项修复
+
+适用错误：Worker 日志持续出现 `Table '...agent_memory_update_outbox' doesn't exist`，失败 SQL 是
+`UPDATE agent_memory_update_outbox SET status=...`。这通常表示代码已经启用 Memory Outbox 消费，
+但应用正在连接的数据库仍停在 `20260725_agent_activity` 或更早 revision。
+
+先在 `backend` 目录核对同一连接目标并正常升级：
+
+```bash
+venv/bin/alembic -c alembic.ini heads
+venv/bin/alembic -c alembic.ini current -v
+venv/bin/alembic -c alembic.ini upgrade head
+venv/bin/alembic -c alembic.ini current -v
+```
+
+成功后 current 应为当前 head（本次故障修复时是 `20260726_memory_outbox_unique`），然后核对真表和复合
+唯一索引，而不是只看 `alembic_version`：
+
+```sql
+SHOW TABLES LIKE 'agent_memory_update_outbox';
+SELECT index_name, column_name, non_unique, seq_in_index
+FROM information_schema.statistics
+WHERE table_schema = DATABASE()
+  AND table_name = 'agent_memory_update_outbox'
+  AND index_name = 'uk_agent_memory_outbox_run_event'
+ORDER BY seq_in_index;
+```
+
+预期索引依次包含 `run_id`、`event_type`，且两行 `non_unique=0`。应用启动期
+`backend/app/modules/operations/schema_guard.py::verify_database_schema`（L43-L191）也会检查八张记忆基础表
+和该索引；缺失时会在 Worker 启动前中止。若 current 已是 head 但真表仍不存在，属于 stamp/旧备份/手工
+删表造成的结构漂移，应先备份并调查迁移历史，不得再次 `stamp head`，也不要手工创建不完整同名表。
+
+2026-07-27 的完整根因、代码锚点和实际验证结果见
+`docs/agent-conversation/incidents/2026-07-27-memory-outbox-table-missing.md`。
+
 ### `agent_model_configs` 缺失专项修复
 
 适用现象包括：管理员 Agent 模型列表返回 500、用户发送消息后日志出现
@@ -183,7 +219,7 @@ alembic -c alembic.ini upgrade head
 | 阶段 | 文件 | 符号 | 代码范围 | 作用 |
 | --- | --- | --- | --- | --- |
 | 建表与旧配置回填 | `backend/alembic/versions/20260723_agent_model_configs.py` | `upgrade` | L21-L90 | 创建完整表结构，并把已启用的 `system_configs.llm` 复制为默认记录 |
-| 启动期结构检查 | `backend/app/modules/operations/schema_guard.py` | `verify_database_schema` | L28-L104 | 比较 Alembic revision，并检查 `agent_model_configs` 真表是否存在 |
+| 启动期结构检查 | `backend/app/modules/operations/schema_guard.py` | `verify_database_schema` | L43-L191 | 比较 Alembic revision，并检查模型配置、记忆基础真表、Memory Outbox 唯一索引及关键列约束 |
 | 用户模型查询 | `backend/app/modules/agent/model_configs.py` | `AgentModelConfigService.list_public` | L168-L180 | 查询 `online + selectable` 记录；缺表时 MySQL 1146 从这里暴露 |
 | 容器部署入口 | `docker-compose.podman.yml` | `services.backend.command` | L190-L190 | 在启动 Uvicorn 前执行 `alembic upgrade head` |
 
@@ -236,8 +272,8 @@ head 但表仍缺失，说明数据库曾被错误 stamp 或结构被人工删�
 | 阶段 | 文件 | 符号 | 代码范围 | 作用 |
 | --- | --- | --- | --- | --- |
 | nullable 前向迁移 | `backend/alembic/versions/20260724_agent_unlimited_tokens.py` | `upgrade` | L20-L27 | 把 `agent_model_configs.max_tokens` 改为允许 SQL `NULL` |
-| 启动期真实约束检查 | `backend/app/modules/operations/schema_guard.py` | `verify_database_schema` | L29-L138 | 同时核对 Alembic head、真表与 `max_tokens.is_nullable`，发现漂移时中止启动 |
-| 约束与 head 回归测试 | `backend/tests/test_schema_guard.py` | `test_schema_guard_rejects_non_nullable_agent_model_token_limit` / `test_schema_guard_reads_the_project_migration_heads` | L104-L133 | 防止后续迁移后遗漏真实列约束或仍断言旧 head |
+| 启动期真实约束检查 | `backend/app/modules/operations/schema_guard.py` | `verify_database_schema` | L43-L191 | 同时核对 Alembic head、Agent 真表、Memory Outbox 唯一索引与 `max_tokens.is_nullable`，发现漂移时中止启动 |
+| 约束与 head 回归测试 | `backend/tests/test_schema_guard.py` | `test_schema_guard_rejects_non_nullable_agent_model_token_limit` / `test_schema_guard_reads_the_project_migration_heads` | L160-L195 | 防止后续迁移后遗漏真实列约束或仍断言旧 head |
 
 先比较当前 revision 与代码 head：
 

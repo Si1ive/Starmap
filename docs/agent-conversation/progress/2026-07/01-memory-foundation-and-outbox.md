@@ -1,5 +1,13 @@
 # 2026-07 记忆基础、可信事实与 Outbox 进展
 
+## 2026-07-27：修复运行库缺失 Memory Outbox 真表
+
+- 目标：消除 Worker 扫描 `agent_memory_update_outbox` 时的 MySQL 1146，并让同类结构漂移在 Worker 启动前失败。
+- 根因与修复：代码 head 为 `20260726_memory_outbox_unique`，实际 `starmap` 仅到 `20260725_agent_activity`；执行 `alembic upgrade head` 后创建八张记忆表并添加 `(run_id,event_type)` 唯一约束。`backend/app/modules/operations/schema_guard.py::verify_database_schema`（L43-L191）进一步校验全部记忆真表和 `uk_agent_memory_outbox_run_event`，不再只相信 revision。
+- 验证：真实数据库 current=head、真表/两列复合索引存在；回滚事务重放 `MemoryOutboxStore.scan_due` 成功且 `due_count=0`；真实 schema guard 通过。迁移、Outbox 与 guard 回归共 26 项通过，`git diff --check` 通过。
+- 故障单：`incidents/2026-07-27-memory-outbox-table-missing.md`。
+- 提交信息：`在启动前阻断 Memory Outbox 结构漂移`
+
 ## 2026-07-26：仅在真实歧义时调用结构化指代模型
 
 - 目标：完成 `MEM-003`，让裸词“这个”和最新 practice 多题等真正歧义进入受约束模型，同时保证确定性单题、显式引用和无候选场景不增加调用。
@@ -63,7 +71,7 @@
 ### 实现
 
 - 在 `backend/app/modules/agent/models.py::AgentMemoryUpdateOutbox`（L612-L650）增加 `(run_id, event_type)` 唯一约束 `uk_agent_memory_outbox_run_event`。
-- 新增前向迁移 `backend/alembic/versions/20260726_memory_outbox_unique.py::upgrade`（L18-L26），并提供 `downgrade`（L28-L34）；当前表尚无生产者，因此升级不会遇到历史重复任务。
+- 新增前向迁移 `backend/alembic/versions/20260726_memory_outbox_unique.py::upgrade`（L18-L25），并提供 `downgrade`（L28-L34）；当前表尚无生产者，因此升级不会遇到历史重复任务。
 - 更新 `backend/tests/test_migrations.py::test_migration_graph_has_single_head`（L28-L34）到新 head，并新增 `test_memory_outbox_idempotency_migration_renders_mysql_ddl`（L238-L262）验证 MySQL ALTER TABLE DDL。
 - 同步更新数据库迁移分卷和 `MEM-006` 状态；本提交只冻结可靠生产契约，不宣称生产者或消费者已完成。
 

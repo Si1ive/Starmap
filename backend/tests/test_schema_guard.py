@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from app.modules.operations.schema_guard import (
+    AGENT_REQUIRED_TABLES,
     DatabaseSchemaError,
     get_expected_revisions,
     verify_database_schema,
@@ -20,13 +21,19 @@ async def test_schema_guard_accepts_database_at_all_alembic_heads():
         "root_run_id",
     ]
     tables_result = Mock()
-    tables_result.scalars.return_value.all.return_value = ["agent_model_configs"]
+    tables_result.scalars.return_value.all.return_value = list(AGENT_REQUIRED_TABLES)
+    memory_outbox_index_result = Mock()
+    memory_outbox_index_result.all.return_value = [
+        ("run_id", 0),
+        ("event_type", 0),
+    ]
     nullable_result = Mock()
     nullable_result.all.return_value = [("max_tokens", "YES")]
     session.execute.side_effect = [
         revision_result,
         columns_result,
         tables_result,
+        memory_outbox_index_result,
         nullable_result,
     ]
 
@@ -102,7 +109,7 @@ async def test_schema_guard_rejects_missing_agent_model_configs_table():
 
 
 @pytest.mark.asyncio
-async def test_schema_guard_rejects_non_nullable_agent_model_token_limit():
+async def test_schema_guard_rejects_missing_memory_outbox_table():
     session = AsyncMock()
     revision_result = Mock()
     revision_result.scalars.return_value.all.return_value = ["current_revision"]
@@ -113,12 +120,67 @@ async def test_schema_guard_rejects_non_nullable_agent_model_token_limit():
     ]
     tables_result = Mock()
     tables_result.scalars.return_value.all.return_value = ["agent_model_configs"]
+    session.execute.side_effect = [revision_result, columns_result, tables_result]
+
+    with pytest.raises(DatabaseSchemaError, match="agent_memory_update_outbox"):
+        await verify_database_schema(
+            session,
+            expected_revisions={"current_revision"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_schema_guard_rejects_missing_memory_outbox_unique_constraint():
+    session = AsyncMock()
+    revision_result = Mock()
+    revision_result.scalars.return_value.all.return_value = ["current_revision"]
+    columns_result = Mock()
+    columns_result.scalars.return_value.all.return_value = [
+        "parent_run_id",
+        "root_run_id",
+    ]
+    tables_result = Mock()
+    tables_result.scalars.return_value.all.return_value = list(AGENT_REQUIRED_TABLES)
+    memory_outbox_index_result = Mock()
+    memory_outbox_index_result.all.return_value = []
+    session.execute.side_effect = [
+        revision_result,
+        columns_result,
+        tables_result,
+        memory_outbox_index_result,
+    ]
+
+    with pytest.raises(DatabaseSchemaError, match="uk_agent_memory_outbox_run_event"):
+        await verify_database_schema(
+            session,
+            expected_revisions={"current_revision"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_schema_guard_rejects_non_nullable_agent_model_token_limit():
+    session = AsyncMock()
+    revision_result = Mock()
+    revision_result.scalars.return_value.all.return_value = ["current_revision"]
+    columns_result = Mock()
+    columns_result.scalars.return_value.all.return_value = [
+        "parent_run_id",
+        "root_run_id",
+    ]
+    tables_result = Mock()
+    tables_result.scalars.return_value.all.return_value = list(AGENT_REQUIRED_TABLES)
+    memory_outbox_index_result = Mock()
+    memory_outbox_index_result.all.return_value = [
+        ("run_id", 0),
+        ("event_type", 0),
+    ]
     nullable_result = Mock()
     nullable_result.all.return_value = [("max_tokens", "NO")]
     session.execute.side_effect = [
         revision_result,
         columns_result,
         tables_result,
+        memory_outbox_index_result,
         nullable_result,
     ]
 
@@ -130,4 +192,4 @@ async def test_schema_guard_rejects_non_nullable_agent_model_token_limit():
 
 
 def test_schema_guard_reads_the_project_migration_heads():
-    assert get_expected_revisions() == frozenset({"20260726_agent_memory_foundation"})
+    assert get_expected_revisions() == frozenset({"20260726_memory_outbox_unique"})

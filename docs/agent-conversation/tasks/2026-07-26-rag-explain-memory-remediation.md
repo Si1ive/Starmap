@@ -150,7 +150,8 @@ load_scope completed
 - `agent_memory_items`：偏好、目标和主题情景摘要，不承载专业学习掌握度。
 - 已在 `backend/app/modules/agent/models.py` 新增上述八张表的 ORM 模型，并通过 `backend/alembic/versions/20260726_agent_memory_foundation.py` 创建对应前向迁移。
 - 已补 `backend/tests/test_migrations.py::test_agent_memory_foundation_migration_renders_mysql_ddl`，验证迁移会创建全部记忆基础表、关键唯一约束和索引；同时更新 Alembic head 断言。
-- 当前仍未接入这些表的实际 selector / projector，后续消费逻辑继续按 `MEM-003` 到 `MEM-006` 推进。
+- 2026-07-27 修复运行库漏迁移：实际 `starmap` 从 `20260725_agent_activity` 前向升级到 `20260726_memory_outbox_unique`，真表、复合唯一索引和 `MemoryOutboxStore.scan_due` 均验证通过；`verify_database_schema`（L43-L191）新增八张记忆表与 Outbox 唯一索引门禁，防止错误 stamp/旧备份在 Worker 启动后才循环报错。完整证据见 `incidents/2026-07-27-memory-outbox-table-missing.md`。
+- 这些表现已接入 Turn snapshot、PracticeBundle、可信事实、Memory Outbox 和首批 projector；Conversation/Evaluation/Planning Bundle、摘要及更多投影继续按 `MEM-004`、`MEM-006` 到 `MEM-008` 推进。
 
 ### MEM-003 新输入的增量处理
 
