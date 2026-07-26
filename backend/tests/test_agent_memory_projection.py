@@ -395,20 +395,19 @@ async def test_grade_renderer_carries_explicit_structured_evidence(db_session):
 
 
 @pytest.mark.asyncio
-async def test_grade_run_with_canned_feedback_does_not_touch_mastery(db_session):
-    """当前 P1 grade 工作流没有真实判定，整个 run 完成后不得产生掌握度。"""
+async def test_grade_run_without_snapshot_fails_without_touching_mastery(db_session):
+    """缺少 EvaluationBundle 时安全失败，不生成固定反馈或掌握度。"""
     run = await _create_run(db_session, run_id="run_grade_worker")
     run.root_run_id = run.id
 
     assert await AgentWorker().process_run(db_session, run) is True
-    assert run.status == "completed"
+    assert run.status == "failed"
+    assert "缺少本轮记忆快照" in run.error_message
 
     artifact = await db_session.scalar(
         select(AgentArtifact).where(AgentArtifact.run_id == run.id)
     )
-    assert artifact is not None
-    assert artifact.artifact_type == "feedback"
-    assert "grading" not in artifact.content_json["content"]
+    assert artifact is None
 
     events = list((await db_session.execute(select(AgentMemoryEvent))).scalars())
     masteries = list((await db_session.execute(select(UserLearningMastery))).scalars())

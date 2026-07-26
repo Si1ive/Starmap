@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -12,6 +13,8 @@ from app.models.mysql_models import (
     CanonicalChapter,
     KnowledgePoint,
     KnowledgePointChapterLink,
+    Question,
+    QuestionKnowledgeLink,
 )
 
 from .memory_contracts import MemoryFactType, MemoryNeed
@@ -72,6 +75,66 @@ class PlanningBundle(BaseModel):
     targets: list[PlanningTarget] = Field(default_factory=list)
     learning_goal_item_ids: list[str] = Field(default_factory=list)
     mastery_signals: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class EvaluationQuestion(BaseModel):
+    id: str
+    question_type: Literal[
+        "choice", "fill", "judge", "short_answer", "design", "analysis"
+    ]
+    content: str
+    options: list[dict[str, Any]] = Field(default_factory=list)
+    standard_answer: str
+    answer_source: Literal["extracted", "manual", "llm"]
+    explanation: str | None = None
+    knowledge_point_ids: list[str] = Field(default_factory=list)
+    subject_id: str | None = None
+    source_artifact_id: str | None = None
+
+
+class EvaluationBundle(BaseModel):
+    snapshot_id: str | None = None
+    standalone_request: str | None = None
+    raw_input: str | None = None
+    user_answer: str | None = None
+    question: EvaluationQuestion | None = None
+    unresolved_reason: Literal[
+        "run_not_found",
+        "snapshot_not_found",
+        "question_reference_missing",
+        "question_reference_ambiguous",
+        "question_not_eligible",
+        "user_answer_missing",
+    ] | None = None
+
+
+_ANSWER_PREFIX_PATTERN = re.compile(
+    r"(?:(?:我的\s*)?(?:答案|作答)\s*(?:是|为|：|:)\s*|我\s*选(?:择)?\s*)(.+)",
+    re.IGNORECASE,
+)
+_ANSWER_SUFFIX_PATTERN = re.compile(
+    r"\s*[，,。；;！？!?]?\s*(?:请|帮我|麻烦|对吗|是否正确|正确吗|批改|评分).*$"
+)
+_CHOICE_ANSWER_PATTERN = re.compile(r"(?:选(?:择)?\s*)?([A-H])\b", re.IGNORECASE)
+
+
+def _extract_user_answer(raw_input: str, question_type: str) -> str | None:
+    """从显式“答案/作答”表达中提取最小答案，不猜测普通请求正文。"""
+    normalized_input = raw_input.strip()
+    match = _ANSWER_PREFIX_PATTERN.search(normalized_input)
+    answer_text = match.group(1).strip() if match else ""
+    if question_type == "choice":
+        choice_match = _CHOICE_ANSWER_PATTERN.search(answer_text)
+        return choice_match.group(1).upper() if choice_match else None
+    if question_type == "judge":
+        for token in ("不正确", "不对", "错误", "正确", "对", "错", "√", "×", "true", "false"):
+            if token.casefold() in answer_text.casefold():
+                return token
+        return None
+    if not answer_text:
+        return None
+    answer_text = _ANSWER_SUFFIX_PATTERN.sub("", answer_text).strip(" \t\r\n\"'“”‘’")
+    return answer_text or None
 
 
 def _bundle_topic_from_understanding(understanding: dict[str, Any]) -> TopicBundle | None:
@@ -271,6 +334,140 @@ async def load_planning_bundle(
         targets=targets,
         learning_goal_item_ids=[item.id for item in goal_items],
         mastery_signals=mastery_signals,
+    )
+
+
+async def load_evaluation_bundle(
+    db: AsyncSession,
+    *,
+    run_id: str,
+    user_id: str,
+) -> EvaluationBundle:
+    """按快照中的唯一题目引用装载可信题面、标准答案与本轮作答。"""
+    run = await db.scalar(
+        select(AgentRun).where(
+            AgentRun.id == run_id,
+            AgentRun.user_id == user_id,
+        )
+    )
+    if run is None:
+        return EvaluationBundle(unresolved_reason="run_not_found")
+
+    snapshot_id = (run.metadata_json or {}).get("memory_snapshot_id")
+    if not snapshot_id:
+        return EvaluationBundle(
+            standalone_request=run.input_message,
+            unresolved_reason="snapshot_not_found",
+        )
+    snapshot = await db.scalar(
+        select(AgentMemorySnapshot).where(
+            AgentMemorySnapshot.id == snapshot_id,
+            AgentMemorySnapshot.user_id == user_id,
+            AgentMemorySnapshot.thread_id == run.thread_id,
+        )
+    )
+    if snapshot is None:
+        return EvaluationBundle(
+            standalone_request=run.input_message,
+            unresolved_reason="snapshot_not_found",
+        )
+
+    understanding = snapshot.understanding_json or {}
+    raw_input = str(understanding.get("raw_input") or "").strip()
+    question_references: dict[str, dict[str, Any]] = {}
+    for reference in understanding.get("reference_sources") or []:
+        if not isinstance(reference, dict) or reference.get("type") != "question":
+            continue
+        question_id = str(reference.get("id") or "").strip()
+        if question_id:
+            question_references.setdefault(question_id, reference)
+    if not question_references:
+        return EvaluationBundle(
+            snapshot_id=snapshot.id,
+            standalone_request=snapshot.standalone_request,
+            raw_input=raw_input or None,
+            unresolved_reason="question_reference_missing",
+        )
+    if len(question_references) != 1:
+        return EvaluationBundle(
+            snapshot_id=snapshot.id,
+            standalone_request=snapshot.standalone_request,
+            raw_input=raw_input or None,
+            unresolved_reason="question_reference_ambiguous",
+        )
+
+    question_id, reference = next(iter(question_references.items()))
+    question = await db.scalar(
+        select(Question).where(
+            Question.id == question_id,
+            Question.status == "active",
+            Question.review_status != "rejected",
+            Question.answer_source.in_(("extracted", "manual", "llm")),
+        )
+    )
+    if question is None or not str(question.answer or "").strip():
+        return EvaluationBundle(
+            snapshot_id=snapshot.id,
+            standalone_request=snapshot.standalone_request,
+            raw_input=raw_input or None,
+            unresolved_reason="question_not_eligible",
+        )
+
+    linked_knowledge_point_ids = list(
+        (
+            await db.execute(
+                select(QuestionKnowledgeLink.knowledge_point_id)
+                .where(QuestionKnowledgeLink.question_id == question.id)
+                .order_by(
+                    QuestionKnowledgeLink.relevance.desc(),
+                    QuestionKnowledgeLink.knowledge_point_id,
+                )
+            )
+        ).scalars()
+    )
+    knowledge_point_ids = list(
+        dict.fromkeys(
+            normalized
+            for value in [
+                *(question.knowledge_point_ids or []),
+                *linked_knowledge_point_ids,
+            ]
+            if (normalized := str(value).strip())
+        )
+    )
+    user_answer = _extract_user_answer(raw_input, question.type)
+    if user_answer is None:
+        return EvaluationBundle(
+            snapshot_id=snapshot.id,
+            standalone_request=snapshot.standalone_request,
+            raw_input=raw_input or None,
+            unresolved_reason="user_answer_missing",
+        )
+
+    source_artifact_id = str(reference.get("artifact_id") or "").strip() or None
+    selected_artifact_ids = set(
+        (snapshot.selection_metadata_json or {}).get("selected_artifact_ids") or []
+    )
+    if source_artifact_id not in selected_artifact_ids:
+        source_artifact_id = None
+
+    return EvaluationBundle(
+        snapshot_id=snapshot.id,
+        standalone_request=snapshot.standalone_request,
+        raw_input=raw_input,
+        user_answer=user_answer,
+        question=EvaluationQuestion(
+            id=question.id,
+            question_type=question.type,
+            content=question.content,
+            options=list(question.options or []),
+            standard_answer=question.answer,
+            answer_source=question.answer_source,
+            explanation=question.explanation,
+            knowledge_point_ids=knowledge_point_ids,
+            subject_id=question.subject_id,
+            source_artifact_id=source_artifact_id,
+        ),
     )
 
 

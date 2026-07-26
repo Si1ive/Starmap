@@ -15,9 +15,15 @@ from app.models.mysql_models import (
     ExamOutline,
     KnowledgePoint,
     KnowledgePointChapterLink,
+    Question,
+    QuestionKnowledgeLink,
     Subject,
 )
-from app.modules.agent.memory_selector import load_planning_bundle, load_practice_bundle
+from app.modules.agent.memory_selector import (
+    load_evaluation_bundle,
+    load_planning_bundle,
+    load_practice_bundle,
+)
 from app.modules.agent.models import (
     AgentMemoryItem,
     AgentMessage,
@@ -45,6 +51,8 @@ SELECTOR_TABLES = [
     Document.__table__,
     KnowledgePoint.__table__,
     KnowledgePointChapterLink.__table__,
+    Question.__table__,
+    QuestionKnowledgeLink.__table__,
     UserLearningMastery.__table__,
 ]
 
@@ -170,6 +178,158 @@ async def test_load_planning_bundle_returns_no_targets_without_real_evidence(db_
 
     assert bundle.targets == []
     assert bundle.learning_goal_item_ids == []
+
+
+@pytest.mark.asyncio
+async def test_load_evaluation_bundle_uses_unique_snapshot_question_and_real_answer(
+    db_session,
+):
+    thread = AgentThread(
+        id="thread_evaluation_bundle",
+        user_id="user_001",
+        title="批改",
+        status="active",
+    )
+    run = AgentRun(
+        id="run_evaluation_bundle",
+        thread_id=thread.id,
+        user_id="user_001",
+        workflow_name="grade",
+        status="queued",
+        input_message="我的答案是 B，请帮我批改",
+        metadata_json={"memory_snapshot_id": "memsnap_evaluation_bundle"},
+    )
+    db_session.add(thread)
+    await db_session.flush()
+    db_session.add(run)
+    await db_session.flush()
+    await _seed_knowledge_point(
+        db_session,
+        kp_id="kp_binary_evaluation",
+        title="二分查找",
+        aliases=["折半查找"],
+    )
+    db_session.add(
+        Question(
+            id="question_evaluation_001",
+            subject_id="subject_ds",
+            type="choice",
+            content="二分查找每轮将搜索区间缩小到多少？",
+            options=[
+                {"key": "A", "text": "四分之一"},
+                {"key": "B", "text": "约一半"},
+            ],
+            answer="B",
+            answer_source="manual",
+            explanation="每轮排除约一半区间。",
+            knowledge_point_ids=["kp_binary_evaluation"],
+            review_status="approved",
+            status="active",
+        )
+    )
+    await db_session.flush()
+    db_session.add(
+        AgentMemorySnapshot(
+            id="memsnap_evaluation_bundle",
+            run_id=run.id,
+            thread_id=thread.id,
+            user_id="user_001",
+            state_version=1,
+            standalone_request="批改二分查找题的答案 B",
+            understanding_json={
+                "raw_input": "我的答案是 B，请帮我批改",
+                "reference_sources": [
+                    {
+                        "type": "question",
+                        "id": "question_evaluation_001",
+                        "artifact_id": "artifact_practice_001",
+                    }
+                ],
+            },
+            selection_metadata_json={
+                "selected_artifact_ids": ["artifact_practice_001"]
+            },
+        )
+    )
+    await db_session.flush()
+
+    bundle = await load_evaluation_bundle(
+        db_session,
+        run_id=run.id,
+        user_id="user_001",
+    )
+
+    assert bundle.unresolved_reason is None
+    assert bundle.user_answer == "B"
+    assert bundle.question is not None
+    assert bundle.question.id == "question_evaluation_001"
+    assert bundle.question.standard_answer == "B"
+    assert bundle.question.answer_source == "manual"
+    assert bundle.question.knowledge_point_ids == ["kp_binary_evaluation"]
+    assert bundle.question.source_artifact_id == "artifact_practice_001"
+
+
+@pytest.mark.asyncio
+async def test_load_evaluation_bundle_rejects_cross_user_snapshot_and_ambiguous_question(
+    db_session,
+):
+    thread = AgentThread(
+        id="thread_evaluation_guard",
+        user_id="user_001",
+        title="批改守卫",
+        status="active",
+    )
+    run = AgentRun(
+        id="run_evaluation_guard",
+        thread_id=thread.id,
+        user_id="user_001",
+        workflow_name="grade",
+        status="queued",
+        input_message="我的答案是 A",
+        metadata_json={"memory_snapshot_id": "memsnap_evaluation_foreign"},
+    )
+    db_session.add(thread)
+    await db_session.flush()
+    db_session.add(run)
+    await db_session.flush()
+    db_session.add(
+        AgentMemorySnapshot(
+            id="memsnap_evaluation_foreign",
+            run_id=run.id,
+            thread_id=thread.id,
+            user_id="user_002",
+            state_version=1,
+            standalone_request="批改答案 A",
+            understanding_json={
+                "raw_input": "我的答案是 A",
+                "reference_sources": [
+                    {"type": "question", "id": "question_001"},
+                    {"type": "question", "id": "question_002"},
+                ],
+            },
+        )
+    )
+    await db_session.flush()
+
+    foreign_bundle = await load_evaluation_bundle(
+        db_session,
+        run_id=run.id,
+        user_id="user_001",
+    )
+    assert foreign_bundle.unresolved_reason == "snapshot_not_found"
+
+    snapshot = await db_session.get(
+        AgentMemorySnapshot,
+        "memsnap_evaluation_foreign",
+    )
+    snapshot.user_id = "user_001"
+    await db_session.flush()
+    ambiguous_bundle = await load_evaluation_bundle(
+        db_session,
+        run_id=run.id,
+        user_id="user_001",
+    )
+    assert ambiguous_bundle.unresolved_reason == "question_reference_ambiguous"
 
 
 _chapter_link_id = 0

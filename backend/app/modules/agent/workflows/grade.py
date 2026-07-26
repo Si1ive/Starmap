@@ -1,31 +1,78 @@
 """
 grade@v1 工作流（批改反馈）
 
-load_attempt_snapshot -> objective_grade_or_skip -> resolve_rubric_gate ->
-generate_subjective_feedback -> feedback_support_gate -> create_feedback_artifact -> completed
+load_attempt_snapshot -> objective_grade -> rubric_gate ->
+generate_feedback -> feedback_gate -> render_artifact -> completed
 """
 
-from typing import Dict, Any, Optional, List
+import re
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from .contracts import WorkflowDefinition, Node, NodeResult, ExecutionContext
 from .registry import workflow_registry
-from ..time_utils import utc_isoformat, utc_now
+from ..memory_selector import load_evaluation_bundle
 
 logger = get_logger(__name__)
+
+_OBJECTIVE_QUESTION_TYPES = {"choice", "fill", "judge"}
+_CHOICE_TOKEN_PATTERN = re.compile(r"(?:选(?:择)?\s*)?([A-H])\b", re.IGNORECASE)
+_JUDGE_TRUE = {"正确", "对", "√", "true", "是"}
+_JUDGE_FALSE = {"错误", "不正确", "不对", "错", "×", "false", "否"}
+
+
+def _normalize_answer(answer: str, question_type: str) -> str:
+    normalized = str(answer or "").strip()
+    if question_type == "choice":
+        match = _CHOICE_TOKEN_PATTERN.search(normalized)
+        return match.group(1).upper() if match else normalized.casefold()
+    if question_type == "judge":
+        folded = normalized.casefold()
+        if folded in {item.casefold() for item in _JUDGE_TRUE}:
+            return "true"
+        if folded in {item.casefold() for item in _JUDGE_FALSE}:
+            return "false"
+        return folded
+    return "".join(normalized.split()).casefold()
 
 
 async def _load_attempt_snapshot_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
     """读取固化题面和作答"""
-    # 从上下文获取作答数据
+    bundle = await load_evaluation_bundle(
+        db,
+        run_id=context.run_id,
+        user_id=context.user_id,
+    )
+    if bundle.question is None or bundle.user_answer is None:
+        reason_messages = {
+            "run_not_found": "评分运行不存在",
+            "snapshot_not_found": "缺少本轮记忆快照，无法安全评分",
+            "question_reference_missing": "缺少明确的题目引用，无法评分",
+            "question_reference_ambiguous": "本轮引用了多道题，请明确要批改的题目",
+            "question_not_eligible": "题目不存在、已失效或缺少可信标准答案",
+            "user_answer_missing": "没有识别到明确作答，请使用“我的答案是……”提交",
+        }
+        return NodeResult.failure(
+            reason_messages.get(bundle.unresolved_reason, "缺少可信评分数据")
+        )
+
+    question = bundle.question
     attempt = {
         "user_id": context.user_id,
-        "question_id": context.get("question_id", "unknown"),
-        "user_answer": context.get("user_answer", ""),
-        "submitted_at": utc_isoformat(utc_now()),
+        "question_id": question.id,
+        "question_type": question.question_type,
+        "question_content": question.content,
+        "options": question.options,
+        "standard_answer": question.standard_answer,
+        "answer_source": question.answer_source,
+        "explanation": question.explanation,
+        "knowledge_point_ids": question.knowledge_point_ids,
+        "subject_id": question.subject_id,
+        "source_artifact_id": question.source_artifact_id,
+        "user_answer": bundle.user_answer,
     }
+    context.set("evaluation_bundle", bundle.model_dump(mode="json"))
     context.set("attempt", attempt)
     logger.info("作答加载", run_id=context.run_id, question_id=attempt["question_id"])
     return NodeResult.success({"snapshot_loaded": True}, next_node="objective_grade")
@@ -34,20 +81,51 @@ async def _load_attempt_snapshot_node(context: ExecutionContext, db: AsyncSessio
 async def _objective_grade_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
     """客观题确定性判定"""
     attempt = context.get("attempt", {})
-    user_answer = attempt.get("user_answer", "")
-    
-    # P1 简化：客观题判定
-    # 实际项目中应调用评分服务
-    # 这里简单模拟：如果答案不为空，标记为需要人工复核
+    question_type = attempt.get("question_type")
+    if question_type not in _OBJECTIVE_QUESTION_TYPES:
+        return NodeResult.failure("当前仅支持选择题、填空题和判断题的确定性批改")
+
+    normalized_user_answer = _normalize_answer(
+        attempt.get("user_answer", ""),
+        question_type,
+    )
+    normalized_standard_answer = _normalize_answer(
+        attempt.get("standard_answer", ""),
+        question_type,
+    )
+    if not normalized_user_answer or not normalized_standard_answer:
+        return NodeResult.failure("作答或标准答案无法确定性归一化")
+
+    is_correct = normalized_user_answer == normalized_standard_answer
+    verdict = "correct" if is_correct else "incorrect"
     objective_result = {
-        "question_id": attempt.get("question_id", "unknown"),
-        "is_objective": False,  # P1 简化：全部走主观反馈
-        "user_answer": user_answer,
-        "submitted_at": attempt.get("submitted_at", ""),
+        "question_id": attempt["question_id"],
+        "question_type": question_type,
+        "is_objective": True,
+        "user_answer": attempt["user_answer"],
+        "standard_answer": attempt["standard_answer"],
+        "answer_source": attempt["answer_source"],
+        "verdict": verdict,
+        "score": 1.0 if is_correct else 0.0,
     }
-    
+    grading_evidence = {
+        "verdict": verdict,
+        "question_id": attempt["question_id"],
+        "knowledge_point_ids": attempt.get("knowledge_point_ids") or [],
+        "subject_id": attempt.get("subject_id"),
+        "evidence_id": context.run_id,
+        "score": objective_result["score"],
+        "error_types": [] if is_correct else ["answer_mismatch"],
+        "answer_source": attempt["answer_source"],
+    }
     context.set("objective_result", objective_result)
-    logger.info("客观题判定", run_id=context.run_id, is_objective=False)
+    context.set("grading_evidence", grading_evidence)
+    logger.info(
+        "客观题判定",
+        run_id=context.run_id,
+        question_id=attempt["question_id"],
+        verdict=verdict,
+    )
     return NodeResult.success({"graded": True}, next_node="rubric_gate")
 
 
@@ -55,38 +133,44 @@ async def _rubric_gate_node(context: ExecutionContext, db: AsyncSession) -> Node
     """rubric 校验"""
     objective_result = context.get("objective_result", {})
     
-    # P1 简化：rubric 校验
     rubric = {
         "completeness": len(objective_result.get("user_answer", "")) > 0,
-        "relevance": True,
-        "format": True,
+        "deterministic": objective_result.get("is_objective") is True,
+        "trusted_answer": objective_result.get("answer_source")
+        in {"extracted", "manual", "llm"},
     }
-    
+    if not all(rubric.values()):
+        return NodeResult.failure("评分证据门禁未通过")
+
     context.set("rubric", rubric)
     logger.info("rubric 校验", run_id=context.run_id, **rubric)
     return NodeResult.success({"gate_passed": True}, next_node="generate_feedback")
 
 
 async def _generate_feedback_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
-    """生成主观反馈"""
+    """根据确定性判定生成有证据的反馈"""
     attempt = context.get("attempt", {})
-    rubric = context.get("rubric", {})
-    
-    # P1 简化：生成反馈
-    feedback = {
-        "overall": "作答已收到，正在分析...",
-        "strengths": [
-            "答题完整度良好" if rubric.get("completeness") else "需要补充更多内容",
-        ],
-        "weaknesses": [
-            "部分细节可以进一步完善",
-        ],
-        "suggestions": [
-            "建议回顾相关知识点",
-            "多做同类题型巩固",
-        ],
-    }
-    
+    result = context.get("objective_result", {})
+    is_correct = result.get("verdict") == "correct"
+    feedback = (
+        {
+            "overall": "回答正确",
+            "strengths": ["作答与可信标准答案一致"],
+            "weaknesses": [],
+            "suggestions": ["可以继续练习同类题目巩固掌握度"],
+        }
+        if is_correct
+        else {
+            "overall": "回答错误",
+            "strengths": ["已提交可确定性判定的明确答案"],
+            "weaknesses": [
+                f"你的答案是 {attempt.get('user_answer')}，标准答案是 {attempt.get('standard_answer')}"
+            ],
+            "suggestions": [
+                attempt.get("explanation") or "请结合标准答案复盘错误原因"
+            ],
+        }
+    )
     context.set("feedback", feedback)
     logger.info("反馈生成", run_id=context.run_id, feedback_summary=feedback["overall"])
     return NodeResult.success({"feedback_generated": True}, next_node="feedback_gate")
@@ -96,7 +180,6 @@ async def _feedback_gate_node(context: ExecutionContext, db: AsyncSession) -> No
     """反馈证据校验"""
     feedback = context.get("feedback", {})
     
-    # P1 简化：检查反馈是否有内容
     if not feedback.get("overall"):
         logger.warning("反馈为空", run_id=context.run_id)
         return NodeResult.failure("反馈生成失败")
@@ -108,7 +191,6 @@ async def _feedback_gate_node(context: ExecutionContext, db: AsyncSession) -> No
 async def _render_artifact_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
     """渲染反馈产物"""
     feedback = context.get("feedback", {})
-    attempt = context.get("attempt", {})
 
     content = {
         "overall": feedback.get("overall", ""),
@@ -116,8 +198,7 @@ async def _render_artifact_node(context: ExecutionContext, db: AsyncSession) -> 
         "weaknesses": feedback.get("weaknesses", []),
         "suggestions": feedback.get("suggestions", []),
     }
-    # 只有确定性判定产生真实 verdict 时才携带结构化评分证据；
-    # 主观固定文案反馈不进入掌握度回写。
+    # 只有确定性判定产生真实 verdict 时才携带结构化评分证据。
     grading_evidence = context.get("grading_evidence") or {}
     if grading_evidence.get("verdict"):
         content["grading"] = grading_evidence

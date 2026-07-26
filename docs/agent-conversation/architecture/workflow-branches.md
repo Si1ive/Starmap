@@ -47,10 +47,10 @@
 
 | 执行阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 作答快照 | `backend/app/modules/agent/workflows/grade.py` | `_load_attempt_snapshot_node` | L20-L31 | `question_id`、`user_answer` | 冻结题目 ID、作答正文和提交时间；当前 worker 只注入 `input_message`，因此 P1 尚无真实题面/答案 Bundle | `attempt` | `_objective_grade_node` |
-| 客观判定与 rubric | `backend/app/modules/agent/workflows/grade.py` | `_objective_grade_node`、`_rubric_gate_node` | L34-L67 | 尝试快照 | 当前 P1 不读取标准答案，所有作答都标为非客观题，再组装完整度 rubric；这里不会产生 `grading_evidence` | `objective_result`、`rubric` | `_generate_feedback_node` |
-| 主观反馈生成 | `backend/app/modules/agent/workflows/grade.py` | `_generate_feedback_node`、`_feedback_gate_node` | L70-L105 | attempt 和 rubric | 生成固定 strengths / weaknesses / suggestions，并校验整体反馈非空 | `feedback`；反馈为空时返回失败并由 worker 投影 `run.failed` | `_render_artifact_node` |
-| 反馈 Artifact | `backend/app/modules/agent/workflows/grade.py` | `_render_artifact_node`、`_completed_node` | L108-L142 | 反馈内容、可选的内部 `grading_evidence` | 组装 feedback artifact；只有已有显式 verdict 时才把完整证据放入 `content.grading`，固定反馈不伪造评分 | `agent_artifacts` 与 completed run | `AgentWorker.process_run` |
+| 评分记忆选择 | `backend/app/modules/agent/memory_selector.py` | `EvaluationQuestion`、`EvaluationBundle`、`_extract_user_answer`、`load_evaluation_bundle` | L80-L137、L340-L471 | Grade run/user、同线程 snapshot、唯一 question 引用、题库与原始输入 | 校验 run/snapshot 作用域，重读 active 且未拒绝的题面、标准答案来源和知识点；只从显式答案句式提取作答。缺快照、跨作用域、多题、失效题或缺可信答案返回稳定 reason | `EvaluationBundle` 或 unresolved reason | `_load_attempt_snapshot_node` |
+| 作答快照 | `backend/app/modules/agent/workflows/grade.py` | `_load_attempt_snapshot_node` | L40-L78 | `EvaluationBundle` | 把题型、题面、标准答案、答案来源、知识点、来源 Artifact 与用户作答冻结进 ExecutionContext；bundle 不完整时返回失败 | `attempt`；失败由 Worker 写 `run.failed`，无 Artifact/掌握度 | `_objective_grade_node` |
+| 客观判定与证据门禁 | `backend/app/modules/agent/workflows/grade.py` | `_normalize_answer`、`_objective_grade_node`、`_rubric_gate_node` | L25-L37、L81-L147 | attempt | 仅支持 choice/fill/judge；按题型归一化后确定性比较，生成 correct/incorrect、分数和 answer_mismatch，再复核作答完整、判定确定、答案来源可信。主观题直接失败 | `objective_result`、`grading_evidence`、`rubric` | `_generate_feedback_node` |
+| 证据反馈与 Artifact | `backend/app/modules/agent/workflows/grade.py` | `_generate_feedback_node`、`_feedback_gate_node`、`_render_artifact_node`、`_completed_node` | L150-L223 | 确定性结果、标准答案和可选解析 | 正确时说明一致；错误时展示用户答案、标准答案与解析；反馈门通过后把完整 `grading_evidence` 放入 Feedback Artifact | `agent_artifacts` 与 completed run；错误证据携带 `answer_mismatch` | `AgentWorker.process_run` |
 | 完成事实交接 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | L183-L224 | completed 结果与 Feedback Artifact | 先持久化 Artifact，再在同一完成事务调用事实投影，最后写 `run.completed` | Artifact、内部记忆事实或无副作用跳过 | `project_completed_run_facts` |
 | 评分事实与掌握度 | `backend/app/modules/agent/memory_projection.py`、`backend/app/modules/agent/memory_item_projection.py` | `project_completed_run_facts`、`_record_grade_result_confirmed`、`project_trusted_memory_event` | L125-L140、L308-L413；L154-L166 | Feedback Artifact 的 `content.grading` | 校验证据、去重知识点，写幂等事实、同步更新掌握度并确保 pending Outbox；异步消费不复制评分正文；证据不完整安全跳过 | 事实、掌握度与 completed Outbox | PlanningBundle / 后续练习或摘要 |
 
@@ -58,7 +58,7 @@
 
 | 执行阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 规划记忆选择 | `backend/app/modules/agent/memory_selector.py` | `PlanningTarget`、`PlanningBundle`、`load_planning_bundle` | L56-L75、L122-L274 | Plan run/user、snapshot、最新批准目标、真实掌握度 | 校验用户作用域，按当前主题→批准 goals→真实薄弱点组装并去重；保留目标来源、记忆项 ID、掌握度与 evidence ID | 最小 PlanningBundle；无证据时 targets 为空 | `_aggregate_learning_evidence_node` |
+| 规划记忆选择 | `backend/app/modules/agent/memory_selector.py` | `PlanningTarget`、`PlanningBundle`、`load_planning_bundle` | L59-L77、L185-L337 | Plan run/user、snapshot、最新批准目标、真实掌握度 | 校验用户作用域，按当前主题→批准 goals→真实薄弱点组装并去重；保留目标来源、记忆项 ID、掌握度与 evidence ID | 最小 PlanningBundle；无证据时 targets 为空 | `_aggregate_learning_evidence_node` |
 | 学习证据聚合 | `backend/app/modules/agent/workflows/plan.py` | `_aggregate_learning_evidence_node` | L26-L49 | PlanningBundle | 把真实 targets、周期、目标项 ID 和掌握度审计写入 ExecutionContext；不再注入默认学科或 60 分钟 | `planning_bundle`、`learning_evidence` | `_planning_precondition_gate_node` |
 | 计划草案生成 | `backend/app/modules/agent/workflows/plan.py` | `_planning_precondition_gate_node`、`_propose_plan_delta_node`、`_plan_quality_gate_node` | L52-L105 | 真实规划 targets | targets 为空直接失败且不创建审批；非空时最多取三个目标，用批准 daily_minutes 或规则模板 30 分钟生成计划并做质量门禁 | 带 source/source_id 的 `plan_draft` | `_create_approval_node` |
 | 审批请求 | `backend/app/modules/agent/workflows/plan.py` | `_create_approval_node` | L108-L161 | 计划草案 | 调用 `AgentService.create_approval` 创建真实审批记录，保留 diff 内容 | `approval_data` | `_wait_for_approval_node` |

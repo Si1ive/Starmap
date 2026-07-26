@@ -1,10 +1,18 @@
 # 2026-07 记忆基础、可信事实与 Outbox 进展
 
+## 2026-07-27：让 Grade 以 EvaluationBundle 产生真实客观题证据
+
+- 目标：推进 `MEM-004` / `MEM-006`，删除 Grade 的固定反馈和伪 attempt，让真实客观题、标准答案与显式作答形成可审计掌握度证据。
+- 实现：`backend/app/modules/agent/memory_selector.py::load_evaluation_bundle`（L340-L471）按 run/user/thread 校验 snapshot，要求唯一 question 引用并重读 active、未拒绝、答案来源可信的题面；`backend/app/modules/agent/workflows/grade.py::_load_attempt_snapshot_node`（L40-L78）装载 bundle，`_objective_grade_node`（L81-L129）只对 choice/fill/judge 确定性比较并生成 verdict/score/error type，`_render_artifact_node`（L191-L218）交给既有事实投影。主观题或不可信/歧义输入在 Artifact 前失败。
+- 测试：`backend/tests/test_agent_memory_selector.py`（L184-L332）覆盖真实题面装载、Artifact 来源、跨用户和多题歧义；`backend/tests/test_agent_grade_worker.py`（L153-L243）覆盖正确/错误 verdict 到 `grade_result_confirmed` / `user_learning_mastery`、主观题零副作用拒绝与判断题否定表达；`test_grade_run_without_snapshot_fails_without_touching_mastery`（L398-L415）覆盖缺快照守卫。
+- 验证：全部 Agent 回归通过（182 passed，75 warnings）；Python 编译、`git diff --check` 与旧状态/旧锚点扫描通过。
+- 提交信息：`让 Grade 消费真实 EvaluationBundle`
+
 ## 2026-07-27：让 Plan 消费真实 PlanningBundle
 
 - 目标：推进 `MEM-004`，移除 Plan 固定注入的学科、强弱项和 60 分钟目标，只允许真实记忆产生审批草案。
-- 实现：`backend/app/modules/agent/memory_selector.py::load_planning_bundle`（L122-L274）按用户校验 Run/snapshot，选择当前主题、最新 active 已批准 goals 和带评分证据的低掌握度知识点，按标题去重并保留来源/证据 ID；`backend/app/modules/agent/workflows/plan.py::_aggregate_learning_evidence_node`（L26-L49）接入 bundle，targets 为空时由前置门失败且不创建审批。批准 Plan 的异步投影现保留结构化 goals，供下一轮继续选择。
-- 测试：`backend/tests/test_agent_memory_selector.py::test_load_planning_bundle_uses_approved_goals_and_real_weak_mastery`（L53-L142）覆盖用户隔离、批准目标、周期和真实薄弱点；`backend/tests/test_agent_plan_worker.py::test_plan_without_real_memory_fails_before_creating_approval`（L142-L156）与 `test_approved_plan_resumes_and_creates_artifact`（L219-L278）覆盖无证据零审批和真实目标 Artifact。
+- 实现：`backend/app/modules/agent/memory_selector.py::load_planning_bundle`（L185-L337）按用户校验 Run/snapshot，选择当前主题、最新 active 已批准 goals 和带评分证据的低掌握度知识点，按标题去重并保留来源/证据 ID；`backend/app/modules/agent/workflows/plan.py::_aggregate_learning_evidence_node`（L26-L49）接入 bundle，targets 为空时由前置门失败且不创建审批。批准 Plan 的异步投影现保留结构化 goals，供下一轮继续选择。
+- 测试：`backend/tests/test_agent_memory_selector.py::test_load_planning_bundle_uses_approved_goals_and_real_weak_mastery`（L61-L150）覆盖用户隔离、批准目标、周期和真实薄弱点；`backend/tests/test_agent_plan_worker.py::test_plan_without_real_memory_fails_before_creating_approval`（L142-L156）与 `test_approved_plan_resumes_and_creates_artifact`（L219-L278）覆盖无证据零审批和真实目标 Artifact。
 - 验证：Memory selector、Plan Worker、Memory Outbox、Validate 与 Conversation 组合回归通过（36 passed，53 warnings）；Python 编译与 `git diff --check` 通过。
 - 提交信息：`让 Plan 只消费真实 PlanningBundle`
 
@@ -194,7 +202,7 @@ fallback 也属于成功讲解，且讲解行为不会被误当成学习掌握�
 ### 实现
 
 - 在 `backend/app/modules/agent/memory_projection.py::_record_grade_result_confirmed`（L308-L413）校验 Feedback Artifact 的结构化评分证据，按用户 + evidence ID 写 `grade_result_confirmed`，并按知识点增量更新 `user_learning_mastery`；重复知识点先去重，重放同一证据无副作用。
-- 在 `backend/app/modules/agent/workflows/grade.py::_render_artifact_node`（L108-L137）建立可选 `grading_evidence -> content.grading` 交接；当前 `_objective_grade_node`（L34-L51）仍不生产 verdict，因此固定反馈不会触发掌握度写入。
+- 在 `backend/app/modules/agent/workflows/grade.py::_render_artifact_node`（当前 L191-L218）建立可选 `grading_evidence -> content.grading` 交接；该提交当时的 `_objective_grade_node` 尚不生产 verdict，因此固定反馈不会触发掌握度写入。2026-07-27 已由本卷顶部的 EvaluationBundle 提交补齐真实客观题证据生产者。
 - 新增 `backend/tests/test_agent_memory_projection.py::test_grade_projection_updates_mastery_and_replays_idempotently`（L212-L281）等五个回归场景，覆盖增量公式、用户隔离、知识点去重、证据契约、缺证据跳过和 P1 worker 端到端无污染语义。
 - 同步更新 `implementation/routing-context-memory.md`、`architecture/workflow-branches.md` 和任务单，明确本次只完成安全投影边界；真实题面、标准答案与评分证据生产者仍是后续 `EvaluationBundle` / Grade 接入范围。
 
