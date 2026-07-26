@@ -24,6 +24,15 @@ _EXPLAIN_HINTS = ("讲一下", "讲解", "解释", "说明")
 _EASY_HINTS = ("简单点", "简单一点", "容易点", "基础点", "基础一些")
 _MEDIUM_HINTS = ("难度适中", "适中", "中等")
 _HARD_HINTS = ("难一点", "难一些", "难点", "提高点", "提升点")
+_QUESTION_REFERENT_HINTS = (
+    "上一道",
+    "上道题",
+    "刚才那道",
+    "上次那题",
+    "这道题",
+    "这个题",
+    "这题",
+)
 _CHAPTER_ORDINAL_PATTERN = re.compile(
     r"第\s*([0-9]{1,2}|[一二三四五六七八九十两]{1,3})\s*章"
 )
@@ -138,6 +147,38 @@ def _derive_constraints(raw_input: str) -> list[str]:
     return constraints
 
 
+def _resolve_question_artifact_reference(
+    agent_context: AgentRunContext,
+    raw_input: str,
+) -> dict[str, Any] | None:
+    """从最新练习产物确定性解析题目指代；歧义时不猜测也不回退。"""
+    if not any(hint in raw_input for hint in _QUESTION_REFERENT_HINTS):
+        return None
+    if any(
+        ref.get("type") == "question" and ref.get("id")
+        for ref in agent_context.context_refs
+    ):
+        return None
+
+    for artifact in reversed(agent_context.recent_artifacts):
+        if artifact.artifact_type != "practice":
+            continue
+        question_references = [
+            reference
+            for reference in artifact.reference_entities
+            if reference.get("type") == "question"
+            and isinstance(reference.get("id"), str)
+            and reference["id"].strip()
+        ]
+        unique_references = {
+            reference["id"].strip(): reference for reference in question_references
+        }
+        if len(unique_references) != 1:
+            return None
+        return next(iter(unique_references.values())).copy()
+    return None
+
+
 def build_turn_understanding(agent_context: AgentRunContext) -> TurnUnderstanding:
     raw_input = agent_context.current_input.strip()
     topic_entities = [
@@ -183,6 +224,9 @@ def build_turn_understanding(agent_context: AgentRunContext) -> TurnUnderstandin
                 "source": "thread_memory",
             }
         )
+    artifact_reference = _resolve_question_artifact_reference(agent_context, raw_input)
+    if artifact_reference is not None:
+        reference_sources.append(artifact_reference)
     return TurnUnderstanding(
         raw_input=raw_input,
         standalone_request=standalone_request,

@@ -9,9 +9,9 @@
 
 | 执行阶段 | 文件 | 符号 | 输入 | 处理 | 输出/副作用 | 下一步 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 上下文数据结构 | `backend/app/modules/agent/context_builder.py` | `AgentRunContext` | 线程、消息、Artifact、选择审计 | 定义当前可传给 Router/child workflow 的消息、Artifact、active topic、独立请求和 snapshot ID | `AgentRunContext` | `ThreadContextBuilder.build` |
-| 历史、Artifact 与热状态选择 | `backend/app/modules/agent/context_builder.py` | `ThreadContextBuilder.build`、`_load_thread_memory_state` | thread ID、root run、token budget、可见 Artifact、线程热状态 | 选择近期消息、当前轮前后的 Artifact、待处理交互，并读取线程 `active_topic` / `memory_state_version` | 受控上下文与热状态 | `_route_node` |
-| 独立请求、约束、快照与显式主题事实 | `backend/app/modules/agent/turn_understanding.py`（L112-L193、L196-L281）；`backend/app/modules/agent/memory_projection.py`（L67-L122） | `_parse_chapter_ordinal`、`_derive_constraints`、`build_turn_understanding`、`ensure_turn_memory_snapshot`、`project_topic_confirmed_fact` | 当前输入、context refs、线程 active topic | 确定性生成 `TurnUnderstanding`，抽取难度与“第 N 章”约束并补全独立请求；创建/复用 snapshot、递增热状态版本；若首个主题来自本轮显式 `context_ref`，在 Router 模型调用前按 Run 幂等写 `topic_confirmed`。仅从 `thread_memory` 继承时不重复冒充用户确认 | 含 `difficulty:*` / `chapter_ordinal:*` 的理解、snapshot、热状态与可选线程主题事实；事实/数据库错误与 route 节点同事务传播 | `_route_node` 的 Router 调用 |
+| 上下文数据结构 | `backend/app/modules/agent/context_builder.py`（L53-L62、L84-L110） | `ArtifactContext`、`AgentRunContext` | 线程、消息、Artifact、选择审计 | 定义当前可传给 Router/child workflow 的消息、Artifact 摘要及结构化实体引用、active topic、独立请求和 snapshot ID | `AgentRunContext` | `ThreadContextBuilder.build` |
+| 历史、Artifact 与热状态选择 | `backend/app/modules/agent/context_builder.py`（L381-L449、L661-L694） | `ThreadContextBuilder._load_artifacts`、`ThreadContextBuilder._extract_artifact_reference_entities` | thread ID、root run、token budget、可见 Artifact 的 `artifact_type` / `content_json` | 按用户、线程、可见性和预算选择近期 Artifact；仅从 practice 产物的 `content.question_ids` 提取去重后的 question 引用，绝不从标题或摘要反推 ID | 按时间升序的 `ArtifactContext`，question 引用携带来源 Artifact ID；查询/结构错误随上下文构建传播 | `build_turn_understanding` |
+| 独立请求、约束、快照与显式主题事实 | `backend/app/modules/agent/turn_understanding.py`（L121-L147、L150-L179、L182-L238、L240-L325）；`backend/app/modules/agent/memory_projection.py`（L67-L122） | `_parse_chapter_ordinal`、`_derive_constraints`、`_resolve_question_artifact_reference`、`build_turn_understanding`、`ensure_turn_memory_snapshot`、`project_topic_confirmed_fact` | 当前输入、context refs、近期 Artifact 结构化引用、线程 active topic | 确定性生成 `TurnUnderstanding`，抽取难度与“第 N 章”约束；“上一道/这道题”等题目指代只接受最新 practice 的唯一 question ID，多题或缺失 ID 保持歧义且不回退旧产物；随后创建/复用 snapshot、递增热状态版本。若首个主题来自本轮显式 `context_ref`，在 Router 模型调用前按 Run 幂等写 `topic_confirmed`，仅从 `thread_memory` 继承时不重复冒充用户确认 | 含约束与可审计 `reference_sources` 的理解、snapshot、热状态与可选线程主题事实；事实/数据库错误与 route 节点同事务传播 | `_route_node` 的 Router 调用 |
 | Conversation 路由 | `backend/app/modules/agent/workflows/conversation.py` | `_route_node` | 当前输入、受控上下文、独立请求、允许 action | 先构建并持久化 `TurnUnderstanding`，再把 `standalone_request` 和历史交给 Router，决定 direct/explain/validate/grade/plan/clarify | `RouterDecision`、run metadata 中的 `memory_snapshot_id` / `turn_understanding` | `_direct_answer_node` / `_dispatch_workflow_node` |
 | Child 元数据交接 | `backend/app/modules/agent/workflows/conversation.py` | `_child_context_metadata` | 父 run 的上下文审计、active topic、独立请求和模型配置 | 复制筛选后的消息/Artifact ID、`active_topic`、`standalone_request`、`memory_snapshot_id` 和模型配置 ID，仍不复制敏感密钥 | child run metadata | `_dispatch_workflow_node` |
 | Child Run 派发 | `backend/app/modules/agent/workflows/conversation.py` | `_dispatch_workflow_node` | Router action、parent/root run、独立请求 | 创建 child run 和 workflow 时间线项；child run 的 `input_message` 改为 `standalone_request`，从而不再只依赖原始短句和消息 ID | queue 中的 child run | worker |
@@ -30,14 +30,14 @@
 ## 当前能力边界
 
 1. 当前系统已经能选取近期消息、Artifact、待处理交互，并在 Router 前读取线程热状态中的 `active_topic`。
-2. `MEM-003` 的第一阶段已打通：conversation run 会生成确定性 `TurnUnderstanding`、创建不可变 snapshot，并把 `standalone_request` 与 `memory_snapshot_id` 传给 child run。
+2. `MEM-003` 已打通确定性理解、snapshot 与首个结构化题目指代：conversation run 会生成 `TurnUnderstanding`，把最新单题 practice Artifact 的可信 question ID 冻结到 `reference_sources`，并将 `standalone_request` 与 `memory_snapshot_id` 传给 child run；多题、缺 ID 和裸词“这个”仍保持歧义。
 3. `MEM-004` / `MEM-005` 的第二阶段已打通到过滤参数和首个澄清闭环：Validate 会从 snapshot 装载 `PracticeBundle`，继承主题、别名、难度约束、知识点 ID 和选中的 Artifact，并据此生成检索 query 与 retrieval filters；若缺少主题，会创建 `practice_topic` 输入项并在用户补充后从断点继续检索。
 4. 真实排除集已闭环：Validate 完成时写 `practice_artifact_created` 事实事件，下一次练习通过 `PracticeBundle.excluded_question_ids` 自动排除近期已出过的题。
 5. 掌握度已形成安全的读写边界：无主题时按“唯一低掌握度知识点”回退练习主题；携带真实结构化评分证据的 Feedback Artifact 能写 `grade_result_confirmed` 并更新 `user_learning_mastery`。当前 P1 Grade 仍只有固定反馈，不生产 verdict，因此真实线上数据源仍需后续评分服务接入。
 6. 本轮显式 `context_ref` 主题已在 Router 调用前写成 `topic_confirmed`；因此 Router/模型失败只会阻止 Agent 输出，不会丢失用户已表达的主题。继承的热状态主题不会重复产生确认事件。
 7. Explain 成功产出 Artifact 时已写 `explanation_artifact_created`，包括零命中/检索异常后的无引用 fallback；事件不复制正文，也不修改掌握度。
 8. Plan 只有在审批记录属于同一 Run、状态为 approved，且成功生成携带 approval ID 的 Artifact 后才写用户级 `plan_confirmed`；拒绝、pending、缺失审批或旁路恢复均不写长期目标。
-9. 当前仍未实现歧义场景下的结构化指代消解模型，也还没有把历史摘要做成可复用的 bundle。
+9. 当前仍未实现裸词“这个”或最新 practice 含多题等真正歧义场景下的结构化指代消解模型，也还没有把历史摘要做成可复用的 bundle。
 
 ## 现状问题与整改入口
 

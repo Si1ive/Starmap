@@ -439,6 +439,64 @@ async def test_context_loads_root_metadata_artifacts_and_pending_items(
 
 
 @pytest.mark.asyncio
+async def test_context_exposes_structured_question_references_from_practice_artifact(
+    db_session,
+):
+    await _add_thread(db_session, thread_id="thread_001", user_id="user_001")
+    _, root_run = await _add_current_turn(db_session, content="再讲一下上一道题")
+    practice_run = AgentRun(
+        id="run_practice",
+        thread_id="thread_001",
+        user_id="user_001",
+        workflow_name="validate",
+        status="completed",
+        parent_run_id=root_run.id,
+        root_run_id=root_run.id,
+        metadata_json={},
+    )
+    db_session.add(practice_run)
+    await db_session.flush()
+    db_session.add(
+        AgentArtifact(
+            id="artifact_practice",
+            run_id=practice_run.id,
+            artifact_type="practice",
+            content_json={
+                "type": "practice",
+                "title": "二分查找练习",
+                "content": {
+                    "question_count": 2,
+                    "question_ids": ["question_001", "question_002"],
+                },
+                "summary": "共 2 道题",
+            },
+        )
+    )
+    await db_session.flush()
+
+    context = await ThreadContextBuilder(db_session).build(
+        user_id="user_001",
+        thread_id="thread_001",
+        turn_id=root_run.id,
+    )
+
+    assert context.recent_artifacts[0].reference_entities == [
+        {
+            "type": "question",
+            "id": "question_001",
+            "source": "artifact",
+            "artifact_id": "artifact_practice",
+        },
+        {
+            "type": "question",
+            "id": "question_002",
+            "source": "artifact",
+            "artifact_id": "artifact_practice",
+        },
+    ]
+
+
+@pytest.mark.asyncio
 async def test_context_history_can_be_passed_to_pydantic_ai_router(db_session):
     now = datetime(2026, 7, 23, 9, 0)
     await _add_thread(db_session, thread_id="thread_001", user_id="user_001")

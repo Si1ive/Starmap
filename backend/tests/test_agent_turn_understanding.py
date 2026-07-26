@@ -1,10 +1,21 @@
-"""TurnUnderstanding 的确定性主题与约束提取测试。"""
+"""TurnUnderstanding 的确定性主题、约束与结构化指代测试。"""
 
-from app.modules.agent.context_builder import AgentRunContext, PermissionScope
+from datetime import datetime
+
+from app.modules.agent.context_builder import (
+    AgentRunContext,
+    ArtifactContext,
+    PermissionScope,
+)
 from app.modules.agent.turn_understanding import build_turn_understanding
 
 
-def _context(*, current_input: str, active_topic: dict | None = None) -> AgentRunContext:
+def _context(
+    *,
+    current_input: str,
+    active_topic: dict | None = None,
+    recent_artifacts: list[ArtifactContext] | None = None,
+) -> AgentRunContext:
     return AgentRunContext(
         thread_id="thread_001",
         user_id="user_001",
@@ -12,6 +23,7 @@ def _context(*, current_input: str, active_topic: dict | None = None) -> AgentRu
         current_message_id="msg_001",
         current_input=current_input,
         active_topic=active_topic,
+        recent_artifacts=recent_artifacts or [],
         permission_scope=PermissionScope(
             user_id="user_001",
             thread_id="thread_001",
@@ -20,6 +32,29 @@ def _context(*, current_input: str, active_topic: dict | None = None) -> AgentRu
         token_budget=4096,
         history_token_budget=2048,
         estimated_tokens=32,
+    )
+
+
+def _practice_artifact(
+    artifact_id: str,
+    *question_ids: str,
+) -> ArtifactContext:
+    return ArtifactContext(
+        id=artifact_id,
+        run_id=f"run_{artifact_id}",
+        artifact_type="practice",
+        summary="练习题摘要里没有可信题目 ID",
+        created_at=datetime(2026, 7, 26, 10, 0),
+        estimated_tokens=10,
+        reference_entities=[
+            {
+                "type": "question",
+                "id": question_id,
+                "source": "artifact",
+                "artifact_id": artifact_id,
+            }
+            for question_id in question_ids
+        ],
     )
 
 
@@ -59,3 +94,72 @@ def test_build_turn_understanding_extracts_explicit_chapter_ordinal():
 
     assert understanding.standalone_request == "给用户出一道关于二分查找的练习题"
     assert understanding.constraints == ["difficulty:hard", "chapter_ordinal:3"]
+
+
+def test_build_turn_understanding_resolves_previous_single_question_from_latest_artifact():
+    understanding = build_turn_understanding(
+        _context(
+            current_input="再讲一下上一道题",
+            recent_artifacts=[
+                _practice_artifact("artifact_practice", "question_001")
+            ],
+        )
+    )
+
+    assert understanding.reference_sources == [
+        {
+            "type": "question",
+            "id": "question_001",
+            "source": "artifact",
+            "artifact_id": "artifact_practice",
+        }
+    ]
+
+
+def test_build_turn_understanding_keeps_multiple_previous_questions_ambiguous():
+    understanding = build_turn_understanding(
+        _context(
+            current_input="上一道题再讲一下",
+            recent_artifacts=[
+                _practice_artifact(
+                    "artifact_practice",
+                    "question_001",
+                    "question_002",
+                )
+            ],
+        )
+    )
+
+    assert understanding.reference_sources == []
+
+
+def test_build_turn_understanding_does_not_fall_back_past_newer_ambiguous_practice():
+    understanding = build_turn_understanding(
+        _context(
+            current_input="这道题再解释一下",
+            recent_artifacts=[
+                _practice_artifact("artifact_old", "question_old"),
+                _practice_artifact(
+                    "artifact_new",
+                    "question_new_001",
+                    "question_new_002",
+                ),
+            ],
+        )
+    )
+
+    assert understanding.reference_sources == []
+
+
+def test_build_turn_understanding_never_guesses_question_id_from_artifact_summary():
+    artifact = _practice_artifact("artifact_practice")
+    artifact.summary = "上一道题是 question_from_summary"
+
+    understanding = build_turn_understanding(
+        _context(
+            current_input="再讲一下上一道题",
+            recent_artifacts=[artifact],
+        )
+    )
+
+    assert understanding.reference_sources == []

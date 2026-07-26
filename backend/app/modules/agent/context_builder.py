@@ -59,6 +59,7 @@ class ArtifactContext(BaseModel):
     summary: str
     created_at: datetime
     estimated_tokens: int
+    reference_entities: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class PendingInteraction(BaseModel):
@@ -435,6 +436,11 @@ class ThreadContextBuilder:
                     summary=summary,
                     created_at=artifact.created_at,
                     estimated_tokens=self.estimate_tokens(summary),
+                    reference_entities=self._extract_artifact_reference_entities(
+                        artifact_id=artifact.id,
+                        artifact_type=artifact.artifact_type,
+                        content=artifact.content_json,
+                    ),
                 )
             )
             if not is_explicit:
@@ -650,3 +656,39 @@ class ThreadContextBuilder:
         if not parts:
             parts.append(json.dumps(content, ensure_ascii=False, sort_keys=True))
         return "\n".join(parts)[:1200]
+
+    @staticmethod
+    def _extract_artifact_reference_entities(
+        *,
+        artifact_id: str,
+        artifact_type: str,
+        content: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        """只从受信任的产物结构提取实体 ID，不解析标题或摘要。"""
+        if artifact_type != "practice" or not isinstance(content, dict):
+            return []
+        artifact_content = content.get("content")
+        if not isinstance(artifact_content, dict):
+            return []
+        question_ids = artifact_content.get("question_ids")
+        if not isinstance(question_ids, list):
+            return []
+
+        references: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for value in question_ids:
+            if not isinstance(value, str):
+                continue
+            question_id = value.strip()
+            if not question_id or question_id in seen_ids:
+                continue
+            seen_ids.add(question_id)
+            references.append(
+                {
+                    "type": "question",
+                    "id": question_id,
+                    "source": "artifact",
+                    "artifact_id": artifact_id,
+                }
+            )
+        return references
