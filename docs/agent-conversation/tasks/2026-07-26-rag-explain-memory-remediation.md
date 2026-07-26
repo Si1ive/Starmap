@@ -56,24 +56,24 @@ load_scope completed
 
 ## 当前代码锚点
 
-| 执行阶段 | 文件 | 符号 | 代码范围 | 当前职责与问题 |
-| --- | --- | --- | --- | --- |
-| 工具活动创建 | `backend/app/modules/agent/tools/retrieve_knowledge.py` | `_logical_activity_id`、`_next_attempt_number`、`retrieve_knowledge` | L77-L227 | 已为同一逻辑检索生成稳定 `activity_id`，并在 `tool.called` 中追加 `attempt_id` / `attempt_no`，同时把 `knowledge_point_ids`、difficulty 和排除题参数公开到安全活动元数据，供后台保留每次 attempt |
-| 工具结果与异常 | `backend/app/modules/agent/tools/retrieve_knowledge.py` | `_normalize_agent_result`、`_sort_agent_results`、`retrieve_knowledge` | L24-L74、L228-L337 | 已统一 Agent DTO，公开零命中和异常结果；Explain 混合检索默认把知识点排在题目前面；失败 attempt 的原始错误保留在后台事件中 |
-| 用户活动归并 | `backend/app/modules/agent/timeline.py` | `AgentTimelineService._activity_views` | L506-L538 | 按 `activity_id` 聚合；不同 ID 必然生成不同活动 |
-| 检索结果契约 | `backend/app/modules/retrieval/search_engine.py` | `RetrievalResult.to_dict` | L20-L95 | 已统一输出 `entity`、`source`、`question_meta`、`knowledge_point_meta` 与学科章节字段，供 Agent 与检索调试共用 |
-| Collection 路由 | `backend/app/modules/retrieval/search_engine.py` | `RetrievalSearchEngine.get_collections` | L171-L181 | `knowledge_point` 和 `question` 分别进入不同 Qdrant Collection；空类型同时查两者 |
-| 命中内容回填 | `backend/app/modules/retrieval/search_engine.py` | `RetrievalSearchEngine.hydrate_results`、`RetrievalSearchEngine._document_source_name`、`RetrievalSearchEngine._load_knowledge_point_details`、`RetrievalSearchEngine._load_question_details`、`RetrievalSearchEngine._question_title` | L279-L447 | 已从 MySQL 同步补全文档来源、实体标题、审核状态和题目/知识点元数据，消除 `source_type` 猜测映射 |
-| 无证据生成 | `backend/app/modules/agent/workflows/explain.py` | `_fallback_evidence_text`、`_evidence_loop_node`、`_evidence_gate_node`、`_generate_explanation_node` | L26-L261 | 无证据仍进入模型生成；零命中与检索异常会走不同 fallback 文案；无资料时强制清空 citations，避免伪造引用 |
-| Explain 产物渲染 | `backend/app/modules/agent/workflows/explain.py` | `_render_artifact_node`、`_completed_node` | L279-L306 | 已通过统一 `artifact` 契约把成功正文挂回上下文并交给 worker 持久化 |
-| Explain 持久化与刷新恢复 | `backend/app/modules/agent/worker.py`、`backend/app/modules/agent/timeline.py` | `AgentWorker.process_run`、`AgentTimelineService.get_timeline`、`AgentTimelineService._activity_views`、`AgentTimelineService.message_view` | `worker.py` L100-L251；`timeline.py` L320-L360、L399-L538、L554-L572 | worker 在 completed 分支创建 artifact、写 `message.completed` / `run.completed`；时间线刷新时按 root run 重建活动、artifact 和最终正文 |
-| 节点结果契约 | `backend/app/modules/agent/workflows/contracts.py` | `NodeResult.success` | L27-L48 | 已支持 `artifact` 参数，render 节点可通过统一工厂方法把最终产物传给引擎与 worker |
-| Validate 检索与首个记忆消费 | `backend/app/modules/agent/memory_selector.py`、`backend/app/modules/agent/workflows/validate.py` | `_load_excluded_question_ids`、`_load_unique_weak_topic`、`load_practice_bundle`、`build_practice_query`、`build_practice_filters`、`_question_is_eligible`、`_load_learning_evidence_node`、`_question_discovery_node`、`_question_gate_node`、`_composition_gate_node`、`_render_artifact_node` | `memory_selector.py` L93-L306；`validate.py` L29-L248 | Validate 已按 `PracticeBundle` 消费 snapshot topic、aliases、difficulty、knowledge point IDs 和选中的 Artifact；`load_practice_bundle` 从近期 `practice_artifact_created` 事实事件装载真实 `excluded_question_ids`，并在快照无主题时回退唯一低掌握度薄弱点（恰好一个 `mastery_score < 0.6` 且有真实证据的知识点，多个则维持澄清）；练习产物 content 携带 `question_ids`；缺少主题时创建 `practice_topic` 等待补充后恢复。`chapter_ids` 稳定来源仍待补齐 |
-| Validate 缺主题澄清与恢复 | `backend/app/modules/agent/service.py`、`backend/app/modules/agent/timeline.py` | `create_input`、`submit_input_answer`、`AgentTimelineService._build_workflow_views` | `service.py` L279-L362；`timeline.py` L462-L500 | waiting run、`practice_topic` 输入、用户答案 | 创建 `AgentInput` 并投影 `workflow.input.required`，时间线把最新 pending input 暴露为 `workflow.pending_input`；用户提交答案后把输入标记为 answered，恢复 run 到 running，worker 从 checkpoint 回到 `_question_discovery_node` | 等待中的工作流卡片、恢复后的检索执行 | 用户补充输入 API / `AgentWorker.process_run` |
-| 当前上下文构建 | `backend/app/modules/agent/context_builder.py` | `AgentRunContext`、`ThreadContextBuilder.build`、`_load_thread_memory_state` | L82-L121、L138-L256、L489-L501 | 已能选择近期消息、Artifact、待处理交互，并读取线程 `active_topic` / `memory_state_version`；仍未按 `MemoryNeed` 选择掌握度、摘要和排除集 |
-| Router 与子 Run 交接 | `backend/app/modules/agent/workflows/conversation.py`、`backend/app/modules/agent/turn_understanding.py` | `_route_node`、`_child_context_metadata`、`_dispatch_workflow_node`、`build_turn_understanding`、`ensure_turn_memory_snapshot` | `conversation.py` L46-L260；`turn_understanding.py` L105-L227 | Router 已先生成 `TurnUnderstanding` 并创建 snapshot，再使用 `standalone_request` 路由；topic aliases、`memory_snapshot_id`、独立请求和 `difficulty:*` 约束都会传给 child run，Validate 已开始消费这些 snapshot 内容 |
-| Run 最终持久化 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | L150-L225 | 执行工作流并创建 Artifact/最终消息；completed 分支已在同一事务调用 `project_completed_run_facts` 按产物类型写事实事件；未来继续补记忆更新 Outbox |
-| 完成事实投影 | `backend/app/modules/agent/memory_projection.py` | `project_completed_run_facts`、`_record_practice_artifact_created` | L15-L77 | 按 artifact 类型（非 workflow 名）分派事实事件；practice 产物写幂等 `practice_artifact_created` 事件到 `agent_memory_events`，载荷含 `artifact_id` 与 `question_ids`，供下一次练习装载排除集 |
+| 执行阶段 | 文件 | 符号 | 当前职责与问题 |
+| --- | --- | --- | --- |
+| 工具活动创建 | `backend/app/modules/agent/tools/retrieve_knowledge.py` | `_logical_activity_id`、`_next_attempt_number`、`retrieve_knowledge` | 已为同一逻辑检索生成稳定 `activity_id`，并在 `tool.called` 中追加 `attempt_id` / `attempt_no`，同时把 `knowledge_point_ids`、difficulty 和排除题参数公开到安全活动元数据，供后台保留每次 attempt |
+| 工具结果与异常 | `backend/app/modules/agent/tools/retrieve_knowledge.py` | `_normalize_agent_result`、`_sort_agent_results`、`retrieve_knowledge` | 已统一 Agent DTO，公开零命中和异常结果；Explain 混合检索默认把知识点排在题目前面；失败 attempt 的原始错误保留在后台事件中 |
+| 用户活动归并 | `backend/app/modules/agent/timeline.py` | `AgentTimelineService._activity_views` | 按 `activity_id` 聚合；不同 ID 必然生成不同活动 |
+| 检索结果契约 | `backend/app/modules/retrieval/search_engine.py` | `RetrievalResult.to_dict` | 已统一输出 `entity`、`source`、`question_meta`、`knowledge_point_meta` 与学科章节字段，供 Agent 与检索调试共用 |
+| Collection 路由 | `backend/app/modules/retrieval/search_engine.py` | `RetrievalSearchEngine.get_collections` | `knowledge_point` 和 `question` 分别进入不同 Qdrant Collection；空类型同时查两者 |
+| 命中内容回填 | `backend/app/modules/retrieval/search_engine.py` | `RetrievalSearchEngine.hydrate_results`、`RetrievalSearchEngine._document_source_name`、`RetrievalSearchEngine._load_knowledge_point_details`、`RetrievalSearchEngine._load_question_details`、`RetrievalSearchEngine._question_title` | 已从 MySQL 同步补全文档来源、实体标题、审核状态和题目/知识点元数据，消除 `source_type` 猜测映射 |
+| 无证据生成 | `backend/app/modules/agent/workflows/explain.py` | `_fallback_evidence_text`、`_evidence_loop_node`、`_evidence_gate_node`、`_generate_explanation_node` | 无证据仍进入模型生成；零命中与检索异常会走不同 fallback 文案；无资料时强制清空 citations，避免伪造引用 |
+| Explain 产物渲染 | `backend/app/modules/agent/workflows/explain.py` | `_render_artifact_node`、`_completed_node` | 已通过统一 `artifact` 契约把成功正文挂回上下文并交给 worker 持久化 |
+| Explain 持久化与刷新恢复 | `backend/app/modules/agent/worker.py`、`backend/app/modules/agent/timeline.py` | `AgentWorker.process_run`、`AgentTimelineService.get_timeline`、`AgentTimelineService._activity_views`、`AgentTimelineService.message_view` | worker 在 completed 分支创建 artifact、写 `message.completed` / `run.completed`；时间线刷新时按 root run 重建活动、artifact 和最终正文 |
+| 节点结果契约 | `backend/app/modules/agent/workflows/contracts.py` | `NodeResult.success` | 已支持 `artifact` 参数，render 节点可通过统一工厂方法把最终产物传给引擎与 worker |
+| Validate 检索与首个记忆消费 | `backend/app/modules/agent/memory_selector.py`、`backend/app/modules/agent/workflows/validate.py` | `_load_excluded_question_ids`、`_load_unique_weak_topic`、`load_practice_bundle`、`build_practice_query`、`build_practice_filters`、`_question_is_eligible`、`_load_learning_evidence_node`、`_question_discovery_node`、`_question_gate_node`、`_composition_gate_node`、`_render_artifact_node` | Validate 已按 `PracticeBundle` 消费 snapshot topic、aliases、difficulty、knowledge point IDs 和选中的 Artifact；`load_practice_bundle` 从近期 `practice_artifact_created` 事实事件装载真实 `excluded_question_ids`，并在快照无主题时回退唯一低掌握度薄弱点（恰好一个 `mastery_score < 0.6` 且有真实证据的知识点，多个则维持澄清）；练习产物 content 携带 `question_ids`；缺少主题时创建 `practice_topic` 等待补充后恢复。`chapter_ids` 稳定来源仍待补齐 |
+| Validate 缺主题澄清与恢复 | `backend/app/modules/agent/service.py`、`backend/app/modules/agent/timeline.py` | `create_input`、`submit_input_answer`、`AgentTimelineService._build_workflow_views` | 缺主题时创建 `AgentInput` 并投影 `workflow.input.required`，时间线把最新 pending input 暴露为 `workflow.pending_input`；用户提交答案后把输入标记为 answered，恢复 run 到 running，worker 从 checkpoint 回到 `_question_discovery_node` 继续检索 |
+| 当前上下文构建 | `backend/app/modules/agent/context_builder.py` | `AgentRunContext`、`ThreadContextBuilder.build`、`_load_thread_memory_state` | 已能选择近期消息、Artifact、待处理交互，并读取线程 `active_topic` / `memory_state_version`；仍未按 `MemoryNeed` 选择掌握度、摘要和排除集 |
+| Router 与子 Run 交接 | `backend/app/modules/agent/workflows/conversation.py`、`backend/app/modules/agent/turn_understanding.py` | `_route_node`、`_child_context_metadata`、`_dispatch_workflow_node`、`build_turn_understanding`、`ensure_turn_memory_snapshot` | Router 已先生成 `TurnUnderstanding` 并创建 snapshot，再使用 `standalone_request` 路由；topic aliases、`memory_snapshot_id`、独立请求和 `difficulty:*` 约束都会传给 child run，Validate 已开始消费这些 snapshot 内容 |
+| Run 最终持久化 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | 执行工作流并创建 Artifact/最终消息；completed 分支已在同一事务调用 `project_completed_run_facts` 按产物类型写事实事件；未来继续补记忆更新 Outbox |
+| 完成事实投影 | `backend/app/modules/agent/memory_projection.py` | `project_completed_run_facts`、`_record_practice_artifact_created` | 按 artifact 类型（非 workflow 名）分派事实事件；practice 产物写幂等 `practice_artifact_created` 事件到 `agent_memory_events`，载荷含 `artifact_id` 与 `question_ids`，供下一次练习装载排除集 |
 
 ## 第一组：立即解除现有故障
 
@@ -140,12 +140,12 @@ load_scope completed
 - 状态：已完成（2026-07-26，迁移与 ORM 已落库）。
 通过 Alembic 前向迁移逐步增加：
 
-- `agent_thread_memory_states`：小型结构化活跃主题、主题栈、活跃任务和指代对象；
-- `agent_memory_events`：追加式增量来源和幂等审计；
-- `agent_memory_snapshots`/`agent_memory_snapshot_items`：冻结 Run 实际使用的记忆版本；
-- `agent_memory_update_outbox`：完成事件的可靠异步投影；
-- `user_learning_mastery`：按知识点保存掌握度和真实答题/Grade 证据；
-- `agent_conversation_summaries`：按消息序列范围增量压缩旧对话；
+- `agent_thread_memory_states`：小型结构化活跃主题、主题栈、活跃任务和指代对象
+- `agent_memory_events`：追加式增量来源和幂等审计
+- `agent_memory_snapshots`/`agent_memory_snapshot_items`：冻结 Run 实际使用的记忆版本
+- `agent_memory_update_outbox`：完成事件的可靠异步投影
+- `user_learning_mastery`：按知识点保存掌握度和真实答题/Grade 证据
+- `agent_conversation_summaries`：按消息序列范围增量压缩旧对话
 - `agent_memory_items`：偏好、目标和主题情景摘要，不承载专业学习掌握度。
 - 已在 `backend/app/modules/agent/models.py` 新增上述八张表的 ORM 模型，并通过 `backend/alembic/versions/20260726_agent_memory_foundation.py` 创建对应前向迁移。
 - 已补 `backend/tests/test_migrations.py::test_agent_memory_foundation_migration_renders_mysql_ddl`，验证迁移会创建全部记忆基础表、关键唯一约束和索引；同时更新 Alembic head 断言。
@@ -303,6 +303,6 @@ Validate/Explain/Grade/Plan 是记忆内核的天然边界。这里把设计口�
 ## 任务维护规则
 
 - 每个独立修复使用中文 Git 提交，并在实现提交中把对应任务状态和验证证据更新到本文件。
-- 代码或符号行号发生变化时，同一提交重新使用 `rg -n`、`nl -ba` 核对本文件代码锚点。
+- 代码锚点只使用「文件路径 + 符号名」，不写行号；重命名、移动或删除符号时，同一提交用 `rg -n` 确认锚点符号仍然存在并更新引用。
 - 复杂实现细节写入对应 `implementation/` 分卷；本文件只保留待做状态、依赖、关键决策和验收入口。
 - 单项只有在代码、迁移、测试、文档和提交全部完成后才能标记 `已完成`。
