@@ -1,5 +1,13 @@
 # 2026-07 Agent 对话模块进展
 
+## 2026-07-26：建立 Memory Outbox 消费状态机
+
+- 目标：让记忆任务具备可竞争认领、崩溃恢复、延迟重试和失败隔离能力。
+- 实现：新增 `backend/app/modules/agent/memory_outbox.py::MemoryOutboxStore`（L34-L181）与 `MemoryOutboxConsumer`（L184-L285）；processing 复用 `scheduled_at` 作为租约截止，状态更新校验 worker 所有权，投影异常由 SAVEPOINT 隔离，耗尽预算进入 failed。
+- 边界：默认 projector 只验证可信事实，尚未接入 Agent Worker；待实际派生投影完成后再启用，避免 pending 任务被空消费。
+- 验证：`cd backend && PYTHONPATH=. venv/bin/pytest -q tests/test_agent_memory_outbox.py` 通过（4 passed）；Python 编译与 `git diff --check` 通过。
+- 提交信息：`建立 Memory Outbox 消费状态机`
+
 ## 2026-07-26：同事务生产 Memory Outbox 任务
 
 ### 目标
