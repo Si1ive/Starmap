@@ -14,12 +14,14 @@ from app.modules.agent.model_runtime.schema import (
     ExplanationOutput,
     LoopDecision,
 )
+from app.modules.agent.memory_projection import project_completed_run_facts
 from app.modules.agent.models import (
     AgentApproval,
     AgentArtifact,
     AgentCheckpoint,
     AgentEvent,
     AgentInput,
+    AgentMemoryEvent,
     AgentMessage,
     AgentRun,
     AgentRunOutbox,
@@ -27,6 +29,7 @@ from app.modules.agent.models import (
     AgentThread,
     AgentThreadEvent,
     AgentThreadItem,
+    UserLearningMastery,
 )
 from app.modules.agent.thread_events import thread_event_store
 from app.modules.agent.timeline import AgentTimelineService
@@ -47,6 +50,8 @@ WORKER_TABLES = [
     AgentArtifact.__table__,
     AgentInput.__table__,
     AgentApproval.__table__,
+    AgentMemoryEvent.__table__,
+    UserLearningMastery.__table__,
 ]
 
 
@@ -165,6 +170,9 @@ async def test_worker_persists_zero_hit_fallback_answer_without_citations(
     artifact = await db_session.scalar(
         select(AgentArtifact).where(AgentArtifact.run_id == run.id)
     )
+    memory_event = await db_session.scalar(
+        select(AgentMemoryEvent).where(AgentMemoryEvent.run_id == run.id)
+    )
     message = await db_session.scalar(
         select(AgentMessage).where(AgentMessage.run_id == run.id)
     )
@@ -178,6 +186,28 @@ async def test_worker_persists_zero_hit_fallback_answer_without_citations(
     assert run.status == "completed"
     assert artifact is not None
     assert artifact.content_json["citations"] == []
+    assert memory_event is not None
+    assert memory_event.fact_type == "explanation_artifact_created"
+    assert memory_event.memory_scope == "thread"
+    assert memory_event.source_kind == "artifact"
+    assert memory_event.idempotency_key == f"explanation_artifact_created:{run.id}"
+    assert memory_event.payload_json == {
+        "artifact_id": artifact.id,
+        "memory_snapshot_id": None,
+    }
+    await project_completed_run_facts(db_session, run, artifact)
+    explanation_events = list(
+        (
+            await db_session.execute(
+                select(AgentMemoryEvent).where(AgentMemoryEvent.run_id == run.id)
+            )
+        ).scalars()
+    )
+    assert len(explanation_events) == 1
+    masteries = list(
+        (await db_session.execute(select(UserLearningMastery))).scalars()
+    )
+    assert masteries == []
     assert message is not None
     assert message.status == "completed"
     assert message.content_text == "红黑树是一种自平衡二叉搜索树。"

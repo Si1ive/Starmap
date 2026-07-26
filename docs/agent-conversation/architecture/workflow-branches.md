@@ -26,7 +26,8 @@
 | 零证据门禁 | `backend/app/modules/agent/workflows/explain.py` | `_evidence_gate_node` | 已筛选 evidence 与 `retrieval_outcome` | 非空资料直接通过；零命中记录“没有检索到相关文档”，检索异常记录“暂时无法检索相关文档”，但两者都继续生成通用知识回答 | `gate_passed` 与原因 | `_generate_explanation_node` |
 | 结构化讲解生成 | `backend/app/modules/agent/workflows/explain.py` | `_fallback_evidence_text`、`_generate_explanation_node` | 用户问题、证据列表和 `retrieval_outcome` | 截断证据正文并保留 `entity_title`、`entity_type`、`source`；无资料时按零命中/异常选择不同 fallback 文案；调用结构化讲解运行时后清空无资料场景的 citations | `ExplanationOutput` | `_citation_gate_node` |
 | 正文/引用校验 | `backend/app/modules/agent/workflows/explain.py` | `_citation_gate_node` | 结构化讲解结果 | 只要正文非空即通过，引用列表在无资料场景下已被上游清空 | 可渲染 explanation | `_render_artifact_node` |
-| Artifact 渲染与结束 | `backend/app/modules/agent/workflows/explain.py` | `_render_artifact_node`、`_completed_node` | outline、body、citations、summary | 组装 explanation artifact，并把最终 artifact 挂到 NodeResult 和上下文 | `agent_artifacts`、completed run | `AgentWorker.process_run` |
+| Artifact 渲染与结束 | `backend/app/modules/agent/workflows/explain.py` | `_render_artifact_node`、`_completed_node`（L279-L306） | outline、body、citations、summary | 组装 explanation artifact，并把最终 artifact 挂到 NodeResult 和上下文 | `agent_artifacts`、completed run | `AgentWorker.process_run` |
+| 讲解事实投影 | `backend/app/modules/agent/memory_projection.py` | `project_completed_run_facts`、`_record_explanation_artifact_created`（L76-L130） | worker 已持久化的 explanation Artifact | 按 Run 幂等写线程级讲解产物事实，仅保存 Artifact ID 与可选 snapshot ID；零命中 fallback 与有引用讲解使用同一事实契约，不复制正文、不提高掌握度 | `explanation_artifact_created`；数据库错误沿 worker 完成事务传播 | 后续 Artifact/记忆选择器 |
 
 ## Validate：候选题检索到练习产物
 
@@ -49,7 +50,7 @@
 | 主观反馈生成 | `backend/app/modules/agent/workflows/grade.py` | `_generate_feedback_node`、`_feedback_gate_node` | L70-L105 | attempt 和 rubric | 生成固定 strengths / weaknesses / suggestions，并校验整体反馈非空 | `feedback`；反馈为空时返回失败并由 worker 投影 `run.failed` | `_render_artifact_node` |
 | 反馈 Artifact | `backend/app/modules/agent/workflows/grade.py` | `_render_artifact_node`、`_completed_node` | L108-L142 | 反馈内容、可选的内部 `grading_evidence` | 组装 feedback artifact；只有已有显式 verdict 时才把完整证据放入 `content.grading`，固定反馈不伪造评分 | `agent_artifacts` 与 completed run | `AgentWorker.process_run` |
 | 完成事实交接 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | L183-L224 | completed 结果与 Feedback Artifact | 先持久化 Artifact，再在同一完成事务调用事实投影，最后写 `run.completed` | Artifact、内部记忆事实或无副作用跳过 | `project_completed_run_facts` |
-| 评分事实与掌握度 | `backend/app/modules/agent/memory_projection.py` | `project_completed_run_facts`、`_record_grade_result_confirmed` | L76-L87、L143-L247 | Feedback Artifact 的 `content.grading` | 校验 verdict / question / knowledge points，知识点去重，按用户 + evidence ID 检查幂等，写 `grade_result_confirmed` 并用增量均值更新掌握度；证据不完整则安全跳过，数据库异常沿完成事务传播 | `agent_memory_events`、`user_learning_mastery` | `memory_selector._load_unique_weak_topic` 在后续练习读取 |
+| 评分事实与掌握度 | `backend/app/modules/agent/memory_projection.py` | `project_completed_run_facts`、`_record_grade_result_confirmed` | L76-L89、L186-L290 | Feedback Artifact 的 `content.grading` | 校验 verdict / question / knowledge points，知识点去重，按用户 + evidence ID 检查幂等，写 `grade_result_confirmed` 并用增量均值更新掌握度；证据不完整则安全跳过，数据库异常沿完成事务传播 | `agent_memory_events`、`user_learning_mastery` | `memory_selector._load_unique_weak_topic` 在后续练习读取 |
 
 ## Plan：计划草案、审批与恢复执行
 

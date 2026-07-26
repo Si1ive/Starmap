@@ -81,10 +81,53 @@ async def project_completed_run_facts(
     """在 Run 完成事务内按产物类型写事实事件；不按 workflow 名分派。"""
     if artifact is None:
         return
-    if artifact.artifact_type == "practice":
+    if artifact.artifact_type == "explanation":
+        await _record_explanation_artifact_created(db, run, artifact)
+    elif artifact.artifact_type == "practice":
         await _record_practice_artifact_created(db, run, artifact)
     elif artifact.artifact_type == "feedback":
         await _record_grade_result_confirmed(db, run, artifact)
+
+
+async def _record_explanation_artifact_created(
+    db: AsyncSession,
+    run: AgentRun,
+    artifact: AgentArtifact,
+) -> None:
+    """记录讲解产物事实，不复制正文，也不推导学习掌握度。"""
+    fact_type = MemoryFactType.EXPLANATION_ARTIFACT_CREATED.value
+    idempotency_key = f"{fact_type}:{run.id}"
+    existing = await db.scalar(
+        select(AgentMemoryEvent.id).where(
+            AgentMemoryEvent.idempotency_key == idempotency_key
+        )
+    )
+    if existing is not None:
+        return
+
+    db.add(
+        AgentMemoryEvent(
+            user_id=run.user_id,
+            thread_id=run.thread_id,
+            run_id=run.id,
+            memory_scope="thread",
+            source_kind="artifact",
+            fact_type=fact_type,
+            idempotency_key=idempotency_key,
+            payload_json={
+                "artifact_id": artifact.id,
+                "memory_snapshot_id": (run.metadata_json or {}).get(
+                    "memory_snapshot_id"
+                ),
+            },
+        )
+    )
+    await db.flush()
+    logger.info(
+        "讲解产物事实写入",
+        run_id=run.id,
+        artifact_id=artifact.id,
+    )
 
 
 async def _record_practice_artifact_created(

@@ -23,7 +23,7 @@
 | 记忆能力与分区命名 | `backend/app/modules/agent/memory_contracts.py` | `MemoryPartition`、`MemoryNeed`、`MemoryFactType`、`MEMORY_NEED_PARTITIONS` | 任务单中的分层记忆边界 | 固化九类分区、六类能力标签与五类事实事件类型，明确能力声明不绑定 explain/validate/grade/plan 名称 | 稳定命名契约 | 快照选择器 / 完成事实投影 / workflow adapter |
 | 记忆 ORM 基础表 | `backend/app/modules/agent/models.py` | `AgentThreadMemoryState`、`AgentMemoryEvent`、`AgentMemorySnapshot`、`AgentMemorySnapshotItem`、`AgentMemoryUpdateOutbox`、`UserLearningMastery`、`AgentConversationSummary`、`AgentMemoryItem` | 线程、Run、用户和未来投影事件 | 定义热状态、事件、快照、Outbox、掌握度、对话摘要和长期记忆项的单表契约 | Base metadata 中的记忆表结构 | Alembic 迁移 / 后续 selector 与 projector |
 | 首个 Bundle 选择器 | `backend/app/modules/agent/memory_selector.py` | `_load_excluded_question_ids`、`_load_unique_weak_topic`、`load_practice_bundle`、`build_practice_query`、`build_practice_filters` | child run 的 `run_id` / `user_id`、snapshot metadata、selected snapshot items、近期 `practice_artifact_created` 事实事件、`user_learning_mastery` | 校验 run 与 snapshot 归属，从 snapshot 和选中的 `topic_focus` / `practice_generation` items 组装 `PracticeBundle`，提取 `difficulty`、`knowledge_point_ids` 和 selected artifacts；按用户维度从最近 10 个 practice 事实事件装载去重后的 `excluded_question_ids`（最多 50 道，最新优先）；快照拿不到主题时回退唯一薄弱点——恰好一个 `mastery_score < 0.6` 且 `evidence_count > 0` 的知识点才构造 `source="learning_mastery"` 的 TopicBundle（标题/aliases 取自 `knowledge_points`）并记录 `mastery_signals`，多个则维持澄清；再用 topic title + aliases 构造 query 与检索过滤条件，无主题时返回空 query，避免静默默认主题 | `PracticeBundle`（含真实排除集与薄弱点回退）、确定性 query、结构化 filters | `validate._load_learning_evidence_node` / `_question_discovery_node` |
-| 可信事实投影 | `backend/app/modules/agent/memory_projection.py`（L19-L247） | `project_topic_confirmed_fact`、`project_completed_run_facts`、`_record_practice_artifact_created`、`_record_grade_result_confirmed` | snapshot 中的显式主题，或 completed run 的已持久化 Artifact | 显式主题在 Router 前写线程事实；Run 完成时按 artifact 类型分派（不读 workflow 名），practice 提取题目 ID，feedback 校验真实评分证据、去重知识点并更新掌握度；三类事件都有稳定幂等键 | `topic_confirmed` / `practice_artifact_created` / `grade_result_confirmed`、`user_learning_mastery` 更新；继承主题、无题目 ID、缺评分证据均无副作用返回；数据库异常沿所在事务传播 | 下一轮 `ThreadContextBuilder` / `memory_selector._load_excluded_question_ids` / `_load_unique_weak_topic` |
+| 可信事实投影 | `backend/app/modules/agent/memory_projection.py`（L19-L290） | `project_topic_confirmed_fact`、`project_completed_run_facts`、`_record_explanation_artifact_created`、`_record_practice_artifact_created`、`_record_grade_result_confirmed` | snapshot 中的显式主题，或 completed run 的已持久化 Artifact | 显式主题在 Router 前写线程事实；Run 完成时按 artifact 类型分派（不读 workflow 名）：explanation 只记录 Artifact/snapshot ID，practice 提取题目 ID，feedback 校验真实评分证据、去重知识点并更新掌握度；四类事件都有稳定幂等键 | `topic_confirmed` / `explanation_artifact_created` / `practice_artifact_created` / `grade_result_confirmed`、可选的 `user_learning_mastery` 更新；继承主题、无题目 ID、缺评分证据均无副作用返回；数据库异常沿所在事务传播 | 下一轮 `ThreadContextBuilder` / `memory_selector._load_excluded_question_ids` / `_load_unique_weak_topic` |
 
 ## 当前能力边界
 
@@ -33,7 +33,8 @@
 4. 真实排除集已闭环：Validate 完成时写 `practice_artifact_created` 事实事件，下一次练习通过 `PracticeBundle.excluded_question_ids` 自动排除近期已出过的题。
 5. 掌握度已形成安全的读写边界：无主题时按“唯一低掌握度知识点”回退练习主题；携带真实结构化评分证据的 Feedback Artifact 能写 `grade_result_confirmed` 并更新 `user_learning_mastery`。当前 P1 Grade 仍只有固定反馈，不生产 verdict，因此真实线上数据源仍需后续评分服务接入。
 6. 本轮显式 `context_ref` 主题已在 Router 调用前写成 `topic_confirmed`；因此 Router/模型失败只会阻止 Agent 输出，不会丢失用户已表达的主题。继承的热状态主题不会重复产生确认事件。
-7. 当前仍未实现歧义场景下的结构化指代消解模型，也还没有把历史摘要做成可复用的 bundle。
+7. Explain 成功产出 Artifact 时已写 `explanation_artifact_created`，包括零命中/检索异常后的无引用 fallback；事件不复制正文，也不修改掌握度。
+8. 当前仍未实现歧义场景下的结构化指代消解模型，也还没有把历史摘要做成可复用的 bundle。
 
 ## 现状问题与整改入口
 
@@ -41,8 +42,8 @@
 | --- | --- | --- | --- |
 | 主题继承还未消费掌握度/摘要等深层记忆 | `backend/app/modules/agent/context_builder.py` `ThreadContextBuilder.build` | 已能读取 `active_topic`，但还没有选择 `user_learning_mastery`、历史摘要或排除集 | `MEM-003`、`MEM-004` |
 | 只有 Validate 已接入 bundle 化记忆 | `backend/app/modules/agent/memory_selector.py` `load_practice_bundle`；`backend/app/modules/agent/workflows/validate.py` `_load_learning_evidence_node` | Validate 已能消费 `PracticeBundle`；Explain / Grade / Plan 仍未声明并装载各自的 bundle | `MEM-004`、`MEM-005` |
-| 掌握度投影已通但真实评分源未接入 | `backend/app/modules/agent/workflows/grade.py::_objective_grade_node`（L34-L51）、`_render_artifact_node`（L108-L137）；`backend/app/modules/agent/memory_projection.py::_record_grade_result_confirmed`（L143-L247） | 投影器只接受结构化真实评分证据并能安全更新掌握度；当前 P1 Grade 仍把所有作答视为主观固定反馈，不产生 verdict，所以不会误写但也没有线上掌握度证据 | `MEM-004`（EvaluationBundle）、`MEM-006`（真实评分生产者） |
-| 长期回写尚未覆盖全部事实和 Outbox | `backend/app/modules/agent/turn_understanding.py::ensure_turn_memory_snapshot`（L161-L246）；`backend/app/modules/agent/memory_projection.py::project_topic_confirmed_fact`（L19-L73）、`project_completed_run_facts`（L76-L87） | 显式主题已在 Router 前写事实；Run 完成事务已分派 practice 与有真实证据的 feedback；讲解 Artifact、计划确认以及 Memory Outbox 异步投影仍未实现 | `MEM-006` |
+| 掌握度投影已通但真实评分源未接入 | `backend/app/modules/agent/workflows/grade.py::_objective_grade_node`（L34-L51）、`_render_artifact_node`（L108-L137）；`backend/app/modules/agent/memory_projection.py::_record_grade_result_confirmed`（L186-L290） | 投影器只接受结构化真实评分证据并能安全更新掌握度；当前 P1 Grade 仍把所有作答视为主观固定反馈，不产生 verdict，所以不会误写但也没有线上掌握度证据 | `MEM-004`（EvaluationBundle）、`MEM-006`（真实评分生产者） |
+| 长期回写尚未覆盖全部事实和 Outbox | `backend/app/modules/agent/turn_understanding.py::ensure_turn_memory_snapshot`（L161-L246）；`backend/app/modules/agent/memory_projection.py::project_topic_confirmed_fact`（L19-L73）、`project_completed_run_facts`（L76-L89）、`_record_explanation_artifact_created`（L92-L130） | 显式主题已在 Router 前写事实；Run 完成事务已分派 explanation、practice 与有真实证据的 feedback；计划确认以及 Memory Outbox 异步投影仍未实现 | `MEM-006` |
 
 ## 设计约束
 

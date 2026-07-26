@@ -73,7 +73,7 @@ load_scope completed
 | 当前上下文构建 | `backend/app/modules/agent/context_builder.py` | `AgentRunContext`、`ThreadContextBuilder.build`、`_load_thread_memory_state` | 已能选择近期消息、Artifact、待处理交互，并读取线程 `active_topic` / `memory_state_version`；仍未按 `MemoryNeed` 选择掌握度、摘要和排除集 |
 | Router、主题事实与子 Run 交接 | `backend/app/modules/agent/workflows/conversation.py`、`backend/app/modules/agent/turn_understanding.py`、`backend/app/modules/agent/memory_projection.py` | `_route_node`（L46-L121）、`build_turn_understanding`（L105-L157）、`ensure_turn_memory_snapshot`（L161-L246）、`project_topic_confirmed_fact`（L19-L73）、`_child_context_metadata`（L183-L209）、`_dispatch_workflow_node`（L212-L261） | Router 前先生成 `TurnUnderstanding`、创建 snapshot 并更新热状态；显式 context ref 主题按 Run 幂等写 `topic_confirmed`，继承主题不重复写，故 Router 失败也保留用户事实；随后用 `standalone_request` 路由并把 snapshot 交给 child run |
 | Run 最终持久化 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run`（L183-L224） | 执行工作流并创建 Artifact/最终消息；completed 分支已在同一事务调用 `project_completed_run_facts` 按产物类型写事实事件；未来继续补记忆更新 Outbox |
-| 可信事实投影 | `backend/app/modules/agent/memory_projection.py` | `project_topic_confirmed_fact`、`project_completed_run_facts`、`_record_practice_artifact_created`、`_record_grade_result_confirmed`（L19-L247） | 按事实来源而非 workflow 名分派：显式主题写 `topic_confirmed`，practice 产物写 `practice_artifact_created`，有真实评分证据的 feedback 写 `grade_result_confirmed` 并更新掌握度；均提供稳定幂等语义，继承主题和固定反馈不产生伪事实 |
+| 可信事实投影 | `backend/app/modules/agent/memory_projection.py` | `project_topic_confirmed_fact`、`project_completed_run_facts`、`_record_explanation_artifact_created`、`_record_practice_artifact_created`、`_record_grade_result_confirmed`（L19-L290） | 按事实来源而非 workflow 名分派：显式主题写 `topic_confirmed`，explanation 写不复制正文的 `explanation_artifact_created`，practice 写 `practice_artifact_created`，有真实评分证据的 feedback 写 `grade_result_confirmed` 并更新掌握度；均提供稳定幂等语义，继承主题和固定反馈不产生伪事实 |
 
 ## 第一组：立即解除现有故障
 
@@ -220,10 +220,11 @@ load_scope completed
 ### MEM-006 按事实事件回写，而不是按 workflow 名写库
 
 - 状态：进行中（2026-07-26 已落地 topic、practice 与 Grade 投影边界）。`backend/app/modules/agent/memory_projection.py::project_topic_confirmed_fact`（L19-L73）在 Router 前把本轮显式 context ref 主题按 Run 幂等写为线程事实，载荷保留 snapshot、状态版本、来源消息与类型化主题；`thread_memory` 继承主题不重复写。因此后续 Router/模型失败时，用户已表达的主题仍作为事实保留。
-- Artifact 完成投影由 `project_completed_run_facts`（L76-L87）、`_record_practice_artifact_created`（L90-L140）与 `_record_grade_result_confirmed`（L143-L247）负责：practice 写幂等 `practice_artifact_created`；feedback 只有携带 `verdict`、`question_id`、`knowledge_point_ids` 的真实评分证据时，才按用户 + evidence ID 幂等写 `grade_result_confirmed` 并增量更新 `user_learning_mastery`。重复知识点先去重，固定文案反馈不提高掌握度。
+- Artifact 完成投影由 `project_completed_run_facts`（L76-L89）、`_record_explanation_artifact_created`（L92-L130）、`_record_practice_artifact_created`（L133-L183）与 `_record_grade_result_confirmed`（L186-L290）负责：explanation 按 Run 幂等记录 Artifact/snapshot ID，不复制正文且不提高掌握度；practice 写 `practice_artifact_created`；feedback 只有携带真实评分证据时才按用户 + evidence ID 幂等更新掌握度。
 - Grade Artifact 的证据交接位于 `backend/app/modules/agent/workflows/grade.py::_render_artifact_node`（L108-L137）：只在上下文已有显式 `grading_evidence.verdict` 时写入 `content.grading`。当前 P1 `_objective_grade_node`（L34-L51）仍不读取真实标准答案、不会生产该证据，因此本阶段只完成安全投影契约，不宣称线上 Grade 掌握度闭环已完成。
 - 已由 `backend/tests/test_agent_memory_projection.py::test_topic_confirmed_projection_is_idempotent_and_skips_inherited_topic`（L131-L179）覆盖主题事实重放和继承跳过；`backend/tests/test_agent_conversation_workflow.py::test_model_configuration_failure_creates_visible_failed_message`（L603-L666）覆盖 Router 失败仍保留显式主题；Grade 投影由 `test_grade_projection_updates_mastery_and_replays_idempotently`（L183-L252）、`test_grade_projection_deduplicates_knowledge_points_and_scopes_evidence_by_user`（L256-L316）、`test_feedback_without_structured_grading_is_ignored`（L320-L334）、`test_grade_run_with_canned_feedback_does_not_touch_mastery`（L369-L387）覆盖。
-- 其余讲解 Artifact、计划确认、Memory Outbox 与异步投影仍待实现。
+- Explain 零命中 fallback 的事实、重放幂等与“不写掌握度”由 `backend/tests/test_agent_explain_worker.py::test_worker_persists_zero_hit_fallback_answer_without_citations`（L129-L227）覆盖。
+- 其余计划确认、Memory Outbox 与异步投影仍待实现。
 - 不把 `message.delta` 写长期记忆，只在 `message.completed`/`artifact.rendered`/`run.completed` 后投影。
 - Run 完成事务同步更新下一轮马上需要的热状态，并写 Memory Outbox。
 - 异步投影历史摘要、Embedding、偏好候选和长期事件，失败可重放且不反向把成功 Run 改成失败。
