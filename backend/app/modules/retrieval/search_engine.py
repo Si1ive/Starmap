@@ -106,9 +106,13 @@ class RetrievalSearchEngine:
         subject_id: Optional[str],
         chapter_ids: Optional[List[str]],
         filters: Optional[Dict[str, Any]] = None,
+        *,
+        knowledge_point_ids: Optional[List[str]] = None,
+        exclude_entity_ids: Optional[List[str]] = None,
     ) -> Optional[Filter]:
         """构建 Qdrant 过滤条件。"""
         conditions = []
+        must_not = []
 
         if subject_id:
             conditions.append(
@@ -123,6 +127,14 @@ class RetrievalSearchEngine:
                 FieldCondition(
                     key="chapter_ids",
                     match=MatchAny(any=chapter_ids),
+                )
+            )
+
+        if knowledge_point_ids:
+            conditions.append(
+                FieldCondition(
+                    key="knowledge_point_ids",
+                    match=MatchAny(any=knowledge_point_ids),
                 )
             )
 
@@ -146,7 +158,15 @@ class RetrievalSearchEngine:
                 FieldCondition(key="tags", match=MatchAny(any=list(tags)))
             )
 
-        return Filter(must=conditions) if conditions else None
+        if exclude_entity_ids:
+            must_not.append(
+                FieldCondition(
+                    key="entity_id",
+                    match=MatchAny(any=exclude_entity_ids),
+                )
+            )
+
+        return Filter(must=conditions or None, must_not=must_not or None) if (conditions or must_not) else None
 
     @staticmethod
     def get_collections(entity_type: Optional[str]) -> List[str]:
@@ -167,7 +187,9 @@ class RetrievalSearchEngine:
         limit: int,
         subject_id: Optional[str] = None,
         chapter_ids: Optional[List[str]] = None,
+        knowledge_point_ids: Optional[List[str]] = None,
         filters: Optional[Dict[str, Any]] = None,
+        exclude_entity_ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """使用 MySQL sparse_text 执行关键词召回。"""
         keywords = query.strip().split()
@@ -183,7 +205,9 @@ class RetrievalSearchEngine:
             entity_type=entity_type,
             subject_id=subject_id,
             chapter_ids=chapter_ids,
+            knowledge_point_ids=knowledge_point_ids,
             filters=filters,
+            exclude_entity_ids=exclude_entity_ids,
         )
         keyword_conditions = [
             RetrievalSegment.sparse_text.ilike(f"%{keyword}%")
@@ -427,7 +451,9 @@ class RetrievalSearchEngine:
         entity_type: str,
         subject_id: Optional[str],
         chapter_ids: Optional[List[str]],
+        knowledge_point_ids: Optional[List[str]],
         filters: Optional[Dict[str, Any]],
+        exclude_entity_ids: Optional[List[str]],
     ) -> List[ColumnElement[bool]]:
         """构建与 Qdrant payload filter 等价的 MySQL 条件。"""
         conditions: List[ColumnElement[bool]] = [
@@ -444,6 +470,21 @@ class RetrievalSearchEngine:
                     json.dumps(chapter_ids),
                 )
                 == 1
+            )
+
+        if knowledge_point_ids:
+            conditions.append(
+                or_(
+                    RetrievalSegment.entity_id.in_(knowledge_point_ids),
+                    func.json_overlaps(
+                        func.json_extract(
+                            RetrievalSegment.metadata_json,
+                            "$.knowledge_point_ids",
+                        ),
+                        json.dumps(knowledge_point_ids),
+                    )
+                    == 1,
+                )
             )
 
         structured_filters = filters or {}
@@ -479,5 +520,8 @@ class RetrievalSearchEngine:
                 )
                 == 1
             )
+
+        if exclude_entity_ids:
+            conditions.append(~RetrievalSegment.entity_id.in_(exclude_entity_ids))
 
         return conditions

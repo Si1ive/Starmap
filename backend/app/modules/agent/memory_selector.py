@@ -25,6 +25,8 @@ class PracticeBundle(BaseModel):
     standalone_request: str | None = None
     topic: TopicBundle | None = None
     constraints: list[str] = Field(default_factory=list)
+    difficulty: str | None = None
+    knowledge_point_ids: list[str] = Field(default_factory=list)
     reference_sources: list[dict[str, Any]] = Field(default_factory=list)
     selected_artifact_ids: list[str] = Field(default_factory=list)
     mastery_signals: list[dict[str, Any]] = Field(default_factory=list)
@@ -57,6 +59,23 @@ def _bundle_topic_from_understanding(understanding: dict[str, Any]) -> TopicBund
 def _bundle_topic(snapshot: AgentMemorySnapshot) -> TopicBundle | None:
     understanding = snapshot.understanding_json or {}
     return _bundle_topic_from_understanding(understanding)
+
+
+def _bundle_difficulty(constraints: list[str]) -> str | None:
+    normalized_constraints = [str(item).strip() for item in constraints if str(item).strip()]
+    for constraint in normalized_constraints:
+        if constraint.startswith("difficulty:"):
+            difficulty = constraint.split(":", 1)[1].strip().lower()
+            if difficulty in {"easy", "medium", "hard"}:
+                return difficulty
+    for constraint in normalized_constraints:
+        if "难度适中" in constraint or "适中" in constraint or "中等" in constraint:
+            return "medium"
+        if "难一点" in constraint or "难一些" in constraint or "难点" in constraint:
+            return "hard"
+        if "简单点" in constraint or "容易点" in constraint or "基础点" in constraint:
+            return "easy"
+    return None
 
 
 async def load_practice_bundle(
@@ -118,11 +137,22 @@ async def load_practice_bundle(
         if not understanding.get("reference_sources") and payload.get("reference_sources"):
             understanding["reference_sources"] = payload.get("reference_sources")
     context_snapshot = snapshot.selection_metadata_json or metadata.get("context_snapshot") or {}
+    topic = _bundle_topic_from_understanding(understanding)
+    knowledge_point_ids = (
+        [topic.entity_id]
+        if topic is not None
+        and topic.entity_type == "knowledge_point"
+        and topic.entity_id
+        else []
+    )
+    constraints = list(understanding.get("constraints") or [])
     return PracticeBundle(
         snapshot_id=snapshot.id,
         standalone_request=snapshot.standalone_request,
-        topic=_bundle_topic_from_understanding(understanding),
-        constraints=list(understanding.get("constraints") or []),
+        topic=topic,
+        constraints=constraints,
+        difficulty=_bundle_difficulty(constraints),
+        knowledge_point_ids=knowledge_point_ids,
         reference_sources=list(understanding.get("reference_sources") or []),
         selected_artifact_ids=list(context_snapshot.get("selected_artifact_ids") or []),
     )
@@ -148,3 +178,16 @@ def build_practice_query(
         seen.add(normalized)
         unique_terms.append(normalized)
     return " ".join(unique_terms) if unique_terms else bundle.topic.title
+
+
+def build_practice_filters(
+    bundle: PracticeBundle | dict[str, Any] | None,
+) -> dict[str, Any]:
+    if bundle is None:
+        bundle = PracticeBundle()
+    if isinstance(bundle, dict):
+        bundle = PracticeBundle.model_validate(bundle)
+    filters: dict[str, Any] = {}
+    if bundle.difficulty:
+        filters["difficulty"] = bundle.difficulty
+    return filters

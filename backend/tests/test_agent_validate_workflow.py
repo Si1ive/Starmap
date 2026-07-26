@@ -191,6 +191,9 @@ async def test_validate_uses_practice_bundle_topic_for_query(monkeypatch):
                     aliases=["折半查找"],
                     source="thread_memory",
                 ),
+                difficulty="medium",
+                knowledge_point_ids=["kp_binary_search"],
+                excluded_question_ids=["question_old_001"],
             )
         ),
     )
@@ -212,6 +215,9 @@ async def test_validate_uses_practice_bundle_topic_for_query(monkeypatch):
     assert context.get("learning_evidence")["recent_topics"] == ["二分查找"]
     assert context.get("practice_bundle")["snapshot_id"] == "memsnap_001"
     assert retrieve.await_args.kwargs["query"] == "二分查找 折半查找"
+    assert retrieve.await_args.kwargs["knowledge_point_ids"] == ["kp_binary_search"]
+    assert retrieve.await_args.kwargs["filters"] == {"difficulty": "medium"}
+    assert retrieve.await_args.kwargs["exclude_entity_ids"] == ["question_old_001"]
     assert retrieve.await_args.kwargs["entity_type"] == "question"
 
 

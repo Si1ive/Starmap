@@ -17,8 +17,11 @@ from .models import (
     AgentThreadMemoryState,
 )
 
-_PRACTICE_HINTS = ("出道题", "来道题", "练习", "题目")
+_PRACTICE_HINTS = ("出道题", "出一道题", "出一道", "来道题", "练习", "题目")
 _EXPLAIN_HINTS = ("讲一下", "讲解", "解释", "说明")
+_EASY_HINTS = ("简单点", "简单一点", "容易点", "基础点", "基础一些")
+_MEDIUM_HINTS = ("难度适中", "适中", "中等")
+_HARD_HINTS = ("难一点", "难一些", "难点", "提高点", "提升点")
 
 
 class TopicEntity(BaseModel):
@@ -89,6 +92,16 @@ def _derive_standalone_request(raw_input: str, topic: TopicEntity | None) -> tup
     return raw_input, None
 
 
+def _derive_constraints(raw_input: str) -> list[str]:
+    if any(hint in raw_input for hint in _MEDIUM_HINTS):
+        return ["difficulty:medium"]
+    if any(hint in raw_input for hint in _HARD_HINTS):
+        return ["difficulty:hard"]
+    if any(hint in raw_input for hint in _EASY_HINTS):
+        return ["difficulty:easy"]
+    return []
+
+
 def build_turn_understanding(agent_context: AgentRunContext) -> TurnUnderstanding:
     raw_input = agent_context.current_input.strip()
     topic_entities = [
@@ -111,6 +124,7 @@ def build_turn_understanding(agent_context: AgentRunContext) -> TurnUnderstandin
         raw_input,
         deduped_topics[0] if deduped_topics else None,
     )
+    constraints = _derive_constraints(raw_input)
     reference_sources = [
         {
             "type": str(ref.get("type") or ""),
@@ -138,6 +152,7 @@ def build_turn_understanding(agent_context: AgentRunContext) -> TurnUnderstandin
         standalone_request=standalone_request,
         intent_hint=intent_hint,
         topic_entities=deduped_topics,
+        constraints=constraints,
         reference_sources=reference_sources,
     )
 

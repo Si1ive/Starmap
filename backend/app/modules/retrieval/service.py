@@ -46,10 +46,12 @@ class RetrievalService:
         query: str,
         subject_id: Optional[str] = None,
         chapter_ids: Optional[List[str]] = None,
+        knowledge_point_ids: Optional[List[str]] = None,
         entity_type: Optional[str] = None,
         mode: str = "hybrid",
         limit: int = 10,
         filters: Optional[Dict[str, Any]] = None,
+        exclude_entity_ids: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Phase 0 + Phase 1 检索：先用大纲扩展 query，再做内容检索。
@@ -88,10 +90,12 @@ class RetrievalService:
             sparse_query=query,
             subject_id=merged_subject_id,
             chapter_ids=merged_chapter_ids,
+            knowledge_point_ids=knowledge_point_ids,
             entity_type=entity_type,
             mode=mode,
             limit=limit,
             filters=filters,
+            exclude_entity_ids=exclude_entity_ids,
         )
 
         return {
@@ -202,11 +206,13 @@ class RetrievalService:
         query: str,
         subject_id: Optional[str] = None,
         chapter_ids: Optional[List[str]] = None,
+        knowledge_point_ids: Optional[List[str]] = None,
         entity_type: Optional[str] = None,
         mode: str = "hybrid",
         limit: int = 10,
         filters: Optional[Dict[str, Any]] = None,
         sparse_query: Optional[str] = None,
+        exclude_entity_ids: Optional[List[str]] = None,
     ) -> List[RetrievalResult]:
         """
         统一检索入口
@@ -215,12 +221,14 @@ class RetrievalService:
             query: 用户查询文本（dense 检索用，可为大纲扩展后的长 query）
             subject_id: 学科过滤
             chapter_ids: 章节过滤（任意匹配）
+            knowledge_point_ids: 知识点过滤（题目关联的任意匹配）
             entity_type: "knowledge_point" / "question" / None(both)
             mode: "dense" / "sparse" / "hybrid"
             limit: 返回数量
             filters: 结构化过滤，支持 exam_year/exam_scope/difficulty/question_type/answer_source/tags
             sparse_query: sparse 检索专用 query。缺省时复用 query；大纲扩展场景下
                 应传入原始 query，避免扩展拼接的长串给关键词 LIKE 引入噪声词
+            exclude_entity_ids: 需要排除的实体ID列表
 
         Returns:
             按相关性排序的检索结果列表
@@ -239,6 +247,8 @@ class RetrievalService:
             subject_id,
             chapter_ids,
             filters,
+            knowledge_point_ids=knowledge_point_ids,
+            exclude_entity_ids=exclude_entity_ids,
         )
 
         # 确定要搜索的 collections
@@ -264,7 +274,9 @@ class RetrievalService:
                     limit * 2,
                     subject_id=subject_id,
                     chapter_ids=chapter_ids,
+                    knowledge_point_ids=knowledge_point_ids,
                     filters=filters,
+                    exclude_entity_ids=exclude_entity_ids,
                 )
             else:
                 # hybrid: dense 用 query，sparse 用 sparse_q（原始 query）
@@ -274,7 +286,9 @@ class RetrievalService:
                     limit * 2,
                     subject_id=subject_id,
                     chapter_ids=chapter_ids,
+                    knowledge_point_ids=knowledge_point_ids,
                     filters=filters,
+                    exclude_entity_ids=exclude_entity_ids,
                 )
                 hits = self.search_engine.merge_hits(dense_hits, sparse_hits)
 

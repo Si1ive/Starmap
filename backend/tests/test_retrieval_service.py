@@ -20,19 +20,25 @@ def test_build_filter_keeps_qdrant_and_sparse_filter_dimensions_aligned():
             "difficulty": "hard",
             "tags": ["真题"],
         },
+        knowledge_point_ids=["kp-1"],
+        exclude_entity_ids=["question-excluded"],
     )
 
     conditions = {condition.key: condition for condition in qdrant_filter.must}
     assert set(conditions) == {
         "subject_id",
         "chapter_ids",
+        "knowledge_point_ids",
         "exam_year",
         "difficulty",
         "tags",
     }
     assert conditions["subject_id"].match.value == "subject-os"
     assert conditions["chapter_ids"].match.any == ["chapter-process"]
+    assert conditions["knowledge_point_ids"].match.any == ["kp-1"]
     assert conditions["tags"].match.any == ["真题"]
+    assert qdrant_filter.must_not[0].key == "entity_id"
+    assert qdrant_filter.must_not[0].match.any == ["question-excluded"]
 
 
 def test_merge_hits_does_not_mutate_qdrant_or_sparse_hits():

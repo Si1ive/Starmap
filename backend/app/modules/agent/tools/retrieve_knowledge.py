@@ -80,6 +80,9 @@ def _logical_activity_id(
     query: str,
     subject_id: Optional[str],
     chapter_ids: Optional[List[str]],
+    knowledge_point_ids: Optional[List[str]],
+    filters: Optional[Dict[str, Any]],
+    exclude_entity_ids: Optional[List[str]],
     entity_type: Optional[str],
 ) -> str:
     normalized = {
@@ -88,6 +91,9 @@ def _logical_activity_id(
         "query": query.strip(),
         "subject_id": subject_id or "",
         "chapter_ids": sorted(set(chapter_ids or [])),
+        "knowledge_point_ids": sorted(set(knowledge_point_ids or [])),
+        "filters": filters or {},
+        "exclude_entity_ids": sorted(set(exclude_entity_ids or [])),
         "entity_type": entity_type or "",
     }
     digest = hashlib.sha1(
@@ -126,6 +132,9 @@ async def retrieve_knowledge(
     query: str,
     subject_id: Optional[str] = None,
     chapter_ids: Optional[List[str]] = None,
+    knowledge_point_ids: Optional[List[str]] = None,
+    filters: Optional[Dict[str, Any]] = None,
+    exclude_entity_ids: Optional[List[str]] = None,
     entity_type: Optional[str] = None,
     limit: int = 10,
     run_id: Optional[str] = None,
@@ -138,6 +147,9 @@ async def retrieve_knowledge(
         query: 查询文本
         subject_id: 限定学科ID
         chapter_ids: 限定章节ID列表
+        knowledge_point_ids: 限定题目关联的知识点ID列表
+        filters: 结构化过滤条件
+        exclude_entity_ids: 需要排除的实体ID列表
         entity_type: 实体类型（knowledge_point / question）
         limit: 返回结果数量
     
@@ -151,6 +163,9 @@ async def retrieve_knowledge(
         query=query,
         subject_id=subject_id,
         chapter_ids=chapter_ids,
+        knowledge_point_ids=knowledge_point_ids,
+        filters=filters,
+        exclude_entity_ids=exclude_entity_ids,
         entity_type=entity_type,
     )
     attempt_no = (
@@ -169,6 +184,9 @@ async def retrieve_knowledge(
         query=query,
         subject_id=subject_id,
         chapter_ids=chapter_ids,
+        knowledge_point_ids=knowledge_point_ids,
+        filters=filters,
+        exclude_entity_ids=exclude_entity_ids,
     )
     
     if run_id:
@@ -196,7 +214,10 @@ async def retrieve_knowledge(
                     "query": query[:200],
                     "subject_id": subject_id,
                     "chapter_ids": chapter_ids or [],
+                    "knowledge_point_ids": knowledge_point_ids or [],
                     "entity_type": entity_type,
+                    "filters": filters or {},
+                    "exclude_entity_ids": exclude_entity_ids or [],
                     "limit": limit,
                     "attempt_no": attempt_no,
                 },
@@ -209,9 +230,12 @@ async def retrieve_knowledge(
             query=query,
             subject_id=subject_id,
             chapter_ids=chapter_ids,
+            knowledge_point_ids=knowledge_point_ids,
             entity_type=entity_type,
             mode="hybrid",
             limit=limit,
+            filters=filters,
+            exclude_entity_ids=exclude_entity_ids,
         )
         
         normalized = [
@@ -329,6 +353,20 @@ _TOOL_PARAMETERS = {
             "type": "array",
             "items": {"type": "string"},
             "description": "限定章节ID列表（可选）",
+        },
+        "knowledge_point_ids": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "限定题目关联的知识点ID列表（可选）",
+        },
+        "filters": {
+            "type": "object",
+            "description": "结构化过滤，例如 difficulty/question_type/tags",
+        },
+        "exclude_entity_ids": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "需要排除的实体ID列表（可选）",
         },
         "entity_type": {
             "type": "string",

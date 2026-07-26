@@ -12,7 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.logging import get_logger
 from .contracts import WorkflowDefinition, Node, NodeResult, ExecutionContext
 from .registry import workflow_registry
-from ..memory_selector import build_practice_query, load_practice_bundle
+from ..memory_selector import (
+    build_practice_filters,
+    build_practice_query,
+    load_practice_bundle,
+)
 from ..time_utils import utc_isoformat, utc_now
 
 logger = get_logger(__name__)
@@ -88,6 +92,9 @@ async def _question_discovery_node(context: ExecutionContext, db: AsyncSession) 
     result = await retrieve_knowledge(
         db,
         query=query,
+        knowledge_point_ids=(practice_bundle or {}).get("knowledge_point_ids"),
+        filters=build_practice_filters(practice_bundle),
+        exclude_entity_ids=(practice_bundle or {}).get("excluded_question_ids"),
         entity_type="question",
         limit=10,
         run_id=context.run_id,

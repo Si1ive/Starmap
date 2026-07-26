@@ -127,4 +127,6 @@ async def test_load_practice_bundle_uses_snapshot_topic_and_context_metadata(db_
     assert bundle.topic.title == "二分查找"
     assert bundle.topic.aliases == ["折半查找"]
     assert bundle.constraints == ["难度适中"]
+    assert bundle.difficulty == "medium"
+    assert bundle.knowledge_point_ids == ["kp_binary_search"]
     assert bundle.selected_artifact_ids == ["artifact_001", "artifact_002"]
