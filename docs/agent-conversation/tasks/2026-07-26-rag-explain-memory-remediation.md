@@ -68,11 +68,12 @@ load_scope completed
 | Explain 产物渲染 | `backend/app/modules/agent/workflows/explain.py` | `_render_artifact_node`、`_completed_node` | L279-L306 | 已通过统一 `artifact` 契约把成功正文挂回上下文并交给 worker 持久化 |
 | Explain 持久化与刷新恢复 | `backend/app/modules/agent/worker.py`、`backend/app/modules/agent/timeline.py` | `AgentWorker.process_run`、`AgentTimelineService.get_timeline`、`AgentTimelineService._activity_views`、`AgentTimelineService.message_view` | `worker.py` L100-L251；`timeline.py` L320-L360、L399-L538、L554-L572 | worker 在 completed 分支创建 artifact、写 `message.completed` / `run.completed`；时间线刷新时按 root run 重建活动、artifact 和最终正文 |
 | 节点结果契约 | `backend/app/modules/agent/workflows/contracts.py` | `NodeResult.success` | L27-L48 | 已支持 `artifact` 参数，render 节点可通过统一工厂方法把最终产物传给引擎与 worker |
-| Validate 检索与首个记忆消费 | `backend/app/modules/agent/memory_selector.py`、`backend/app/modules/agent/workflows/validate.py` | `load_practice_bundle`、`build_practice_query`、`build_practice_filters`、`_question_is_eligible`、`_load_learning_evidence_node`、`_question_discovery_node`、`_question_gate_node`、`_composition_gate_node` | `memory_selector.py` L81-L193；`validate.py` L29-L229 | Validate 已开始按 `PracticeBundle` 消费 snapshot topic、aliases、difficulty、knowledge point IDs 和选中的 Artifact，并把它们转换成题目检索 query 与过滤条件；缺少主题时会创建 `practice_topic` 等待用户补充后恢复执行；题目资格门与组合门继续读取真实 DTO。掌握度、真实排除集和唯一薄弱点回退仍待补齐 |
+| Validate 检索与首个记忆消费 | `backend/app/modules/agent/memory_selector.py`、`backend/app/modules/agent/workflows/validate.py` | `_load_excluded_question_ids`、`load_practice_bundle`、`build_practice_query`、`build_practice_filters`、`_question_is_eligible`、`_load_learning_evidence_node`、`_question_discovery_node`、`_question_gate_node`、`_composition_gate_node`、`_render_artifact_node` | `memory_selector.py` L89-L235；`validate.py` L29-L248 | Validate 已按 `PracticeBundle` 消费 snapshot topic、aliases、difficulty、knowledge point IDs 和选中的 Artifact；`load_practice_bundle` 会从近期 `practice_artifact_created` 事实事件装载真实 `excluded_question_ids` 并下发为 `exclude_entity_ids`；练习产物 content 携带 `question_ids`；缺少主题时创建 `practice_topic` 等待补充后恢复。掌握度与唯一薄弱点回退仍待补齐 |
 | Validate 缺主题澄清与恢复 | `backend/app/modules/agent/service.py`、`backend/app/modules/agent/timeline.py` | `create_input`、`submit_input_answer`、`AgentTimelineService._build_workflow_views` | `service.py` L279-L362；`timeline.py` L462-L500 | waiting run、`practice_topic` 输入、用户答案 | 创建 `AgentInput` 并投影 `workflow.input.required`，时间线把最新 pending input 暴露为 `workflow.pending_input`；用户提交答案后把输入标记为 answered，恢复 run 到 running，worker 从 checkpoint 回到 `_question_discovery_node` | 等待中的工作流卡片、恢复后的检索执行 | 用户补充输入 API / `AgentWorker.process_run` |
 | 当前上下文构建 | `backend/app/modules/agent/context_builder.py` | `AgentRunContext`、`ThreadContextBuilder.build`、`_load_thread_memory_state` | L82-L121、L138-L256、L489-L501 | 已能选择近期消息、Artifact、待处理交互，并读取线程 `active_topic` / `memory_state_version`；仍未按 `MemoryNeed` 选择掌握度、摘要和排除集 |
 | Router 与子 Run 交接 | `backend/app/modules/agent/workflows/conversation.py`、`backend/app/modules/agent/turn_understanding.py` | `_route_node`、`_child_context_metadata`、`_dispatch_workflow_node`、`build_turn_understanding`、`ensure_turn_memory_snapshot` | `conversation.py` L46-L260；`turn_understanding.py` L105-L227 | Router 已先生成 `TurnUnderstanding` 并创建 snapshot，再使用 `standalone_request` 路由；topic aliases、`memory_snapshot_id`、独立请求和 `difficulty:*` 约束都会传给 child run，Validate 已开始消费这些 snapshot 内容 |
-| Run 最终持久化 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | L150-L222 | 执行工作流并创建 Artifact/最终消息；未来在完成事务中写记忆更新 Outbox |
+| Run 最终持久化 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | L150-L225 | 执行工作流并创建 Artifact/最终消息；completed 分支已在同一事务调用 `project_completed_run_facts` 按产物类型写事实事件；未来继续补记忆更新 Outbox |
+| 完成事实投影 | `backend/app/modules/agent/memory_projection.py` | `project_completed_run_facts`、`_record_practice_artifact_created` | L15-L77 | 按 artifact 类型（非 workflow 名）分派事实事件；practice 产物写幂等 `practice_artifact_created` 事件到 `agent_memory_events`，载荷含 `artifact_id` 与 `question_ids`，供下一次练习装载排除集 |
 
 ## 第一组：立即解除现有故障
 
@@ -193,7 +194,8 @@ load_scope completed
 - 已在 `backend/app/modules/agent/workflows/validate.py` 的 `_load_learning_evidence_node()` 中装载 `PracticeBundle`，优先使用 bundle topic 填充 `weak_areas` / `recent_topics`，并把 bundle 本身写回 `ExecutionContext`。
 - 已在 `_question_discovery_node()` 中通过 `build_practice_query()` 构造 query，并把 `knowledge_point_ids`、`difficulty` 与 `exclude_entity_ids` 下发到 `retrieve_knowledge()`；当 bundle topic 存在时会发起 `query="二分查找 折半查找"` 的题目检索；当 topic 与 fallback terms 都为空时，会创建 `practice_topic` 输入项并进入 waiting，用户补充后从 checkpoint 恢复到同一节点继续检索。
 - 已补 `backend/tests/test_agent_validate_workflow.py::test_validate_uses_practice_bundle_topic_for_query` 与 `test_validate_stops_when_no_topic_or_fallback_terms`，分别覆盖 topic aliases + knowledge point + difficulty 过滤，以及“缺少主题进入 waiting”的行为；并新增 `backend/tests/test_agent_validate_worker.py::test_validate_waits_for_topic_clarification_and_resumes_with_answer`，覆盖输入项创建、时间线 `pending_input` 展示与回答后恢复执行。
-- 当前仍未完成：`chapter_ids` 的稳定来源、真实 `exclude_ids` 回写，以及唯一高优先级薄弱点回退。
+- 已打通真实 `exclude_ids` 回写（2026-07-26）：练习产物 content 携带 `question_ids`，Run 完成事务写 `practice_artifact_created` 事实事件；`load_practice_bundle` 从近期事件装载去重后的 `excluded_question_ids`（按最新优先，最多 10 个事件 / 50 道题），`_question_discovery_node` 已把它下发为 `exclude_entity_ids`。覆盖测试：`backend/tests/test_agent_memory_selector.py::test_load_practice_bundle_excludes_recent_practice_questions` 与 `backend/tests/test_agent_validate_worker.py::test_validate_completion_writes_practice_fact_event_for_exclusion`。
+- 当前仍未完成：`chapter_ids` 的稳定来源，以及唯一高优先级薄弱点回退。
 
 `validate` 是首个落地消费者，因为当前“讲解后出题”的痛点最集中、验证成本最低；它只是样板，不是
 记忆内核对 workflow 的硬编码。后续若把 `validate` 拆成新的 workflow，或新增 `drill`、`quiz`、`review`
@@ -216,6 +218,7 @@ load_scope completed
 
 ### MEM-006 按事实事件回写，而不是按 workflow 名写库
 
+- 状态：进行中（2026-07-26 已落地首个事实事件）。已固化 `MemoryFactType` 枚举（`memory_contracts.py`），并新增 `backend/app/modules/agent/memory_projection.py`：worker completed 分支在同一事务按 artifact 类型分派，practice 产物写幂等 `practice_artifact_created` 事件；重放不产生重复记忆。其余事实事件、热状态同步更新与 Memory Outbox 投影仍待实现。
 - 不把 `message.delta` 写长期记忆，只在 `message.completed`/`artifact.rendered`/`run.completed` 后投影。
 - Run 完成事务同步更新下一轮马上需要的热状态，并写 Memory Outbox。
 - 异步投影历史摘要、Embedding、偏好候选和长期事件，失败可重放且不反向把成功 Run 改成失败。

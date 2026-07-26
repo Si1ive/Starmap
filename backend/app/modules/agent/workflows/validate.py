@@ -210,12 +210,18 @@ async def _render_artifact_node(context: ExecutionContext, db: AsyncSession) -> 
     """渲染练习产物"""
     draft = context.get("practice_draft", {})
     composition = context.get("composition", {})
-    
+    question_ids = [
+        str(question.get("entity_id"))
+        for question in draft.get("questions", [])
+        if question.get("entity_id")
+    ]
+
     artifact = {
         "type": "practice",
         "title": draft.get("title", "专项练习"),
         "content": {
             "question_count": len(draft.get("questions", [])),
+            "question_ids": question_ids,
             "composition": composition,
         },
         "summary": f"共 {len(draft.get('questions', []))} 道题，覆盖 {len(composition.get('subjects', {}))} 个考点",

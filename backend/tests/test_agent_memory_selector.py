@@ -11,6 +11,7 @@ from app.db.mysql import Base
 from app.modules.agent.memory_selector import load_practice_bundle
 from app.modules.agent.models import (
     AgentMessage,
+    AgentMemoryEvent,
     AgentMemorySnapshot,
     AgentMemorySnapshotItem,
     AgentRun,
@@ -21,6 +22,7 @@ SELECTOR_TABLES = [
     AgentThread.__table__,
     AgentMessage.__table__,
     AgentRun.__table__,
+    AgentMemoryEvent.__table__,
     AgentMemorySnapshot.__table__,
     AgentMemorySnapshotItem.__table__,
 ]
@@ -130,3 +132,96 @@ async def test_load_practice_bundle_uses_snapshot_topic_and_context_metadata(db_
     assert bundle.difficulty == "medium"
     assert bundle.knowledge_point_ids == ["kp_binary_search"]
     assert bundle.selected_artifact_ids == ["artifact_001", "artifact_002"]
+    assert bundle.excluded_question_ids == []
+
+
+@pytest.mark.asyncio
+async def test_load_practice_bundle_excludes_recent_practice_questions(db_session):
+    thread = AgentThread(
+        id="thread_002",
+        user_id="user_001",
+        title="排除集线程",
+        status="active",
+    )
+    old_run = AgentRun(
+        id="run_validate_old",
+        thread_id=thread.id,
+        user_id="user_001",
+        workflow_name="validate",
+        workflow_key="validate",
+        workflow_version="v1",
+        status="completed",
+        input_message="给我出道题",
+    )
+    new_run = AgentRun(
+        id="run_validate_new",
+        thread_id=thread.id,
+        user_id="user_001",
+        workflow_name="validate",
+        workflow_key="validate",
+        workflow_version="v1",
+        status="queued",
+        input_message="再出一道",
+        metadata_json={},
+    )
+    db_session.add(thread)
+    await db_session.flush()
+    db_session.add_all([old_run, new_run])
+    await db_session.flush()
+    db_session.add_all(
+        [
+            AgentMemoryEvent(
+                user_id="user_001",
+                thread_id=thread.id,
+                run_id=old_run.id,
+                memory_scope="user",
+                source_kind="artifact",
+                fact_type="practice_artifact_created",
+                idempotency_key="practice_artifact_created:run_validate_older",
+                payload_json={
+                    "artifact_id": "art_older",
+                    "question_ids": ["question_001", "question_002"],
+                },
+            ),
+            AgentMemoryEvent(
+                user_id="user_001",
+                thread_id=thread.id,
+                run_id=old_run.id,
+                memory_scope="user",
+                source_kind="artifact",
+                fact_type="practice_artifact_created",
+                idempotency_key="practice_artifact_created:run_validate_old",
+                payload_json={
+                    "artifact_id": "art_old",
+                    "question_ids": ["question_002", "question_003"],
+                },
+            ),
+            AgentMemoryEvent(
+                user_id="user_other",
+                thread_id=None,
+                run_id=None,
+                memory_scope="user",
+                source_kind="artifact",
+                fact_type="practice_artifact_created",
+                idempotency_key="practice_artifact_created:run_other_user",
+                payload_json={
+                    "artifact_id": "art_other",
+                    "question_ids": ["question_999"],
+                },
+            ),
+        ]
+    )
+    await db_session.flush()
+
+    bundle = await load_practice_bundle(
+        db_session,
+        run_id=new_run.id,
+        user_id="user_001",
+    )
+
+    # 最新事件的题排在最前，跨事件重复的题只保留一次，其他用户的题不进入排除集。
+    assert bundle.excluded_question_ids == [
+        "question_002",
+        "question_003",
+        "question_001",
+    ]

@@ -15,6 +15,7 @@ from app.modules.agent.models import (
     AgentCheckpoint,
     AgentEvent,
     AgentInput,
+    AgentMemoryEvent,
     AgentMessage,
     AgentRun,
     AgentRunOutbox,
@@ -23,12 +24,13 @@ from app.modules.agent.models import (
     AgentThreadEvent,
     AgentThreadItem,
 )
+from app.modules.agent.memory_projection import project_completed_run_facts
 from app.modules.agent.service import AgentService
 from app.modules.agent.timeline import AgentTimelineService
 from app.modules.agent.tools import retrieve_knowledge as retrieve_module
 from app.modules.agent.worker import AgentWorker
 from app.modules.agent.workflows import validate
-from app.modules.agent.memory_selector import PracticeBundle
+from app.modules.agent.memory_selector import PracticeBundle, TopicBundle
 
 WORKER_TABLES = [
     AgentThread.__table__,
@@ -43,6 +45,7 @@ WORKER_TABLES = [
     AgentArtifact.__table__,
     AgentInput.__table__,
     AgentApproval.__table__,
+    AgentMemoryEvent.__table__,
 ]
 
 
@@ -170,3 +173,86 @@ async def test_validate_waits_for_topic_clarification_and_resumes_with_answer(
     assert artifact is not None
     assert artifact.content_json["content"]["question_count"] == 1
     assert retrieve.await_args.kwargs["query"] == "红黑树"
+
+
+@pytest.mark.asyncio
+async def test_validate_completion_writes_practice_fact_event_for_exclusion(
+    db_session,
+    monkeypatch,
+):
+    run = await _create_validate_run(db_session, run_id="run_validate_fact_001")
+    monkeypatch.setattr(
+        validate,
+        "load_practice_bundle",
+        AsyncMock(
+            return_value=PracticeBundle(
+                topic=TopicBundle(
+                    title="二分查找",
+                    entity_type="knowledge_point",
+                    entity_id="kp_binary_search",
+                    aliases=["折半查找"],
+                    source="snapshot",
+                )
+            )
+        ),
+    )
+    retrieve = AsyncMock(
+        return_value={
+            "status": "success",
+            "results": [
+                {
+                    "entity_id": "question_binary_001",
+                    "entity_type": "question",
+                    "entity_title": "[1] 二分查找练习",
+                    "subject_id": "subject_ds",
+                    "question_meta": {
+                        "question_type": "analysis",
+                        "difficulty": "medium",
+                        "source": "真题卷",
+                        "paper_name": "查找专项",
+                        "answer_source": "manual",
+                        "review_status": "approved",
+                        "status": "active",
+                    },
+                }
+            ],
+            "total": 1,
+        }
+    )
+    monkeypatch.setattr(retrieve_module, "retrieve_knowledge", retrieve)
+
+    assert await AgentWorker().process_run(db_session, run) is True
+    assert run.status == "completed"
+
+    artifact = await db_session.scalar(
+        select(AgentArtifact).where(AgentArtifact.run_id == run.id)
+    )
+    assert artifact is not None
+    assert artifact.content_json["content"]["question_ids"] == ["question_binary_001"]
+
+    events = list(
+        (
+            await db_session.execute(
+                select(AgentMemoryEvent).where(AgentMemoryEvent.run_id == run.id)
+            )
+        ).scalars()
+    )
+    assert len(events) == 1
+    event = events[0]
+    assert event.fact_type == "practice_artifact_created"
+    assert event.memory_scope == "user"
+    assert event.source_kind == "artifact"
+    assert event.idempotency_key == f"practice_artifact_created:{run.id}"
+    assert event.payload_json["artifact_id"] == artifact.id
+    assert event.payload_json["question_ids"] == ["question_binary_001"]
+
+    # 重放完成投影不会产生第二条事实事件。
+    await project_completed_run_facts(db_session, run, artifact)
+    replayed = list(
+        (
+            await db_session.execute(
+                select(AgentMemoryEvent).where(AgentMemoryEvent.run_id == run.id)
+            )
+        ).scalars()
+    )
+    assert len(replayed) == 1

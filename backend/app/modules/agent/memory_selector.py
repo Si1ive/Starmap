@@ -8,8 +8,16 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .memory_contracts import MemoryNeed
-from .models import AgentMemorySnapshot, AgentMemorySnapshotItem, AgentRun
+from .memory_contracts import MemoryFactType, MemoryNeed
+from .models import (
+    AgentMemoryEvent,
+    AgentMemorySnapshot,
+    AgentMemorySnapshotItem,
+    AgentRun,
+)
+
+_EXCLUDED_EVENT_LIMIT = 10
+_EXCLUDED_QUESTION_LIMIT = 50
 
 
 class TopicBundle(BaseModel):
@@ -78,6 +86,34 @@ def _bundle_difficulty(constraints: list[str]) -> str | None:
     return None
 
 
+async def _load_excluded_question_ids(db: AsyncSession, *, user_id: str) -> list[str]:
+    """按近期 practice 事实事件装载用户的真实排除集，越新的题排越前。"""
+    events = (
+        await db.execute(
+            select(AgentMemoryEvent)
+            .where(
+                AgentMemoryEvent.user_id == user_id,
+                AgentMemoryEvent.fact_type
+                == MemoryFactType.PRACTICE_ARTIFACT_CREATED.value,
+            )
+            .order_by(AgentMemoryEvent.id.desc())
+            .limit(_EXCLUDED_EVENT_LIMIT)
+        )
+    ).scalars()
+    excluded: list[str] = []
+    seen: set[str] = set()
+    for event in events:
+        for question_id in (event.payload_json or {}).get("question_ids") or []:
+            normalized = str(question_id).strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            excluded.append(normalized)
+            if len(excluded) >= _EXCLUDED_QUESTION_LIMIT:
+                return excluded
+    return excluded
+
+
 async def load_practice_bundle(
     db: AsyncSession,
     *,
@@ -93,13 +129,15 @@ async def load_practice_bundle(
     if run is None:
         return PracticeBundle()
 
+    excluded_question_ids = await _load_excluded_question_ids(db, user_id=user_id)
     metadata = run.metadata_json or {}
     snapshot_id = metadata.get("memory_snapshot_id")
     if not snapshot_id:
         return PracticeBundle(
             selected_artifact_ids=list(
                 (metadata.get("context_snapshot") or {}).get("selected_artifact_ids") or []
-            )
+            ),
+            excluded_question_ids=excluded_question_ids,
         )
 
     snapshot = await db.scalar(
@@ -109,7 +147,10 @@ async def load_practice_bundle(
         )
     )
     if snapshot is None:
-        return PracticeBundle(snapshot_id=str(snapshot_id))
+        return PracticeBundle(
+            snapshot_id=str(snapshot_id),
+            excluded_question_ids=excluded_question_ids,
+        )
 
     snapshot_items = list(
         (
@@ -155,6 +196,7 @@ async def load_practice_bundle(
         knowledge_point_ids=knowledge_point_ids,
         reference_sources=list(understanding.get("reference_sources") or []),
         selected_artifact_ids=list(context_snapshot.get("selected_artifact_ids") or []),
+        excluded_question_ids=excluded_question_ids,
     )
 
 

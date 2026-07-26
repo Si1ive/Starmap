@@ -30,6 +30,16 @@ class MemoryNeed(str, Enum):
     PENDING_INTERACTION = "pending_interaction"
 
 
+class MemoryFactType(str, Enum):
+    """Fixed domain fact events allowed to enter long-term memory."""
+
+    TOPIC_CONFIRMED = "topic_confirmed"
+    EXPLANATION_ARTIFACT_CREATED = "explanation_artifact_created"
+    PRACTICE_ARTIFACT_CREATED = "practice_artifact_created"
+    GRADE_RESULT_CONFIRMED = "grade_result_confirmed"
+    PLAN_CONFIRMED = "plan_confirmed"
+
+
 MEMORY_NEED_PARTITIONS: dict[MemoryNeed, tuple[MemoryPartition, ...]] = {
     MemoryNeed.CONVERSATION_CONTINUITY: (
         MemoryPartition.RECENT_CONVERSATION,

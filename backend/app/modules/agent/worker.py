@@ -21,6 +21,7 @@ from .events import event_store
 from .outbox import outbox_store
 from .service import AgentService
 from .checkpoints import checkpoint_store
+from .memory_projection import project_completed_run_facts
 from .workflows.contracts import NodeStatus
 from .public_errors import classify_agent_error
 from .time_utils import utc_now
@@ -196,6 +197,7 @@ class AgentWorker:
                         "artifact_id": artifact.id,
                         "artifact_type": artifact.artifact_type,
                     })
+                    await project_completed_run_facts(db, run, artifact)
 
                 display_result = None
                 if result.artifact:
