@@ -33,6 +33,7 @@
 | Artifact 工厂契约 | `backend/app/modules/agent/workflows/contracts.py` | `NodeResult.success` | L27-L48 | render 节点可通过统一工厂方法同时返回 `output`、`next_node` 和最终 `artifact`，避免 completed 之前丢失产物 |
 | 节点进度持久化 | `backend/app/modules/agent/workflows/engine.py` | `WorkflowEngine.execute` | L61-L212 | 每个 step 的开始、完成、失败都写 `agent_steps` 和 `agent_events`，并在关键边界 commit |
 | 当前公开步骤 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | L127-L209 | run 进入 running 和完成时维护 `current_public_step`、最终 artifact 和消息完成事件 |
+| 最终正文与产物落库 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | L183-L251 | workflow 返回 completed 后创建 `AgentArtifact`、写 `artifact.rendered` / `message.completed` / `run.completed`，让刷新可恢复最终正文和 artifact |
 | 时间线步骤重建 | `backend/app/modules/agent/timeline.py` | `AgentTimelineService._build_workflow_views` | L399-L538 | 按 root run 聚合 child runs、steps、tool events、pending input 和 approvals |
 | 活动按 ID 归并 | `backend/app/modules/agent/timeline.py` | `AgentTimelineService._activity_views` | L506-L538 | `tool.called` + `tool.result` 共享同一 `activity_id` 时可在刷新后重建成一个活动 |
 
@@ -42,12 +43,13 @@
 | --- | --- | --- | --- | --- |
 | 工作流公开步骤持久化 | `backend/tests/test_agent_workflow_engine.py` | `test_engine_persists_public_step_for_timeline_snapshot` | L72-L143 | 校验 step.started / step.completed 真实提交后，时间线刷新仍能恢复当前步骤 |
 | Explain 最终 Artifact 不再丢失 | `backend/tests/test_agent_workflow_engine.py` | `test_explain_workflow_keeps_artifact_through_render_and_completion` | L146-L257 | 真正执行 explain workflow 到 `render_artifact -> completed`，确认 `NodeResult.success(..., artifact=...)` 可把 artifact 保留到最终结果 |
+| Explain 无资料回退在 worker 持久化后仍可刷新恢复 | `backend/tests/test_agent_explain_worker.py` | `test_worker_persists_zero_hit_fallback_answer_without_citations`、`test_worker_persists_retrieval_error_fallback_answer_without_citations` | L123-L264 | 真实执行 `AgentWorker.process_run`，覆盖零命中和检索异常两条路径的活动卡片、artifact、最终消息与线程刷新恢复 |
 
 ## 当前整改关注点
 
 1. `FLOW-001` 已在 2026-07-25 完成：workflow 最终 Artifact 通过 `NodeResult.success(..., artifact=...)` 进入 `context.artifacts`，Explain 渲染链已补回归测试。
 2. `ACT-001` 要稳定逻辑 `activity_id`，否则即便后端只是在重试，时间线刷新和 SSE 都会显示成多张活动卡片。
-3. `EXP-001` 需要同时覆盖零命中和工具异常两条公开路径，确保错误语义与最终正文各自可恢复。
+3. `EXP-001` 已在 2026-07-26 补齐 worker 级验收：零命中和工具异常两条公开路径都会保留正确活动语义，且最终正文、artifact 与空 citations 均可在刷新后恢复。
 
 ## 下一步阅读
 
