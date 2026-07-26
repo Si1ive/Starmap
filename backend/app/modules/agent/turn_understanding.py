@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from typing import Any
 
@@ -23,6 +24,21 @@ _EXPLAIN_HINTS = ("讲一下", "讲解", "解释", "说明")
 _EASY_HINTS = ("简单点", "简单一点", "容易点", "基础点", "基础一些")
 _MEDIUM_HINTS = ("难度适中", "适中", "中等")
 _HARD_HINTS = ("难一点", "难一些", "难点", "提高点", "提升点")
+_CHAPTER_ORDINAL_PATTERN = re.compile(
+    r"第\s*([0-9]{1,2}|[一二三四五六七八九十两]{1,3})\s*章"
+)
+_CHINESE_DIGITS = {
+    "一": 1,
+    "二": 2,
+    "两": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+}
 
 
 class TopicEntity(BaseModel):
@@ -93,14 +109,33 @@ def _derive_standalone_request(raw_input: str, topic: TopicEntity | None) -> tup
     return raw_input, None
 
 
+def _parse_chapter_ordinal(value: str) -> int | None:
+    if value.isdigit():
+        ordinal = int(value)
+    elif "十" in value:
+        tens_text, ones_text = value.split("十", 1)
+        tens = _CHINESE_DIGITS.get(tens_text, 1) if tens_text else 1
+        ones = _CHINESE_DIGITS.get(ones_text, 0) if ones_text else 0
+        ordinal = tens * 10 + ones
+    else:
+        ordinal = _CHINESE_DIGITS.get(value, 0)
+    return ordinal if 1 <= ordinal <= 99 else None
+
+
 def _derive_constraints(raw_input: str) -> list[str]:
+    constraints: list[str] = []
     if any(hint in raw_input for hint in _MEDIUM_HINTS):
-        return ["difficulty:medium"]
-    if any(hint in raw_input for hint in _HARD_HINTS):
-        return ["difficulty:hard"]
-    if any(hint in raw_input for hint in _EASY_HINTS):
-        return ["difficulty:easy"]
-    return []
+        constraints.append("difficulty:medium")
+    elif any(hint in raw_input for hint in _HARD_HINTS):
+        constraints.append("difficulty:hard")
+    elif any(hint in raw_input for hint in _EASY_HINTS):
+        constraints.append("difficulty:easy")
+    chapter_match = _CHAPTER_ORDINAL_PATTERN.search(raw_input)
+    if chapter_match:
+        ordinal = _parse_chapter_ordinal(chapter_match.group(1))
+        if ordinal is not None:
+            constraints.append(f"chapter_ordinal:{ordinal}")
+    return constraints
 
 
 def build_turn_understanding(agent_context: AgentRunContext) -> TurnUnderstanding:

@@ -246,10 +246,122 @@ async def test_load_practice_bundle_uses_snapshot_topic_and_context_metadata(db_
     assert bundle.difficulty == "medium"
     assert bundle.knowledge_point_ids == ["kp_binary_search"]
     assert bundle.chapter_ids == ["cchap_search", "cchap_algo_basic"]
+    assert bundle.chapter_scope_source == "knowledge_point"
     assert bundle.selected_artifact_ids == ["artifact_001", "artifact_002"]
     assert bundle.excluded_question_ids == []
     assert bundle.topic.source == "thread_memory"
     assert bundle.mastery_signals == []
+
+
+@pytest.mark.asyncio
+async def test_explicit_chapter_ordinal_overrides_knowledge_point_default_chapters(
+    db_session,
+):
+    thread = AgentThread(
+        id="thread_explicit_chapter",
+        user_id="user_001",
+        title="显式章节约束",
+        status="active",
+    )
+    run = AgentRun(
+        id="run_explicit_chapter",
+        thread_id=thread.id,
+        user_id="user_001",
+        workflow_name="validate",
+        workflow_key="validate",
+        workflow_version="v1",
+        status="queued",
+        input_message="给我出一道第三章的题",
+        metadata_json={"memory_snapshot_id": "memsnap_explicit_chapter"},
+    )
+    snapshot = AgentMemorySnapshot(
+        id="memsnap_explicit_chapter",
+        run_id=run.id,
+        thread_id=thread.id,
+        user_id="user_001",
+        state_version=1,
+        standalone_request="给用户出一道关于二分查找的练习题",
+        understanding_json={
+            "raw_input": "给我出一道第三章的题",
+            "standalone_request": "给用户出一道关于二分查找的练习题",
+            "intent_hint": "practice_generation",
+            "topic_entities": [
+                {
+                    "entity_type": "knowledge_point",
+                    "entity_id": "kp_binary_search",
+                    "title": "二分查找",
+                    "source": "thread_memory",
+                    "aliases": ["折半查找"],
+                }
+            ],
+            "constraints": ["chapter_ordinal:3"],
+            "reference_sources": [],
+        },
+        selection_metadata_json={},
+    )
+    db_session.add(thread)
+    await db_session.flush()
+    db_session.add(run)
+    await db_session.flush()
+    db_session.add(snapshot)
+    await db_session.flush()
+    await _seed_knowledge_point(
+        db_session,
+        kp_id="kp_binary_search",
+        title="二分查找",
+        aliases=["折半查找"],
+    )
+    db_session.add_all(
+        [
+            CanonicalChapter(
+                id="cchap_ds_01",
+                subject_id="subject_ds",
+                level=1,
+                name="绪论",
+                sort_order=0,
+                status="active",
+            ),
+            CanonicalChapter(
+                id="cchap_ds_02",
+                subject_id="subject_ds",
+                level=1,
+                name="线性表",
+                sort_order=1,
+                status="active",
+            ),
+            CanonicalChapter(
+                id="cchap_ds_03",
+                subject_id="subject_ds",
+                level=1,
+                name="栈、队列和数组",
+                sort_order=2,
+                status="active",
+            ),
+        ]
+    )
+    await db_session.flush()
+    await _seed_chapter_link(
+        db_session,
+        kp_id="kp_binary_search",
+        chapter_id="cchap_search_default",
+        chapter_name="查找",
+        is_primary=True,
+        relevance=1.0,
+    )
+    default_chapter = await db_session.get(CanonicalChapter, "cchap_search_default")
+    default_chapter.sort_order = 9
+    await db_session.flush()
+
+    bundle = await load_practice_bundle(
+        db_session,
+        run_id=run.id,
+        user_id="user_001",
+    )
+
+    assert bundle.constraints == ["chapter_ordinal:3"]
+    assert bundle.knowledge_point_ids == ["kp_binary_search"]
+    assert bundle.chapter_ids == ["cchap_ds_03"]
+    assert bundle.chapter_scope_source == "explicit"
 
 
 async def _create_run_without_snapshot(db_session, *, run_id: str) -> AgentRun:

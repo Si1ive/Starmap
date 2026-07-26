@@ -41,3 +41,21 @@ def test_build_turn_understanding_preserves_topic_aliases_and_difficulty_constra
     assert understanding.intent_hint == "practice_generation"
     assert understanding.topic_entities[0].aliases == ["折半查找"]
     assert understanding.constraints == ["difficulty:hard"]
+
+
+def test_build_turn_understanding_extracts_explicit_chapter_ordinal():
+    understanding = build_turn_understanding(
+        _context(
+            current_input="给我出一道第三章难一点的题",
+            active_topic={
+                "entity_type": "knowledge_point",
+                "entity_id": "kp_binary_search",
+                "title": "二分查找",
+                "aliases": ["折半查找"],
+                "source": "thread_memory",
+            },
+        )
+    )
+
+    assert understanding.standalone_request == "给用户出一道关于二分查找的练习题"
+    assert understanding.constraints == ["difficulty:hard", "chapter_ordinal:3"]

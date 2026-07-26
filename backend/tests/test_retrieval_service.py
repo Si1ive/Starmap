@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy.dialects import mysql
 
 from app.db.qdrant import qdrant_manager
+from app.modules.retrieval import service as retrieval_service_module
 from app.modules.retrieval.search_engine import RetrievalSearchEngine
 from app.modules.retrieval.service import RetrievalService
 
@@ -62,6 +63,39 @@ def test_merge_hits_does_not_mutate_qdrant_or_sparse_hits():
         "payload": {"segment_id": "segment-1"},
     }
     assert sparse_hits[1]["score"] == 0.6
+
+
+@pytest.mark.asyncio
+async def test_outline_expansion_keeps_explicit_chapter_scope_strict(monkeypatch):
+    monkeypatch.setattr(
+        retrieval_service_module,
+        "expand_query_with_outline",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                expanded_query="二分查找 栈",
+                matched_chapters=[
+                    {"chapter_id": "cchap_outline_01"},
+                    {"chapter_id": "cchap_outline_02"},
+                ],
+                subject_ids=["subject_outline_guess"],
+                chapter_ids=["cchap_outline_01", "cchap_outline_02"],
+            )
+        ),
+    )
+    service = RetrievalService(None)
+    service.search = AsyncMock(return_value=[])
+
+    await service.search_with_outline_expansion(
+        query="二分查找",
+        chapter_ids=["cchap_explicit_03"],
+        strict_chapter_scope=True,
+        entity_type="question",
+    )
+
+    assert service.search.await_args.kwargs["chapter_ids"] == [
+        "cchap_explicit_03"
+    ]
+    assert service.search.await_args.kwargs["subject_id"] is None
 
 
 @pytest.mark.asyncio

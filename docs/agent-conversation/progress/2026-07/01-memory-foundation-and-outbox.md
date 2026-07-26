@@ -138,7 +138,7 @@ fallback 也属于成功讲解，且讲解行为不会被误当成学习掌握�
 ### 实现
 
 - 新增 `backend/app/modules/agent/memory_projection.py::project_topic_confirmed_fact`（L67-L122），仅接受 `source=context_ref` 的首个类型化主题，以 `topic_confirmed:{run_id}` 幂等写线程级事件，并记录 snapshot、状态版本和来源消息。
-- 在 `backend/app/modules/agent/turn_understanding.py::ensure_turn_memory_snapshot`（L161-L246）创建或复用 snapshot 时调用主题投影；写入发生在 `_route_node` 的 Router 调用之前，继承自 `thread_memory` 的主题会无副作用跳过。
+- 在 `backend/app/modules/agent/turn_understanding.py::ensure_turn_memory_snapshot`（L196-L281）创建或复用 snapshot 时调用主题投影；写入发生在 `_route_node` 的 Router 调用之前，继承自 `thread_memory` 的主题会无副作用跳过。
 - 更新 `backend/tests/test_agent_conversation_workflow.py::test_model_configuration_failure_creates_visible_failed_message`（L603-L666），证明 Router 模型不可用时显式二分查找主题仍存在；`test_follow_up_validate_request_uses_active_topic_snapshot_for_child_run`（L443-L521）证明继承主题不新增确认事件。
 - 新增 `backend/tests/test_agent_memory_projection.py::test_topic_confirmed_projection_is_idempotent_and_skips_inherited_topic`（L133-L208），覆盖同一 Run 重放、继承跳过与 Outbox 补建。
 

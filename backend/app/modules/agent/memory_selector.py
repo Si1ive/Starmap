@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.mysql_models import KnowledgePoint, KnowledgePointChapterLink
+from app.models.mysql_models import (
+    CanonicalChapter,
+    KnowledgePoint,
+    KnowledgePointChapterLink,
+)
 
 from .memory_contracts import MemoryFactType, MemoryNeed
 from .models import (
@@ -37,9 +41,11 @@ class PracticeBundle(BaseModel):
     standalone_request: str | None = None
     topic: TopicBundle | None = None
     constraints: list[str] = Field(default_factory=list)
+    unresolved_constraints: list[str] = Field(default_factory=list)
     difficulty: str | None = None
     knowledge_point_ids: list[str] = Field(default_factory=list)
     chapter_ids: list[str] = Field(default_factory=list)
+    chapter_scope_source: Literal["explicit", "knowledge_point"] | None = None
     reference_sources: list[dict[str, Any]] = Field(default_factory=list)
     selected_artifact_ids: list[str] = Field(default_factory=list)
     mastery_signals: list[dict[str, Any]] = Field(default_factory=list)
@@ -151,6 +157,60 @@ async def _load_chapter_ids(
     return chapter_ids
 
 
+async def _resolve_explicit_chapter_ids(
+    db: AsyncSession,
+    *,
+    constraints: list[str],
+    knowledge_point_ids: list[str],
+) -> tuple[list[str] | None, list[str]]:
+    """把显式章节序号解析到唯一学科的一级标准章节。
+
+    返回 ``None`` 表示用户没有显式章节约束；返回空列表则表示存在显式约束但无法安全解析。
+    """
+    chapter_constraints = [
+        constraint
+        for constraint in constraints
+        if constraint.startswith("chapter_ordinal:")
+    ]
+    if not chapter_constraints:
+        return None, []
+    if len(chapter_constraints) != 1 or not knowledge_point_ids:
+        return [], chapter_constraints
+    try:
+        ordinal = int(chapter_constraints[0].split(":", 1)[1])
+    except (IndexError, ValueError):
+        return [], chapter_constraints
+    if ordinal < 1:
+        return [], chapter_constraints
+
+    subject_ids = list(
+        (
+            await db.execute(
+                select(KnowledgePoint.subject_id)
+                .where(KnowledgePoint.id.in_(knowledge_point_ids))
+                .distinct()
+            )
+        ).scalars()
+    )
+    if len(subject_ids) != 1:
+        return [], chapter_constraints
+    chapter_id = await db.scalar(
+        select(CanonicalChapter.id)
+        .where(
+            CanonicalChapter.subject_id == subject_ids[0],
+            CanonicalChapter.parent_id.is_(None),
+            CanonicalChapter.level == 1,
+            CanonicalChapter.status == "active",
+        )
+        .order_by(CanonicalChapter.sort_order, CanonicalChapter.id)
+        .offset(ordinal - 1)
+        .limit(1)
+    )
+    if chapter_id is None:
+        return [], chapter_constraints
+    return [chapter_id], []
+
+
 async def _load_unique_weak_topic(
     db: AsyncSession,
     *,
@@ -224,10 +284,12 @@ async def load_practice_bundle(
         knowledge_point_ids = (
             [topic.entity_id] if topic is not None and topic.entity_id else []
         )
+        chapter_ids = await _load_chapter_ids(db, knowledge_point_ids)
         return PracticeBundle(
             topic=topic,
             knowledge_point_ids=knowledge_point_ids,
-            chapter_ids=await _load_chapter_ids(db, knowledge_point_ids),
+            chapter_ids=chapter_ids,
+            chapter_scope_source="knowledge_point" if chapter_ids else None,
             mastery_signals=mastery_signals,
             selected_artifact_ids=list(
                 (metadata.get("context_snapshot") or {}).get("selected_artifact_ids") or []
@@ -246,11 +308,13 @@ async def load_practice_bundle(
         knowledge_point_ids = (
             [topic.entity_id] if topic is not None and topic.entity_id else []
         )
+        chapter_ids = await _load_chapter_ids(db, knowledge_point_ids)
         return PracticeBundle(
             snapshot_id=str(snapshot_id),
             topic=topic,
             knowledge_point_ids=knowledge_point_ids,
-            chapter_ids=await _load_chapter_ids(db, knowledge_point_ids),
+            chapter_ids=chapter_ids,
+            chapter_scope_source="knowledge_point" if chapter_ids else None,
             mastery_signals=mastery_signals,
             excluded_question_ids=excluded_question_ids,
         )
@@ -294,14 +358,29 @@ async def load_practice_bundle(
         else []
     )
     constraints = list(understanding.get("constraints") or [])
+    explicit_chapter_ids, unresolved_constraints = (
+        await _resolve_explicit_chapter_ids(
+            db,
+            constraints=constraints,
+            knowledge_point_ids=knowledge_point_ids,
+        )
+    )
+    if explicit_chapter_ids is not None:
+        chapter_ids = explicit_chapter_ids
+        chapter_scope_source = "explicit"
+    else:
+        chapter_ids = await _load_chapter_ids(db, knowledge_point_ids)
+        chapter_scope_source = "knowledge_point" if chapter_ids else None
     return PracticeBundle(
         snapshot_id=snapshot.id,
         standalone_request=snapshot.standalone_request,
         topic=topic,
         constraints=constraints,
+        unresolved_constraints=unresolved_constraints,
         difficulty=_bundle_difficulty(constraints),
         knowledge_point_ids=knowledge_point_ids,
-        chapter_ids=await _load_chapter_ids(db, knowledge_point_ids),
+        chapter_ids=chapter_ids,
+        chapter_scope_source=chapter_scope_source,
         reference_sources=list(understanding.get("reference_sources") or []),
         selected_artifact_ids=list(context_snapshot.get("selected_artifact_ids") or []),
         mastery_signals=mastery_signals,

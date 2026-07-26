@@ -46,6 +46,7 @@ class RetrievalService:
         query: str,
         subject_id: Optional[str] = None,
         chapter_ids: Optional[List[str]] = None,
+        strict_chapter_scope: bool = False,
         knowledge_point_ids: Optional[List[str]] = None,
         entity_type: Optional[str] = None,
         mode: str = "hybrid",
@@ -72,15 +73,23 @@ class RetrievalService:
         # Phase 0: 大纲扩展
         expansion = await expand_query_with_outline(self.db, query)
 
-        # 合并过滤条件。chapter filter 只取高置信 top-2 命中考点（matched_chapters
-        # 已按 score 降序），避免低分考点把候选集扩成混杂主题、引入噪声。
-        merged_subject_id = subject_id or (expansion.subject_ids[0] if expansion.subject_ids else None)
+        # 非严格范围合并高置信 top-2 大纲章节；用户显式章节属于严格范围，
+        # 只允许扩 query，不能把额外章节并入过滤条件。
+        merged_subject_id = (
+            subject_id
+            if strict_chapter_scope
+            else subject_id
+            or (expansion.subject_ids[0] if expansion.subject_ids else None)
+        )
         top_expansion_chapter_ids = [
             c["chapter_id"] for c in expansion.matched_chapters[:2] if c.get("chapter_id")
         ]
-        merged_chapter_ids = list(set(
-            (chapter_ids or []) + top_expansion_chapter_ids
-        )) or None
+        if strict_chapter_scope and chapter_ids:
+            merged_chapter_ids = list(dict.fromkeys(chapter_ids))
+        else:
+            merged_chapter_ids = list(
+                dict.fromkeys((chapter_ids or []) + top_expansion_chapter_ids)
+            ) or None
 
         # Phase 1: dense 用扩展后的 query（解决短查询语义不对称）；
         # sparse 保留原始 query（避免扩展拼入的长描述污染关键词匹配）。
@@ -107,6 +116,7 @@ class RetrievalService:
                 "matched_chapters": expansion.matched_chapters,
                 "subject_ids": expansion.subject_ids,
                 "chapter_ids": expansion.chapter_ids,
+                "strict_chapter_scope": strict_chapter_scope,
             },
         }
 

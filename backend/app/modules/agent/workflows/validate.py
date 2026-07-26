@@ -82,6 +82,15 @@ async def _question_discovery_node(context: ExecutionContext, db: AsyncSession) 
     evidence = context.get("learning_evidence", {})
     weak_areas = evidence.get("weak_areas", [])
     practice_bundle = context.get("practice_bundle", {})
+    unresolved_constraints = (practice_bundle or {}).get("unresolved_constraints") or []
+    if unresolved_constraints:
+        logger.warning(
+            "Validate 无法解析显式范围",
+            run_id=context.run_id,
+            unresolved_constraints=unresolved_constraints,
+        )
+        context.set("candidates", [])
+        return NodeResult.failure("无法解析显式章节范围，请提供有效章节")
 
     # 检索候选题目
     query = build_practice_query(
@@ -134,6 +143,9 @@ async def _question_discovery_node(context: ExecutionContext, db: AsyncSession) 
         query=query,
         knowledge_point_ids=(practice_bundle or {}).get("knowledge_point_ids"),
         chapter_ids=(practice_bundle or {}).get("chapter_ids"),
+        strict_chapter_scope=(
+            (practice_bundle or {}).get("chapter_scope_source") == "explicit"
+        ),
         filters=build_practice_filters(practice_bundle),
         exclude_entity_ids=(practice_bundle or {}).get("excluded_question_ids"),
         entity_type="question",

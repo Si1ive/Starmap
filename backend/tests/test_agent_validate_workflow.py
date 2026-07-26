@@ -194,6 +194,7 @@ async def test_validate_uses_practice_bundle_topic_for_query(monkeypatch):
                 difficulty="medium",
                 knowledge_point_ids=["kp_binary_search"],
                 chapter_ids=["cchap_search"],
+                chapter_scope_source="explicit",
                 excluded_question_ids=["question_old_001"],
             )
         ),
@@ -218,9 +219,43 @@ async def test_validate_uses_practice_bundle_topic_for_query(monkeypatch):
     assert retrieve.await_args.kwargs["query"] == "二分查找 折半查找"
     assert retrieve.await_args.kwargs["knowledge_point_ids"] == ["kp_binary_search"]
     assert retrieve.await_args.kwargs["chapter_ids"] == ["cchap_search"]
+    assert retrieve.await_args.kwargs["strict_chapter_scope"] is True
     assert retrieve.await_args.kwargs["filters"] == {"difficulty": "medium"}
     assert retrieve.await_args.kwargs["exclude_entity_ids"] == ["question_old_001"]
     assert retrieve.await_args.kwargs["entity_type"] == "question"
+
+
+@pytest.mark.asyncio
+async def test_validate_does_not_broaden_unresolved_explicit_chapter_scope(monkeypatch):
+    context = _context()
+    db = AsyncMock()
+    monkeypatch.setattr(
+        validate,
+        "load_practice_bundle",
+        AsyncMock(
+            return_value=PracticeBundle(
+                snapshot_id="memsnap_unresolved_chapter",
+                topic=TopicBundle(
+                    title="二分查找",
+                    entity_type="knowledge_point",
+                    entity_id="kp_binary_search",
+                    source="thread_memory",
+                ),
+                constraints=["chapter_ordinal:99"],
+                unresolved_constraints=["chapter_ordinal:99"],
+            )
+        ),
+    )
+    retrieve = AsyncMock()
+    monkeypatch.setattr(retrieve_module, "retrieve_knowledge", retrieve)
+
+    loaded = await validate._load_learning_evidence_node(context, db)
+    discovered = await validate._question_discovery_node(context, db)
+
+    assert loaded.status == NodeStatus.COMPLETED
+    assert discovered.status == NodeStatus.FAILED
+    assert discovered.error == "无法解析显式章节范围，请提供有效章节"
+    retrieve.assert_not_awaited()
 
 
 @pytest.mark.asyncio

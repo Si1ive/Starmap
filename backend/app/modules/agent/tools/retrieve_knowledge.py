@@ -80,6 +80,7 @@ def _logical_activity_id(
     query: str,
     subject_id: Optional[str],
     chapter_ids: Optional[List[str]],
+    strict_chapter_scope: bool,
     knowledge_point_ids: Optional[List[str]],
     filters: Optional[Dict[str, Any]],
     exclude_entity_ids: Optional[List[str]],
@@ -91,6 +92,7 @@ def _logical_activity_id(
         "query": query.strip(),
         "subject_id": subject_id or "",
         "chapter_ids": sorted(set(chapter_ids or [])),
+        "strict_chapter_scope": strict_chapter_scope,
         "knowledge_point_ids": sorted(set(knowledge_point_ids or [])),
         "filters": filters or {},
         "exclude_entity_ids": sorted(set(exclude_entity_ids or [])),
@@ -132,6 +134,7 @@ async def retrieve_knowledge(
     query: str,
     subject_id: Optional[str] = None,
     chapter_ids: Optional[List[str]] = None,
+    strict_chapter_scope: bool = False,
     knowledge_point_ids: Optional[List[str]] = None,
     filters: Optional[Dict[str, Any]] = None,
     exclude_entity_ids: Optional[List[str]] = None,
@@ -147,6 +150,7 @@ async def retrieve_knowledge(
         query: 查询文本
         subject_id: 限定学科ID
         chapter_ids: 限定章节ID列表
+        strict_chapter_scope: 是否禁止大纲扩展加入额外章节
         knowledge_point_ids: 限定题目关联的知识点ID列表
         filters: 结构化过滤条件
         exclude_entity_ids: 需要排除的实体ID列表
@@ -163,6 +167,7 @@ async def retrieve_knowledge(
         query=query,
         subject_id=subject_id,
         chapter_ids=chapter_ids,
+        strict_chapter_scope=strict_chapter_scope,
         knowledge_point_ids=knowledge_point_ids,
         filters=filters,
         exclude_entity_ids=exclude_entity_ids,
@@ -184,6 +189,7 @@ async def retrieve_knowledge(
         query=query,
         subject_id=subject_id,
         chapter_ids=chapter_ids,
+        strict_chapter_scope=strict_chapter_scope,
         knowledge_point_ids=knowledge_point_ids,
         filters=filters,
         exclude_entity_ids=exclude_entity_ids,
@@ -214,6 +220,7 @@ async def retrieve_knowledge(
                     "query": query[:200],
                     "subject_id": subject_id,
                     "chapter_ids": chapter_ids or [],
+                    "strict_chapter_scope": strict_chapter_scope,
                     "knowledge_point_ids": knowledge_point_ids or [],
                     "entity_type": entity_type,
                     "filters": filters or {},
@@ -230,6 +237,7 @@ async def retrieve_knowledge(
             query=query,
             subject_id=subject_id,
             chapter_ids=chapter_ids,
+            strict_chapter_scope=strict_chapter_scope,
             knowledge_point_ids=knowledge_point_ids,
             entity_type=entity_type,
             mode="hybrid",

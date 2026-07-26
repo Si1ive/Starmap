@@ -6,6 +6,32 @@ from app.modules.agent.tools import retrieve_knowledge as retrieve_module
 
 
 @pytest.mark.asyncio
+async def test_retrieve_knowledge_forwards_strict_chapter_scope(monkeypatch):
+    search = AsyncMock(
+        return_value={
+            "mode": "hybrid",
+            "outline_expansion": {"matched_chapters": []},
+            "results": [],
+        }
+    )
+    monkeypatch.setattr(
+        retrieve_module.RetrievalService,
+        "search_with_outline_expansion",
+        search,
+    )
+
+    await retrieve_module.retrieve_knowledge(
+        AsyncMock(),
+        query="二分查找",
+        chapter_ids=["cchap_ds_03"],
+        strict_chapter_scope=True,
+    )
+
+    assert search.await_args.kwargs["chapter_ids"] == ["cchap_ds_03"]
+    assert search.await_args.kwargs["strict_chapter_scope"] is True
+
+
+@pytest.mark.asyncio
 async def test_retrieve_knowledge_emits_public_running_and_completed_activity(monkeypatch):
     search = AsyncMock(
         return_value={
