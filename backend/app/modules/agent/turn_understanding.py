@@ -26,6 +26,7 @@ class TopicEntity(BaseModel):
     entity_id: str | None = None
     title: str
     source: str
+    aliases: list[str] = Field(default_factory=list)
 
 
 class TurnUnderstanding(BaseModel):
@@ -49,6 +50,11 @@ def _topic_from_context_ref(ref: dict[str, Any]) -> TopicEntity | None:
         entity_id=str(ref.get("id")) if ref.get("id") else None,
         title=title,
         source="context_ref",
+        aliases=[
+            str(alias).strip()
+            for alias in (ref.get("aliases") or [])
+            if str(alias).strip()
+        ],
     )
 
 
@@ -65,6 +71,11 @@ def _topic_from_memory(active_topic: dict[str, Any] | None) -> TopicEntity | Non
         entity_id=str(entity_id) if entity_id else None,
         title=title,
         source="thread_memory",
+        aliases=[
+            str(alias).strip()
+            for alias in (active_topic.get("aliases") or [])
+            if str(alias).strip()
+        ],
     )
 
 

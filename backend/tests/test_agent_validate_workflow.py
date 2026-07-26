@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.modules.agent.memory_selector import PracticeBundle, TopicBundle
 from app.modules.agent.tools import retrieve_knowledge as retrieve_module
 from app.modules.agent.workflows import validate
 from app.modules.agent.workflows.contracts import ExecutionContext, NodeStatus
@@ -139,6 +140,11 @@ async def test_validate_binary_search_question_survives_retrieval_dto_and_gate(
         "_next_attempt_number",
         AsyncMock(return_value=1),
     )
+    monkeypatch.setattr(
+        validate,
+        "load_practice_bundle",
+        AsyncMock(return_value=PracticeBundle()),
+    )
 
     loaded = await validate._load_learning_evidence_node(context, db)
     discovered = await validate._question_discovery_node(context, db)
@@ -165,3 +171,67 @@ async def test_validate_binary_search_question_survives_retrieval_dto_and_gate(
         "difficulties": {"medium": 1},
         "subjects": {"subject_ds": 1},
     }
+
+
+@pytest.mark.asyncio
+async def test_validate_uses_practice_bundle_topic_for_query(monkeypatch):
+    context = _context()
+    db = AsyncMock()
+    monkeypatch.setattr(
+        validate,
+        "load_practice_bundle",
+        AsyncMock(
+            return_value=PracticeBundle(
+                snapshot_id="memsnap_001",
+                standalone_request="给用户出一道关于二分查找的练习题",
+                topic=TopicBundle(
+                    title="二分查找",
+                    entity_type="knowledge_point",
+                    entity_id="kp_binary_search",
+                    aliases=["折半查找"],
+                    source="thread_memory",
+                ),
+            )
+        ),
+    )
+    retrieve = AsyncMock(
+        return_value={
+            "status": "success",
+            "results": [],
+            "total": 0,
+        }
+    )
+    monkeypatch.setattr(retrieve_module, "retrieve_knowledge", retrieve)
+
+    loaded = await validate._load_learning_evidence_node(context, db)
+    discovered = await validate._question_discovery_node(context, db)
+
+    assert loaded.status == NodeStatus.COMPLETED
+    assert discovered.status == NodeStatus.COMPLETED
+    assert context.get("learning_evidence")["weak_areas"] == ["二分查找"]
+    assert context.get("learning_evidence")["recent_topics"] == ["二分查找"]
+    assert context.get("practice_bundle")["snapshot_id"] == "memsnap_001"
+    assert retrieve.await_args.kwargs["query"] == "二分查找 折半查找"
+    assert retrieve.await_args.kwargs["entity_type"] == "question"
+
+
+@pytest.mark.asyncio
+async def test_validate_stops_when_no_topic_or_fallback_terms(monkeypatch):
+    context = _context()
+    db = AsyncMock()
+    monkeypatch.setattr(
+        validate,
+        "load_practice_bundle",
+        AsyncMock(return_value=PracticeBundle()),
+    )
+    retrieve = AsyncMock()
+    monkeypatch.setattr(retrieve_module, "retrieve_knowledge", retrieve)
+
+    loaded = await validate._load_learning_evidence_node(context, db)
+    discovered = await validate._question_discovery_node(context, db)
+
+    assert loaded.status == NodeStatus.COMPLETED
+    assert context.get("learning_evidence")["weak_areas"] == []
+    assert discovered.status == NodeStatus.FAILED
+    assert discovered.error == "缺少可用于出题的主题"
+    retrieve.assert_not_awaited()

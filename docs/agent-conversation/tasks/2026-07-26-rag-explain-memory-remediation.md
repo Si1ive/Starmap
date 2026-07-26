@@ -68,9 +68,9 @@ load_scope completed
 | Explain 产物渲染 | `backend/app/modules/agent/workflows/explain.py` | `_render_artifact_node`、`_completed_node` | L279-L306 | 已通过统一 `artifact` 契约把成功正文挂回上下文并交给 worker 持久化 |
 | Explain 持久化与刷新恢复 | `backend/app/modules/agent/worker.py`、`backend/app/modules/agent/timeline.py` | `AgentWorker.process_run`、`AgentTimelineService.get_timeline`、`AgentTimelineService._activity_views`、`AgentTimelineService.message_view` | `worker.py` L100-L251；`timeline.py` L320-L360、L399-L538、L554-L572 | worker 在 completed 分支创建 artifact、写 `message.completed` / `run.completed`；时间线刷新时按 root run 重建活动、artifact 和最终正文 |
 | 节点结果契约 | `backend/app/modules/agent/workflows/contracts.py` | `NodeResult.success` | L27-L48 | 已支持 `artifact` 参数，render 节点可通过统一工厂方法把最终产物传给引擎与 worker |
-| Validate 检索 | `backend/app/modules/agent/workflows/validate.py` | `_question_is_eligible`、`_load_learning_evidence_node`、`_question_discovery_node`、`_question_gate_node`、`_composition_gate_node` | L20-L116 | 仍使用硬编码薄弱点生成查询，但题目资格门已改读 `question_meta` / `entity` 的审核、状态、题型、难度与来源字段，组合门同步改读真实 DTO |
+| Validate 检索与首个记忆消费 | `backend/app/modules/agent/memory_selector.py`、`backend/app/modules/agent/workflows/validate.py` | `load_practice_bundle`、`build_practice_query`、`_question_is_eligible`、`_load_learning_evidence_node`、`_question_discovery_node`、`_question_gate_node`、`_composition_gate_node` | `memory_selector.py` L62-L150；`validate.py` L21-L142 | Validate 已开始按 `PracticeBundle` 消费 snapshot topic、aliases、约束和选中的 Artifact，并用它们确定性构造题目检索 query；题目资格门与组合门继续读取真实 DTO。掌握度、排除集和澄清闭环仍待补齐 |
 | 当前上下文构建 | `backend/app/modules/agent/context_builder.py` | `AgentRunContext`、`ThreadContextBuilder.build`、`_load_thread_memory_state` | L82-L121、L138-L256、L489-L501 | 已能选择近期消息、Artifact、待处理交互，并读取线程 `active_topic` / `memory_state_version`；仍未按 `MemoryNeed` 选择掌握度、摘要和排除集 |
-| Router 与子 Run 交接 | `backend/app/modules/agent/workflows/conversation.py`、`backend/app/modules/agent/turn_understanding.py` | `_route_node`、`_child_context_metadata`、`_dispatch_workflow_node`、`build_turn_understanding`、`ensure_turn_memory_snapshot` | `conversation.py` L46-L260；`turn_understanding.py` L24-L201 | Router 已先生成 `TurnUnderstanding` 并创建 snapshot，再使用 `standalone_request` 路由；子 Run 已收到 `memory_snapshot_id` 和独立请求，但业务 workflow 还没有消费 snapshot items |
+| Router 与子 Run 交接 | `backend/app/modules/agent/workflows/conversation.py`、`backend/app/modules/agent/turn_understanding.py` | `_route_node`、`_child_context_metadata`、`_dispatch_workflow_node`、`build_turn_understanding`、`ensure_turn_memory_snapshot` | `conversation.py` L46-L260；`turn_understanding.py` L24-L211 | Router 已先生成 `TurnUnderstanding` 并创建 snapshot，再使用 `standalone_request` 路由；topic aliases、`memory_snapshot_id` 和独立请求都会传给 child run，Validate 已开始消费这些 snapshot 内容 |
 | Run 最终持久化 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | L150-L222 | 执行工作流并创建 Artifact/最终消息；未来在完成事务中写记忆更新 Outbox |
 
 ## 第一组：立即解除现有故障
@@ -163,12 +163,18 @@ load_scope completed
 - 已新增 `backend/app/modules/agent/turn_understanding.py`，用确定性规则把 `context_refs` 或线程 `active_topic` 补全为 `TurnUnderstanding`；例如当前活跃主题是“二分查找”且输入“给我出道题”时，会生成 `standalone_request="给用户出一道关于二分查找的练习题"`。
 - 已在 `backend/app/modules/agent/workflows/conversation.py` 的 `_route_node()` 中创建不可变 snapshot，并把 `memory_snapshot_id`、`turn_understanding` 写入父 run metadata；Router 改为消费 `standalone_request`，child run 也改为继承 `standalone_request` 和 `memory_snapshot_id`。
 - 已补 `backend/tests/test_agent_context_builder.py::test_context_loads_active_topic_from_thread_memory_state` 与 `backend/tests/test_agent_conversation_workflow.py::test_follow_up_validate_request_uses_active_topic_snapshot_for_child_run`，覆盖“Router 前读取热状态”和“子 Run 继承 snapshot ID + standalone_request”的第一阶段闭环。
-- 尚未完成项：歧义输入的结构化指代消解模型、基于 `MemoryNeed` 的 bundle 选择器，以及业务 workflow 对 snapshot items 的真实消费，继续留在后续 `MEM-003` / `MEM-004`。
+- 尚未完成项：歧义输入的结构化指代消解模型、更多 bundle 类型和更多 workflow consumer，以及掌握度/排除集/澄清闭环，继续留在后续 `MEM-003` / `MEM-004` / `MEM-005`。
 
 冲突优先级固定为：当前输入明确主题 > 显式引用/附件 > 待处理任务 > 最近活跃主题 > 唯一高优先级
 学习薄弱点 > 请求用户澄清。禁止静默使用“数据结构 操作系统”作为默认主题。
 
 ### MEM-004 按能力声明选择最小记忆
+
+- 状态：进行中（2026-07-26 已落地 `PracticeBundle` 首个 selector）。
+- 已新增 `backend/app/modules/agent/memory_selector.py`，定义 workflow-neutral 的 `TopicBundle` / `PracticeBundle`，并通过 `load_practice_bundle()` 按 `run_id + user_id` 校验 run/snapshot 归属，从 `agent_memory_snapshots`、`agent_memory_snapshot_items` 与 `selection_metadata_json` 读取主题、aliases、约束和已选 Artifact。
+- 已在 `build_practice_query()` 中把 bundle topic title + aliases 确定性拼成 query；当既没有 bundle topic 也没有 fallback terms 时返回空 query，避免静默默认“数据结构/操作系统”。
+- 已补 `backend/tests/test_agent_memory_selector.py::test_load_practice_bundle_uses_snapshot_topic_and_context_metadata`，覆盖 snapshot topic aliases、约束和 selected artifacts 都能被组装进 `PracticeBundle`。
+- 当前仍未完成：`ConversationBundle` / `EvaluationBundle` / `PlanningBundle` 等更多 selector，掌握度与排除集的结构化选择，以及 explain / grade / plan 的 bundle 接入。
 
 - 定义类型化 `MemoryNeed`，把消费能力固定为 `conversation_continuity`、`topic_focus`、`practice_generation`、
   `grading_evidence`、`planning_goal`、`pending_interaction` 等稳定标签；当前 Router/Explain/Validate/Grade/Plan
@@ -180,6 +186,13 @@ load_scope completed
 - 快照记录每条选中记忆的来源、版本、选择原因、内容副本、估算 Token 和被丢弃原因。
 
 ### MEM-005 先用 Validate 打穿首个消费闭环
+
+- 状态：进行中（2026-07-26 已让 Validate 使用 `PracticeBundle` 生成题目检索 query）。
+- 已在 `backend/app/modules/agent/turn_understanding.py` 为 `TopicEntity` 增加 `aliases`，让 snapshot topic 能保留“二分查找 / 折半查找”这类别名。
+- 已在 `backend/app/modules/agent/workflows/validate.py` 的 `_load_learning_evidence_node()` 中装载 `PracticeBundle`，优先使用 bundle topic 填充 `weak_areas` / `recent_topics`，并把 bundle 本身写回 `ExecutionContext`。
+- 已在 `_question_discovery_node()` 中通过 `build_practice_query()` 构造 query；当 bundle topic 存在时会发起 `query="二分查找 折半查找"` 的题目检索，当 topic 与 fallback terms 都为空时直接失败，不再静默随机出题。
+- 已补 `backend/tests/test_agent_validate_workflow.py::test_validate_uses_practice_bundle_topic_for_query` 与 `test_validate_stops_when_no_topic_or_fallback_terms`，分别覆盖 topic aliases query 和“缺少主题即失败”的行为。
+- 当前仍未完成：`chapter_ids` / `knowledge_point_ids` / `difficulty` / `exclude_ids` 等更细粒度过滤、唯一高优先级薄弱点回退，以及失败后主动进入澄清而不是直接终止。
 
 `validate` 是首个落地消费者，因为当前“讲解后出题”的痛点最集中、验证成本最低；它只是样板，不是
 记忆内核对 workflow 的硬编码。后续若把 `validate` 拆成新的 workflow，或新增 `drill`、`quiz`、`review`
@@ -193,12 +206,12 @@ load_scope completed
   → 用户输入“给我出道题”
   → standalone_request=“给用户出一道关于二分查找的练习题”
   → Router=validate
-  → ValidateMemoryBundle 读取主题、掌握度、出题约束、近期题目排除集
+  → PracticeBundle 读取主题、掌握度、出题约束、近期题目排除集
   → 确定性构造 query="二分查找 折半查找"
   → retrieve_knowledge(entity_type="question", chapter_ids/knowledge_point_ids/difficulty/exclude_ids)
 ```
 
-没有明确主题时：先使用活跃主题；再考虑唯一高优先级薄弱点；仍不唯一则澄清，不随机出题。
+没有明确主题时：先使用活跃主题；再考虑唯一高优先级薄弱点；当前实现已移除静默默认主题，若仍拿不到主题则直接失败，后续再补“请求用户澄清”的显式闭环。
 
 ### MEM-006 按事实事件回写，而不是按 workflow 名写库
 

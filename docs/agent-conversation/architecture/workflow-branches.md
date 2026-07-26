@@ -31,11 +31,12 @@
 
 | 执行阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 学习证据读取 | `backend/app/modules/agent/workflows/validate.py` | `_load_learning_evidence_node` | L38-L49 | user/context | 读取弱项、强项和近期主题，并写入 `learning_evidence` | 学习证据 | `_question_discovery_node` |
-| 候选题检索 | `backend/app/modules/agent/workflows/validate.py` | `_question_discovery_node` | L52-L73 | `weak_areas` 与 run ID | 拼查询词并调用 `retrieve_knowledge(entity_type="question")`，直接拿到题目实体元数据 | `candidates` | `_question_gate_node` |
-| 题目资格门 | `backend/app/modules/agent/workflows/validate.py` | `_question_is_eligible`、`_question_gate_node` | L20-L35、L76-L89 | 候选题列表 | 校验实体类型、审核/状态、题型、难度和真实来源字段；不再依赖虚构的 `source_type` | `valid_questions` | `_composition_gate_node` |
-| 组合校验 | `backend/app/modules/agent/workflows/validate.py` | `_composition_gate_node` | L92-L116 | 有效题目 | 汇总 `question_meta.question_type`、`question_meta.difficulty` 和 `subject_id`，供后续产物使用 | `composition` | `_create_draft_node` |
-| 练习草稿与 Artifact | `backend/app/modules/agent/workflows/validate.py` | `_create_draft_node`、`_render_artifact_node` | L119-L161 | 有效题目与组合信息 | 生成 practice draft，再渲染 practice artifact | `agent_artifacts` 与 completed run | `_completed_node` |
+| PracticeBundle 选择 | `backend/app/modules/agent/memory_selector.py` | `load_practice_bundle` | L62-L128 | child run `run_id` / `user_id`、`memory_snapshot_id`、selected snapshot items | 校验 run 与 snapshot 权限，从 `agent_memory_snapshots`、`agent_memory_snapshot_items` 和 `selection_metadata_json` 读取主题、aliases、约束与选中的 Artifact | `PracticeBundle` | `_load_learning_evidence_node` |
+| 学习证据读取 | `backend/app/modules/agent/workflows/validate.py` | `_load_learning_evidence_node` | L39-L67 | `PracticeBundle`、当前上下文 | 优先用 bundle topic 填充 `weak_areas` / `recent_topics`，并把序列化后的 bundle 写回 `ExecutionContext` 供后续节点继续消费 | `learning_evidence`、`practice_bundle` | `_question_discovery_node` |
+| 候选题检索 | `backend/app/modules/agent/memory_selector.py`、`backend/app/modules/agent/workflows/validate.py` | `build_practice_query`、`_question_discovery_node` | `memory_selector.py` L131-L150；`validate.py` L70-L99 | `practice_bundle`、`weak_areas`、run ID | 用 bundle topic title + aliases 确定性生成 query；若无主题且无 fallback terms，则直接失败；否则调用 `retrieve_knowledge(entity_type="question")` 获取题目 DTO | `candidates` 或缺主题失败 | `_question_gate_node` / workflow failed |
+| 题目资格门 | `backend/app/modules/agent/workflows/validate.py` | `_question_is_eligible`、`_question_gate_node` | L21-L36、L102-L115 | 候选题列表 | 校验实体类型、审核/状态、题型、难度和真实来源字段；不再依赖虚构的 `source_type` | `valid_questions` | `_composition_gate_node` |
+| 组合校验 | `backend/app/modules/agent/workflows/validate.py` | `_composition_gate_node` | L118-L142 | 有效题目 | 汇总 `question_meta.question_type`、`question_meta.difficulty` 和 `subject_id`，供后续产物使用 | `composition` | `_create_draft_node` |
+| 练习草稿与 Artifact | `backend/app/modules/agent/workflows/validate.py` | `_create_draft_node`、`_render_artifact_node` | L145-L182 | 有效题目与组合信息 | 生成 practice draft，再渲染 practice artifact | `agent_artifacts` 与 completed run | `_completed_node` |
 
 ## Grade：作答快照到反馈产物
 

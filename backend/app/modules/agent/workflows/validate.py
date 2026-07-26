@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.logging import get_logger
 from .contracts import WorkflowDefinition, Node, NodeResult, ExecutionContext
 from .registry import workflow_registry
+from ..memory_selector import build_practice_query, load_practice_bundle
 from ..time_utils import utc_isoformat, utc_now
 
 logger = get_logger(__name__)
@@ -37,13 +38,30 @@ def _question_is_eligible(candidate: Dict[str, Any]) -> bool:
 
 async def _load_learning_evidence_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
     """读取用户学习证据"""
+    practice_bundle = await load_practice_bundle(
+        db,
+        run_id=context.run_id,
+        user_id=context.user_id,
+    )
+    topic = practice_bundle.topic
+    weak_areas = (
+        [topic.title]
+        if topic is not None
+        else list(context.get("weak_areas", []) or [])
+    )
+    recent_topics = (
+        [topic.title]
+        if topic is not None
+        else context.get("recent_topics", [])
+    )
     # P1 简化：从上下文获取
     evidence = {
         "user_id": context.user_id,
-        "weak_areas": context.get("weak_areas", ["数据结构", "操作系统"]),
+        "weak_areas": weak_areas,
         "strong_areas": context.get("strong_areas", ["计算机网络"]),
-        "recent_topics": context.get("recent_topics", []),
+        "recent_topics": recent_topics,
     }
+    context.set("practice_bundle", practice_bundle.model_dump(mode="json"))
     context.set("learning_evidence", evidence)
     logger.info("学习证据加载", run_id=context.run_id, weak_areas=evidence["weak_areas"])
     return NodeResult.success({"evidence_loaded": True}, next_node="question_discovery")
@@ -55,10 +73,18 @@ async def _question_discovery_node(context: ExecutionContext, db: AsyncSession) 
     
     evidence = context.get("learning_evidence", {})
     weak_areas = evidence.get("weak_areas", [])
-    
+    practice_bundle = context.get("practice_bundle", {})
+
     # 检索候选题目
-    query = " ".join(weak_areas) if weak_areas else "数据结构 栈和队列"
-    
+    query = build_practice_query(
+        practice_bundle if isinstance(practice_bundle, dict) else {},
+        weak_areas,
+    )
+    if not query.strip():
+        logger.warning("缺少可用于出题的主题", run_id=context.run_id)
+        context.set("candidates", [])
+        return NodeResult.failure("缺少可用于出题的主题")
+
     result = await retrieve_knowledge(
         db,
         query=query,
