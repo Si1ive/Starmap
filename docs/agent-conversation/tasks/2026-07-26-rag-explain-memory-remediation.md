@@ -225,7 +225,7 @@ load_scope completed
 - 已由 `backend/tests/test_agent_memory_projection.py::test_topic_confirmed_projection_is_idempotent_and_skips_inherited_topic`（L131-L179）覆盖主题事实重放和继承跳过；`backend/tests/test_agent_conversation_workflow.py::test_model_configuration_failure_creates_visible_failed_message`（L603-L666）覆盖 Router 失败仍保留显式主题；Grade 投影由 `test_grade_projection_updates_mastery_and_replays_idempotently`（L183-L252）、`test_grade_projection_deduplicates_knowledge_points_and_scopes_evidence_by_user`（L256-L316）、`test_feedback_without_structured_grading_is_ignored`（L320-L334）、`test_grade_run_with_canned_feedback_does_not_touch_mastery`（L369-L387）覆盖。
 - Explain 零命中 fallback 的事实、重放幂等与“不写掌握度”由 `backend/tests/test_agent_explain_worker.py::test_worker_persists_zero_hit_fallback_answer_without_citations`（L129-L227）覆盖。
 - Plan 审批与事实闭环：`AgentService.decide_approval`（L424-L476）只在 approved 时恢复；`backend/app/modules/agent/workflows/plan.py::_apply_plan_change_node`（L165-L189）复核审批，`_render_plan_result_node`（L192-L215）把 approval ID 放入 Artifact；`_record_plan_confirmed`（L141-L206）再次查询 approved 事实并按 approval ID 幂等写 `plan_confirmed`。`backend/tests/test_agent_plan_worker.py` 三条测试（L92-L200）覆盖拒绝/旁路零事实、批准写事实与重放。
-- 其余 Memory Outbox 与异步投影仍待实现。
+- Memory Outbox 可靠生产的数据库前置已完成：`backend/app/modules/agent/models.py::AgentMemoryUpdateOutbox`（L612-L650）和前向迁移 `backend/alembic/versions/20260726_memory_outbox_unique.py::upgrade`（L18-L26）增加 `(run_id, event_type)` 唯一约束，并由 `backend/tests/test_migrations.py::test_memory_outbox_idempotency_migration_renders_mysql_ddl`（L238-L262）验证 MySQL DDL。事实生产者、认领/重试消费者与异步投影仍待实现。
 - 不把 `message.delta` 写长期记忆，只在 `message.completed`/`artifact.rendered`/`run.completed` 后投影。
 - Run 完成事务同步更新下一轮马上需要的热状态，并写 Memory Outbox。
 - 异步投影历史摘要、Embedding、偏好候选和长期事件，失败可重放且不反向把成功 Run 改成失败。

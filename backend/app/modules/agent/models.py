@@ -640,6 +640,11 @@ class AgentMemoryUpdateOutbox(Base):
     __table_args__ = (
         Index("idx_agent_memory_outbox_status", "status", "scheduled_at"),
         Index("idx_agent_memory_outbox_run", "run_id"),
+        UniqueConstraint(
+            "run_id",
+            "event_type",
+            name="uk_agent_memory_outbox_run_event",
+        ),
         {"comment": "Agent 记忆更新 Outbox 表"}
     )
 
