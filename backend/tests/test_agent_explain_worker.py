@@ -22,6 +22,7 @@ from app.modules.agent.models import (
     AgentEvent,
     AgentInput,
     AgentMemoryEvent,
+    AgentMemoryUpdateOutbox,
     AgentMessage,
     AgentRun,
     AgentRunOutbox,
@@ -51,6 +52,7 @@ WORKER_TABLES = [
     AgentInput.__table__,
     AgentApproval.__table__,
     AgentMemoryEvent.__table__,
+    AgentMemoryUpdateOutbox.__table__,
     UserLearningMastery.__table__,
 ]
 

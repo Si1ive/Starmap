@@ -18,6 +18,7 @@ from app.modules.agent.models import (
     AgentEvent,
     AgentInput,
     AgentMemoryEvent,
+    AgentMemoryUpdateOutbox,
     AgentMessage,
     AgentRun,
     AgentRunOutbox,
@@ -45,6 +46,7 @@ PROJECTION_TABLES = [
     AgentInput.__table__,
     AgentApproval.__table__,
     AgentMemoryEvent.__table__,
+    AgentMemoryUpdateOutbox.__table__,
     UserLearningMastery.__table__,
 ]
 
@@ -177,6 +179,33 @@ async def test_topic_confirmed_projection_is_idempotent_and_skips_inherited_topi
         "source_message_id": "msg_topic_001",
         "topic": explicit_topic,
     }
+    outboxes = list(
+        (await db_session.execute(select(AgentMemoryUpdateOutbox))).scalars()
+    )
+    assert len(outboxes) == 1
+    assert outboxes[0].status == "pending"
+    assert outboxes[0].event_type == "topic_confirmed"
+    assert outboxes[0].payload_json == {
+        "memory_event_id": events[0].id,
+        "fact_type": "topic_confirmed",
+    }
+
+    # 模拟迁移前已经有事实但没有 Outbox；重放必须补建任务。
+    await db_session.delete(outboxes[0])
+    await db_session.flush()
+    await project_topic_confirmed_fact(
+        db_session,
+        run,
+        snapshot_id="memsnap_topic_001",
+        state_version=2,
+        source_message_id="msg_topic_001",
+        topic=explicit_topic,
+    )
+    backfilled = list(
+        (await db_session.execute(select(AgentMemoryUpdateOutbox))).scalars()
+    )
+    assert len(backfilled) == 1
+    assert backfilled[0].payload_json["memory_event_id"] == events[0].id
 
 
 @pytest.mark.asyncio

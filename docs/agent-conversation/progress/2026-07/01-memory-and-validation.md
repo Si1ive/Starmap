@@ -1,5 +1,27 @@
 # 2026-07 Agent 对话模块进展
 
+## 2026-07-26：同事务生产 Memory Outbox 任务
+
+### 目标
+
+让五类可信记忆事实在同一事务可靠产生 pending Memory Outbox，并让已有事实重放能够补建迁移前缺失任务；并发重复不能污染成功 Run。
+
+### 实现
+
+- 新增 `backend/app/modules/agent/memory_projection.py::_ensure_memory_update_outbox`（L27-L64）：按 Run/事实类型查询，写入只包含 memory event ID 和 fact type 的 pending 任务。
+- 五类事实投影在新事件 flush 后调用 ensure；发现已有事件时不再直接返回，而是补建缺失 Outbox。
+- 使用嵌套事务 SAVEPOINT 捕获数据库唯一键冲突，只回滚并发重复任务，不反向破坏外层 Run、Artifact 和事实事务。
+- 为 conversation、Explain、Validate、Plan 和投影测试补齐 Memory Outbox 测试表；`backend/tests/test_agent_memory_projection.py::test_topic_confirmed_projection_is_idempotent_and_skips_inherited_topic`（L133-L208）覆盖新建、重放和删除后补建。
+
+### 验证
+
+- `cd backend && PYTHONPATH=. venv/bin/pytest -q tests/test_agent_memory_projection.py tests/test_agent_conversation_workflow.py tests/test_agent_explain_worker.py tests/test_agent_plan_worker.py tests/test_agent_validate_worker.py` 通过（24 passed）。
+- `git diff --check` 通过。
+
+### 提交信息
+
+`同事务生产 Memory Outbox 任务`
+
 ## 2026-07-26：冻结 Memory Outbox 数据库幂等键
 
 ### 目标
@@ -31,7 +53,7 @@
 ### 实现
 
 - 在 `backend/app/modules/agent/workflows/plan.py::_render_plan_result_node`（L192-L215）把已通过守卫的 approval ID 写入 Plan Artifact，使事实投影可以回查真实批准来源。
-- 扩展 `backend/app/modules/agent/memory_projection.py::project_completed_run_facts`（L82-L97），由 `_record_plan_confirmed`（L141-L206）校验 approval ID、同 Run 归属和数据库 approved 状态，再按 approval ID 幂等写用户级 `plan_confirmed`。
+- 扩展 `backend/app/modules/agent/memory_projection.py::project_completed_run_facts`（L125-L140），由 `_record_plan_confirmed`（L185-L251）校验 approval ID、同 Run 归属和数据库 approved 状态，再按 approval ID 幂等写用户级 `plan_confirmed`。
 - 事件只保存 Artifact、approval 和可选 snapshot ID，计划正文仍以 `agent_artifacts` 为权威来源；拒绝与未批准路径维持零 Artifact、零长期事实。
 - 扩展 `backend/tests/test_agent_plan_worker.py`（L92-L200），覆盖拒绝/旁路不写事实、批准后 Artifact 携带审批来源、事实载荷和重放幂等。
 - 同步更新记忆实现分卷、Plan 执行全景和任务单，并修正 `memory_projection.py` 插入 Plan 投影后受影响的主题、Explain 与 Grade 锚点。
@@ -77,7 +99,7 @@ fallback 也属于成功讲解，且讲解行为不会被误当成学习掌握�
 
 ### 实现
 
-- 在 `backend/app/modules/agent/memory_projection.py::project_completed_run_facts`（L82-L97）增加 explanation Artifact 分派，并由 `_record_explanation_artifact_created`（L100-L138）按 Run 幂等写线程级 `explanation_artifact_created`。
+- 在 `backend/app/modules/agent/memory_projection.py::project_completed_run_facts`（L125-L140）增加 explanation Artifact 分派，并由 `_record_explanation_artifact_created`（L143-L182）按 Run 幂等写线程级 `explanation_artifact_created`。
 - 事件载荷只保留 `artifact_id` 与可选 `memory_snapshot_id`，正文、outline 和 citations 继续以 `agent_artifacts` 为唯一权威位置，不复制进长期事件或公开 SSE。
 - 扩展 `backend/tests/test_agent_explain_worker.py::test_worker_persists_zero_hit_fallback_answer_without_citations`（L129-L227），覆盖零命中 fallback 仍写事实、重放不重复、引用为空且 `user_learning_mastery` 不产生记录。
 - 同步更新 Router/记忆实现分卷、Explain 工作流执行全景和任务单，并修正 `memory_projection.py` 插入新函数后受影响的 Grade 代码锚点。
@@ -100,10 +122,10 @@ fallback 也属于成功讲解，且讲解行为不会被误当成学习掌握�
 
 ### 实现
 
-- 新增 `backend/app/modules/agent/memory_projection.py::project_topic_confirmed_fact`（L25-L79），仅接受 `source=context_ref` 的首个类型化主题，以 `topic_confirmed:{run_id}` 幂等写线程级事件，并记录 snapshot、状态版本和来源消息。
+- 新增 `backend/app/modules/agent/memory_projection.py::project_topic_confirmed_fact`（L67-L122），仅接受 `source=context_ref` 的首个类型化主题，以 `topic_confirmed:{run_id}` 幂等写线程级事件，并记录 snapshot、状态版本和来源消息。
 - 在 `backend/app/modules/agent/turn_understanding.py::ensure_turn_memory_snapshot`（L161-L246）创建或复用 snapshot 时调用主题投影；写入发生在 `_route_node` 的 Router 调用之前，继承自 `thread_memory` 的主题会无副作用跳过。
 - 更新 `backend/tests/test_agent_conversation_workflow.py::test_model_configuration_failure_creates_visible_failed_message`（L603-L666），证明 Router 模型不可用时显式二分查找主题仍存在；`test_follow_up_validate_request_uses_active_topic_snapshot_for_child_run`（L443-L521）证明继承主题不新增确认事件。
-- 新增 `backend/tests/test_agent_memory_projection.py::test_topic_confirmed_projection_is_idempotent_and_skips_inherited_topic`（L131-L179），覆盖同一 Run 重放与继承来源跳过。
+- 新增 `backend/tests/test_agent_memory_projection.py::test_topic_confirmed_projection_is_idempotent_and_skips_inherited_topic`（L133-L208），覆盖同一 Run 重放、继承跳过与 Outbox 补建。
 
 ### 验证
 
@@ -123,9 +145,9 @@ fallback 也属于成功讲解，且讲解行为不会被误当成学习掌握�
 
 ### 实现
 
-- 在 `backend/app/modules/agent/memory_projection.py::_record_grade_result_confirmed`（L262-L366）校验 Feedback Artifact 的结构化评分证据，按用户 + evidence ID 写 `grade_result_confirmed`，并按知识点增量更新 `user_learning_mastery`；重复知识点先去重，重放同一证据无副作用。
+- 在 `backend/app/modules/agent/memory_projection.py::_record_grade_result_confirmed`（L308-L413）校验 Feedback Artifact 的结构化评分证据，按用户 + evidence ID 写 `grade_result_confirmed`，并按知识点增量更新 `user_learning_mastery`；重复知识点先去重，重放同一证据无副作用。
 - 在 `backend/app/modules/agent/workflows/grade.py::_render_artifact_node`（L108-L137）建立可选 `grading_evidence -> content.grading` 交接；当前 `_objective_grade_node`（L34-L51）仍不生产 verdict，因此固定反馈不会触发掌握度写入。
-- 新增 `backend/tests/test_agent_memory_projection.py::test_grade_projection_updates_mastery_and_replays_idempotently`（L183-L252）等五个回归场景，覆盖增量公式、用户隔离、知识点去重、证据契约、缺证据跳过和 P1 worker 端到端无污染语义。
+- 新增 `backend/tests/test_agent_memory_projection.py::test_grade_projection_updates_mastery_and_replays_idempotently`（L212-L281）等五个回归场景，覆盖增量公式、用户隔离、知识点去重、证据契约、缺证据跳过和 P1 worker 端到端无污染语义。
 - 同步更新 `implementation/routing-context-memory.md`、`architecture/workflow-branches.md` 和任务单，明确本次只完成安全投影边界；真实题面、标准答案与评分证据生产者仍是后续 `EvaluationBundle` / Grade 接入范围。
 
 ### 验证

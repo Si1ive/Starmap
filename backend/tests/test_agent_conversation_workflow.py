@@ -20,6 +20,7 @@ from app.modules.agent.models import (
     AgentEvent,
     AgentInput,
     AgentMemoryEvent,
+    AgentMemoryUpdateOutbox,
     AgentMemorySnapshot,
     AgentMemorySnapshotItem,
     AgentMessage,
@@ -51,6 +52,7 @@ CONVERSATION_TABLES = [
     AgentApproval.__table__,
     AgentThreadMemoryState.__table__,
     AgentMemoryEvent.__table__,
+    AgentMemoryUpdateOutbox.__table__,
     AgentMemorySnapshot.__table__,
     AgentMemorySnapshotItem.__table__,
 ]

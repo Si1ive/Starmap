@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
@@ -11,6 +12,7 @@ from .models import (
     AgentApproval,
     AgentArtifact,
     AgentMemoryEvent,
+    AgentMemoryUpdateOutbox,
     AgentRun,
     UserLearningMastery,
 )
@@ -20,6 +22,46 @@ logger = get_logger(__name__)
 
 # 真实评分结论对掌握度的贡献值；不在表内的 verdict 视为无效证据。
 _VERDICT_CONTRIBUTIONS = {"correct": 1.0, "partial": 0.5, "incorrect": 0.0}
+
+
+async def _ensure_memory_update_outbox(
+    db: AsyncSession,
+    run: AgentRun,
+    memory_event: AgentMemoryEvent,
+) -> None:
+    """确保每个 Run/事实类型只有一个待异步投影任务。"""
+    existing = await db.scalar(
+        select(AgentMemoryUpdateOutbox.id).where(
+            AgentMemoryUpdateOutbox.run_id == run.id,
+            AgentMemoryUpdateOutbox.event_type == memory_event.fact_type,
+        )
+    )
+    if existing is not None:
+        return
+    try:
+        async with db.begin_nested():
+            db.add(
+                AgentMemoryUpdateOutbox(
+                    run_id=run.id,
+                    thread_id=run.thread_id,
+                    user_id=run.user_id,
+                    event_type=memory_event.fact_type,
+                    status="pending",
+                    payload_json={
+                        "memory_event_id": memory_event.id,
+                        "fact_type": memory_event.fact_type,
+                    },
+                )
+            )
+            await db.flush()
+    except IntegrityError:
+        # 并发重放由 (run_id, event_type) 唯一约束收敛；SAVEPOINT
+        # 只回滚重复 Outbox，不污染外层成功 Run/事实事务。
+        logger.info(
+            "Memory Outbox 并发幂等命中",
+            run_id=run.id,
+            event_type=memory_event.fact_type,
+        )
 
 
 async def project_topic_confirmed_fact(
@@ -46,31 +88,32 @@ async def project_topic_confirmed_fact(
     fact_type = MemoryFactType.TOPIC_CONFIRMED.value
     idempotency_key = f"{fact_type}:{run.id}"
     existing = await db.scalar(
-        select(AgentMemoryEvent.id).where(
+        select(AgentMemoryEvent).where(
             AgentMemoryEvent.idempotency_key == idempotency_key
         )
     )
     if existing is not None:
+        await _ensure_memory_update_outbox(db, run, existing)
         return
 
-    db.add(
-        AgentMemoryEvent(
-            user_id=run.user_id,
-            thread_id=run.thread_id,
-            run_id=run.id,
-            memory_scope="thread",
-            source_kind="message",
-            fact_type=fact_type,
-            idempotency_key=idempotency_key,
-            payload_json={
-                "snapshot_id": snapshot_id,
-                "state_version": state_version,
-                "source_message_id": source_message_id,
-                "topic": topic,
-            },
-        )
+    memory_event = AgentMemoryEvent(
+        user_id=run.user_id,
+        thread_id=run.thread_id,
+        run_id=run.id,
+        memory_scope="thread",
+        source_kind="message",
+        fact_type=fact_type,
+        idempotency_key=idempotency_key,
+        payload_json={
+            "snapshot_id": snapshot_id,
+            "state_version": state_version,
+            "source_message_id": source_message_id,
+            "topic": topic,
+        },
     )
+    db.add(memory_event)
     await db.flush()
+    await _ensure_memory_update_outbox(db, run, memory_event)
     logger.info(
         "用户确认主题事实写入",
         run_id=run.id,
@@ -106,31 +149,32 @@ async def _record_explanation_artifact_created(
     fact_type = MemoryFactType.EXPLANATION_ARTIFACT_CREATED.value
     idempotency_key = f"{fact_type}:{run.id}"
     existing = await db.scalar(
-        select(AgentMemoryEvent.id).where(
+        select(AgentMemoryEvent).where(
             AgentMemoryEvent.idempotency_key == idempotency_key
         )
     )
     if existing is not None:
+        await _ensure_memory_update_outbox(db, run, existing)
         return
 
-    db.add(
-        AgentMemoryEvent(
-            user_id=run.user_id,
-            thread_id=run.thread_id,
-            run_id=run.id,
-            memory_scope="thread",
-            source_kind="artifact",
-            fact_type=fact_type,
-            idempotency_key=idempotency_key,
-            payload_json={
-                "artifact_id": artifact.id,
-                "memory_snapshot_id": (run.metadata_json or {}).get(
-                    "memory_snapshot_id"
-                ),
-            },
-        )
+    memory_event = AgentMemoryEvent(
+        user_id=run.user_id,
+        thread_id=run.thread_id,
+        run_id=run.id,
+        memory_scope="thread",
+        source_kind="artifact",
+        fact_type=fact_type,
+        idempotency_key=idempotency_key,
+        payload_json={
+            "artifact_id": artifact.id,
+            "memory_snapshot_id": (run.metadata_json or {}).get(
+                "memory_snapshot_id"
+            ),
+        },
     )
+    db.add(memory_event)
     await db.flush()
+    await _ensure_memory_update_outbox(db, run, memory_event)
     logger.info(
         "讲解产物事实写入",
         run_id=run.id,
@@ -172,32 +216,33 @@ async def _record_plan_confirmed(
     fact_type = MemoryFactType.PLAN_CONFIRMED.value
     idempotency_key = f"{fact_type}:{approval_id}"
     existing = await db.scalar(
-        select(AgentMemoryEvent.id).where(
+        select(AgentMemoryEvent).where(
             AgentMemoryEvent.idempotency_key == idempotency_key
         )
     )
     if existing is not None:
+        await _ensure_memory_update_outbox(db, run, existing)
         return
 
-    db.add(
-        AgentMemoryEvent(
-            user_id=run.user_id,
-            thread_id=run.thread_id,
-            run_id=run.id,
-            memory_scope="user",
-            source_kind="artifact",
-            fact_type=fact_type,
-            idempotency_key=idempotency_key,
-            payload_json={
-                "artifact_id": artifact.id,
-                "approval_id": approval_id,
-                "memory_snapshot_id": (run.metadata_json or {}).get(
-                    "memory_snapshot_id"
-                ),
-            },
-        )
+    memory_event = AgentMemoryEvent(
+        user_id=run.user_id,
+        thread_id=run.thread_id,
+        run_id=run.id,
+        memory_scope="user",
+        source_kind="artifact",
+        fact_type=fact_type,
+        idempotency_key=idempotency_key,
+        payload_json={
+            "artifact_id": artifact.id,
+            "approval_id": approval_id,
+            "memory_snapshot_id": (run.metadata_json or {}).get(
+                "memory_snapshot_id"
+            ),
+        },
     )
+    db.add(memory_event)
     await db.flush()
+    await _ensure_memory_update_outbox(db, run, memory_event)
     logger.info(
         "用户确认计划事实写入",
         run_id=run.id,
@@ -228,29 +273,30 @@ async def _record_practice_artifact_created(
     fact_type = MemoryFactType.PRACTICE_ARTIFACT_CREATED.value
     idempotency_key = f"{fact_type}:{run.id}"
     existing = await db.scalar(
-        select(AgentMemoryEvent.id).where(
+        select(AgentMemoryEvent).where(
             AgentMemoryEvent.idempotency_key == idempotency_key
         )
     )
     if existing is not None:
+        await _ensure_memory_update_outbox(db, run, existing)
         return
 
-    db.add(
-        AgentMemoryEvent(
-            user_id=run.user_id,
-            thread_id=run.thread_id,
-            run_id=run.id,
-            memory_scope="user",
-            source_kind="artifact",
-            fact_type=fact_type,
-            idempotency_key=idempotency_key,
-            payload_json={
-                "artifact_id": artifact.id,
-                "question_ids": question_ids,
-            },
-        )
+    memory_event = AgentMemoryEvent(
+        user_id=run.user_id,
+        thread_id=run.thread_id,
+        run_id=run.id,
+        memory_scope="user",
+        source_kind="artifact",
+        fact_type=fact_type,
+        idempotency_key=idempotency_key,
+        payload_json={
+            "artifact_id": artifact.id,
+            "question_ids": question_ids,
+        },
     )
+    db.add(memory_event)
     await db.flush()
+    await _ensure_memory_update_outbox(db, run, memory_event)
     logger.info(
         "练习事实事件写入",
         run_id=run.id,
@@ -295,33 +341,33 @@ async def _record_grade_result_confirmed(
     # evidence_id 由评分来源提供，不假设它跨用户全局唯一。
     idempotency_key = f"{fact_type}:{run.user_id}:{evidence_id}"
     existing = await db.scalar(
-        select(AgentMemoryEvent.id).where(
+        select(AgentMemoryEvent).where(
             AgentMemoryEvent.idempotency_key == idempotency_key
         )
     )
     if existing is not None:
+        await _ensure_memory_update_outbox(db, run, existing)
         return
 
-    db.add(
-        AgentMemoryEvent(
-            user_id=run.user_id,
-            thread_id=run.thread_id,
-            run_id=run.id,
-            memory_scope="user",
-            source_kind="artifact",
-            fact_type=fact_type,
-            idempotency_key=idempotency_key,
-            payload_json={
-                "artifact_id": artifact.id,
-                "evidence_id": evidence_id,
-                "question_id": question_id,
-                "knowledge_point_ids": knowledge_point_ids,
-                "verdict": verdict,
-                "score": grading.get("score"),
-                "error_types": grading.get("error_types") or [],
-            },
-        )
+    memory_event = AgentMemoryEvent(
+        user_id=run.user_id,
+        thread_id=run.thread_id,
+        run_id=run.id,
+        memory_scope="user",
+        source_kind="artifact",
+        fact_type=fact_type,
+        idempotency_key=idempotency_key,
+        payload_json={
+            "artifact_id": artifact.id,
+            "evidence_id": evidence_id,
+            "question_id": question_id,
+            "knowledge_point_ids": knowledge_point_ids,
+            "verdict": verdict,
+            "score": grading.get("score"),
+            "error_types": grading.get("error_types") or [],
+        },
     )
+    db.add(memory_event)
 
     contribution = _VERDICT_CONTRIBUTIONS[verdict]
     subject_id = str(grading.get("subject_id") or "").strip() or None
@@ -357,6 +403,7 @@ async def _record_grade_result_confirmed(
         mastery.last_graded_at = utc_now()
 
     await db.flush()
+    await _ensure_memory_update_outbox(db, run, memory_event)
     logger.info(
         "评分事实事件写入并更新掌握度",
         run_id=run.id,

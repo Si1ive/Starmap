@@ -10,7 +10,7 @@
 | 执行序号 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `backend/app/modules/agent/workflows/conversation.py` | `_route_node` | L46-L121 | conversation run 与当前消息 | 调用上下文构建、确定性理解和 snapshot，再用独立请求调用 Router；找不到 run 时返回失败，Router 异常交给 engine | `agent_run_context`、RouterDecision 或失败 | `build_turn_understanding` / `ensure_turn_memory_snapshot` |
-| 2 | `backend/app/modules/agent/turn_understanding.py`、`backend/app/modules/agent/memory_projection.py` | `build_turn_understanding`、`ensure_turn_memory_snapshot`、`project_topic_confirmed_fact` | L105-L157、L161-L246；L25-L79 | 当前输入、context refs、线程 `active_topic` | 生成确定性理解、创建不可变 snapshot 并更新热状态；首个主题来自显式 context ref 时，在 Router 模型调用前按 Run 幂等写 `topic_confirmed`，继承主题不重复写 | `standalone_request`、snapshot、`active_topic`、可选线程级主题事实；Router 后续失败不回滚已表达主题 | `_route_node` 的 Router 调用 |
+| 2 | `backend/app/modules/agent/turn_understanding.py`、`backend/app/modules/agent/memory_projection.py` | `build_turn_understanding`、`ensure_turn_memory_snapshot`、`project_topic_confirmed_fact` | L105-L157、L161-L246；L67-L122 | 当前输入、context refs、线程 `active_topic` | 生成确定性理解、创建不可变 snapshot 并更新热状态；首个主题来自显式 context ref 时，在 Router 模型调用前按 Run 幂等写 `topic_confirmed`，继承主题不重复写 | `standalone_request`、snapshot、`active_topic`、主题事实与 pending Memory Outbox；Router 后续失败不回滚已表达主题 | `_route_node` 的 Router 调用 |
 | 3 | `backend/app/modules/agent/workflows/conversation.py` | `_child_context_metadata` | L183-L209 | 受控上下文、独立请求、snapshot ID 与父 Run `model_config_id` | 复制上下文审计、`active_topic`、`standalone_request`、`memory_snapshot_id` 和模型配置 ID，不复制 API Key | child run metadata | `_dispatch_workflow_node` |
 | 4 | `backend/app/modules/agent/workflows/conversation.py` | `_dispatch_workflow_node` | L212-L261 | Router action、parent/root run、独立请求 | 幂等创建 compact child run 和对应 workflow timeline item；child `input_message` 使用 `standalone_request` | 队列中的 child run | `AgentWorker.process_run` |
 | 5 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run`（进入 running） | L128-L178 | queued child run | 提交 running 状态和 `run.status_changed`，让用户端先看到真实执行中 | running child run | `WorkflowEngine.execute` |
@@ -27,7 +27,7 @@
 | 结构化讲解生成 | `backend/app/modules/agent/workflows/explain.py` | `_fallback_evidence_text`、`_generate_explanation_node` | 用户问题、证据列表和 `retrieval_outcome` | 截断证据正文并保留 `entity_title`、`entity_type`、`source`；无资料时按零命中/异常选择不同 fallback 文案；调用结构化讲解运行时后清空无资料场景的 citations | `ExplanationOutput` | `_citation_gate_node` |
 | 正文/引用校验 | `backend/app/modules/agent/workflows/explain.py` | `_citation_gate_node` | 结构化讲解结果 | 只要正文非空即通过，引用列表在无资料场景下已被上游清空 | 可渲染 explanation | `_render_artifact_node` |
 | Artifact 渲染与结束 | `backend/app/modules/agent/workflows/explain.py` | `_render_artifact_node`、`_completed_node`（L279-L306） | outline、body、citations、summary | 组装 explanation artifact，并把最终 artifact 挂到 NodeResult 和上下文 | `agent_artifacts`、completed run | `AgentWorker.process_run` |
-| 讲解事实投影 | `backend/app/modules/agent/memory_projection.py` | `project_completed_run_facts`、`_record_explanation_artifact_created`（L82-L138） | worker 已持久化的 explanation Artifact | 按 Run 幂等写线程级讲解产物事实，仅保存 Artifact ID 与可选 snapshot ID；零命中 fallback 与有引用讲解使用同一事实契约，不复制正文、不提高掌握度 | `explanation_artifact_created`；数据库错误沿 worker 完成事务传播 | 后续 Artifact/记忆选择器 |
+| 讲解事实投影 | `backend/app/modules/agent/memory_projection.py` | `project_completed_run_facts`、`_record_explanation_artifact_created`（L125-L182） | worker 已持久化的 explanation Artifact | 按 Run 幂等写讲解事实并确保 pending Outbox，不复制正文、不提高掌握度 | `explanation_artifact_created` 与异步任务 | 后续消费者 |
 
 ## Validate：候选题检索到练习产物
 
@@ -50,7 +50,7 @@
 | 主观反馈生成 | `backend/app/modules/agent/workflows/grade.py` | `_generate_feedback_node`、`_feedback_gate_node` | L70-L105 | attempt 和 rubric | 生成固定 strengths / weaknesses / suggestions，并校验整体反馈非空 | `feedback`；反馈为空时返回失败并由 worker 投影 `run.failed` | `_render_artifact_node` |
 | 反馈 Artifact | `backend/app/modules/agent/workflows/grade.py` | `_render_artifact_node`、`_completed_node` | L108-L142 | 反馈内容、可选的内部 `grading_evidence` | 组装 feedback artifact；只有已有显式 verdict 时才把完整证据放入 `content.grading`，固定反馈不伪造评分 | `agent_artifacts` 与 completed run | `AgentWorker.process_run` |
 | 完成事实交接 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | L183-L224 | completed 结果与 Feedback Artifact | 先持久化 Artifact，再在同一完成事务调用事实投影，最后写 `run.completed` | Artifact、内部记忆事实或无副作用跳过 | `project_completed_run_facts` |
-| 评分事实与掌握度 | `backend/app/modules/agent/memory_projection.py` | `project_completed_run_facts`、`_record_grade_result_confirmed` | L82-L97、L262-L366 | Feedback Artifact 的 `content.grading` | 校验 verdict / question / knowledge points，知识点去重，按用户 + evidence ID 检查幂等，写 `grade_result_confirmed` 并用增量均值更新掌握度；证据不完整则安全跳过，数据库异常沿完成事务传播 | `agent_memory_events`、`user_learning_mastery` | `memory_selector._load_unique_weak_topic` 在后续练习读取 |
+| 评分事实与掌握度 | `backend/app/modules/agent/memory_projection.py` | `project_completed_run_facts`、`_record_grade_result_confirmed` | L125-L140、L308-L413 | Feedback Artifact 的 `content.grading` | 校验证据、去重知识点，写幂等事实、更新掌握度并确保 pending Outbox；证据不完整安全跳过 | 事实、掌握度与异步任务 | 后续练习/消费者 |
 
 ## Plan：计划草案、审批与恢复执行
 
@@ -62,7 +62,7 @@
 | WAITING 断点 | `backend/app/modules/agent/workflows/plan.py` | `_wait_for_approval_node` | L158-L162 | 当前 run | 返回 `NodeResult.waiting(next_node="apply_plan_change")` | checkpoint 与待审批状态 | 用户审批 API |
 | 审批决定分流 | `backend/app/modules/agent/service.py` | `AgentService.decide_approval` | L424-L476 | waiting run、pending approval、用户决定 | approved 恢复 running 并投递；rejected 转 failed、删除 checkpoint、不投递；错误状态或跨用户无副作用返回 | approved run 或 rejected 终态 | `AgentWorker.process_run` / timeline |
 | 恢复应用与 Artifact | `backend/app/modules/agent/workflows/plan.py` | `_apply_plan_change_node`、`_render_plan_result_node`、`_completed_node` | L165-L220 | 审批通过后的 checkpoint | 应用节点复核 approval=approved；渲染时把 approval ID 放入 Plan Artifact，未批准返回失败 | 携带审批来源的 Artifact 与 completed run，或无 Artifact 的 failed run | worker 完成分支 |
-| 确认计划事实 | `backend/app/modules/agent/memory_projection.py` | `project_completed_run_facts`、`_record_plan_confirmed` | L82-L97、L141-L206 | 已持久化 Plan Artifact、approval ID | 再查同 Run 的 approved 审批；按 approval ID 幂等写用户级事实，仅保存 Artifact/approval/snapshot ID；未批准或缺 ID 跳过 | `plan_confirmed`，不复制计划正文 | 未来 PlanningBundle / 长期目标投影 |
+| 确认计划事实 | `backend/app/modules/agent/memory_projection.py` | `project_completed_run_facts`、`_record_plan_confirmed` | L125-L140、L185-L251 | 已持久化 Plan Artifact、approval ID | 再查 approved 审批，按 approval ID 幂等写事实并确保 pending Outbox；未批准跳过 | `plan_confirmed` 与异步任务 | 未来 PlanningBundle / 消费者 |
 
 ## 旁路：等待用户输入与审批
 
