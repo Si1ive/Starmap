@@ -64,6 +64,7 @@ MEMORY_NEED_PARTITIONS: dict[MemoryNeed, tuple[MemoryPartition, ...]] = {
     ),
     MemoryNeed.PLANNING_GOAL: (
         MemoryPartition.THREAD_TOPIC_STATE,
+        MemoryPartition.LEARNING_MASTERY,
         MemoryPartition.USER_GOAL,
         MemoryPartition.USER_PREFERENCE,
         MemoryPartition.ARTIFACT_AND_TASK,

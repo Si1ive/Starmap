@@ -931,14 +931,15 @@ async def test_load_practice_bundle_falls_back_to_unique_weak_point(db_session):
     assert bundle.topic.source == "learning_mastery"
     assert bundle.knowledge_point_ids == ["kp_red_black_tree"]
     assert bundle.chapter_ids == ["cchap_tree"]
-    assert bundle.mastery_signals == [
-        {
-            "knowledge_point_id": "kp_red_black_tree",
-            "mastery_score": 0.3,
-            "evidence_count": 4,
-            "last_evidence_id": "grade_evidence_001",
-        }
-    ]
+    assert len(bundle.mastery_signals) == 1
+    signal = bundle.mastery_signals[0]
+    assert signal["knowledge_point_id"] == "kp_red_black_tree"
+    assert signal["mastery_score"] == 0.3
+    assert signal["raw_mastery_score"] == 0.3
+    assert signal["effective_mastery_score"] == 0.3
+    assert signal["evidence_count"] == 4
+    assert signal["last_evidence_id"] == "grade_evidence_001"
+    assert signal["decay_policy_version"] == "mastery-decay-v1"
 
 
 @pytest.mark.asyncio
@@ -1165,3 +1166,262 @@ async def test_explicit_repeat_removes_only_unique_referenced_question_from_excl
         "question_repeat",
         "question_other",
     ]
+
+
+@pytest.mark.asyncio
+async def test_practice_uses_decayed_mastery_and_freezes_it_per_snapshot(db_session):
+    from datetime import timedelta
+    from sqlalchemy import select
+
+    now = datetime(2026, 7, 27, 8, 0, 0)
+    thread = AgentThread(
+        id="thread_mastery_decay_practice",
+        user_id="user_001",
+        title="掌握度衰减练习",
+        status="active",
+    )
+    run = AgentRun(
+        id="run_mastery_decay_practice",
+        thread_id=thread.id,
+        user_id="user_001",
+        workflow_name="validate",
+        status="queued",
+        metadata_json={"memory_snapshot_id": "snapshot_mastery_decay_practice"},
+    )
+    snapshot = AgentMemorySnapshot(
+        id="snapshot_mastery_decay_practice",
+        run_id=run.id,
+        thread_id=thread.id,
+        user_id="user_001",
+        state_version=1,
+        standalone_request="给我出道题",
+        understanding_json={"topic_entities": [], "constraints": []},
+        selection_metadata_json={},
+    )
+    db_session.add(thread)
+    await db_session.flush()
+    db_session.add(run)
+    await db_session.flush()
+    db_session.add(snapshot)
+    await db_session.flush()
+    await _seed_knowledge_point(
+        db_session,
+        kp_id="kp_mastery_decay_practice",
+        title="散列表冲突处理",
+        aliases=["哈希冲突"],
+    )
+    mastery = UserLearningMastery(
+        user_id="user_001",
+        subject_id="subject_ds",
+        knowledge_point_id="kp_mastery_decay_practice",
+        mastery_score=1.0,
+        evidence_count=1,
+        correct_count=1,
+        incorrect_count=0,
+        last_evidence_id="grade_stale_001",
+        last_graded_at=now - timedelta(days=180),
+    )
+    db_session.add_all(
+        [
+            mastery,
+            UserLearningMastery(
+                user_id="user_002",
+                subject_id="subject_ds",
+                knowledge_point_id="kp_mastery_decay_practice",
+                mastery_score=0.0,
+                evidence_count=5,
+                last_graded_at=now - timedelta(days=365),
+            ),
+        ]
+    )
+    await db_session.flush()
+
+    stale_bundle = await load_practice_bundle(
+        db_session,
+        run_id=run.id,
+        user_id="user_001",
+        now=now,
+    )
+
+    assert stale_bundle.topic is not None
+    assert stale_bundle.topic.title == "散列表冲突处理"
+    assert len(stale_bundle.mastery_signals) == 1
+    frozen_signal = stale_bundle.mastery_signals[0]
+    assert frozen_signal["raw_mastery_score"] == 1.0
+    assert frozen_signal["effective_mastery_score"] == 0.4
+    assert frozen_signal["mastery_score"] == 0.4
+    assert frozen_signal["age_days"] == 180
+    frozen_items = list(
+        (
+            await db_session.execute(
+                select(AgentMemorySnapshotItem).where(
+                    AgentMemorySnapshotItem.snapshot_id == snapshot.id,
+                    AgentMemorySnapshotItem.memory_need == "practice_generation",
+                    AgentMemorySnapshotItem.memory_partition == "learning_mastery",
+                )
+            )
+        ).scalars()
+    )
+    assert len(frozen_items) == 1
+    assert frozen_items[0].payload_json == frozen_signal
+
+    mastery.mastery_score = 1.0
+    mastery.evidence_count = 2
+    mastery.last_evidence_id = "grade_fresh_002"
+    mastery.last_graded_at = now
+    knowledge_point = await db_session.get(
+        KnowledgePoint,
+        "kp_mastery_decay_practice",
+    )
+    knowledge_point.title = "散列表冲突处理（新标题）"
+    knowledge_point.aliases = ["哈希冲突新别名"]
+    await db_session.flush()
+    replayed_bundle = await load_practice_bundle(
+        db_session,
+        run_id=run.id,
+        user_id="user_001",
+        now=now,
+    )
+    assert replayed_bundle.mastery_signals == [frozen_signal]
+    assert replayed_bundle.topic is not None
+    assert replayed_bundle.topic.title == "散列表冲突处理"
+    assert replayed_bundle.topic.aliases == ["哈希冲突"]
+    replayed_items = list(
+        (
+            await db_session.execute(
+                select(AgentMemorySnapshotItem).where(
+                    AgentMemorySnapshotItem.snapshot_id == snapshot.id,
+                    AgentMemorySnapshotItem.memory_need == "practice_generation",
+                    AgentMemorySnapshotItem.memory_partition == "learning_mastery",
+                )
+            )
+        ).scalars()
+    )
+    assert len(replayed_items) == 1
+
+    fresh_run = AgentRun(
+        id="run_mastery_fresh_practice",
+        thread_id=thread.id,
+        user_id="user_001",
+        workflow_name="validate",
+        status="queued",
+        metadata_json={"memory_snapshot_id": "snapshot_mastery_fresh_practice"},
+    )
+    db_session.add(fresh_run)
+    await db_session.flush()
+    db_session.add(
+        AgentMemorySnapshot(
+            id="snapshot_mastery_fresh_practice",
+            run_id=fresh_run.id,
+            thread_id=thread.id,
+            user_id="user_001",
+            state_version=2,
+            standalone_request="再给我出道题",
+            understanding_json={"topic_entities": [], "constraints": []},
+            selection_metadata_json={},
+        )
+    )
+    await db_session.flush()
+
+    fresh_bundle = await load_practice_bundle(
+        db_session,
+        run_id=fresh_run.id,
+        user_id="user_001",
+        now=now,
+    )
+    assert fresh_bundle.topic is None
+    assert fresh_bundle.mastery_signals == []
+
+
+@pytest.mark.asyncio
+async def test_planning_uses_the_same_effective_mastery_policy(db_session):
+    from datetime import timedelta
+    from sqlalchemy import select
+
+    now = datetime(2026, 7, 27, 8, 0, 0)
+    thread = AgentThread(
+        id="thread_mastery_decay_plan",
+        user_id="user_001",
+        title="掌握度衰减计划",
+        status="active",
+    )
+    run = AgentRun(
+        id="run_mastery_decay_plan",
+        thread_id=thread.id,
+        user_id="user_001",
+        workflow_name="plan",
+        status="queued",
+        metadata_json={"memory_snapshot_id": "snapshot_mastery_decay_plan"},
+    )
+    snapshot = AgentMemorySnapshot(
+        id="snapshot_mastery_decay_plan",
+        run_id=run.id,
+        thread_id=thread.id,
+        user_id="user_001",
+        state_version=1,
+        standalone_request="制定复习计划",
+        understanding_json={"topic_entities": []},
+        selection_metadata_json={},
+    )
+    db_session.add(thread)
+    await db_session.flush()
+    db_session.add(run)
+    await db_session.flush()
+    db_session.add(snapshot)
+    await db_session.flush()
+    await _seed_knowledge_point(
+        db_session,
+        kp_id="kp_mastery_decay_plan",
+        title="最小生成树",
+        aliases=["MST"],
+    )
+    db_session.add(
+        UserLearningMastery(
+            user_id="user_001",
+            subject_id="subject_ds",
+            knowledge_point_id="kp_mastery_decay_plan",
+            mastery_score=1.0,
+            evidence_count=3,
+            correct_count=3,
+            incorrect_count=0,
+            last_evidence_id="grade_plan_stale",
+            last_graded_at=now - timedelta(days=180),
+        )
+    )
+    await db_session.flush()
+
+    bundle = await load_planning_bundle(
+        db_session,
+        run_id=run.id,
+        user_id="user_001",
+        now=now,
+    )
+
+    assert len(bundle.mastery_signals) == 1
+    assert bundle.mastery_signals[0]["effective_mastery_score"] == 0.4
+    assert bundle.targets[0].title == "最小生成树"
+    assert bundle.targets[0].mastery_score == 0.4
+    frozen_item = await db_session.scalar(
+        select(AgentMemorySnapshotItem).where(
+            AgentMemorySnapshotItem.snapshot_id == snapshot.id,
+            AgentMemorySnapshotItem.memory_need == "planning_goal",
+            AgentMemorySnapshotItem.memory_partition == "learning_mastery",
+        )
+    )
+    assert frozen_item is not None
+    assert frozen_item.payload_json == bundle.mastery_signals[0]
+
+    knowledge_point = await db_session.get(
+        KnowledgePoint,
+        "kp_mastery_decay_plan",
+    )
+    knowledge_point.title = "最小生成树（新标题）"
+    await db_session.flush()
+    replayed = await load_planning_bundle(
+        db_session,
+        run_id=run.id,
+        user_id="user_001",
+        now=now,
+    )
+    assert replayed.targets[0].title == "最小生成树"
+    assert replayed.mastery_signals == bundle.mastery_signals

@@ -1,5 +1,12 @@
 # 2026-07 记忆失效与删除治理进展
 
+## 2026-07-27：让学习掌握度按证据时间衰减
+
+- 目标：完成 `MEM-007` 的学习画像时间治理，保留 Grade 原始聚合与事实审计，同时让 Practice 和 Planning 使用同一可复现有效分数。
+- 实现：`backend/app/modules/agent/mastery_decay.py::calculate_effective_mastery`（L26-L58）固定 `mastery-decay-v1` 的 90 天半衰期和不抬高低分的 0.2 地板；`backend/app/modules/agent/memory_selector.py::_mastery_signal`、`_load_frozen_mastery_signals`、`_freeze_mastery_signals`（L188-L300）统一 UTC、版本化审计和 Snapshot 锁内幂等冻结。`load_planning_bundle`（L303-L499）与 `_load_unique_weak_topic` / `load_practice_bundle`（L750-L985）都按 effective score 选取，并冻结题名/别名，原始 score/evidence 不修改。
+- 验证：纯函数与 selector/Grade/Plan/Validate 聚焦回归 43 项通过；全部 Agent 回归 210 passed、101 warnings，Python 编译与 `git diff --check` 通过。
+- 提交信息：`让学习掌握度按证据时间衰减`
+
 ## 2026-07-27：固化临时练习约束的单轮失效边界
 
 - 目标：完成 `MEM-007` 的临时约束收口，证明 difficulty、chapter ordinal 和派生检索参数不会随线程主题继承到下一轮。

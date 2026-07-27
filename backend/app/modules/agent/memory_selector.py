@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -17,7 +18,8 @@ from app.models.mysql_models import (
     QuestionKnowledgeLink,
 )
 
-from .memory_contracts import MemoryFactType, MemoryNeed
+from .mastery_decay import calculate_effective_mastery
+from .memory_contracts import MemoryFactType, MemoryNeed, MemoryPartition
 from .models import (
     AgentMemoryEvent,
     AgentMemoryItem,
@@ -26,6 +28,7 @@ from .models import (
     AgentRun,
     UserLearningMastery,
 )
+from .time_utils import utc_isoformat, utc_now
 
 _EXCLUDED_EVENT_LIMIT = 10
 _EXCLUDED_QUESTION_LIMIT = 50
@@ -182,11 +185,127 @@ def _bundle_difficulty(constraints: list[str]) -> str | None:
     return None
 
 
+def _mastery_signal(
+    mastery: UserLearningMastery,
+    *,
+    now: datetime,
+) -> dict[str, Any] | None:
+    """从不可变统计值派生带策略版本的有效掌握度审计副本。"""
+    if mastery.evidence_count <= 0:
+        return None
+    evidence_at = mastery.last_graded_at
+    evidence_time_source = "last_graded_at"
+    if evidence_at is None:
+        evidence_at = mastery.updated_at
+        evidence_time_source = "updated_at"
+    if evidence_at is None:
+        evidence_at = mastery.created_at
+        evidence_time_source = "created_at"
+    if evidence_at is None:
+        return None
+    effective = calculate_effective_mastery(
+        mastery.mastery_score,
+        evidence_at=evidence_at,
+        now=now,
+    )
+    return {
+        "mastery_id": mastery.id,
+        "knowledge_point_id": mastery.knowledge_point_id,
+        # 兼容既有 Bundle 消费方：mastery_score 现在明确表示有效分数。
+        "mastery_score": effective.effective_score,
+        "raw_mastery_score": effective.raw_score,
+        "effective_mastery_score": effective.effective_score,
+        "evidence_count": mastery.evidence_count,
+        "last_evidence_id": mastery.last_evidence_id,
+        "evidence_at": utc_isoformat(effective.evidence_at),
+        "evidence_time_source": evidence_time_source,
+        "age_days": effective.age_days,
+        "decay_policy_version": effective.policy_version,
+    }
+
+
+async def _load_frozen_mastery_signals(
+    db: AsyncSession,
+    *,
+    snapshot_id: str,
+    memory_need: MemoryNeed,
+) -> list[dict[str, Any]]:
+    items = list(
+        (
+            await db.execute(
+                select(AgentMemorySnapshotItem)
+                .where(
+                    AgentMemorySnapshotItem.snapshot_id == snapshot_id,
+                    AgentMemorySnapshotItem.memory_need == memory_need.value,
+                    AgentMemorySnapshotItem.memory_partition
+                    == MemoryPartition.LEARNING_MASTERY.value,
+                    AgentMemorySnapshotItem.source_kind == "user_learning_mastery",
+                    AgentMemorySnapshotItem.selected.is_(True),
+                )
+                .order_by(AgentMemorySnapshotItem.id)
+            )
+        ).scalars()
+    )
+    return [dict(item.payload_json or {}) for item in items]
+
+
+async def _freeze_mastery_signals(
+    db: AsyncSession,
+    *,
+    snapshot_id: str,
+    memory_need: MemoryNeed,
+    masteries_by_id: dict[int, UserLearningMastery],
+    signals: list[dict[str, Any]],
+) -> None:
+    # 同一 child Run 理论上只有一个 Worker；仍锁定 snapshot 并在锁内复核，
+    # 让租约重领或管理员重放不会追加第二份相同选择。
+    locked_snapshot_id = await db.scalar(
+        select(AgentMemorySnapshot.id)
+        .where(AgentMemorySnapshot.id == snapshot_id)
+        .with_for_update()
+    )
+    if locked_snapshot_id is None:
+        return
+    if await _load_frozen_mastery_signals(
+        db,
+        snapshot_id=snapshot_id,
+        memory_need=memory_need,
+    ):
+        return
+    for signal in signals:
+        mastery_id = signal.get("mastery_id")
+        if not isinstance(mastery_id, int) or isinstance(mastery_id, bool):
+            continue
+        mastery = masteries_by_id.get(mastery_id)
+        if mastery is None:
+            continue
+        db.add(
+            AgentMemorySnapshotItem(
+                snapshot_id=snapshot_id,
+                memory_need=memory_need.value,
+                memory_partition=MemoryPartition.LEARNING_MASTERY.value,
+                source_kind="user_learning_mastery",
+                source_id=str(mastery.id),
+                item_key=(
+                    f"{memory_need.value}:mastery:{mastery.id}:"
+                    f"{mastery.evidence_count}"
+                ),
+                version=mastery.evidence_count,
+                selected=True,
+                selection_reason="effective_mastery_below_threshold",
+                token_estimate=0,
+                payload_json=signal,
+            )
+        )
+    await db.flush()
+
+
 async def load_planning_bundle(
     db: AsyncSession,
     *,
     run_id: str,
     user_id: str,
+    now: datetime | None = None,
 ) -> PlanningBundle:
     """按当前主题、批准目标和真实掌握度选择最小规划记忆。"""
     run = await db.scalar(
@@ -197,6 +316,7 @@ async def load_planning_bundle(
     )
     if run is None:
         return PlanningBundle()
+    effective_now = now or utc_now()
 
     metadata = run.metadata_json or {}
     snapshot_id = metadata.get("memory_snapshot_id")
@@ -206,6 +326,7 @@ async def load_planning_bundle(
             select(AgentMemorySnapshot).where(
                 AgentMemorySnapshot.id == snapshot_id,
                 AgentMemorySnapshot.user_id == user_id,
+                AgentMemorySnapshot.thread_id == run.thread_id,
             )
         )
 
@@ -225,27 +346,74 @@ async def load_planning_bundle(
             )
         ).scalars()
     )
-    weak_rows = (
-        await db.execute(
-            select(UserLearningMastery, KnowledgePoint)
-            .join(
-                KnowledgePoint,
-                KnowledgePoint.id == UserLearningMastery.knowledge_point_id,
-            )
-            .where(
-                UserLearningMastery.user_id == user_id,
-                UserLearningMastery.mastery_score < _WEAK_MASTERY_THRESHOLD,
-                UserLearningMastery.evidence_count > 0,
-                KnowledgePoint.status == "active",
-            )
-            .order_by(
-                UserLearningMastery.mastery_score,
-                UserLearningMastery.evidence_count.desc(),
-                UserLearningMastery.knowledge_point_id,
-            )
-            .limit(10)
+    frozen_mastery_signals = (
+        await _load_frozen_mastery_signals(
+            db,
+            snapshot_id=snapshot.id,
+            memory_need=MemoryNeed.PLANNING_GOAL,
         )
-    ).all()
+        if snapshot is not None
+        else []
+    )
+    weak_candidates: list[dict[str, Any]] = []
+    if frozen_mastery_signals:
+        weak_candidates = [
+            signal
+            for signal in frozen_mastery_signals
+            if str(signal.get("knowledge_point_title") or "").strip()
+        ]
+    else:
+        mastery_rows = (
+            await db.execute(
+                select(UserLearningMastery, KnowledgePoint)
+                .join(
+                    KnowledgePoint,
+                    KnowledgePoint.id == UserLearningMastery.knowledge_point_id,
+                )
+                .where(
+                    UserLearningMastery.user_id == user_id,
+                    UserLearningMastery.evidence_count > 0,
+                    KnowledgePoint.status == "active",
+                )
+            )
+        ).all()
+        live_candidates = [
+            (
+                {
+                    **signal,
+                    "knowledge_point_title": knowledge_point.title,
+                    "knowledge_point_aliases": [
+                        str(alias).strip()
+                        for alias in (knowledge_point.aliases or [])
+                        if str(alias).strip()
+                    ],
+                },
+                mastery,
+            )
+            for mastery, knowledge_point in mastery_rows
+            if (signal := _mastery_signal(mastery, now=effective_now)) is not None
+            and signal["effective_mastery_score"] < _WEAK_MASTERY_THRESHOLD
+        ]
+        live_candidates.sort(
+            key=lambda item: (
+                item[0]["effective_mastery_score"],
+                -item[0]["evidence_count"],
+                item[0]["knowledge_point_id"],
+            )
+        )
+        selected_candidates = live_candidates[:10]
+        weak_candidates = [signal for signal, _mastery in selected_candidates]
+        if snapshot is not None and selected_candidates:
+            await _freeze_mastery_signals(
+                db,
+                snapshot_id=snapshot.id,
+                memory_need=MemoryNeed.PLANNING_GOAL,
+                masteries_by_id={
+                    mastery.id: mastery
+                    for _signal, mastery in selected_candidates
+                },
+                signals=[signal for signal, _mastery in selected_candidates],
+            )
 
     targets: list[PlanningTarget] = []
     seen_titles: set[str] = set()
@@ -304,24 +472,18 @@ async def load_planning_bundle(
             )
 
     mastery_signals: list[dict[str, Any]] = []
-    for mastery, knowledge_point in weak_rows:
-        signal = {
-            "knowledge_point_id": mastery.knowledge_point_id,
-            "mastery_score": mastery.mastery_score,
-            "evidence_count": mastery.evidence_count,
-            "last_evidence_id": mastery.last_evidence_id,
-        }
+    for signal in weak_candidates:
         mastery_signals.append(signal)
         add_target(
             PlanningTarget(
-                title=knowledge_point.title,
+                title=signal["knowledge_point_title"],
                 target="针对真实薄弱点进行巩固",
                 source="learning_mastery",
                 entity_type="knowledge_point",
-                entity_id=mastery.knowledge_point_id,
-                source_id=mastery.knowledge_point_id,
-                mastery_score=mastery.mastery_score,
-                evidence_id=mastery.last_evidence_id,
+                entity_id=signal["knowledge_point_id"],
+                source_id=signal["knowledge_point_id"],
+                mastery_score=signal["effective_mastery_score"],
+                evidence_id=signal.get("last_evidence_id"),
             )
         )
 
@@ -589,50 +751,95 @@ async def _load_unique_weak_topic(
     db: AsyncSession,
     *,
     user_id: str,
+    now: datetime,
+    snapshot: AgentMemorySnapshot | None = None,
 ) -> tuple[TopicBundle | None, list[dict[str, Any]]]:
-    """唯一高优先级薄弱点回退：恰好一个低掌握度知识点时才回退主题，多个则继续澄清。"""
-    weak_rows = list(
-        (
-            await db.execute(
-                select(UserLearningMastery)
-                .where(
-                    UserLearningMastery.user_id == user_id,
-                    UserLearningMastery.mastery_score < _WEAK_MASTERY_THRESHOLD,
-                    UserLearningMastery.evidence_count > 0,
+    """按有效掌握度选择唯一薄弱点，并为同一 Snapshot 冻结首次选择。"""
+    frozen_signals = (
+        await _load_frozen_mastery_signals(
+            db,
+            snapshot_id=snapshot.id,
+            memory_need=MemoryNeed.PRACTICE_GENERATION,
+        )
+        if snapshot is not None
+        else []
+    )
+    selected: list[tuple[UserLearningMastery | None, dict[str, Any]]] = []
+    if frozen_signals:
+        selected = [(None, signal) for signal in frozen_signals]
+    else:
+        mastery_rows = list(
+            (
+                await db.execute(
+                    select(UserLearningMastery).where(
+                        UserLearningMastery.user_id == user_id,
+                        UserLearningMastery.evidence_count > 0,
+                    )
                 )
-                .order_by(UserLearningMastery.mastery_score.asc())
-                .limit(2)
+            ).scalars()
+        )
+        live_candidates = [
+            (mastery, signal)
+            for mastery in mastery_rows
+            if (signal := _mastery_signal(mastery, now=now)) is not None
+            and signal["effective_mastery_score"] < _WEAK_MASTERY_THRESHOLD
+        ]
+        live_candidates.sort(
+            key=lambda item: (
+                item[1]["effective_mastery_score"],
+                -item[1]["evidence_count"],
+                item[1]["knowledge_point_id"],
             )
-        ).scalars()
-    )
-    if len(weak_rows) != 1:
+        )
+        selected = live_candidates[:2]
+    if len(selected) != 1:
         return None, []
-    weak = weak_rows[0]
-    knowledge_point = await db.scalar(
-        select(KnowledgePoint).where(KnowledgePoint.id == weak.knowledge_point_id)
-    )
-    if knowledge_point is None:
-        return None, []
-    topic = TopicBundle(
-        title=knowledge_point.title,
-        entity_type="knowledge_point",
-        entity_id=knowledge_point.id,
-        aliases=[
+    mastery, signal = selected[0]
+    if frozen_signals:
+        title = str(signal.get("knowledge_point_title") or "").strip()
+        aliases = [
+            str(alias).strip()
+            for alias in signal.get("knowledge_point_aliases") or []
+            if str(alias).strip()
+        ]
+        if not title:
+            return None, []
+    else:
+        knowledge_point = await db.scalar(
+            select(KnowledgePoint).where(
+                KnowledgePoint.id == signal["knowledge_point_id"],
+                KnowledgePoint.status == "active",
+            )
+        )
+        if knowledge_point is None:
+            return None, []
+        title = knowledge_point.title
+        aliases = [
             str(alias).strip()
             for alias in (knowledge_point.aliases or [])
             if str(alias).strip()
-        ],
+        ]
+        signal = {
+            **signal,
+            "knowledge_point_title": title,
+            "knowledge_point_aliases": aliases,
+        }
+        if snapshot is not None and mastery is not None:
+            await _freeze_mastery_signals(
+                db,
+                snapshot_id=snapshot.id,
+                memory_need=MemoryNeed.PRACTICE_GENERATION,
+                masteries_by_id={mastery.id: mastery},
+                signals=[signal],
+            )
+    topic = TopicBundle(
+        title=title,
+        entity_type="knowledge_point",
+        entity_id=signal["knowledge_point_id"],
+        aliases=aliases,
         source="learning_mastery",
     )
-    mastery_signals = [
-        {
-            "knowledge_point_id": weak.knowledge_point_id,
-            "mastery_score": weak.mastery_score,
-            "evidence_count": weak.evidence_count,
-            "last_evidence_id": weak.last_evidence_id,
-        }
-    ]
-    return topic, mastery_signals
+    return topic, [signal]
 
 
 async def load_practice_bundle(
@@ -640,6 +847,7 @@ async def load_practice_bundle(
     *,
     run_id: str,
     user_id: str,
+    now: datetime | None = None,
 ) -> PracticeBundle:
     run = await db.scalar(
         select(AgentRun).where(
@@ -649,12 +857,17 @@ async def load_practice_bundle(
     )
     if run is None:
         return PracticeBundle()
+    effective_now = now or utc_now()
 
     excluded_question_ids = await _load_excluded_question_ids(db, user_id=user_id)
     metadata = run.metadata_json or {}
     snapshot_id = metadata.get("memory_snapshot_id")
     if not snapshot_id:
-        topic, mastery_signals = await _load_unique_weak_topic(db, user_id=user_id)
+        topic, mastery_signals = await _load_unique_weak_topic(
+            db,
+            user_id=user_id,
+            now=effective_now,
+        )
         knowledge_point_ids = (
             [topic.entity_id] if topic is not None and topic.entity_id else []
         )
@@ -675,10 +888,15 @@ async def load_practice_bundle(
         select(AgentMemorySnapshot).where(
             AgentMemorySnapshot.id == snapshot_id,
             AgentMemorySnapshot.user_id == user_id,
+            AgentMemorySnapshot.thread_id == run.thread_id,
         )
     )
     if snapshot is None:
-        topic, mastery_signals = await _load_unique_weak_topic(db, user_id=user_id)
+        topic, mastery_signals = await _load_unique_weak_topic(
+            db,
+            user_id=user_id,
+            now=effective_now,
+        )
         knowledge_point_ids = (
             [topic.entity_id] if topic is not None and topic.entity_id else []
         )
@@ -723,7 +941,12 @@ async def load_practice_bundle(
     mastery_signals: list[dict[str, Any]] = []
     if topic is None:
         # 冲突优先级：快照主题（当前输入/引用/活跃主题）优先，全部缺失才回退唯一薄弱点。
-        topic, mastery_signals = await _load_unique_weak_topic(db, user_id=user_id)
+        topic, mastery_signals = await _load_unique_weak_topic(
+            db,
+            user_id=user_id,
+            now=effective_now,
+            snapshot=snapshot,
+        )
     knowledge_point_ids = (
         [topic.entity_id]
         if topic is not None

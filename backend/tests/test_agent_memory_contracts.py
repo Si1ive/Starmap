@@ -41,3 +41,9 @@ def test_every_memory_need_maps_to_at_least_one_partition():
     for partitions in MEMORY_NEED_PARTITIONS.values():
         assert partitions
         assert all(isinstance(partition, MemoryPartition) for partition in partitions)
+
+
+def test_planning_goal_declares_learning_mastery_partition():
+    assert MemoryPartition.LEARNING_MASTERY in MEMORY_NEED_PARTITIONS[
+        MemoryNeed.PLANNING_GOAL
+    ]

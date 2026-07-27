@@ -3,7 +3,7 @@
 ## 2026-07-27：让 Explain 消费 snapshot 冻结摘要
 
 - 目标：补齐历史摘要的首个 child workflow 消费者，保证 Explain 使用父 Run snapshot 的内容副本而不是执行时的最新摘要。
-- 实现：`backend/app/modules/agent/memory_selector.py::load_conversation_bundle`（L832-L1001）要求唯一 snapshot item 并复核源摘要 user/thread/version 后读取冻结正文；版本不符或重复条目不注入摘要。`_conversation_inputs`（L50-L66）把摘要交给 `ExplanationDeps`，模型通过 `_controlled_context`（L57-L73）将其作为不可信数据。
+- 实现：`backend/app/modules/agent/memory_selector.py::load_conversation_bundle`（L1055-L1224）要求唯一 snapshot item 并复核源摘要 user/thread/version 后读取冻结正文；版本不符或重复条目不注入摘要。`_conversation_inputs`（L50-L66）把摘要交给 `ExplanationDeps`，模型通过 `_controlled_context`（L57-L73）将其作为不可信数据。
 - 测试：Memory selector、Explain workflow/runtime/Worker 聚焦回归 23 项通过；全部 Agent 回归 195 passed、75 warnings，Python 编译与 `git diff --check` 通过。
 - 提交信息：`让 Explain 消费 snapshot 冻结摘要`
 
@@ -27,7 +27,7 @@
 ## 2026-07-27：让 Explain 消费 ConversationBundle 冻结上下文
 
 - 目标：完成 `MEM-004`，让 Explain 真正消费 Router 前按权限和 Token 预算筛选并冻结到 snapshot 的消息、Artifact、主题与引用，移除无实际约束的全学科固定 scope。
-- 实现：`backend/app/modules/agent/memory_selector.py::load_conversation_bundle`（当前 L832-L1001）按 snapshot ID 复现同用户/线程的上下文和首次 query；`_evidence_loop_node`（当前 L69-L206）与 `_generate_explanation_node`（当前 L236-L289）向规划/生成模型传入同一 history。
+- 实现：`backend/app/modules/agent/memory_selector.py::load_conversation_bundle`（当前 L1055-L1224）按 snapshot ID 复现同用户/线程的上下文和首次 query；`_evidence_loop_node`（当前 L69-L206）与 `_generate_explanation_node`（当前 L236-L289）向规划/生成模型传入同一 history。
 - 测试：`backend/tests/test_agent_memory_selector.py::test_load_conversation_bundle_replays_only_snapshot_selected_visible_context`（当前 L341-L526）覆盖冻结选择、摘要副本、版本/重复保护、hidden 丢弃、Artifact 和 aliases query；`backend/tests/test_agent_explain_workflow.py::test_explain_uses_conversation_bundle_history_and_frozen_topic_query`（当前 L145-L203）覆盖冻结检索与摘要依赖；`backend/tests/test_agent_explain_worker.py::test_explain_worker_replays_snapshot_selected_history`（L314-L441）覆盖 Worker 端到端重放。
 - 验证：全部 Agent 回归通过（185 passed，75 warnings）；Python 编译和 `git diff --check` 通过，旧状态/旧锚点扫描未发现残留。
 - 提交信息：`让 Explain 消费冻结的 ConversationBundle`
@@ -35,7 +35,7 @@
 ## 2026-07-27：让 Grade 以 EvaluationBundle 产生真实客观题证据
 
 - 目标：推进 `MEM-004` / `MEM-006`，删除 Grade 的固定反馈和伪 attempt，让真实客观题、标准答案与显式作答形成可审计掌握度证据。
-- 实现：`backend/app/modules/agent/memory_selector.py::load_evaluation_bundle`（L340-L471）按 run/user/thread 校验 snapshot，要求唯一 question 引用并重读 active、未拒绝、答案来源可信的题面；`backend/app/modules/agent/workflows/grade.py::_load_attempt_snapshot_node`（L40-L78）装载 bundle，`_objective_grade_node`（L81-L129）只对 choice/fill/judge 确定性比较并生成 verdict/score/error type，`_render_artifact_node`（L191-L218）交给既有事实投影。主观题或不可信/歧义输入在 Artifact 前失败。
+- 实现：`backend/app/modules/agent/memory_selector.py::load_evaluation_bundle`（L502-L633）按 run/user/thread 校验 snapshot，要求唯一 question 引用并重读 active、未拒绝、答案来源可信的题面；`backend/app/modules/agent/workflows/grade.py::_load_attempt_snapshot_node`（L40-L78）装载 bundle，`_objective_grade_node`（L81-L129）只对 choice/fill/judge 确定性比较并生成 verdict/score/error type，`_render_artifact_node`（L191-L218）交给既有事实投影。主观题或不可信/歧义输入在 Artifact 前失败。
 - 测试：`backend/tests/test_agent_memory_selector.py`（L189-L337）覆盖真实题面装载、Artifact 来源、跨用户和多题歧义；`backend/tests/test_agent_grade_worker.py`（L153-L243）覆盖正确/错误 verdict 到 `grade_result_confirmed` / `user_learning_mastery`、主观题零副作用拒绝与判断题否定表达；`test_grade_run_without_snapshot_fails_without_touching_mastery`（L398-L415）覆盖缺快照守卫。
 - 验证：全部 Agent 回归通过（182 passed，75 warnings）；Python 编译、`git diff --check` 与旧状态/旧锚点扫描通过。
 - 提交信息：`让 Grade 消费真实 EvaluationBundle`
@@ -43,7 +43,7 @@
 ## 2026-07-27：让 Plan 消费真实 PlanningBundle
 
 - 目标：推进 `MEM-004`，移除 Plan 固定注入的学科、强弱项和 60 分钟目标，只允许真实记忆产生审批草案。
-- 实现：`backend/app/modules/agent/memory_selector.py::load_planning_bundle`（L185-L337）按用户校验 Run/snapshot，选择当前主题、最新 active 已批准 goals 和带评分证据的低掌握度知识点，按标题去重并保留来源/证据 ID；`backend/app/modules/agent/workflows/plan.py::_aggregate_learning_evidence_node`（L26-L49）接入 bundle，targets 为空时由前置门失败且不创建审批。批准 Plan 的异步投影现保留结构化 goals，供下一轮继续选择。
+- 实现：`backend/app/modules/agent/memory_selector.py::load_planning_bundle`（L303-L499）按用户/线程校验 Run/snapshot，选择当前主题、最新 active 已批准 goals 和按统一策略衰减后的有效薄弱点，按标题去重并冻结题名/别名、分数与证据版本；`backend/app/modules/agent/workflows/plan.py::_aggregate_learning_evidence_node`（L26-L49）接入 bundle，targets 为空时由前置门失败且不创建审批。
 - 测试：`backend/tests/test_agent_memory_selector.py::test_load_planning_bundle_uses_approved_goals_and_real_weak_mastery`（L66-L155）覆盖用户隔离、批准目标、周期和真实薄弱点；`backend/tests/test_agent_plan_worker.py::test_plan_without_real_memory_fails_before_creating_approval`（L142-L156）与 `test_approved_plan_resumes_and_creates_artifact`（L219-L278）覆盖无证据零审批和真实目标 Artifact。
 - 验证：Memory selector、Plan Worker、Memory Outbox、Validate 与 Conversation 组合回归通过（36 passed，53 warnings）；Python 编译与 `git diff --check` 通过。
 - 提交信息：`让 Plan 只消费真实 PlanningBundle`
