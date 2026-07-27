@@ -64,10 +64,19 @@ def _safe_psutil_sample() -> dict:
         pass
 
     try:
-        proc = psutil.Process(os.getpid())
-        with proc.oneshot():
-            data["process_rss_mb"] = round(proc.memory_info().rss / (1024 * 1024), 2)
-            data["process_cpu_percent"] = float(proc.cpu_percent(interval=None))
+        root = psutil.Process(os.getpid())
+        processes = [root, *root.children(recursive=True)]
+        rss = 0
+        cpu = 0.0
+        for proc in processes:
+            try:
+                with proc.oneshot():
+                    rss += int(proc.memory_info().rss)
+                    cpu += float(proc.cpu_percent(interval=None))
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        data["process_rss_mb"] = round(rss / (1024 * 1024), 2)
+        data["process_cpu_percent"] = round(cpu, 2)
     except Exception:
         pass
 

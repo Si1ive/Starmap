@@ -29,6 +29,8 @@ _log_queue: Queue = Queue(maxsize=DEFAULT_QUEUE_SIZE)
 _dropped_count = 0
 _worker_task: Optional[asyncio.Task] = None
 _worker_running = False
+_flush_failures = 0
+_last_flush_error: Optional[str] = None
 
 
 def queue_log(event_dict: Dict[str, Any]) -> None:
@@ -37,7 +39,13 @@ def queue_log(event_dict: Dict[str, Any]) -> None:
     try:
         _log_queue.put_nowait(event_dict)
     except Full:
-        _dropped_count += 1
+        # 保留最新诊断信息：移除最旧一条后再放入当前事件。
+        try:
+            _log_queue.get_nowait()
+            _dropped_count += 1
+            _log_queue.put_nowait(event_dict)
+        except (Empty, Full):
+            _dropped_count += 1
 
 
 def db_log_processor(
@@ -113,9 +121,10 @@ def _drain_queue(max_items: int) -> List[Dict[str, Any]]:
     return items
 
 
-async def _flush_batch(items: List[Dict[str, Any]]) -> None:
+async def _flush_batch(items: List[Dict[str, Any]]) -> bool:
+    global _flush_failures, _last_flush_error
     if not items:
-        return
+        return True
 
     # 延迟导入，避免循环依赖（service_logs 模型在 mysql_models 中）
     from app.db.mysql import mysql_client
@@ -149,9 +158,19 @@ async def _flush_batch(items: List[Dict[str, Any]]) -> None:
         async with mysql_client.session() as session:
             session.add_all(rows)
             await session.commit()
+        _last_flush_error = None
+        return True
     except Exception as e:
+        _flush_failures += 1
+        _last_flush_error = str(e)[:500]
         # 不能再用 logger，否则递归
         print(f"[db_log_sink] flush failed: {e}", file=sys.stderr)
+        return False
+
+
+def _requeue_items(items: List[Dict[str, Any]]) -> None:
+    for item in items:
+        queue_log(item)
 
 
 async def _worker_loop(batch_size: int, flush_interval: float) -> None:
@@ -167,16 +186,19 @@ async def _worker_loop(batch_size: int, flush_interval: float) -> None:
             if should_flush_full or should_flush_time:
                 items = _drain_queue(batch_size)
                 if items:
-                    await _flush_batch(items)
+                    if not await _flush_batch(items):
+                        _requeue_items(items)
                 last_flush = now
         # 收尾
         items = _drain_queue(batch_size * 4)
         if items:
-            await _flush_batch(items)
+            if not await _flush_batch(items):
+                _requeue_items(items)
     except asyncio.CancelledError:
         items = _drain_queue(batch_size * 4)
         if items:
-            await _flush_batch(items)
+            if not await _flush_batch(items):
+                _requeue_items(items)
         raise
 
 
@@ -210,3 +232,14 @@ def get_dropped_count() -> int:
 
 def get_queue_size() -> int:
     return _log_queue.qsize()
+
+
+def get_sink_health() -> Dict[str, Any]:
+    return {
+        "queue_size": get_queue_size(),
+        "queue_capacity": _log_queue.maxsize,
+        "dropped_count": _dropped_count,
+        "flush_failures": _flush_failures,
+        "last_flush_error": _last_flush_error,
+        "worker_running": _worker_running,
+    }

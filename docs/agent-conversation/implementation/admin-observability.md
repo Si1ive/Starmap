@@ -72,6 +72,14 @@ Outbox 的调度状态。Worker 后续仍走 `MemoryOutboxConsumer.process_claim
 4. 事件、Artifact 和错误摘要在既有会话详情序列化时也经过同一脱敏函数，API key、Authorization、DSN 凭证和 traceback 不进入响应。
 5. Outbox 重放沿用数据库唯一幂等身份；重复点击只更新同一行，但每次管理员动作都写独立审计记录。
 
+## 监控采集器自身健康
+
+| 采集器 | 文件 | 符号 | 代码范围 | 入口与处理 | 失败、副作用与最终消费 |
+| --- | --- | --- | --- | --- | --- |
+| 服务日志 Sink | `backend/app/modules/monitoring/log_sink.py`、`backend/app/modules/monitoring/queries.py` | `queue_log`、`_flush_batch`、`_worker_loop`、`get_sink_health`（L36-L248）、`get_service_log_stats`（L102-L135） | structlog 事件先进入 5000 条队列；队列满时淘汰最旧事件并保留最新故障。批量写库失败把原批次重新入队，同时累计 dropped/flush failure/last error | 日志失败不递归阻断业务；健康状态进入服务日志统计 API，`frontend-admin/src/pages/Monitor/Errors.tsx::MonitorErrors`（L28-L261）显示丢弃与写入告警 |
+| API 统计 Flusher | `backend/app/modules/monitoring/api_stats.py`、`backend/app/modules/monitoring/queries.py` | `_flush_to_db`、`get_api_stats_health`（L105-L197）、`get_api_stats_overview`（L281-L417） | HTTP 中间件按小时在内存聚合；flush 前取快照，提交失败时与 flush 期间新数据合并回原桶，下周期重试 | 不再永久丢失整批 API 指标；pending buckets/失败次数/最后错误进入 API 监控响应，`frontend-admin/src/pages/Monitor/Api.tsx::ApiMonitor`（L11-L229）显示告警 |
+| 进程树资源采样 | `backend/app/modules/monitoring/system_metrics.py` | `_safe_psutil_sample` | L25-L83 | 读取主机 CPU/内存/磁盘，并递归枚举当前进程 children，逐进程汇总 RSS/CPU；消失或无权限的子进程单独跳过 | 采样值反映 uvicorn/reload/worker 进程树；采集异常仍不阻断应用，最终由系统资源页消费 |
+
 ## 排查建议
 
 1. “模型没按选择运行”：先看观测响应的 `model.calls` 和 `final_model_call_id`，再按 config ID 查看模型配置。

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import {
   Card, Table, Tag, Space, Input, Select, Row, Col, Statistic, Button, Drawer, Descriptions,
-  Popconfirm, message, DatePicker,
+  Alert, Popconfirm, message, DatePicker,
 } from 'antd'
 import { type Dayjs } from 'dayjs'
 import {
@@ -120,6 +120,15 @@ const MonitorErrors = () => {
 
   return (
     <div>
+      {stats?.sink_health && (stats.sink_health.dropped_count > 0 || stats.sink_health.flush_failures > 0) && (
+        <Alert
+          showIcon
+          type="warning"
+          message={`日志 Sink 异常：丢弃 ${stats.sink_health.dropped_count} 条，写入失败 ${stats.sink_health.flush_failures} 次`}
+          description={`当前队列 ${stats.sink_health.queue_size}/${stats.sink_health.queue_capacity}；队列满时保留最新日志。`}
+          style={{ marginBottom: 16 }}
+        />
+      )}
       <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h2 style={{ margin: 0 }}>服务日志</h2>
         <Space>

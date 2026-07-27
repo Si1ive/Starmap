@@ -39,6 +39,8 @@ _buckets: Dict[Tuple[str, str, datetime], dict] = defaultdict(
 )
 _flush_task: Optional[asyncio.Task] = None
 _flush_running = False
+_flush_failures = 0
+_last_flush_error: Optional[str] = None
 
 
 def _hour_bucket(ts: Optional[datetime] = None) -> datetime:
@@ -108,6 +110,7 @@ async def _flush_to_db() -> None:
     snapshot = list(_buckets.items())
     _buckets.clear()
 
+    global _flush_failures, _last_flush_error
     try:
         from app.db.mysql import mysql_client
         from app.models.mysql_models import ApiCallStat
@@ -168,9 +171,30 @@ async def _flush_to_db() -> None:
                         )
                     )
             await session.commit()
+        _last_flush_error = None
     except Exception as e:
-        # 失败的桶丢弃；下个周期累积新数据
+        _flush_failures += 1
+        _last_flush_error = str(e)[:500]
+        # 与 flush 期间新到的请求合并回内存，下一周期重试，避免整批永久丢失。
+        for key, data in snapshot:
+            bucket = _buckets[key]
+            bucket["count"] += data["count"]
+            bucket["errors"] += data["errors"]
+            bucket["total_ms"] += data["total_ms"]
+            bucket["max_ms"] = max(bucket["max_ms"], data["max_ms"])
+            bucket["latency_histogram"] = merge_histograms(
+                bucket["latency_histogram"], data["latency_histogram"]
+            )
         print(f"[api_stats_middleware] flush failed: {e}", file=sys.stderr)
+
+
+def get_api_stats_health() -> dict:
+    return {
+        "pending_buckets": len(_buckets),
+        "flush_failures": _flush_failures,
+        "last_flush_error": _last_flush_error,
+        "flusher_running": _flush_running,
+    }
 
 
 async def _flush_loop(interval: float) -> None:

@@ -122,6 +122,8 @@ async def get_service_log_stats(
         )
     ).all()
 
+    from app.modules.monitoring.log_sink import get_sink_health
+
     return {
         "window_hours": hours,
         "by_level": [{"level": lvl, "count": int(c)} for lvl, c in by_level],
@@ -129,6 +131,7 @@ async def get_service_log_stats(
             {"logger": logger_name or "unknown", "count": int(count)}
             for logger_name, count in by_logger
         ],
+        "sink_health": get_sink_health(),
     }
 
 
@@ -367,6 +370,8 @@ async def get_api_stats_overview(
         )
     endpoints.sort(key=lambda x: x["calls"], reverse=True)
 
+    from app.modules.monitoring.api_stats import get_api_stats_health
+
     return {
         "window_hours": hours,
         "total_requests": total_calls,
@@ -408,6 +413,7 @@ async def get_api_stats_overview(
             reverse=True,
         )[:20],
         "qps_trend": qps_trend,
+        "collector_health": get_api_stats_health(),
     }
 
 

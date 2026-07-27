@@ -1,5 +1,15 @@
 # 2026-07 管理端记忆可观测进展
 
+## 2026-07-28：加固监控采集器自身可靠性
+
+- 目标：修复“监控看起来正常但自身已丢日志/丢 API 统计”的盲区，并让进程资源值覆盖实际子进程负载。
+- 服务日志：`backend/app/modules/monitoring/log_sink.py::queue_log`（L36-L48）在队列满时真正淘汰最旧事件并保留最新事件；`_flush_batch`、`_worker_loop`（L124-L202）在数据库失败时累计安全错误并把原批次重新入队。`get_sink_health`（L237-L248）把队列、丢弃、失败和 worker 状态交给管理 API。
+- API 统计：`backend/app/modules/monitoring/api_stats.py::_flush_to_db`（L105-L188）写库失败后把快照与并发新数据合并回内存，避免先 clear 后永久丢批；`get_api_stats_health`（L191-L197）公开 pending buckets、失败次数和最后错误。
+- 资源采样：`backend/app/modules/monitoring/system_metrics.py::_safe_psutil_sample`（L25-L83）汇总当前进程及递归 children 的 RSS/CPU，单个退出或无权限子进程不会清空整次采样。
+- 管理端：`frontend-admin/src/pages/Monitor/Api.tsx::ApiMonitor`（L11-L229）与 `frontend-admin/src/pages/Monitor/Errors.tsx::MonitorErrors`（L28-L261）分别显示指标重试和日志丢弃/flush 告警。
+- 验证：监控可靠性、延迟直方图和数据库监控 8 项通过；Python 编译、管理端 lint/build 与 `git diff --check` 通过。
+- 提交信息：`加固后台监控采集可靠性`
+
 ## 2026-07-28：拆分运行上下文与持久化记忆观测
 
 - 目标：修复 Memory 抽屉把 `changed=false` 误解成“整个工作流上下文没变化”的问题，同时避免为了可见性把关键词、大纲候选和 RAG 证据错误写入长期记忆。

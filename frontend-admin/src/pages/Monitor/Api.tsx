@@ -1,4 +1,4 @@
-import { Row, Col, Card, Statistic, Table, Tag, Tooltip, Select, Space } from 'antd'
+import { Alert, Row, Col, Card, Statistic, Table, Tag, Tooltip, Select, Space } from 'antd'
 import {
   ApiOutlined, ThunderboltOutlined, ClockCircleOutlined, WarningOutlined,
 } from '@ant-design/icons'
@@ -85,6 +85,16 @@ const ApiMonitor = () => {
           />
         </Space>
       </div>
+
+      {(apiData?.collector_health.flush_failures ?? 0) > 0 && (
+        <Alert
+          showIcon
+          type="warning"
+          message={`API 统计写入曾失败 ${apiData?.collector_health.flush_failures} 次`}
+          description="失败批次已合并回内存等待重试；请检查监控数据库与 pending buckets。"
+          style={{ marginBottom: 16 }}
+        />
+      )}
 
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
         <Col xs={12} sm={6}>

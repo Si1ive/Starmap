@@ -29,6 +29,12 @@ export interface ApiMonitorData {
   endpoints: ApiEndpointMetric[]
   slow_queries: ApiEndpointMetric[]
   qps_trend: Array<{ date: string; count: number }>
+  collector_health: {
+    pending_buckets: number
+    flush_failures: number
+    last_flush_error?: string | null
+    flusher_running: boolean
+  }
 }
 
 export const getApiMonitor = (hours = 24): Promise<ApiResponse<ApiMonitorData>> => {
@@ -152,6 +158,14 @@ export const getServiceLogStats = (hours = 24): Promise<ApiResponse<{
   window_hours: number
   by_level: Array<{ level: string; count: number }>
   top_loggers: Array<{ logger: string; count: number }>
+  sink_health: {
+    queue_size: number
+    queue_capacity: number
+    dropped_count: number
+    flush_failures: number
+    last_flush_error?: string | null
+    worker_running: boolean
+  }
 }>> => {
   return adminClient.get('/monitor/logs/stats', { params: { hours } })
 }
