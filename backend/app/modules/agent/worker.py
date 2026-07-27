@@ -21,6 +21,7 @@ from .events import event_store
 from .outbox import outbox_store
 from .service import AgentService
 from .checkpoints import checkpoint_store
+from .conversation_summary import enqueue_conversation_summary_maintenance
 from .memory_projection import project_completed_run_facts
 from .memory_outbox import memory_outbox_consumer
 from .workflows.contracts import NodeStatus
@@ -223,6 +224,7 @@ class AgentWorker:
                     "result_artifact_id": artifact.id if artifact else None,
                     "artifacts": result.output.get("artifacts", []) if result.output else [],
                 })
+                await enqueue_conversation_summary_maintenance(db, run)
 
             elif result.status == NodeStatus.WAITING:
                 waiting_output = result.output or {}

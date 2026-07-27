@@ -1,10 +1,19 @@
 # 2026-07 记忆基础、可信事实与 Outbox 进展
 
+## 2026-07-27：按连续消息区间增量生成历史摘要
+
+- 目标：推进 `MEM-007` 的首个可独立验证单元，在不阻塞成功 Run、不覆盖原消息的前提下，把最近 12 个用户轮次之前的历史按稳定 sequence 区间滚动压缩。
+- 实现：`backend/app/modules/agent/conversation_summary.py::enqueue_conversation_summary_maintenance`（L37-L69）让每个成功 Run 同事务幂等写摘要维护 Outbox；`ConversationSummaryMaintainer.maintain`（L90-L211）按 run/thread/user 复核作用域，只选择活跃摘要末尾到近期窗口之前最多 24 条 visible completed user/assistant 消息，模型返回后锁线程复核活跃版本，生成新版本后以 `superseded_by_id` 失效旧摘要。`backend/app/modules/agent/model_runtime/conversation_summary.py::ConversationSummaryRuntime.summarize`（L65-L117）使用触发 Run 绑定模型，把旧摘要和消息都按不可信数据处理。
+- 异步边界：`backend/app/modules/agent/memory_outbox.py::MemoryOutboxConsumer.process_claimed`（L202-L276）识别摘要任务并在 SAVEPOINT 内调用 maintainer；模型或持久化失败只让 Outbox 延迟重试，原 completed Run、原始消息和公开 SSE 均不改变。
+- 测试：`backend/tests/test_agent_conversation_summary.py`（L169-L436）覆盖近期窗口、隐藏/失败/system 消息排除、重放幂等、增量合并与 supersede、并发版本变化重试、跨用户/线程隔离和失败隔离；`backend/tests/test_agent_conversation_summary_runtime.py`（L42-L86）覆盖结构化输出与触发 Run 模型配置；Explain Worker 回归证明完成链真实入队。
+- 验证：全部 Agent 回归通过（192 passed，75 warnings）；Python 编译通过，`git diff --check` 通过。
+- 提交信息：`按连续消息区间增量生成对话摘要`
+
 ## 2026-07-27：让 Explain 消费 ConversationBundle 冻结上下文
 
 - 目标：完成 `MEM-004`，让 Explain 真正消费 Router 前按权限和 Token 预算筛选并冻结到 snapshot 的消息、Artifact、主题与引用，移除无实际约束的全学科固定 scope。
 - 实现：`backend/app/modules/agent/memory_selector.py::load_conversation_bundle`（L829-L956）只按 snapshot ID 集合重读同用户/线程的 visible completed 消息和公开 Artifact，并按唯一题面→主题 aliases→standalone request 生成首次 query；`backend/app/modules/agent/workflows/explain.py::_load_scope_node`（L36-L47）接入 bundle，`_evidence_loop_node`（L68-L204）与 `_generate_explanation_node`（L234-L287）向规划/生成模型传入同一 history；`ExplanationRuntime.decide` / `generate`（L88-L177）把 history 交给 Pydantic AI，并用动态 instructions 标记主题、摘要和引用均为不可信数据。
-- 测试：`backend/tests/test_agent_memory_selector.py::test_load_conversation_bundle_replays_only_snapshot_selected_visible_context`（L341-L458）覆盖冻结选择、hidden 丢弃、Artifact 摘要和 aliases query；`backend/tests/test_agent_explain_workflow.py::test_explain_uses_conversation_bundle_history_and_frozen_topic_query`（L145-L198）覆盖模型首个动作无法跳过/改写冻结检索；`backend/tests/test_agent_explain_worker.py::test_explain_worker_replays_snapshot_selected_history`（L302-L429）覆盖 Worker 端到端重放。
+- 测试：`backend/tests/test_agent_memory_selector.py::test_load_conversation_bundle_replays_only_snapshot_selected_visible_context`（L341-L458）覆盖冻结选择、hidden 丢弃、Artifact 摘要和 aliases query；`backend/tests/test_agent_explain_workflow.py::test_explain_uses_conversation_bundle_history_and_frozen_topic_query`（L145-L198）覆盖模型首个动作无法跳过/改写冻结检索；`backend/tests/test_agent_explain_worker.py::test_explain_worker_replays_snapshot_selected_history`（L314-L441）覆盖 Worker 端到端重放。
 - 验证：全部 Agent 回归通过（185 passed，75 warnings）；Python 编译和 `git diff --check` 通过，旧状态/旧锚点扫描未发现残留。
 - 提交信息：`让 Explain 消费冻结的 ConversationBundle`
 
@@ -52,14 +61,14 @@
 ## 2026-07-26：启用可信事实异步派生
 
 - 目标：让 Memory Outbox 产生真实长期记忆落点并进入后台循环，而不是空消费任务。
-- 实现：`memory_item_projection.py::project_trusted_memory_event`（L154-L166）按事实分派，线程主题与批准计划分别物化 `topic_context` / `learning_goal`；`AgentWorker.start`（L368-L392）在 Run 批次后消费记忆任务，异常仍只重试 Outbox。
+- 实现：`memory_item_projection.py::project_trusted_memory_event`（L154-L166）按事实分派，线程主题与批准计划分别物化 `topic_context` / `learning_goal`；`AgentWorker.start`（L370-L394）在 Run 批次后消费记忆任务，异常仍只重试 Outbox。
 - 验证：记忆/迁移组 32 项、workflow/Worker 组 22 项通过；Python 编译与 `git diff --check` 通过。
 - 提交信息：`启用可信事实异步派生`
 
 ## 2026-07-26：建立 Memory Outbox 消费状态机
 
 - 目标：让记忆任务具备可竞争认领、崩溃恢复、延迟重试和失败隔离能力。
-- 实现：新增 `backend/app/modules/agent/memory_outbox.py::MemoryOutboxStore`（L25-L172）与 `MemoryOutboxConsumer`（L175-L276）；processing 复用 `scheduled_at` 作为租约截止，状态更新校验 worker 所有权，投影异常由 SAVEPOINT 隔离，耗尽预算进入 failed。
+- 实现：新增 `backend/app/modules/agent/memory_outbox.py::MemoryOutboxStore`（当前 L30-L177）与 `MemoryOutboxConsumer`（当前 L180-L308）；processing 复用 `scheduled_at` 作为租约截止，状态更新校验 worker 所有权，投影异常由 SAVEPOINT 隔离，耗尽预算进入 failed。
 - 边界：该提交的默认 projector 只验证可信事实且未接入 Agent Worker；实际派生与运行时启用由后续 `启用可信事实异步派生` 提交完成。
 - 验证：`cd backend && PYTHONPATH=. venv/bin/pytest -q tests/test_agent_memory_outbox.py` 通过（4 passed）；Python 编译与 `git diff --check` 通过。
 - 提交信息：`建立 Memory Outbox 消费状态机`
@@ -165,7 +174,7 @@ fallback 也属于成功讲解，且讲解行为不会被误当成学习掌握�
 
 - 在 `backend/app/modules/agent/memory_projection.py::project_completed_run_facts`（L125-L140）增加 explanation Artifact 分派，并由 `_record_explanation_artifact_created`（L143-L182）按 Run 幂等写线程级 `explanation_artifact_created`。
 - 事件载荷只保留 `artifact_id` 与可选 `memory_snapshot_id`，正文、outline 和 citations 继续以 `agent_artifacts` 为唯一权威位置，不复制进长期事件或公开 SSE。
-- 扩展 `backend/tests/test_agent_explain_worker.py::test_worker_persists_zero_hit_fallback_answer_without_citations`（当前 L133-L232），覆盖零命中 fallback 仍写事实、重放不重复、引用为空且 `user_learning_mastery` 不产生记录。
+- 扩展 `backend/tests/test_agent_explain_worker.py::test_worker_persists_zero_hit_fallback_answer_without_citations`（当前 L134-L243），覆盖零命中 fallback 仍写事实、重放不重复、引用为空且 `user_learning_mastery` 不产生记录。
 - 同步更新 Router/记忆实现分卷、Explain 工作流执行全景和任务单，并修正 `memory_projection.py` 插入新函数后受影响的 Grade 代码锚点。
 
 ### 验证

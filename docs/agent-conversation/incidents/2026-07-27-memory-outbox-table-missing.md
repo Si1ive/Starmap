@@ -30,7 +30,7 @@ Alembic 已到 head 后的真表漂移。
 | 创建 Outbox 表 | `backend/alembic/versions/20260726_agent_memory_foundation.py` | `upgrade` | L152-L192 | revision `20260725_agent_activity` | 创建 `agent_memory_update_outbox`、外键及扫描索引 | MySQL 新增真表 | DDL 失败会中止 upgrade，禁止 stamp |
 | 冻结幂等键 | `backend/alembic/versions/20260726_memory_outbox_unique.py` | `upgrade` | L18-L25 | 已存在的 Outbox 表 | 添加 `(run_id,event_type)` 唯一约束 | `uk_agent_memory_outbox_run_event` | DDL 失败保留完整迁移错误 |
 | 启动期真表门禁 | `backend/app/modules/operations/schema_guard.py` | `verify_database_schema` | L43-L191 | Alembic revision、information_schema 表/列/索引 | 校验九张 Agent 必需表、Memory Outbox 复合唯一索引和模型列约束 | 校验通过才允许启动 Worker | 缺表/缺索引抛 `DatabaseSchemaError`，由 FastAPI lifespan 中止启动 |
-| Worker 原始复现 | `backend/app/modules/agent/memory_outbox.py` | `MemoryOutboxStore._expire_exhausted_processing`、`MemoryOutboxStore.scan_due` | L41-L81 | 到期 processing/pending 任务 | 先把耗尽重试的任务置 failed，再查询可认领任务 | due 任务列表 | 数据库错误向 Worker 扫描循环传播 |
+| Worker 原始复现 | `backend/app/modules/agent/memory_outbox.py` | `MemoryOutboxStore._expire_exhausted_processing`、`MemoryOutboxStore.scan_due` | L46-L86 | 到期 processing/pending 任务 | 先把耗尽重试的任务置 failed，再查询可认领任务 | due 任务列表 | 数据库错误向 Worker 扫描循环传播 |
 
 实际执行 `alembic upgrade head` 后，数据库依次升级到记忆基础迁移和唯一约束迁移。随后确认：
 

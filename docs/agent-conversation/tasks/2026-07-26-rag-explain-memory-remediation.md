@@ -73,7 +73,7 @@ load_scope completed
 | Validate 缺主题澄清与恢复 | `backend/app/modules/agent/service.py`、`backend/app/modules/agent/timeline.py` | `create_input`、`submit_input_answer`、`AgentTimelineService._build_workflow_views` | 缺主题时创建 `AgentInput` 并投影 `workflow.input.required`，时间线把最新 pending input 暴露为 `workflow.pending_input`；用户提交答案后把输入标记为 answered，恢复 run 到 running，worker 从 checkpoint 回到 `_question_discovery_node` 继续检索 |
 | 当前上下文构建 | `backend/app/modules/agent/context_builder.py` | `AgentRunContext`、`ThreadContextBuilder.build`、`_load_thread_memory_state` | 已能选择近期消息、Artifact、待处理交互，并读取线程 `active_topic` / `memory_state_version`；仍未按 `MemoryNeed` 选择掌握度、摘要和排除集 |
 | Router、题目指代、主题事实与子 Run 交接 | `backend/app/modules/agent/workflows/conversation.py`、`backend/app/modules/agent/turn_understanding.py`、`backend/app/modules/agent/model_runtime/referent.py`、`backend/app/modules/agent/memory_projection.py` | `_route_node`（L50-L151）、`build_ambiguous_referent_candidates`（L187-L264）、`hydrate_referent_candidate_labels`（L267-L301）、`ReferentRuntime.resolve`（L79-L148）、`build_turn_understanding`（L347-L403）、`ensure_turn_memory_snapshot`（L405-L490）、`project_topic_confirmed_fact`（L67-L122）、`_child_context_metadata`（L213-L239）、`_dispatch_workflow_node`（L242-L291） | Router 前生成含难度/章节约束的 `TurnUnderstanding`；确定性未解时只允许模型选择带真实语义标签的服务端候选，再创建 snapshot 并更新热状态。显式主题按 Run 幂等写事实，继承主题不重复写；随后用 standalone request 路由并把 snapshot 交给 child run |
-| Run 最终持久化 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run`（L183-L224） | 执行 workflow 并创建 Artifact/最终消息；completed 分支调用事实投影，使 Artifact、事实、Memory Outbox 与 Run 终态处在同一外层事务 |
+| Run 最终持久化 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run`（L185-L227） | 执行 workflow 并创建 Artifact/最终消息；completed 分支调用事实投影并写摘要任务，使 Artifact、事实、Memory Outbox 与 Run 终态处在同一外层事务 |
 | 可信事实与 Outbox 生产 | `backend/app/modules/agent/memory_projection.py` | `_ensure_memory_update_outbox`、`project_topic_confirmed_fact`、`project_completed_run_facts`、各 `_record_*`（L27-L413） | 写五类事实后确保 `(run_id,event_type)` 唯一的 pending Memory Outbox；重放已有事实会补建缺失任务，并发冲突只回滚 SAVEPOINT；不满足事实条件时不写事件或任务 |
 
 ## 第一组：立即解除现有故障
@@ -227,14 +227,14 @@ load_scope completed
 
 ### MEM-006 按事实事件回写，而不是按 workflow 名写库
 
-- 状态：进行中（2026-07-26 已落地 topic、explanation、practice、approved plan 与 Grade 投影边界）。`project_topic_confirmed_fact`（L67-L122）在 Router 前保留显式主题；`thread_memory` 继承主题不重复写。
+- 状态：进行中（已落地 topic、explanation、practice、approved plan、Grade 投影边界与历史摘要异步任务）。`project_topic_confirmed_fact`（L67-L122）在 Router 前保留显式主题；`thread_memory` 继承主题不重复写。
 - Artifact 完成投影由 `project_completed_run_facts`（L125-L140）、`_record_explanation_artifact_created`（L143-L182）、`_record_plan_confirmed`（L185-L251）、`_record_practice_artifact_created`（L254-L305）与 `_record_grade_result_confirmed`（L308-L413）负责。Plan 必须携带 approval ID 且数据库存在同 Run approved 审批；未批准计划不写长期目标。
 - Grade 已完成真实客观题证据生产：`backend/app/modules/agent/workflows/grade.py::_objective_grade_node`（L81-L129）只对 choice/fill/judge 做题型归一化和确定性标准答案比较，产生 correct/incorrect、score、answer_mismatch 与 Run 级 evidence ID；`_render_artifact_node`（L191-L218）把证据写入 `content.grading`。主观题、缺快照、无唯一题目或无可信标准答案在 Artifact 前失败，不能污染掌握度。
 - 已由 `backend/tests/test_agent_memory_projection.py::test_topic_confirmed_projection_is_idempotent_and_skips_inherited_topic`（L133-L208）覆盖主题事实重放、Outbox 幂等和补建；`backend/tests/test_agent_conversation_workflow.py::test_model_configuration_failure_creates_visible_failed_message`（L603-L666）覆盖 Router 失败仍保留显式主题；Grade 投影边界由 `test_grade_projection_updates_mastery_and_replays_idempotently`（L212-L281）、`test_grade_projection_deduplicates_knowledge_points_and_scopes_evidence_by_user`（L285-L345）、`test_feedback_without_structured_grading_is_ignored`（L349-L363）、`test_grade_run_without_snapshot_fails_without_touching_mastery`（L398-L415）覆盖；`backend/tests/test_agent_grade_worker.py`（L153-L243）覆盖真实正确/错误证据到掌握度、主观题拒绝与判断题否定表达归一化。
-- Explain 零命中 fallback 的事实、重放幂等与“不写掌握度”由 `backend/tests/test_agent_explain_worker.py::test_worker_persists_zero_hit_fallback_answer_without_citations`（L133-L232）覆盖。
+- Explain 零命中 fallback 的事实、重放幂等与“不写掌握度”由 `backend/tests/test_agent_explain_worker.py::test_worker_persists_zero_hit_fallback_answer_without_citations`（L134-L243）覆盖。
 - Plan 审批与事实闭环：`AgentService.decide_approval`（L424-L476）只在 approved 时恢复；`backend/app/modules/agent/workflows/plan.py::_apply_plan_change_node`（L171-L195）复核审批，`_render_plan_result_node`（L198-L221）把 approval ID 放入 Artifact；`backend/app/modules/agent/memory_projection.py::_record_plan_confirmed`（L185-L251）再次查询 approved 事实并按 approval ID 幂等写 `plan_confirmed`。`backend/tests/test_agent_plan_worker.py` 覆盖无证据、拒绝、旁路和批准事实闭环。
-- Memory Outbox 生产、消费与首批派生已闭环：`backend/app/modules/agent/memory_projection.py::_ensure_memory_update_outbox`（L27-L64）同事务生产，`backend/app/modules/agent/memory_outbox.py::MemoryOutboxStore`（L25-L172）与 `MemoryOutboxConsumer`（L175-L276）负责认领、租约、重试、事实归属和失败隔离，`backend/app/modules/agent/worker.py::AgentWorker.start`（L368-L392）每轮在 Run 批次后消费记忆任务。
-- `backend/app/modules/agent/memory_item_projection.py::project_trusted_memory_event`（L154-L166）只物化明确可信的两类派生：`_project_topic_context`（L60-L90）按事实键 upsert 线程主题，`_project_confirmed_plan_goal`（L108-L151）复核同 Run Plan Artifact/approval 后写包含结构化 goals 的用户目标；Explain/Practice/Grade 不复制权威正文。`backend/tests/test_agent_memory_outbox.py` 覆盖竞争、租约、topic/plan 物化、重放与失败隔离。历史摘要、Embedding 与偏好候选仍待实现。
+- Memory Outbox 生产、消费与首批派生已闭环：`backend/app/modules/agent/memory_projection.py::_ensure_memory_update_outbox`（L27-L64）生产事实任务；`backend/app/modules/agent/conversation_summary.py::enqueue_conversation_summary_maintenance`（L37-L69）在每个成功 Run 事务内另行幂等生产摘要任务；`backend/app/modules/agent/memory_outbox.py::MemoryOutboxStore`（L30-L177）与 `MemoryOutboxConsumer`（L180-L308）负责认领、租约、按类型归属校验、重试和失败隔离，`backend/app/modules/agent/worker.py::AgentWorker.start`（L370-L394）每轮在 Run 批次后消费。
+- `backend/app/modules/agent/memory_item_projection.py::project_trusted_memory_event`（L154-L166）物化显式主题与批准目标；`backend/app/modules/agent/conversation_summary.py::ConversationSummaryMaintainer.maintain`（L90-L211）物化滚动历史摘要。Explain/Practice/Grade 不复制权威正文，Embedding 与偏好候选仍待实现。
 - 不把 `message.delta` 写长期记忆，只在 `message.completed`/`artifact.rendered`/`run.completed` 后投影。
 - Run 完成事务同步更新下一轮马上需要的热状态，并写 Memory Outbox。
 - 异步投影历史摘要、Embedding、偏好候选和长期事件，失败可重放且不反向把成功 Run 改成失败。
@@ -246,8 +246,10 @@ load_scope completed
 
 ### MEM-007 压缩、冲突、失效与删除
 
-- 最近 6～12 轮保留原始消息；更旧消息按连续 sequence 区间增量摘要，不整线程重复总结。
-- 摘要不覆盖原消息，旧摘要被合并后标记 `superseded` 并保留来源范围和版本。
+- 状态：进行中（2026-07-27 已完成连续区间增量摘要生产；摘要召回、冲突、衰减和删除仍待实现）。
+- 已由 `backend/app/modules/agent/conversation_summary.py::ConversationSummaryMaintainer`（L72-L318）固定保留最近 12 个用户轮次，只从上个活跃摘要 `end_sequence` 之后选择最多 24 条同用户/线程的 visible completed user/assistant 消息；不足 13 轮不调用模型，也不在每次 Run 重读整线程。模型返回后短暂锁定线程并复核活跃版本，避免多 Worker 产生双活摘要，冲突交给 Outbox 基于新版本重试。
+- `backend/app/modules/agent/model_runtime/conversation_summary.py::ConversationSummaryRuntime.summarize`（L65-L117）把旧摘要和新增消息当作不可信数据，使用触发 Run 绑定模型生成结构化非空摘要；`maintain` 新建递增版本、保留起止 sequence 和来源消息 ID，再用 `superseded_by_id` 标记旧摘要。原 `AgentMessage` 不覆盖，摘要正文不进入公开 SSE。
+- 成功 Run 只在 `AgentWorker.process_run`（L185-L227）当前事务写摘要维护 Outbox；`MemoryOutboxConsumer.process_claimed`（L202-L276）在独立消费事务复核 Run/thread/user/type，模型或存储失败只重试任务，不把 completed Run 改成失败。`backend/tests/test_agent_conversation_summary.py`（L169-L436）覆盖近期窗口、隐藏/失败/system 排除、重放幂等、新区间合并、并发版本复核、跨作用域隔离和失败隔离。
 - 用户明确陈述和真实业务事件优先于模型抽取；低置信度候选不能覆盖高置信度活跃记忆。
 - 线程主题按轮次衰减；临时约束随 Turn/Practice 结束；学习画像长期保存并按时间衰减。
 - 排除集的衰减与覆盖是读取策略而非存储变更：事实事件永久保留，selector 默认只取近期窗口（当前为最近 10 个练习事件 / 50 道题，后续可加时间衰减）；用户显式引用（“再出一遍上次那道题”）按冲突优先级最高级覆盖排除集。这类调整只改 selector 参数，不迁移事实表。
@@ -316,6 +318,7 @@ Validate/Explain/Grade/Plan 是记忆内核的天然边界。这里把设计口�
 6. 无法消解：没有主题和唯一薄弱点时进入澄清，不使用硬编码默认主题；唯一薄弱点回退与“多薄弱点仍澄清”已由 `test_load_practice_bundle_falls_back_to_unique_weak_point` / `test_load_practice_bundle_skips_weak_point_when_multiple_candidates` 覆盖。
 7. 增量回写：Explain/Validate 不提高掌握度；Grade 对唯一可信客观题和显式作答确定性产生结构化证据，Feedback Artifact 按用户 + Run evidence ID 幂等更新掌握度；已由 `test_grade_worker_projects_real_objective_verdict_to_mastery` 与 `test_grade_worker_records_incorrect_objective_verdict` 覆盖。主观题仍安全失败，不冒充真实评分。
 8. 失败隔离：流式中途失败不写长期 Agent 输出记忆；重放 Outbox 不产生重复记忆。
+9. 增量摘要：13 轮以上线程只压缩近期 12 轮之前的 visible completed 对话；新增轮次只合并新区间并 supersede 旧摘要，模型失败不修改完成 Run。已由 `test_summary_selects_only_old_visible_completed_conversation_range`、`test_summary_replay_is_idempotent_and_new_range_supersedes_old_version` 和 `test_summary_outbox_is_idempotent_and_failure_keeps_run_completed` 覆盖。
 
 ## 任务维护规则
 

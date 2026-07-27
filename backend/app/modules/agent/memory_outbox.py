@@ -12,8 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.logging import get_logger
 from app.db.mysql import mysql_client
 
+from .conversation_summary import (
+    CONVERSATION_SUMMARY_TASK,
+    ConversationSummaryMaintainer,
+    conversation_summary_maintainer,
+)
 from .memory_item_projection import project_trusted_memory_event
-from .models import AgentMemoryEvent, AgentMemoryUpdateOutbox
+from .models import AgentMemoryEvent, AgentMemoryUpdateOutbox, AgentRun
 from .time_utils import utc_now
 
 logger = get_logger(__name__)
@@ -180,12 +185,16 @@ class MemoryOutboxConsumer:
         *,
         store: MemoryOutboxStore | None = None,
         projector: MemoryProjector = project_trusted_memory_event,
+        summary_maintainer: ConversationSummaryMaintainer = (
+            conversation_summary_maintainer
+        ),
         lease_seconds: int = 300,
         retry_delay_seconds: int = 30,
         max_retries: int = 3,
     ) -> None:
         self.store = store or MemoryOutboxStore()
         self.projector = projector
+        self.summary_maintainer = summary_maintainer
         self.lease_seconds = lease_seconds
         self.retry_delay_seconds = retry_delay_seconds
         self.max_retries = max_retries
@@ -209,21 +218,44 @@ class MemoryOutboxConsumer:
 
         try:
             async with db.begin_nested():
-                memory_event_id = int(outbox.payload_json.get("memory_event_id"))
-                fact_type = str(outbox.payload_json.get("fact_type") or "")
-                memory_event = await db.scalar(
-                    select(AgentMemoryEvent).where(
-                        AgentMemoryEvent.id == memory_event_id,
-                        AgentMemoryEvent.run_id == outbox.run_id,
-                        AgentMemoryEvent.thread_id == outbox.thread_id,
-                        AgentMemoryEvent.user_id == outbox.user_id,
-                        AgentMemoryEvent.fact_type == outbox.event_type,
-                        AgentMemoryEvent.fact_type == fact_type,
+                if outbox.event_type == CONVERSATION_SUMMARY_TASK:
+                    trigger_run_id = str(
+                        outbox.payload_json.get("trigger_run_id") or ""
                     )
-                )
-                if memory_event is None:
-                    raise ValueError("Memory Outbox 与可信事实不匹配")
-                await self.projector(db, memory_event)
+                    task_type = str(outbox.payload_json.get("task_type") or "")
+                    trigger_run = await db.scalar(
+                        select(AgentRun).where(
+                            AgentRun.id == trigger_run_id,
+                            AgentRun.id == outbox.run_id,
+                            AgentRun.thread_id == outbox.thread_id,
+                            AgentRun.user_id == outbox.user_id,
+                            AgentRun.status == "completed",
+                        )
+                    )
+                    if trigger_run is None or task_type != CONVERSATION_SUMMARY_TASK:
+                        raise ValueError("对话摘要 Outbox 与已完成 Run 不匹配")
+                    await self.summary_maintainer.maintain(
+                        db,
+                        thread_id=outbox.thread_id,
+                        user_id=outbox.user_id,
+                        trigger_run_id=trigger_run.id,
+                    )
+                else:
+                    memory_event_id = int(outbox.payload_json.get("memory_event_id"))
+                    fact_type = str(outbox.payload_json.get("fact_type") or "")
+                    memory_event = await db.scalar(
+                        select(AgentMemoryEvent).where(
+                            AgentMemoryEvent.id == memory_event_id,
+                            AgentMemoryEvent.run_id == outbox.run_id,
+                            AgentMemoryEvent.thread_id == outbox.thread_id,
+                            AgentMemoryEvent.user_id == outbox.user_id,
+                            AgentMemoryEvent.fact_type == outbox.event_type,
+                            AgentMemoryEvent.fact_type == fact_type,
+                        )
+                    )
+                    if memory_event is None:
+                        raise ValueError("Memory Outbox 与可信事实不匹配")
+                    await self.projector(db, memory_event)
         except Exception as error:
             logger.error(
                 "Memory Outbox 投影失败",

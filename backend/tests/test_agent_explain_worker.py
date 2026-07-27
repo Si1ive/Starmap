@@ -14,6 +14,7 @@ from app.modules.agent.model_runtime.schema import (
     ExplanationOutput,
     LoopDecision,
 )
+from app.modules.agent.conversation_summary import CONVERSATION_SUMMARY_TASK
 from app.modules.agent.memory_projection import project_completed_run_facts
 from app.modules.agent.models import (
     AgentApproval,
@@ -177,6 +178,12 @@ async def test_worker_persists_zero_hit_fallback_answer_without_citations(
     memory_event = await db_session.scalar(
         select(AgentMemoryEvent).where(AgentMemoryEvent.run_id == run.id)
     )
+    summary_task = await db_session.scalar(
+        select(AgentMemoryUpdateOutbox).where(
+            AgentMemoryUpdateOutbox.run_id == run.id,
+            AgentMemoryUpdateOutbox.event_type == CONVERSATION_SUMMARY_TASK,
+        )
+    )
     message = await db_session.scalar(
         select(AgentMessage).where(AgentMessage.run_id == run.id)
     )
@@ -198,6 +205,11 @@ async def test_worker_persists_zero_hit_fallback_answer_without_citations(
     assert memory_event.payload_json == {
         "artifact_id": artifact.id,
         "memory_snapshot_id": None,
+    }
+    assert summary_task is not None
+    assert summary_task.payload_json == {
+        "task_type": CONVERSATION_SUMMARY_TASK,
+        "trigger_run_id": run.id,
     }
     await project_completed_run_facts(db_session, run, artifact)
     explanation_events = list(
