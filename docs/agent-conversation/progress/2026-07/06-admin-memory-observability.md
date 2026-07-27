@@ -30,3 +30,19 @@
   共 68 项通过；Python 编译、Alembic 单 head 与 `git diff --check` 通过；真实 MySQL 已从
   `20260727_thread_memory_delete` 前向升级到 `20260727_memory_outbox_error (head)`。
 - 提交信息：`实现 Memory Outbox 观测与幂等重放`
+
+## 2026-07-27：完成管理端记忆观测与 Outbox 运维界面
+
+- 目标：完成 `MEM-008` 最后一阶段，让管理员在既有 Agent Runs 监控中使用冻结记忆飞行记录器和
+  Memory Outbox 运维面，同时保留原有评测重放入口。
+- 实现：`frontend-admin/src/pages/AgentRunDetailPage.tsx::TurnDetail`（L98-L278）在每个 Run 卡增加记忆观测入口；
+  `frontend-admin/src/pages/agent-observability/RunMemoryDrawer.tsx::RunMemoryDrawer`（L85-L420）展示
+  Run→Snapshot→Outbox 轨迹、理解/预算、选择账本、模型/工具/派生事实，并只在显式操作后以纯文本显示冻结
+  正文或当前 source。`frontend-admin/src/pages/agent-observability/MemoryOutboxPanel.tsx::MemoryOutboxPanel`
+  （L38-L396）提供 event/status/run/thread/source/time 组合筛选、失败详情、重放资格和原任务确认重放。
+- 安全补全：`backend/app/modules/agent/admin_memory.py::get_run_memory_observability`（L135-L258）把 Outbox
+  最后错误经 `safe_error_summary` 后加入 Run 摘要；前端没有 HTML/Markdown 执行器，也不提供强制成功、
+  跳过版本校验或直接写派生记忆入口。
+- 验证：管理端观测/Outbox/路由后端回归 14 项通过；前端 ESLint 和生产构建通过。无头 Chrome 模拟真实管理
+  API 验证桌面 Outbox、桌面/390px Run 抽屉均无横向页面溢出或运行时异常，恶意 HTML 样例未生成 DOM 图片。
+- 提交信息：`完成管理端记忆观测与 Outbox 运维界面`

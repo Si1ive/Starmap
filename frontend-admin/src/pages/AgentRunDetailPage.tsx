@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   Alert,
@@ -15,15 +15,18 @@ import {
   Typography,
   message,
 } from 'antd'
-import { ArrowLeftOutlined, PlayCircleOutlined, ReloadOutlined } from '@ant-design/icons'
+import {
+  ArrowLeftOutlined,
+  DatabaseOutlined,
+  PlayCircleOutlined,
+  ReloadOutlined,
+} from '@ant-design/icons'
 import dayjs from 'dayjs'
 
 import * as agentRunsApi from '@/api/agentRuns'
-import type {
-  AdminAgentRunEvent,
-  AdminAgentSessionDetail,
-  AdminAgentTurn,
-} from '@/api/agentRuns'
+import type { AdminAgentRunEvent, AdminAgentSessionDetail, AdminAgentTurn } from '@/api/agentRuns'
+import RunMemoryDrawer from './agent-observability/RunMemoryDrawer'
+import './agent-observability/agent-observability.css'
 
 const { Title, Text, Paragraph } = Typography
 
@@ -65,7 +68,7 @@ const eventTypeNames: Record<string, string> = {
   error: '执行错误',
 }
 
-export const getAgentEventTypeLabel = (eventType: string) =>
+const getAgentEventTypeLabel = (eventType: string) =>
   `${eventTypeNames[eventType] || '未知事件'}（${eventType}）`
 
 const eventColor = (event: AdminAgentRunEvent) => {
@@ -95,14 +98,16 @@ const renderJson = (value: unknown) => (
 const TurnDetail = ({
   turn,
   selectedEventTypes,
+  onInspectMemory,
   onReplay,
 }: {
   turn: AdminAgentTurn
   selectedEventTypes: string[]
+  onInspectMemory: (runId: string) => void
   onReplay: (runId: string) => void
 }) => {
   const events = turn.events.filter(
-    (event) => selectedEventTypes.length === 0 || selectedEventTypes.includes(event.event_type),
+    (event) => selectedEventTypes.length === 0 || selectedEventTypes.includes(event.event_type)
   )
 
   return (
@@ -118,7 +123,9 @@ const TurnDetail = ({
           <div>
             <Text type="secondary">Agent：</Text>
             {turn.assistant_messages.length === 0 ? (
-              <Paragraph type="secondary" style={{ marginBottom: 0 }}>（暂无回复消息）</Paragraph>
+              <Paragraph type="secondary" style={{ marginBottom: 0 }}>
+                （暂无回复消息）
+              </Paragraph>
             ) : (
               turn.assistant_messages.map((assistantMessage) => (
                 <Paragraph
@@ -167,24 +174,42 @@ const TurnDetail = ({
                       </Space>
                     }
                     extra={
-                      run.id === turn.root_run_id ? (
+                      <Space size={2}>
                         <Button
                           size="small"
                           type="link"
-                          icon={<PlayCircleOutlined />}
-                          onClick={() => onReplay(run.id)}
+                          icon={<DatabaseOutlined />}
+                          onClick={() => onInspectMemory(run.id)}
                         >
-                          重放本轮
+                          记忆观测
                         </Button>
-                      ) : null
+                        {run.id === turn.root_run_id ? (
+                          <Button
+                            size="small"
+                            type="link"
+                            icon={<PlayCircleOutlined />}
+                            onClick={() => onReplay(run.id)}
+                          >
+                            重放本轮
+                          </Button>
+                        ) : null}
+                      </Space>
                     }
                   >
                     <Descriptions size="small" column={2}>
                       <Descriptions.Item label="Run ID">{run.id}</Descriptions.Item>
-                      <Descriptions.Item label="父 Run">{run.parent_run_id || '-'}</Descriptions.Item>
-                      <Descriptions.Item label="工作流">{run.workflow_key}@{run.workflow_version}</Descriptions.Item>
-                      <Descriptions.Item label="当前步骤">{run.current_step_key || '-'}</Descriptions.Item>
-                      <Descriptions.Item label="模型配置">{run.model_config_id || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="父 Run">
+                        {run.parent_run_id || '-'}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="工作流">
+                        {run.workflow_key}@{run.workflow_version}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="当前步骤">
+                        {run.current_step_key || '-'}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="模型配置">
+                        {run.model_config_id || '-'}
+                      </Descriptions.Item>
                       <Descriptions.Item label="事件数">{run.event_count}</Descriptions.Item>
                     </Descriptions>
                   </Card>
@@ -195,52 +220,56 @@ const TurnDetail = ({
           {
             key: 'events',
             label: `事件流（${events.length}/${turn.events.length}）`,
-            children: events.length === 0 ? (
-              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无匹配事件" />
-            ) : (
-              <Timeline
-                mode="left"
-                items={events.map((event) => ({
-                  key: `${event.run_id}-${event.id}`,
-                  color: eventColor(event),
-                  label: dayjs(event.created_at).format('HH:mm:ss.SSS'),
-                  children: (
-                    <div>
-                      <Space wrap style={{ marginBottom: 6 }}>
-                        <Text strong>{getAgentEventTypeLabel(event.event_type)}</Text>
-                        <Tag>{event.run_id.slice(0, 12)}</Tag>
-                        <Text type="secondary">#{event.sequence}</Text>
-                      </Space>
-                      {renderJson(event.payload)}
-                    </div>
-                  ),
-                }))}
-              />
-            ),
+            children:
+              events.length === 0 ? (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无匹配事件" />
+              ) : (
+                <Timeline
+                  mode="left"
+                  items={events.map((event) => ({
+                    key: `${event.run_id}-${event.id}`,
+                    color: eventColor(event),
+                    label: dayjs(event.created_at).format('HH:mm:ss.SSS'),
+                    children: (
+                      <div>
+                        <Space wrap style={{ marginBottom: 6 }}>
+                          <Text strong>{getAgentEventTypeLabel(event.event_type)}</Text>
+                          <Tag>{event.run_id.slice(0, 12)}</Tag>
+                          <Text type="secondary">#{event.sequence}</Text>
+                        </Space>
+                        {renderJson(event.payload)}
+                      </div>
+                    ),
+                  }))}
+                />
+              ),
           },
           {
             key: 'interactions',
             label: `审批与产物（${turn.approvals.length + turn.artifacts.length}）`,
-            children: turn.approvals.length === 0 && turn.artifacts.length === 0 ? (
-              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="本轮没有审批或产物" />
-            ) : (
-              <Space direction="vertical" style={{ width: '100%' }}>
-                {turn.approvals.map((approval) => (
-                  <Card key={approval.id} size="small" title={`审批：${approval.action_key}`}>
-                    <Descriptions size="small" column={2}>
-                      <Descriptions.Item label="状态">{approval.status}</Descriptions.Item>
-                      <Descriptions.Item label="审批人">{approval.decided_by || '-'}</Descriptions.Item>
-                    </Descriptions>
-                    {approval.diff_ref ? renderJson(approval.diff_ref) : null}
-                  </Card>
-                ))}
-                {turn.artifacts.map((artifact) => (
-                  <Card key={artifact.id} size="small" title={`产物：${artifact.type}`}>
-                    {renderJson(artifact.content)}
-                  </Card>
-                ))}
-              </Space>
-            ),
+            children:
+              turn.approvals.length === 0 && turn.artifacts.length === 0 ? (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="本轮没有审批或产物" />
+              ) : (
+                <Space direction="vertical" style={{ width: '100%' }}>
+                  {turn.approvals.map((approval) => (
+                    <Card key={approval.id} size="small" title={`审批：${approval.action_key}`}>
+                      <Descriptions size="small" column={2}>
+                        <Descriptions.Item label="状态">{approval.status}</Descriptions.Item>
+                        <Descriptions.Item label="审批人">
+                          {approval.decided_by || '-'}
+                        </Descriptions.Item>
+                      </Descriptions>
+                      {approval.diff_ref ? renderJson(approval.diff_ref) : null}
+                    </Card>
+                  ))}
+                  {turn.artifacts.map((artifact) => (
+                    <Card key={artifact.id} size="small" title={`产物：${artifact.type}`}>
+                      {renderJson(artifact.content)}
+                    </Card>
+                  ))}
+                </Space>
+              ),
           },
         ]}
       />
@@ -254,8 +283,9 @@ const AgentRunDetailPage = () => {
   const [session, setSession] = useState<AdminAgentSessionDetail | null>(null)
   const [loading, setLoading] = useState(false)
   const [selectedEventTypes, setSelectedEventTypes] = useState<string[]>([])
+  const [memoryRunId, setMemoryRunId] = useState<string | null>(null)
 
-  const fetchSession = async () => {
+  const fetchSession = useCallback(async () => {
     if (!id) return
     setLoading(true)
     try {
@@ -266,14 +296,16 @@ const AgentRunDetailPage = () => {
     } finally {
       setLoading(false)
     }
-  }
+  }, [id])
 
   useEffect(() => {
     void fetchSession()
-  }, [id])
+  }, [fetchSession])
 
   const eventTypeOptions = useMemo(() => {
-    const eventTypes = new Set(session?.turns.flatMap((turn) => turn.events.map((event) => event.event_type)) || [])
+    const eventTypes = new Set(
+      session?.turns.flatMap((turn) => turn.events.map((event) => event.event_type)) || []
+    )
     return [...eventTypes].sort().map((eventType) => ({
       value: eventType,
       label: getAgentEventTypeLabel(eventType),
@@ -290,13 +322,19 @@ const AgentRunDetailPage = () => {
   }
 
   if (loading) {
-    return <div style={{ display: 'flex', justifyContent: 'center', padding: 64 }}><Spin size="large" /></div>
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', padding: 64 }}>
+        <Spin size="large" />
+      </div>
+    )
   }
 
   if (!session) {
     return (
       <div style={{ padding: 24 }}>
-        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/admin/agent-runs')}>返回列表</Button>
+        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/admin/agent-runs')}>
+          返回列表
+        </Button>
         <Empty description="会话不存在" style={{ marginTop: 48 }} />
       </div>
     )
@@ -306,12 +344,18 @@ const AgentRunDetailPage = () => {
     <div style={{ padding: 24 }}>
       <Space direction="vertical" size="large" style={{ width: '100%' }}>
         <Space>
-          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/admin/agent-runs')}>返回列表</Button>
-          <Button icon={<ReloadOutlined />} onClick={() => void fetchSession()}>刷新</Button>
+          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/admin/agent-runs')}>
+            返回列表
+          </Button>
+          <Button icon={<ReloadOutlined />} onClick={() => void fetchSession()}>
+            刷新
+          </Button>
         </Space>
 
         <div>
-          <Title level={3} style={{ marginBottom: 4 }}>会话详情：{session.title}</Title>
+          <Title level={3} style={{ marginBottom: 4 }}>
+            会话详情：{session.title}
+          </Title>
           <Text type="secondary">每个折叠面板对应一次用户提问及其完整运行事件。</Text>
         </div>
 
@@ -328,7 +372,9 @@ const AgentRunDetailPage = () => {
             <Descriptions.Item label="问答轮数">{session.turn_count}</Descriptions.Item>
             <Descriptions.Item label="Run 总数">{session.total_run_count}</Descriptions.Item>
             <Descriptions.Item label="事件总数">{session.event_count}</Descriptions.Item>
-            <Descriptions.Item label="最后更新">{dayjs(session.updated_at).format('YYYY-MM-DD HH:mm:ss')}</Descriptions.Item>
+            <Descriptions.Item label="最后更新">
+              {dayjs(session.updated_at).format('YYYY-MM-DD HH:mm:ss')}
+            </Descriptions.Item>
           </Descriptions>
         </Card>
 
@@ -355,15 +401,22 @@ const AgentRunDetailPage = () => {
               label: (
                 <Space wrap>
                   <Text strong>第 {turn.turn_number} 轮</Text>
-                  <Tag color={statusColors[turn.status] || 'default'}>{statusLabels[turn.status] || turn.status}</Tag>
-                  <Text>{(turn.user_message?.content || turn.input_message || '无输入').slice(0, 80)}</Text>
-                  <Text type="secondary">{dayjs(turn.created_at).format('YYYY-MM-DD HH:mm:ss')}</Text>
+                  <Tag color={statusColors[turn.status] || 'default'}>
+                    {statusLabels[turn.status] || turn.status}
+                  </Tag>
+                  <Text>
+                    {(turn.user_message?.content || turn.input_message || '无输入').slice(0, 80)}
+                  </Text>
+                  <Text type="secondary">
+                    {dayjs(turn.created_at).format('YYYY-MM-DD HH:mm:ss')}
+                  </Text>
                 </Space>
               ),
               children: (
                 <TurnDetail
                   turn={turn}
                   selectedEventTypes={selectedEventTypes}
+                  onInspectMemory={setMemoryRunId}
                   onReplay={handleReplay}
                 />
               ),
@@ -371,6 +424,11 @@ const AgentRunDetailPage = () => {
           />
         )}
       </Space>
+      <RunMemoryDrawer
+        onClose={() => setMemoryRunId(null)}
+        open={Boolean(memoryRunId)}
+        runId={memoryRunId}
+      />
     </div>
   )
 }

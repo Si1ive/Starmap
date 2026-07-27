@@ -2,7 +2,7 @@
 
 ## 状态与范围
 
-状态：进行中。Run/Snapshot/source 只读观测与复现、Memory Outbox 运维 API 已完成；管理端界面待完成。
+状态：已完成。Run/Snapshot/source 只读观测与复现、Memory Outbox 运维 API 和管理端界面均已闭环。
 本分卷冻结管理员 Agent Runs 对分层记忆的观测、复现和运维验收面。用户端时间线和
 公开 SSE 不暴露记忆正文；管理端读取也必须经过现有管理员权限和数据作用域校验。
 
@@ -62,3 +62,11 @@ Item，当前 source 只作对照；缺失、越权或版本漂移统一返回 4
 3. 记忆正文按不可信数据展示，前端使用文本渲染，不执行 HTML/Markdown 中的指令、链接脚本或事件属性。
 4. 公共 SSE 契约回归证明 Snapshot Item body、摘要正文、候选正文和 Outbox error 均不会泄露。
 5. API、服务、前端和端到端测试覆盖 Run 详情、source 404、Snapshot 复现、Outbox 失败筛选与幂等重放。
+
+管理端由 `frontend-admin/src/pages/AgentRunDetailPage.tsx::TurnDetail`（L98-L278）从每个 Run 卡进入
+`frontend-admin/src/pages/agent-observability/RunMemoryDrawer.tsx::RunMemoryDrawer`（L85-L420）；选择账本默认只展示
+source 标识、版本、原因和 Token，冻结正文仅在管理员显式 source 对比或只读复现后进入
+`frontend-admin/src/pages/agent-observability/PlainDataBlock.tsx::PlainDataBlock`（L7-L15）纯文本节点。
+`frontend-admin/src/pages/AgentRunsPage.tsx::AgentRunsPage`（L58-L340）通过标签页挂载
+`frontend-admin/src/pages/agent-observability/MemoryOutboxPanel.tsx::MemoryOutboxPanel`（L38-L396），完整支持组合筛选、
+脱敏详情、状态门提示和原记录重放；页面没有强制成功、跳过版本或直接写派生记忆的入口。

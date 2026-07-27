@@ -177,6 +177,7 @@ async def _seed_snapshot(db_session):
                 user_id=thread.user_id,
                 event_type="conversation_summary_maintenance",
                 status="completed",
+                last_error_message="Bearer private-token failed before retry",
                 payload_json={"task_type": "conversation_summary_maintenance"},
                 scheduled_at=now,
                 processed_at=now + timedelta(seconds=1),
@@ -212,6 +213,9 @@ async def test_run_memory_observability_uses_frozen_snapshot_and_actual_tool_eve
     assert payload["tool_calls"][0]["exclude_entity_ids"] == ["question-9"]
     assert "authorization" not in payload["tool_calls"][0]
     assert payload["memory_outbox"][0]["status"] == "completed"
+    assert payload["memory_outbox"][0]["safe_error_summary"] == (
+        "Bearer [REDACTED] failed before retry"
+    )
 
 
 @pytest.mark.asyncio

@@ -248,6 +248,7 @@ async def get_run_memory_observability(
                 "task_key": row.task_key,
                 "status": row.status,
                 "retry_count": row.retry_count,
+                "safe_error_summary": safe_error_summary(row.last_error_message),
                 "scheduled_at": utc_isoformat(row.scheduled_at),
                 "processed_at": utc_isoformat(row.processed_at),
                 "created_at": utc_isoformat(row.created_at),

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Button,
@@ -12,6 +12,7 @@ import {
   Statistic,
   Table,
   Tag,
+  Tabs,
   Typography,
   message,
 } from 'antd'
@@ -21,6 +22,8 @@ import dayjs from 'dayjs'
 
 import * as agentRunsApi from '@/api/agentRuns'
 import type { AdminAgentSession } from '@/api/agentRuns'
+import MemoryOutboxPanel from './agent-observability/MemoryOutboxPanel'
+import './agent-observability/agent-observability.css'
 
 const { RangePicker } = DatePicker
 const { Search } = Input
@@ -73,28 +76,31 @@ const AgentRunsPage = () => {
     end_date?: string
   }>({})
 
-  const fetchSessions = async (page = 1, pageSize = 20) => {
-    setLoading(true)
-    try {
-      const response = await agentRunsApi.getAgentRuns({
-        page,
-        page_size: pageSize,
-        ...filters,
-      })
-      setSessions(response.data?.items || [])
-      setPagination({
-        current: page,
-        pageSize,
-        total: response.data?.total || 0,
-      })
-    } catch {
-      message.error('获取 Agent 会话监控失败')
-    } finally {
-      setLoading(false)
-    }
-  }
+  const fetchSessions = useCallback(
+    async (page = 1, pageSize = 20) => {
+      setLoading(true)
+      try {
+        const response = await agentRunsApi.getAgentRuns({
+          page,
+          page_size: pageSize,
+          ...filters,
+        })
+        setSessions(response.data?.items || [])
+        setPagination({
+          current: page,
+          pageSize,
+          total: response.data?.total || 0,
+        })
+      } catch {
+        message.error('获取 Agent 会话监控失败')
+      } finally {
+        setLoading(false)
+      }
+    },
+    [filters]
+  )
 
-  const fetchStats = async () => {
+  const fetchStats = useCallback(async () => {
     try {
       const response = await agentRunsApi.getAgentRunStats()
       const data = response.data || {}
@@ -109,12 +115,12 @@ const AgentRunsPage = () => {
     } catch {
       // 统计接口失败不阻塞会话列表。
     }
-  }
+  }, [])
 
   useEffect(() => {
     void fetchSessions()
     void fetchStats()
-  }, [filters])
+  }, [fetchSessions, fetchStats])
 
   const columns: ColumnsType<AdminAgentSession> = [
     {
@@ -138,9 +144,7 @@ const AgentRunsPage = () => {
       key: 'latest_status',
       width: 120,
       render: (status: string) => (
-        <Tag color={statusColors[status] || 'default'}>
-          {statusLabels[status] || status}
-        </Tag>
+        <Tag color={statusColors[status] || 'default'}>{statusLabels[status] || status}</Tag>
       ),
     },
     { title: '问答轮数', dataIndex: 'turn_count', key: 'turn_count', width: 100 },
@@ -185,79 +189,152 @@ const AgentRunsPage = () => {
         一条记录对应一个完整会话；详情中按用户提问分组展示多轮运行与事件。
       </Typography.Paragraph>
 
-      <Row gutter={16} style={{ marginBottom: 24 }}>
-        <Col span={4}><Card><Statistic title="会话总计" value={stats.total} /></Card></Col>
-        <Col span={4}><Card><Statistic title="运行中" value={stats.running} valueStyle={{ color: '#1890ff' }} /></Card></Col>
-        <Col span={4}><Card><Statistic title="已完成" value={stats.completed} valueStyle={{ color: '#52c41a' }} /></Card></Col>
-        <Col span={4}><Card><Statistic title="失败" value={stats.failed} valueStyle={{ color: '#f5222d' }} /></Card></Col>
-        <Col span={4}><Card><Statistic title="等待用户" value={stats.waiting_for_user} valueStyle={{ color: '#faad14' }} /></Card></Col>
-        <Col span={4}><Card><Statistic title="等待审批" value={stats.waiting_for_approval} valueStyle={{ color: '#722ed1' }} /></Card></Col>
-      </Row>
+      <Tabs
+        className="agent-observability-tabs"
+        items={[
+          {
+            key: 'sessions',
+            label: '会话与 Run',
+            children: (
+              <>
+                <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+                  <Col span={4}>
+                    <Card>
+                      <Statistic title="会话总计" value={stats.total} />
+                    </Card>
+                  </Col>
+                  <Col span={4}>
+                    <Card>
+                      <Statistic
+                        title="运行中"
+                        value={stats.running}
+                        valueStyle={{ color: '#1890ff' }}
+                      />
+                    </Card>
+                  </Col>
+                  <Col span={4}>
+                    <Card>
+                      <Statistic
+                        title="已完成"
+                        value={stats.completed}
+                        valueStyle={{ color: '#52c41a' }}
+                      />
+                    </Card>
+                  </Col>
+                  <Col span={4}>
+                    <Card>
+                      <Statistic
+                        title="失败"
+                        value={stats.failed}
+                        valueStyle={{ color: '#f5222d' }}
+                      />
+                    </Card>
+                  </Col>
+                  <Col span={4}>
+                    <Card>
+                      <Statistic
+                        title="等待用户"
+                        value={stats.waiting_for_user}
+                        valueStyle={{ color: '#faad14' }}
+                      />
+                    </Card>
+                  </Col>
+                  <Col span={4}>
+                    <Card>
+                      <Statistic
+                        title="等待审批"
+                        value={stats.waiting_for_approval}
+                        valueStyle={{ color: '#722ed1' }}
+                      />
+                    </Card>
+                  </Col>
+                </Row>
 
-      <Card style={{ marginBottom: 24 }}>
-        <Space wrap size="middle">
-          <Select
-            placeholder="会话中运行状态"
-            allowClear
-            style={{ width: 160 }}
-            onChange={(value) => setFilters((previous) => ({ ...previous, status: value }))}
-            options={Object.entries(statusLabels).map(([value, label]) => ({ value, label }))}
-          />
-          <Select
-            placeholder="工作流筛选"
-            allowClear
-            style={{ width: 150 }}
-            onChange={(value) => setFilters((previous) => ({ ...previous, workflow_key: value }))}
-            options={[
-              { label: 'conversation', value: 'conversation' },
-              { label: 'explain', value: 'explain' },
-              { label: 'validate', value: 'validate' },
-              { label: 'grade', value: 'grade' },
-              { label: 'plan', value: 'plan' },
-            ]}
-          />
-          <Search
-            placeholder="用户 ID"
-            allowClear
-            style={{ width: 200 }}
-            onSearch={(value) => setFilters((previous) => ({ ...previous, user_id: value || undefined }))}
-          />
-          <RangePicker
-            onChange={(dates) => setFilters((previous) => ({
-              ...previous,
-              start_date: dates?.[0]?.format('YYYY-MM-DD'),
-              end_date: dates?.[1]?.format('YYYY-MM-DD'),
-            }))}
-          />
-          <Button
-            icon={<ReloadOutlined />}
-            onClick={() => {
-              void fetchSessions(pagination.current, pagination.pageSize)
-              void fetchStats()
-            }}
-          >
-            刷新
-          </Button>
-        </Space>
-      </Card>
+                <Card style={{ marginBottom: 24 }}>
+                  <Space wrap size="middle">
+                    <Select
+                      placeholder="会话中运行状态"
+                      allowClear
+                      style={{ width: 160 }}
+                      onChange={(value) =>
+                        setFilters((previous) => ({ ...previous, status: value }))
+                      }
+                      options={Object.entries(statusLabels).map(([value, label]) => ({
+                        value,
+                        label,
+                      }))}
+                    />
+                    <Select
+                      placeholder="工作流筛选"
+                      allowClear
+                      style={{ width: 150 }}
+                      onChange={(value) =>
+                        setFilters((previous) => ({ ...previous, workflow_key: value }))
+                      }
+                      options={[
+                        { label: 'conversation', value: 'conversation' },
+                        { label: 'explain', value: 'explain' },
+                        { label: 'validate', value: 'validate' },
+                        { label: 'grade', value: 'grade' },
+                        { label: 'plan', value: 'plan' },
+                      ]}
+                    />
+                    <Search
+                      placeholder="用户 ID"
+                      allowClear
+                      style={{ width: 200 }}
+                      onSearch={(value) =>
+                        setFilters((previous) => ({ ...previous, user_id: value || undefined }))
+                      }
+                    />
+                    <RangePicker
+                      onChange={(dates) =>
+                        setFilters((previous) => ({
+                          ...previous,
+                          start_date: dates?.[0]?.format('YYYY-MM-DD'),
+                          end_date: dates?.[1]?.format('YYYY-MM-DD'),
+                        }))
+                      }
+                    />
+                    <Button
+                      icon={<ReloadOutlined />}
+                      onClick={() => {
+                        void fetchSessions(pagination.current, pagination.pageSize)
+                        void fetchStats()
+                      }}
+                    >
+                      刷新
+                    </Button>
+                  </Space>
+                </Card>
 
-      <Card>
-        <Table
-          columns={columns}
-          dataSource={sessions}
-          rowKey="thread_id"
-          loading={loading}
-          scroll={{ x: 1300 }}
-          pagination={{
-            current: pagination.current,
-            pageSize: pagination.pageSize,
-            total: pagination.total,
-            showSizeChanger: true,
-            showTotal: (total) => `共 ${total} 个会话`,
-            onChange: (page, pageSize) => void fetchSessions(page, pageSize),
-          }}
-        />
-      </Card>
+                <Card>
+                  <Table
+                    columns={columns}
+                    dataSource={sessions}
+                    rowKey="thread_id"
+                    loading={loading}
+                    scroll={{ x: 1300 }}
+                    pagination={{
+                      current: pagination.current,
+                      pageSize: pagination.pageSize,
+                      total: pagination.total,
+                      showSizeChanger: true,
+                      showTotal: (total) => `共 ${total} 个会话`,
+                      onChange: (page, pageSize) => void fetchSessions(page, pageSize),
+                    }}
+                  />
+                </Card>
+              </>
+            ),
+          },
+          {
+            key: 'memory-outbox',
+            label: 'Memory Outbox',
+            children: <MemoryOutboxPanel />,
+          },
+        ]}
+      />
     </div>
   )
 }
