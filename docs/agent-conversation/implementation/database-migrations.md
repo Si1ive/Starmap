@@ -40,4 +40,5 @@
 ## 下一步阅读
 
 - 要看管理端和模型配置如何消费这些结构，转到 `architecture/admin-and-model-config.md`。
-- 要看长期记忆新增表的规划，转到任务单 `tasks/2026-07-26-rag-explain-memory-remediation.md` 的 `MEM-002`。
+- 要回查长期记忆新增表的任务边界，转到
+  `../tasks/2026-07-26-rag-explain-memory-remediation-completed.md` 的 `MEM-002`。

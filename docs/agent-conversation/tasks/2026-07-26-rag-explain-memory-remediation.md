@@ -1,330 +1,57 @@
 # RAG、Explain 与分层记忆整改计划
 
-## 文档目的
+## 文档职责
 
-本任务单用于持续追踪 `run_5c6c46d3` 暴露的检索、工作流产物、用户端活动投影问题，以及后续分层
-长期记忆建设。它是待做任务的权威清单，不表示列出的代码修复已经完成；实施时按任务 ID 更新状态、
-验证结果和对应提交，不依赖历史对话恢复上下文。
+本文件保留原任务单稳定路径，只负责状态总览和主题分卷路由。实现证据、未完成项的详细验收标准及
+历史故障说明不再继续追加到这里。
 
-实施前置已在 2026-07-25 完成：`docs/agent-conversation/` 已从旧大文件拆分为 `architecture/`、
-`implementation/`、`tasks/` 和 `progress/` 分卷，后续每个 Agent 提交直接更新最小相关分卷。
+状态含义：`进行中` 表示已有部分闭环但仍有明确验收项；`待实现` 表示边界已冻结但代码尚未落地；
+`已完成` 必须同时满足代码、迁移（如适用）、测试、教学文档和中文提交要求。
 
-状态含义：`已定位` 表示根因已有证据但代码尚未修复；`待设计` 表示仍需冻结契约；`待实现` 表示
-方案已明确；`已完成` 必须同时满足代码、迁移、测试、教学文档和提交要求。
+## 阅读路由
 
-## 用户问题覆盖矩阵
-
-| 原问题 | 任务 ID | 当前结论 | 状态 | 完成条件 |
-| --- | --- | --- | --- | --- |
-| 1. 工具重试三次，用户端也展示三次 | ACT-001 | 已为同一逻辑检索复用稳定 `activity_id`，后台额外保留 `attempt_id` / `attempt_no`，时间线与前端按同一 ID 归并成单个活动 | 已完成 | 后台保留每次 attempt；用户端以稳定逻辑活动 ID 只展示一个持续更新的活动 |
-| 2. Explain 无资料时由 LLM 回答 | EXP-001 | 已完成代码修复与 worker 级验收：零命中和检索异常均走不同 fallback 文案，最终 artifact、message 与空 citations 都能持久化并在刷新后恢复 | 已完成 | 正常零命中和检索异常均可按策略继续回答；无伪造引用；最终内容成功展示 |
-| 3. LLM 已生成长回答但最终显示失败 | FLOW-001 | `NodeResult.success()` 已支持 `artifact`，Explain 渲染链已补最终节点回归测试 | 已完成 | Explain/Validate/Grade/Plan 均可创建 Artifact；失败回归测试覆盖最终节点 |
-| 4. 题目和知识点看似走同一路检索 | RAG-002 | 已统一题目/知识点 DTO，Explain 混合结果优先知识点，Validate 改读 `question_meta` 与实体状态字段 | 已完成 | 统一类型化 DTO；Explain 与 Validate 使用明确实体类型、字段和用户可见名称 |
-| 5. 二分查找题明明存在却未检索到 | RAG-001、RAG-002 | 已完成代码修复与整体验收：来源回填、DTO 和 Validate 资格门已经打通，真实二分查找题可进入 Validate 候选集 | 已完成 | 修复来源字段和 DTO；真实二分查找题通过混合检索进入 Validate 候选集 |
-
-结论：五个问题均已登记，没有遗漏；其中 `ACT-001`、`EXP-001`、`FLOW-001`、`RAG-001 + RAG-002` 均已完成代码与验收闭环。
-
-## `run_5c6c46d3` 已确认故障链
-
-完整子 Run 为 `run_5c6c46d3111c495c831a`，父 conversation Run 为
-`run_379058566cb4408892e3`。实际执行顺序如下：
-
-```text
-load_scope completed
-  → retrieve_knowledge 连续执行三次
-  → 每次均在命中后的文档信息回填处抛出 Document.filename 不存在
-  → evidence_count=0
-  → evidence_gate 允许继续
-  → generate_explanation 成功生成完整二分查找正文
-  → citation_gate 通过
-  → render_artifact 调用 NodeResult.success(artifact=...)
-  → TypeError
-  → run.failed
-  → 用户端未收到最终 Artifact，只显示回复生成失败
-```
-
-二分查找检索分层探测结果：
-
-| 探测层 | 结果 | 证据 |
+| 分卷 | 适用场景 | 权威内容 |
 | --- | --- | --- |
-| MySQL `questions` | 命中 | 题目 ID `7d600b0198a3425bbe202986885bc877` |
-| MySQL `retrieval_segments` | 命中 | Segment ID `91b0a7f197d44ded848b4a58d6fe8e02` |
-| MySQL 稀疏检索 | 命中 | 查询“二分查找”返回 1 条，分数 `1.0` |
-| Qdrant 题目 Collection | 命中 | 排名第一，分数 `0.6684933` |
-| MySQL 来源信息回填 | 失败 | `'Document' object has no attribute 'filename'` |
-| Agent 工具字段转换 | 不兼容 | 底层返回 `entity_id/content_text/source`，工具读取 `id/content/source_type` |
+| [已完成整改与记忆基础](./2026-07-26-rag-explain-memory-remediation-completed.md) | 回查 `run_5c6c46d3`、FLOW/RAG/ACT/EXP、MEM-001～006 | 已完成边界、提交和验证入口 |
+| [记忆生命周期与治理](./2026-07-26-rag-explain-memory-remediation-memory-lifecycle.md) | 继续 MEM-007 | 临时约束、掌握度衰减、Embedding、偏好冲突、线程删除 |
+| [管理端记忆可观测性](./2026-07-26-rag-explain-memory-remediation-observability.md) | 继续 MEM-008 | 管理端字段、source 回查、Snapshot 复现、Outbox 重放与安全 |
 
-## 当前代码锚点
+实现时先从本文件确认状态，再进入一个主题分卷；代码教学正文继续更新
+`../implementation/` 的最小相关分卷，当月进展更新 `../progress/2026-07/` 的对应主题分卷。
 
-| 执行阶段 | 文件 | 符号 | 当前职责与问题 |
+## 当前状态
+
+| 任务 | 状态 | 当前结论 | 下一落点 |
 | --- | --- | --- | --- |
-| 工具活动创建 | `backend/app/modules/agent/tools/retrieve_knowledge.py` | `_logical_activity_id`、`_next_attempt_number`、`retrieve_knowledge` | 已为同一逻辑检索生成稳定 `activity_id`，并在 `tool.called` 中追加 `attempt_id` / `attempt_no`；knowledge point、章节、strict scope、difficulty 和排除题参数进入安全活动元数据，供后台审计每次 attempt |
-| 工具结果与异常 | `backend/app/modules/agent/tools/retrieve_knowledge.py` | `_normalize_agent_result`、`_sort_agent_results`、`retrieve_knowledge` | 已统一 Agent DTO，公开零命中和异常结果；Explain 混合检索默认把知识点排在题目前面；失败 attempt 的原始错误保留在后台事件中 |
-| 用户活动归并 | `backend/app/modules/agent/timeline.py` | `AgentTimelineService._activity_views` | 按 `activity_id` 聚合；不同 ID 必然生成不同活动 |
-| 检索结果契约 | `backend/app/modules/retrieval/search_engine.py` | `RetrievalResult.to_dict` | 已统一输出 `entity`、`source`、`question_meta`、`knowledge_point_meta` 与学科章节字段，供 Agent 与检索调试共用 |
-| Collection 路由 | `backend/app/modules/retrieval/search_engine.py` | `RetrievalSearchEngine.get_collections` | `knowledge_point` 和 `question` 分别进入不同 Qdrant Collection；空类型同时查两者 |
-| 大纲扩展与严格章节 | `backend/app/modules/retrieval/service.py` | `RetrievalService.search_with_outline_expansion`（L44-L120） | 默认吸收高置信大纲学科/章节；strict 时只扩 dense query，不注入推测学科，章节过滤保持调用方显式集合 |
-| 命中内容回填 | `backend/app/modules/retrieval/search_engine.py` | `RetrievalSearchEngine.hydrate_results`、`RetrievalSearchEngine._document_source_name`、`RetrievalSearchEngine._load_knowledge_point_details`、`RetrievalSearchEngine._load_question_details`、`RetrievalSearchEngine._question_title` | 已从 MySQL 同步补全文档来源、实体标题、审核状态和题目/知识点元数据，消除 `source_type` 猜测映射 |
-| 无证据生成 | `backend/app/modules/agent/workflows/explain.py` | `_fallback_evidence_text`、`_evidence_loop_node`、`_evidence_gate_node`、`_generate_explanation_node` | 无证据仍进入模型生成；零命中与检索异常会走不同 fallback 文案；无资料时强制清空 citations，避免伪造引用 |
-| Explain 产物渲染 | `backend/app/modules/agent/workflows/explain.py` | `_render_artifact_node`、`_completed_node` | 已通过统一 `artifact` 契约把成功正文挂回上下文并交给 worker 持久化 |
-| Explain 持久化与刷新恢复 | `backend/app/modules/agent/worker.py`、`backend/app/modules/agent/timeline.py` | `AgentWorker.process_run`、`AgentTimelineService.get_timeline`、`AgentTimelineService._activity_views`、`AgentTimelineService.message_view` | worker 在 completed 分支创建 artifact、写 `message.completed` / `run.completed`；时间线刷新时按 root run 重建活动、artifact 和最终正文 |
-| 节点结果契约 | `backend/app/modules/agent/workflows/contracts.py` | `NodeResult.success` | 已支持 `artifact` 参数，render 节点可通过统一工厂方法把最终产物传给引擎与 worker |
-| Validate 检索与首个记忆消费 | `backend/app/modules/agent/memory_selector.py`、`backend/app/modules/agent/workflows/validate.py` | `_load_excluded_question_ids`、`_load_unique_weak_topic`、`_load_chapter_ids`、`_resolve_explicit_chapter_ids`、`load_practice_bundle`、`build_practice_query`、`build_practice_filters`、`_question_is_eligible`、`_load_learning_evidence_node`、`_question_discovery_node`、`_question_gate_node`、`_composition_gate_node`、`_render_artifact_node` | Validate 消费 snapshot topic、aliases、difficulty、knowledge point、章节和 Artifact；显式“第 N 章”在唯一学科内解析并覆盖知识点默认章节，无法解析时不发起宽检索；同时装载真实排除集、唯一薄弱点，缺主题则等待补充后恢复 |
-| Validate 缺主题澄清与恢复 | `backend/app/modules/agent/service.py`、`backend/app/modules/agent/timeline.py` | `create_input`、`submit_input_answer`、`AgentTimelineService._build_workflow_views` | 缺主题时创建 `AgentInput` 并投影 `workflow.input.required`，时间线把最新 pending input 暴露为 `workflow.pending_input`；用户提交答案后把输入标记为 answered，恢复 run 到 running，worker 从 checkpoint 回到 `_question_discovery_node` 继续检索 |
-| 当前上下文构建 | `backend/app/modules/agent/context_builder.py` | `AgentRunContext`、`ThreadContextBuilder.build`、`_load_thread_memory_state` | 已能选择近期消息、Artifact、待处理交互，并读取线程 `active_topic` / `memory_state_version`；仍未按 `MemoryNeed` 选择掌握度、摘要和排除集 |
-| Router、题目指代、摘要、主题事实与子 Run 交接 | `backend/app/modules/agent/workflows/conversation.py`、`backend/app/modules/agent/turn_understanding.py`、`backend/app/modules/agent/model_runtime/referent.py`、`backend/app/modules/agent/memory_projection.py` | `_route_node`（L50-L155）、`build_ambiguous_referent_candidates`（L187-L264）、`hydrate_referent_candidate_labels`（L267-L301）、`ReferentRuntime.resolve`（L79-L148）、`build_turn_understanding`（L347-L403）、`ensure_turn_memory_snapshot`（L405-L515）、`project_topic_confirmed_fact`（L67-L122）、`_child_context_metadata`（L217-L246）、`_dispatch_workflow_node`（L249-L298） | Router 前确定性理解并预算选择 active 摘要；真实歧义才调用候选模型。snapshot 冻结摘要正文/ID/版本/范围，Router 将其视为不可信数据；child metadata 只传摘要 ID 与 snapshot ID，不复制正文 |
-| Run 最终持久化 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run`（L185-L227） | 执行 workflow 并创建 Artifact/最终消息；completed 分支调用事实投影并写摘要任务，使 Artifact、事实、Memory Outbox 与 Run 终态处在同一外层事务 |
-| 可信事实与 Outbox 生产 | `backend/app/modules/agent/memory_projection.py` | `_ensure_memory_update_outbox`、`project_topic_confirmed_fact`、`project_completed_run_facts`、各 `_record_*`（L27-L413） | 写五类事实后确保 `(run_id,event_type)` 唯一的 pending Memory Outbox；重放已有事实会补建缺失任务，并发冲突只回滚 SAVEPOINT；不满足事实条件时不写事件或任务 |
+| FLOW-001 | 已完成 | 工作流 Artifact 契约已统一 | 已完成分卷 |
+| RAG-001 | 已完成 | 检索命中后的来源回填已修复 | 已完成分卷 |
+| RAG-002 | 已完成 | 题目/知识点 DTO 与资格门已统一 | 已完成分卷 |
+| ACT-001 | 已完成 | 工具重试后台保留 attempt、用户端折叠为单活动 | 已完成分卷 |
+| EXP-001 | 已完成 | Explain 零命中/异常可无引用完成并持久化 | 已完成分卷 |
+| MEM-001～005 | 已完成 | 记忆契约、存储、Turn Snapshot、能力 Bundle、Validate 首个消费闭环已落地 | 已完成分卷 |
+| MEM-006 | 进行中 | 可信事实、Grade 掌握度、Outbox、摘要派生已闭环；Embedding 与偏好候选并入 MEM-007 继续 | 记忆生命周期分卷 |
+| MEM-007 | 进行中 | 摘要、冻结消费、重复题覆盖、主题六轮 TTL 已完成；其余生命周期治理待实现 | 记忆生命周期分卷 |
+| MEM-008 | 待实现 | 已冻结管理端观测与安全验收面 | 管理端可观测性分卷 |
 
-## 第一组：立即解除现有故障
-
-### FLOW-001 修复工作流 Artifact 契约
-
-- 状态：已完成（2026-07-25）。
-- 已扩展 `NodeResult.success()`，接收并传递 `artifact`，Explain / Validate / Grade / Plan 现可继续复用统一工厂方法。
-- 已补 `backend/tests/test_agent_workflow_engine.py::test_explain_workflow_keeps_artifact_through_render_and_completion`，真正执行 explain workflow 到 `render_artifact -> completed`，覆盖此前的 TypeError 回归点。
-- 验证：`./venv/bin/pytest tests/test_agent_workflow_engine.py tests/test_agent_explain_workflow.py -q` 通过。
-
-### RAG-001 修复命中后的来源信息回填
-
-- 状态：已完成（2026-07-25）。
-- 已使用当前 `Document.source_label` / `title` 契约替代不存在的 `filename`，空来源明确回退为 `None`。
-- 已增加“Qdrant 命中且存在展示来源”和“只有标题或完全没有来源文档”的回填测试。
-- 验证：`cd backend && ./venv/bin/pytest tests/test_retrieval_service.py -q` 通过。
-
-### RAG-002 统一题目/知识点检索 DTO
-
-- 状态：已完成（2026-07-25）。
-- 已在 `RetrievalResult.to_dict()` 中统一输出 `entity`、`source`、`question_meta`、`knowledge_point_meta`、学科章节和正文字段，并在 `hydrate_results()` 阶段从 `questions` / `knowledge_points` 补齐标题、审核状态和题目元数据。
-- 已删除 Agent 工具中的 `id/title/content/source_type` 猜测式映射，改为统一归一化 DTO；Explain 混合检索结果默认把知识点排在题目前面，Validate 继续强制 `entity_type="question"`。
-- 已修改 Validate 资格门与组合门，改读 DTO 中真实的题目来源、审核状态、题型、难度和学科字段，不再依赖空 `source_type`。
-- 验证：`cd backend && ./venv/bin/pytest tests/test_retrieval_service.py tests/test_agent_retrieve_activity.py tests/test_agent_validate_workflow.py tests/test_agent_explain_workflow.py tests/test_relation_expansion.py -q` 通过。
-
-### RAG-001 + RAG-002 验收：二分查找题进入 Validate 候选集
-
-- 状态：已完成（2026-07-26 完成整体验收）。
-- 已新增 `backend/tests/test_agent_validate_workflow.py::test_validate_binary_search_question_survives_retrieval_dto_and_gate`，从 `load_learning_evidence -> question_discovery -> question_gate -> composition_gate` 真实走过 Validate 检索链。
-- 测试使用 `RetrievalResult.to_dict()` 构造二分查找题的底层检索结果，再通过真实 `retrieve_knowledge()` 工具归一化为 Agent DTO，确认 `source.filename`、`question_meta.paper_name` 与题目实体状态都能穿过装配层进入 `candidates` 和 `valid_questions`。
-- 同时校验 Validate 对二分查找的检索参数仍是 `query="二分查找"` 且 `entity_type="question"`，确保该题不会在混合检索装配、DTO 转换或资格门阶段再次丢失。
-- 验证：`cd backend && ./venv/bin/pytest tests/test_agent_validate_workflow.py tests/test_agent_retrieve_activity.py tests/test_retrieval_service.py -q` 通过。
-
-### ACT-001 折叠用户端工具重试
-
-- 状态：已完成（2026-07-25）。
-- 已在 `retrieve_knowledge()` 中按 run/query/scope/entity_type 生成稳定 `logical_activity_id`，并让公开 `activity_id` 复用该逻辑 ID；每次真实调用仍保留独立 `attempt_id` 与 `attempt_no`。
-- 已保持 `tool.called` / `tool.result` 的公开提示语义不变：零命中仍显示“没有检索到相关文档”，异常仍显示“暂时无法检索相关文档”；同一逻辑检索的后续 attempt 只会更新同一张活动卡片。
-- 已补 `backend/tests/test_agent_retrieve_activity.py::test_retrieve_knowledge_reuses_logical_activity_id_across_retries` 与 `backend/tests/test_agent_timeline_service.py::test_timeline_merges_retry_attempts_into_single_public_activity`，分别覆盖后台事件 attempt 信息和线程时间线单卡片归并。
-- 验证：`cd backend && ./venv/bin/pytest tests/test_agent_retrieve_activity.py tests/test_agent_timeline_service.py -q` 通过。
-
-### EXP-001 固化 Explain 无资料回答
-
-- 状态：已完成（2026-07-26 完成完整验收）。
-- 已保留无证据进入 `generate_explanation` 的行为，并在 `evidence_loop -> evidence_gate` 之间区分 `retrieval_outcome=empty|error`；零命中继续提示“没有检索到相关文档”，检索异常则提示“暂时无法检索相关文档”。
-- 已在 `_fallback_evidence_text()` 中为零命中和检索异常生成不同 fallback 文案，并在无资料场景下强制清空 `citations`，避免模型把通用知识回答伪装成有来源答案。
-- 已补 `backend/tests/test_agent_explain_workflow.py::test_evidence_gate_distinguishes_retrieval_error_from_zero_hits` 与 `test_generate_explanation_clears_citations_when_no_evidence`，覆盖两类 fallback 和无资料引用清理。
-- 已新增 `backend/tests/test_agent_explain_worker.py::test_worker_persists_zero_hit_fallback_answer_without_citations` 与 `test_worker_persists_retrieval_error_fallback_answer_without_citations`，通过 patch `RetrievalService.search_with_outline_expansion()` 让真实 `retrieve_knowledge()` 工具链继续产生活动事件，再走完整 `AgentWorker.process_run()` 持久化链，覆盖 artifact、最终消息和线程刷新恢复。
-- 验证：`cd backend && ./venv/bin/pytest tests/test_agent_explain_worker.py tests/test_agent_explain_workflow.py tests/test_agent_retrieve_activity.py tests/test_agent_timeline_service.py -q` 通过。
-
-## 第二组：分层长期记忆最小闭环
-
-### MEM-001 冻结记忆分区和事实边界
-
-- 状态：已完成（2026-07-26，契约已落库）。
-记忆分区固定为：当前轮理解、线程主题状态、近期原始对话、历史主题摘要、用户学习画像、Artifact/任务、
-待处理交互、用户明确偏好与目标。原始消息和 Artifact 继续作为事实源；流式 delta、失败输出和 LLM 猜测
-不得直接成为长期用户记忆。
-- 已在 `backend/app/modules/agent/memory_contracts.py` 定义 `MemoryPartition`、`MemoryNeed` 和 `MEMORY_NEED_PARTITIONS`，把分区与能力标签固化为 workflow-neutral 的稳定命名契约。
-- 已新增 `backend/tests/test_agent_memory_contracts.py`，覆盖分区全集、能力标签全集，以及“能力标签不出现 explain / validate / grade / plan 等工作流名称”的约束。
-
-### MEM-002 建立热状态、事件、快照和专业画像存储
-
-- 状态：已完成（2026-07-26，迁移与 ORM 已落库）。
-通过 Alembic 前向迁移逐步增加：
-
-- `agent_thread_memory_states`：小型结构化活跃主题、主题栈、活跃任务和指代对象
-- `agent_memory_events`：追加式增量来源和幂等审计
-- `agent_memory_snapshots`/`agent_memory_snapshot_items`：冻结 Run 实际使用的记忆版本
-- `agent_memory_update_outbox`：完成事件的可靠异步投影
-- `user_learning_mastery`：按知识点保存掌握度和真实答题/Grade 证据
-- `agent_conversation_summaries`：按消息序列范围增量压缩旧对话
-- `agent_memory_items`：偏好、目标和主题情景摘要，不承载专业学习掌握度。
-- 已在 `backend/app/modules/agent/models.py` 新增上述八张表的 ORM 模型，并通过 `backend/alembic/versions/20260726_agent_memory_foundation.py` 创建对应前向迁移。
-- 已补 `backend/tests/test_migrations.py::test_agent_memory_foundation_migration_renders_mysql_ddl`，验证迁移会创建全部记忆基础表、关键唯一约束和索引；同时更新 Alembic head 断言。
-- 2026-07-27 修复运行库漏迁移：实际 `starmap` 从 `20260725_agent_activity` 前向升级到 `20260726_memory_outbox_unique`，真表、复合唯一索引和 `MemoryOutboxStore.scan_due` 均验证通过；`verify_database_schema`（L43-L191）新增八张记忆表与 Outbox 唯一索引门禁，防止错误 stamp/旧备份在 Worker 启动后才循环报错。完整证据见 `incidents/2026-07-27-memory-outbox-table-missing.md`。
-- 这些表现已接入 Turn snapshot、ConversationBundle、PracticeBundle、EvaluationBundle、PlanningBundle、可信事实、Memory Outbox 和首批 projector；摘要及更多投影继续按 `MEM-006` 到 `MEM-008` 推进。
-
-### MEM-003 新输入的增量处理
-
-- 状态：已完成（2026-07-26，确定性理解、结构化歧义消解、snapshot 与子 Run 交接已闭环）。
-1. HTTP 事务只原子保存用户消息、根 Run、时间线和 Run Outbox，不调用 LLM。
-2. Worker 在 Router 前读取热状态、少量近期消息、显式引用和待处理交互。
-3. 确定性解析优先；只有“这个、上一道、难一点”等仍有歧义时调用结构化指代消解模型。
-4. 生成 `TurnUnderstanding`：原始输入、独立请求、意图提示、主题实体、约束和引用来源。
-5. 创建不可变 Turn Memory Snapshot，并以版本号更新线程热状态。
-6. Router 使用独立请求；子 Run 接收 snapshot ID，不再只传消息 ID。
-
-- 已在 `backend/app/modules/agent/context_builder.py` 为 `AgentRunContext` 增加 `active_topic`、`memory_state_version`、`standalone_request` 和 `memory_snapshot_id`，并在 `ThreadContextBuilder.build()` 中读取 `agent_thread_memory_states`。
-- 已新增 `backend/app/modules/agent/turn_understanding.py`，用确定性规则把 `context_refs` 或线程 `active_topic` 补全为 `TurnUnderstanding`；例如当前活跃主题是“二分查找”且输入“给我出一道难一点的题”时，会生成 `standalone_request="给用户出一道关于二分查找的练习题"`，并补 `constraints=["difficulty:hard"]`。
-- 已在 `backend/app/modules/agent/workflows/conversation.py` 的 `_route_node()` 中创建不可变 snapshot，并把 `memory_snapshot_id`、`turn_understanding` 写入父 run metadata；Router 改为消费 `standalone_request`，child run 也改为继承 `standalone_request` 和 `memory_snapshot_id`。
-- 已补 `backend/tests/test_agent_context_builder.py::test_context_loads_active_topic_from_thread_memory_state` 与 `backend/tests/test_agent_conversation_workflow.py::test_follow_up_validate_request_uses_active_topic_snapshot_for_child_run`，覆盖“Router 前读取热状态”和“子 Run 继承 snapshot ID + standalone_request”的第一阶段闭环。
-- 已完成显式章节序号闭环：`_derive_constraints`（L139-L152）把“第三章”冻结为 `chapter_ordinal:3`；`_resolve_explicit_chapter_ids`（L534-L585）只在当前知识点唯一确定学科时解析并标记 explicit；无法解析会阻止工具调用。`retrieve_knowledge`（L132-L345）把 strict 标志交给 `RetrievalService.search_with_outline_expansion`（L44-L120），大纲扩展只增强 query，不注入推测学科或额外章节。
-- 已完成无显式引用时的首个确定性题目 referent：`ThreadContextBuilder._extract_artifact_reference_entities`（L713-L746）只从 practice Artifact 的 `content.question_ids` 暴露可信 question ID；`_resolve_question_artifact_reference`（L155-L184）在“上一道 / 这道题 / 这个题 / 这题”等明确题目短语出现时，只接受最新 practice 恰好一个唯一 ID，并把 Artifact ID 一并写入 snapshot 的 `reference_sources`。多题、零题不会猜测，也不会回退更旧产物；标题和摘要永不作为 ID 来源。
-- 已完成真正歧义时的结构化模型：`build_ambiguous_referent_candidates`（L187-L264）只在确定性阶段未解决时构造候选；`hydrate_referent_candidate_labels`（L267-L301）只保留题库中 active 且有题面的 question；`ReferentRuntime.resolve`（L79-L148）限制模型只能选择服务端候选键，非法键报错、低于 0.8 降级 unresolved。`_route_node`（L50-L155）把 resolved/unresolved 审计冻结进 snapshot 后再调用 Router。
-- `MEM-003` 已无剩余实现项；更多 bundle/workflow consumer 继续留在 `MEM-004`。
-
-冲突优先级固定为：当前输入明确主题 > 显式引用/附件 > 待处理任务 > 最近活跃主题 > 唯一高优先级
-学习薄弱点 > 请求用户澄清。禁止静默使用“数据结构 操作系统”作为默认主题。
-
-### MEM-004 按能力声明选择最小记忆
-
-- 状态：已完成（2026-07-27，首批 Conversation/Practice/Evaluation/Planning 能力 Bundle 与消费者已闭环）。
-- 已新增 `backend/app/modules/agent/memory_selector.py`，定义 workflow-neutral 的 `TopicBundle` / `PracticeBundle`，并通过 `load_practice_bundle()` 按 `run_id + user_id` 校验 run/snapshot 归属，从 `agent_memory_snapshots`、`agent_memory_snapshot_items` 与 `selection_metadata_json` 读取主题、aliases、约束、difficulty、knowledge point IDs 和已选 Artifact。
-- 已在 `build_practice_query()` 与 `build_practice_filters()` 中把 bundle topic title + aliases、difficulty 确定性转成 query 与 retrieval filters；当既没有 bundle topic 也没有 fallback terms 时返回空 query，避免静默默认“数据结构/操作系统”。
-- 已补 `backend/tests/test_agent_memory_selector.py::test_load_practice_bundle_uses_snapshot_topic_and_context_metadata`，覆盖 snapshot topic aliases、约束、difficulty、knowledge point IDs 和 selected artifacts 都能被组装进 `PracticeBundle`。
-- 已完成 `PlanningBundle`：`PlanningTarget` / `PlanningBundle`（L59-L77）和 `load_planning_bundle`（L185-L337）只从同用户 snapshot 主题、最新 active 已批准目标和有评分证据的低掌握度知识点选取规划目标；`plan._aggregate_learning_evidence_node`（L26-L49）已接入。无真实目标时前置门失败且不创建审批，硬编码的“数据结构 / 操作系统 / 计算机网络 / 60 分钟”已删除。
-- 已完成 `EvaluationBundle`：`EvaluationQuestion` / `EvaluationBundle` / `_extract_user_answer`（L80-L137）和 `load_evaluation_bundle`（L340-L471）按 run/user/thread 校验 snapshot，只接受唯一 question 引用，重读 active、未拒绝且有可信答案来源的题面，并从显式“我的答案是 / 我选”表达提取作答；跨用户、跨线程、多题、失效题、缺答案均返回稳定 unresolved reason。Grade 的 `_load_attempt_snapshot_node`（L40-L78）已接入。
-- 已完成 `ConversationBundle`：`ConversationTurn`、`ConversationBundle.to_message_history` 与 `load_conversation_bundle`（L800-L1001）复现同用户/线程 snapshot 的 visible completed 消息、冻结摘要和公开 Artifact；首次 query 仍按唯一题面、topic aliases、standalone request 决定。Explain 的 `_evidence_loop_node`（L69-L206）和 `_generate_explanation_node`（L236-L289）把同一份受控 history/摘要交给模型。
-- `MEM-004` 已无剩余 Bundle/首批消费接入；历史摘要属于 `MEM-007`，主观题可靠评分器属于后续 Grade 能力扩展，不阻塞本任务的分层记忆最小闭环。
-
-- 定义类型化 `MemoryNeed`，把消费能力固定为 `conversation_continuity`、`topic_focus`、`practice_generation`、
-  `grading_evidence`、`planning_goal`、`pending_interaction` 等稳定标签；当前 Router/Explain/Validate/Grade/Plan
-  只是这些能力的第一批消费者，不是记忆表结构边界。
-- Bundle 命名按能力而不是按 workflow：`ConversationBundle`、`TopicBundle`、`PracticeBundle`、
-  `EvaluationBundle`、`PlanningBundle`。未来新增或重排 workflow 时，只声明需要哪些能力，不改底层存储。
-- 先做权限和作用域过滤，再按实体 ID 精确查询；只有旧情景摘要缺少实体 ID 时才做向量检索。
-- `message_history` 只承担近期对话连续性；主题、学习画像和 Artifact 使用结构化 Bundle。
-- 快照记录每条选中记忆的来源、版本、选择原因、内容副本、估算 Token 和被丢弃原因。
-
-### MEM-005 先用 Validate 打穿首个消费闭环
-
-- 状态：已完成（2026-07-26）。主题继承、难度过滤、缺主题澄清、真实排除集、唯一薄弱点回退与 `chapter_ids` 来源全部闭环；掌握度 bundle 的深化与更多 workflow 接入继续在 MEM-004 / MEM-006 推进。
-- 已在 `backend/app/modules/agent/turn_understanding.py` 为 `TopicEntity` 增加 `aliases`，并为“难一点 / 简单点 / 难度适中”这类输入补 `difficulty:*` 约束，让 snapshot topic 与难度条件都能进入后续 bundle。
-- 已在 `backend/app/modules/agent/workflows/validate.py` 的 `_load_learning_evidence_node()` 中装载 `PracticeBundle`，优先使用 bundle topic 填充 `weak_areas` / `recent_topics`，并把 bundle 本身写回 `ExecutionContext`。
-- 已在 `_question_discovery_node()` 中通过 `build_practice_query()` 构造 query，并把 `knowledge_point_ids`、`difficulty` 与 `exclude_entity_ids` 下发到 `retrieve_knowledge()`；当 bundle topic 存在时会发起 `query="二分查找 折半查找"` 的题目检索；当 topic 与 fallback terms 都为空时，会创建 `practice_topic` 输入项并进入 waiting，用户补充后从 checkpoint 恢复到同一节点继续检索。
-- 已补 `backend/tests/test_agent_validate_workflow.py::test_validate_uses_practice_bundle_topic_for_query` 与 `test_validate_stops_when_no_topic_or_fallback_terms`，分别覆盖 topic aliases + knowledge point + difficulty 过滤，以及“缺少主题进入 waiting”的行为；并新增 `backend/tests/test_agent_validate_worker.py::test_validate_waits_for_topic_clarification_and_resumes_with_answer`，覆盖输入项创建、时间线 `pending_input` 展示与回答后恢复执行。
-- 已打通真实 `exclude_ids` 回写：练习事实永久保留，`backend/app/modules/agent/memory_selector.py::load_practice_bundle`（L638-L762）默认按最新优先读取 10 个事件 / 50 道题；`backend/app/modules/agent/turn_understanding.py::requests_question_repeat`（L518-L536）把明确重出意图冻结为约束，`backend/app/modules/agent/memory_selector.py::_apply_explicit_question_repeat`（L1004-L1024）只在唯一 question 引用时移除本轮排除项，否定或歧义表达不放宽。
-- 已落地唯一高优先级薄弱点回退（2026-07-26）：`_load_unique_weak_topic()` 只在快照拿不到主题时查 `user_learning_mastery`，恰好一个 `mastery_score < 0.6` 且 `evidence_count > 0` 的知识点才回退为 `source="learning_mastery"` 的 TopicBundle（标题与 aliases 取自 `knowledge_points`），并把命中行记入 `mastery_signals` 供审计；0 个或多个薄弱点保持 `practice_topic` 澄清路径。覆盖测试：`test_load_practice_bundle_falls_back_to_unique_weak_point`、`test_load_practice_bundle_skips_weak_point_when_multiple_candidates`，以及快照主题优先于薄弱点的断言。
-- 已冻结并落地 `chapter_ids` 稳定来源（2026-07-26）。优先级为：① 用户显式“第 N 章”在唯一学科内解析并启用 strict scope；② 无显式约束时由知识点章节关系读取标准 ID；③ 都没有时交给大纲扩展。显式解析失败禁止工具调用；成功后 RetrievalService 也不得并入扩展章节。回归覆盖解析、优先级、工具透传、底层合并守卫和既有非严格检索。
-
-`validate` 是首个落地消费者，因为当前“讲解后出题”的痛点最集中、验证成本最低；它只是样板，不是
-记忆内核对 workflow 的硬编码。后续若把 `validate` 拆成新的 workflow，或新增 `drill`、`quiz`、`review`
-之类分支，只要复用 `practice_generation`/`topic_focus` 能力和同一套快照、回写协议即可。
-
-首个目标链路：
+## 剩余实施顺序
 
 ```text
-“讲解二分查找”完成
-  → 热状态 active_topic=二分查找
-  → 用户输入“给我出道题”
-  → standalone_request=“给用户出一道关于二分查找的练习题”
-  → Router=validate
-  → PracticeBundle 读取主题、掌握度、出题约束、近期题目排除集
-  → 确定性构造 query="二分查找 折半查找"
-  → retrieve_knowledge(entity_type="question", knowledge_point_ids=["kp_binary_search"], filters={"difficulty":"hard"}, exclude_ids)
+临时练习约束单轮失效回归
+  → UserLearningMastery 时间衰减
+  → Embedding 生成、召回、版本更新和删除
+  → 偏好候选与完整冲突优先级
+  → 线程删除记忆治理
+  → MEM-008 管理端观测、复现与 Outbox 运维
 ```
 
-没有明确主题时：先使用活跃主题（已折入快照理解）；再回退唯一高优先级薄弱点（已实现，见 `_load_unique_weak_topic()`）；仍拿不到主题则创建 `practice_topic` 输入项进入澄清，等待用户补充后再继续检索。静默默认主题已移除。
+每个箭头前的单元都必须独立测试、执行 `git diff --check`、更新最小实现分卷与当月进展分卷，随后
+立即创建中文 Git 提交。数据库结构变化必须使用 Alembic 前向迁移并补迁移测试，禁止使用
+`alembic stamp head`。
 
-### MEM-006 按事实事件回写，而不是按 workflow 名写库
+## 总体验收边界
 
-- 状态：进行中（已落地 topic、explanation、practice、approved plan、Grade 投影边界与历史摘要异步任务）。`project_topic_confirmed_fact`（L67-L122）在 Router 前保留显式主题；`thread_memory` 继承主题不重复写。
-- Artifact 完成投影由 `project_completed_run_facts`（L125-L140）、`_record_explanation_artifact_created`（L143-L182）、`_record_plan_confirmed`（L185-L251）、`_record_practice_artifact_created`（L254-L305）与 `_record_grade_result_confirmed`（L308-L413）负责。Plan 必须携带 approval ID 且数据库存在同 Run approved 审批；未批准计划不写长期目标。
-- Grade 已完成真实客观题证据生产：`backend/app/modules/agent/workflows/grade.py::_objective_grade_node`（L81-L129）只对 choice/fill/judge 做题型归一化和确定性标准答案比较，产生 correct/incorrect、score、answer_mismatch 与 Run 级 evidence ID；`_render_artifact_node`（L191-L218）把证据写入 `content.grading`。主观题、缺快照、无唯一题目或无可信标准答案在 Artifact 前失败，不能污染掌握度。
-- 已由 `backend/tests/test_agent_memory_projection.py::test_topic_confirmed_projection_is_idempotent_and_skips_inherited_topic`（L133-L208）覆盖主题事实重放、Outbox 幂等和补建；`backend/tests/test_agent_conversation_workflow.py::test_model_configuration_failure_creates_visible_failed_message`（L761-L825）覆盖 Router 失败仍保留显式主题；Grade 投影边界由 `test_grade_projection_updates_mastery_and_replays_idempotently`（L212-L281）、`test_grade_projection_deduplicates_knowledge_points_and_scopes_evidence_by_user`（L285-L345）、`test_feedback_without_structured_grading_is_ignored`（L349-L363）、`test_grade_run_without_snapshot_fails_without_touching_mastery`（L398-L415）覆盖；`backend/tests/test_agent_grade_worker.py`（L153-L243）覆盖真实正确/错误证据到掌握度、主观题拒绝与判断题否定表达归一化。
-- Explain 零命中 fallback 的事实、重放幂等与“不写掌握度”由 `backend/tests/test_agent_explain_worker.py::test_worker_persists_zero_hit_fallback_answer_without_citations`（L134-L243）覆盖。
-- Plan 审批与事实闭环：`AgentService.decide_approval`（L424-L476）只在 approved 时恢复；`backend/app/modules/agent/workflows/plan.py::_apply_plan_change_node`（L171-L195）复核审批，`_render_plan_result_node`（L198-L221）把 approval ID 放入 Artifact；`backend/app/modules/agent/memory_projection.py::_record_plan_confirmed`（L185-L251）再次查询 approved 事实并按 approval ID 幂等写 `plan_confirmed`。`backend/tests/test_agent_plan_worker.py` 覆盖无证据、拒绝、旁路和批准事实闭环。
-- Memory Outbox 生产、消费与首批派生已闭环：`backend/app/modules/agent/memory_projection.py::_ensure_memory_update_outbox`（L27-L64）生产事实任务；`backend/app/modules/agent/conversation_summary.py::enqueue_conversation_summary_maintenance`（L37-L69）在每个成功 Run 事务内另行幂等生产摘要任务；`backend/app/modules/agent/memory_outbox.py::MemoryOutboxStore`（L30-L177）与 `MemoryOutboxConsumer`（L180-L308）负责认领、租约、按类型归属校验、重试和失败隔离，`backend/app/modules/agent/worker.py::AgentWorker.start`（L370-L394）每轮在 Run 批次后消费。
-- `backend/app/modules/agent/memory_item_projection.py::project_trusted_memory_event`（L154-L166）物化显式主题与批准目标；`backend/app/modules/agent/conversation_summary.py::ConversationSummaryMaintainer.maintain`（L90-L211）物化滚动历史摘要。Explain/Practice/Grade 不复制权威正文，Embedding 与偏好候选仍待实现。
-- 不把 `message.delta` 写长期记忆，只在 `message.completed`/`artifact.rendered`/`run.completed` 后投影。
-- Run 完成事务同步更新下一轮马上需要的热状态，并写 Memory Outbox。
-- 异步投影历史摘要、Embedding、偏好候选和长期事件，失败可重放且不反向把成功 Run 改成失败。
-- 领域事件固定为“主题被确认”“讲解 Artifact 产生”“练习 Artifact 产生”“评分结果确认”“计划被用户确认”
-  等事实事件；Explain/Validate/Grade/Plan 只是当前这些事件的来源。
-- Explain 只更新主题和讲解 Artifact，不提高掌握度；Validate 创建练习和排除集，也不提高掌握度。
-- Grade 的真实得分/错误类型才更新 `user_learning_mastery`；Plan 只有经用户确认后才成为长期目标。
-- `run.failed` 不写 Agent 输出记忆，用户已表达的输入主题仍保留为事实。
-
-### MEM-007 压缩、冲突、失效与删除
-
-- 状态：进行中（已完成增量摘要消费、显式重复题覆盖和线程主题轮次失效；其余冲突、学习画像衰减、Embedding 和删除仍待实现）。
-- 已由 `backend/app/modules/agent/conversation_summary.py::ConversationSummaryMaintainer`（L72-L318）固定保留最近 12 个用户轮次，只从上个活跃摘要 `end_sequence` 之后选择最多 24 条同用户/线程的 visible completed user/assistant 消息；不足 13 轮不调用模型，也不在每次 Run 重读整线程。模型返回后短暂锁定线程并复核活跃版本，避免多 Worker 产生双活摘要，冲突交给 Outbox 基于新版本重试。
-- `backend/app/modules/agent/model_runtime/conversation_summary.py::ConversationSummaryRuntime.summarize`（L65-L117）把旧摘要和新增消息当作不可信数据，使用触发 Run 绑定模型生成结构化非空摘要；`maintain` 新建递增版本、保留起止 sequence 和来源消息 ID，再用 `superseded_by_id` 标记旧摘要。原 `AgentMessage` 不覆盖，摘要正文不进入公开 SSE。
-- 成功 Run 只在 `AgentWorker.process_run`（L185-L227）当前事务写摘要维护 Outbox；`MemoryOutboxConsumer.process_claimed`（L202-L276）在独立消费事务复核 Run/thread/user/type，模型或存储失败只重试任务，不把 completed Run 改成失败。`backend/tests/test_agent_conversation_summary.py`（L169-L436）覆盖近期窗口、隐藏/失败/system 排除、重放幂等、新区间合并、并发版本复核、跨作用域隔离和失败隔离。
-- `backend/app/modules/agent/context_builder.py::ThreadContextBuilder._load_conversation_summary`（L533-L569）只在近期原始轮次选完后用剩余 Token 预算选择同用户/线程、范围不重叠的唯一 active 摘要；`ensure_turn_memory_snapshot`（L405-L515）冻结内容副本和来源版本。`RouterDeps` / `DirectAnswerDeps` 将摘要作为不可信动态上下文消费，child metadata 和公开 SSE 均不含正文。`backend/tests/test_agent_context_builder.py::test_context_selects_only_active_summary_that_fits_remaining_budget`（L319-L384）覆盖预算选择与 snapshot item。
-- `backend/app/modules/agent/memory_selector.py::load_conversation_bundle`（L832-L1001）让 Explain 复现唯一 snapshot 摘要副本，并复核源摘要 user/thread/version；版本不符或重复条目均安全降级。`ExplanationDeps`（L19-L75）把同一副本交给规划和正文模型，摘要不进入 message history、child metadata 或 SSE。
-- 用户明确陈述和真实业务事件优先于模型抽取；低置信度候选不能覆盖高置信度活跃记忆。
-- 线程主题轮次失效已落地：`backend/app/modules/agent/turn_understanding.py::_topic_state_payload`（L539-L554）让显式主题写确认版本、继承主题保留原版本；`backend/app/modules/agent/context_builder.py::_active_topic_from_state`（L752-L772）只暴露版本差不超过 6 的主题，第 7 个后续轮次失效，旧版 JSON 首次兼容且非法标记安全失效。临时约束单轮失效与学习画像时间衰减仍待收口。
-- 排除集覆盖已按读取策略落地：`backend/app/modules/agent/turn_understanding.py::requests_question_repeat`（L518-L536）排除“不要/别/不想/无需”等否定表达，`backend/app/modules/agent/memory_selector.py::_apply_explicit_question_repeat`（L1004-L1024）只允许唯一结构化 question 引用覆盖本轮排除视图；事实事件不变。时间衰减仍待实现。
-- 删除线程时失效线程记忆并通过 Outbox 删除向量；用户级学习画像单独控制。
-
-### MEM-008 记忆可观测性与安全
-
-- Agent Runs 展示原始输入、独立请求、主题来源、快照版本、选中/丢弃记忆、Token 和最终工具参数。
-- 记忆正文不塞入公开 SSE；事件只保存快照/调用 ID 和安全摘要。
-- 所有读取校验 `user_id`、`thread_id` 和 Artifact 权限；记忆文本按不可信数据渲染，不能成为系统指令。
-- 支持按 source ID 回查、幂等重放、快照复现和投影失败重试。
-
-## 外部基线与设计校正
-
-本轮审计结论：对“现有方案是否过度绑定当前 workflow”的担忧是合理的。当前任务单里稳定的部分是
-MEM-001/002/003/007/008；风险主要在 MEM-004/005/006 的原始表述，它们容易让维护者误以为
-Validate/Explain/Grade/Plan 是记忆内核的天然边界。这里把设计口径校正为：稳定的是事实模型、快照、
-选择协议和事件回写；可变的是 workflow 对这些能力的装配方式。
-
-| 方案 | 公开设计 | 为什么稳定 | 为什么不直接照搬 | 本任务单吸收后的落点 |
-| --- | --- | --- | --- | --- |
-| [Codex AGENTS.md](https://learn.chatgpt.com/docs/agent-configuration/agents-md)、[Memories](https://learn.chatgpt.com/docs/customization/memories?surface=app)、[Skills](https://learn.chatgpt.com/docs/build-skills)、[Subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents) | `AGENTS.md` 负责持久规则，Memories 在后台把旧会话沉淀为本地记忆，Skills 按需加载，Subagents 把噪声工作移出主线程 | 规则、记忆、执行技能三层分离；会话空闲后异步生成记忆，技能只在命中时加载，workflow 变化不会倒逼底层记忆重建 | Codex 主要服务工程协作，缺少“学习掌握度、题目排除集、评分证据”这类教育域结构化状态；它的 durable recall 更偏通用提示与历史上下文 | 采纳“三层分离”：记忆底座只存事实和结构化状态，workflow 只声明 `MemoryNeed`；不把 `validate`、`grade` 名称写进存储契约 |
-| [Claude Code Memory](https://code.claude.com/docs/en/memory)、[Skills](https://code.claude.com/docs/en/skills)、[Context Windows](https://platform.claude.com/docs/en/build-with-claude/context-windows) | `CLAUDE.md` 与 auto memory 在每次会话启动时加载，长流程靠 compaction 管理上下文，技能正文只在使用时注入 | 作用域和加载时机清晰：事实/规则常驻，流程说明按需注入；官方明确把“procedure”从常驻记忆里拆到 skills，避免上下文腐烂 | Claude Code 的 memory 更像“项目说明 + 偏好 + 调试经验”，不是我们要长期审计的业务事实账本；auto memory 也不提供我们需要的用户级学习画像和快照复现 | 采纳“事实常驻、流程按需加载”的边界：主题状态、掌握度、摘要常驻； Explain/Validate/Grade 的步骤说明放在 workflow adapter，不进入核心记忆 schema |
-| [Hermes Memory](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/memory.md)、[Memory Providers](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/memory-providers.md)、[Context Engine Plugins](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/developer-guide/context-engine-plugin.md) | 小而常驻的 `MEMORY.md`/`USER.md` 负责有界记忆，外部 provider 做跨会话召回，context engine 可替换压缩/上下文管理策略 | 内建记忆、外部记忆、上下文管理彼此解耦；即使改检索或压缩引擎，也不必改 agent core 和 memory surface | Hermes 的 Markdown 记忆非常轻量，适合个人 agent，不足以承载我们需要的权限校验、评分证据、用户级 mastery 和可追溯快照；它也公开暴露单用户污染风险 | 采纳“有界常驻 + 外部检索 + 可替换上下文引擎”的思想：线程热状态要小，历史摘要/向量检索走异步通道，记忆选择器与具体 workflow 解耦 |
-
-三类成熟方案虽然实现不同，但共同点很一致：
-
-1. 记忆底座独立于 workflow。稳定的是记忆面、作用域和加载协议，不是某条业务流程图。
-2. 常驻记忆必须小而可信。大型步骤说明、长参考资料、工具细节都按需加载，不能长期塞在主上下文。
-3. 长期记忆只接收确认后的事实，不接收流式中间态和临时推理。
-4. 复杂流程靠技能、子代理、上下文压缩去适配，而不是频繁改底层记忆 schema。
-
-因此，本任务单的最终口径应当是：
-
-- 当前设计的大方向没有错：分层记忆、快照、事件回写、热状态与长期画像分离，这些都比“把全部历史直接塞回模型”更稳。
-- 需要修正的是表达和边界：记忆核心必须围绕事实类型与能力标签稳定，workflow 只做薄适配层。
-- `validate` 仍然应该作为第一条打通链路，因为它最能暴露主题继承、题目检索和排除集是否好用；但它只是验收样例，不是架构中心。
-- 存储层只按事实建模，场景视图一律读时推导（2026-07-26 固化）。`agent_memory_events` 记录的是“练习产物包含哪些题”这类客观事实，而“排除哪些题、回退哪个薄弱点、过滤哪些章节”都是 selector 在读取时从事实推导的视图。新增场景（“再出一遍上一道题”“上次那题的解析”）只新增读取策略，不新增存储预设，因此不存在“没预想到的场景无法回溯”——事实一直都在。这与 Claude Code auto memory（一事实一文件、索引常驻、正文按需读取）和 Codex Memories（后台把会话沉淀为事实、使用时按需选择）的公开设计同构；三家都没有为特定场景建专用记忆库。禁止的反模式：把“排除集”“薄弱点”这类推导结论物化成独立存储表。
-
-## 实施顺序与依赖
-
-```text
-文档分卷迁移
-  → FLOW-001
-  → RAG-001
-  → RAG-002
-  → ACT-001 + EXP-001
-  → MEM-001/002（契约与迁移）
-  → MEM-003/004（输入解析、快照、选择）
-  → MEM-005（Validate 最小闭环）
-  → MEM-006（完成事件增量回写）
-  → MEM-007（摘要、冲突、失效）
-  → MEM-008（完整可观测与治理）
-```
-
-记忆接入 Validate 前必须先完成 FLOW-001、RAG-001 和 RAG-002，否则即使主题选择正确，检索结果仍可能
-在回填/DTO 层丢失，最终 Practice Artifact 也可能无法持久化。
-
-## 端到端验收场景
-
-1. Explain 检索零命中：用户看到一个检索活动和通用知识回答，引用为空，刷新后正文仍在；已由 `backend/tests/test_agent_explain_worker.py::test_worker_persists_zero_hit_fallback_answer_without_citations` 覆盖。
-2. Explain 检索连续失败三次：后台显示三次 attempt，用户端只有一个活动，LLM 回答仍正常完成；公开活动折叠由 `test_timeline_merges_retry_attempts_into_single_public_activity` 覆盖，单次失败回退持久化由 `test_worker_persists_retrieval_error_fallback_answer_without_citations` 覆盖。
-3. 二分查找真实题：MySQL 稀疏和 Qdrant 向量候选经过回填、DTO 和资格门后进入 Practice；已由 `backend/tests/test_agent_validate_workflow.py::test_validate_binary_search_question_survives_retrieval_dto_and_gate` 覆盖。
-4. 上下文继承：“讲解二分查找”后说“给我出道题”，Validate 工具查询必须包含二分查找且类型为 question；Explain 的继续讲解会重放 snapshot 选中的 history，并用 `二分查找 折半查找` 首次检索。后者已由 `test_explain_worker_replays_snapshot_selected_history` 覆盖。
-5. 明确覆盖：“不要二分查找，出红黑树题”，当前输入覆盖旧主题。
-6. 无法消解：没有主题和唯一薄弱点时进入澄清，不使用硬编码默认主题；唯一薄弱点回退与“多薄弱点仍澄清”已由 `test_load_practice_bundle_falls_back_to_unique_weak_point` / `test_load_practice_bundle_skips_weak_point_when_multiple_candidates` 覆盖。
-7. 增量回写：Explain/Validate 不提高掌握度；Grade 对唯一可信客观题和显式作答确定性产生结构化证据，Feedback Artifact 按用户 + Run evidence ID 幂等更新掌握度；已由 `test_grade_worker_projects_real_objective_verdict_to_mastery` 与 `test_grade_worker_records_incorrect_objective_verdict` 覆盖。主观题仍安全失败，不冒充真实评分。
-8. 失败隔离：流式中途失败不写长期 Agent 输出记忆；重放 Outbox 不产生重复记忆。
-9. 增量摘要：13 轮以上线程只压缩近期 12 轮之前的 visible completed 对话；新增轮次只合并新区间并 supersede 旧摘要，模型失败不修改完成 Run。已由 `test_summary_selects_only_old_visible_completed_conversation_range`、`test_summary_replay_is_idempotent_and_new_range_supersedes_old_version` 和 `test_summary_outbox_is_idempotent_and_failure_keeps_run_completed` 覆盖。
-
-## 任务维护规则
-
-- 每个独立修复使用中文 Git 提交，并在实现提交中把对应任务状态和验证证据更新到本文件。
-- 代码锚点使用「文件路径 + 完整符号名 + 当前起止行范围」；重命名、移动、删除或插入代码时，同一提交用 `rg -n`、`nl -ba` 重新确认并更新引用。
-- 复杂实现细节写入对应 `implementation/` 分卷；本文件只保留待做状态、依赖、关键决策和验收入口。
-- 单项只有在代码、迁移、测试、文档和提交全部完成后才能标记 `已完成`。
+- 原始消息、Artifact、可信业务事件和 Grade 证据保持不可变；场景视图在读取时推导。
+- 当前用户明确陈述优先于可信业务事件，可信业务事件优先于模型抽取候选。
+- 所有记忆选择、向量召回、source 回查和删除都同时校验用户、线程与来源版本。
+- 记忆派生失败只重试 Memory Outbox，不把已经完成的 Run 反向改成失败。
+- 记忆正文和密钥不得进入公开 SSE；Snapshot 必须足以复现某个 Run 当时实际消费的内容副本。

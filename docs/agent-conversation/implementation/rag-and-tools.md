@@ -3,7 +3,8 @@
 ## 适用场景
 
 本分卷记录 explain / validate 共用的 `retrieve_knowledge` 工具、底层检索服务、公开工具活动投影，以及
-`2026-07-26-rag-explain-memory-remediation.md` 中 RAG 与 Explain 整改任务当前对应的真实代码位置。
+`../tasks/2026-07-26-rag-explain-memory-remediation-completed.md` 中已完成 RAG 与 Explain 整改任务对应的
+真实代码位置。
 
 ## 当前检索主链
 

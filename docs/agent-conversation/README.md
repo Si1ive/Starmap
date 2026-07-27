@@ -32,7 +32,8 @@ docs/agent-conversation/
 ├── incidents/
 │   └── YYYY-MM-DD-主题.md             # 单次复杂故障证据与复盘
 ├── tasks/
-│   └── YYYY-MM-DD-主题.md             # 跨阶段待做任务、依赖和验收状态
+│   ├── README.md                      # 跨阶段任务阅读路由
+│   └── YYYY-MM-DD-主题.md             # 待做任务状态、依赖和验收入口
 └── progress/
     ├── README.md                       # 进展日志总路由
     ├── YYYY-MM.md                      # 月度兼容薄索引
@@ -57,8 +58,8 @@ docs/agent-conversation/
 
 ## 当前待做任务
 
-- [RAG、Explain 与分层记忆整改计划](./tasks/2026-07-26-rag-explain-memory-remediation.md)：覆盖
-  `run_5c6c46d3`、检索重试公开投影、Explain 无资料回答、RAG 契约和分层长期记忆。
+- [Agent 对话任务路由](./tasks/README.md)：当前包含 RAG、Explain 与分层记忆整改总览，以及
+  已完成基础、记忆生命周期和管理端可观测性主题分卷。
 
 ## 薄索引入口
 
