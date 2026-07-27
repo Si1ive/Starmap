@@ -9,6 +9,53 @@ from typing import Optional, Dict, Any, List, Callable, Awaitable
 from enum import Enum
 
 
+_AUDIT_STRING_LIMIT = 4000
+_AUDIT_COLLECTION_LIMIT = 40
+
+
+def _audit_value(value: Any, *, depth: int = 0) -> Any:
+    """把节点上下文压缩成可安全落库的 JSON 审计值。
+
+    ExecutionContext 中既有普通字典，也有 Pydantic 模型和带消息正文的
+    AgentRunContext。步骤输入需要能在管理端复盘，但不能把任意 Python 对象
+    或无限增长的历史直接写入事件表，因此在这里统一做递归、截断和类型收敛。
+    """
+    if depth > 5:
+        return "[nested value truncated]"
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        if len(value) <= _AUDIT_STRING_LIMIT:
+            return value
+        return f"{value[:_AUDIT_STRING_LIMIT]}...[truncated, total {len(value)}]"
+
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        try:
+            return _audit_value(model_dump(mode="json"), depth=depth + 1)
+        except Exception:
+            return f"<{type(value).__name__}>"
+
+    if isinstance(value, dict):
+        items = list(value.items())[:_AUDIT_COLLECTION_LIMIT]
+        result = {
+            str(key): _audit_value(item, depth=depth + 1)
+            for key, item in items
+        }
+        if len(value) > _AUDIT_COLLECTION_LIMIT:
+            result["_truncated_items"] = len(value) - _AUDIT_COLLECTION_LIMIT
+        return result
+
+    if isinstance(value, (list, tuple, set)):
+        values = list(value)
+        result = [_audit_value(item, depth=depth + 1) for item in values[:_AUDIT_COLLECTION_LIMIT]]
+        if len(values) > _AUDIT_COLLECTION_LIMIT:
+            result.append(f"[...{len(values) - _AUDIT_COLLECTION_LIMIT} items truncated]")
+        return result
+
+    return f"<{type(value).__name__}>"
+
+
 class ModelBudgetExceeded(Exception):
     """模型调用预算耗尽"""
     pass
@@ -110,6 +157,14 @@ class ExecutionContext:
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.variables.get(key, default)
+
+    def audit_input(self) -> Dict[str, Any]:
+        """返回节点开始前可供管理员定位问题的上下文快照。"""
+        return {
+            "input_message": _audit_value(self.get("input_message")),
+            "context_keys": sorted(self.variables),
+            "variables": _audit_value(self.variables),
+        }
 
     def charge_model_call(self, count: int = 1) -> None:
         """在调用模型前扣减预算，超限则抛 ModelBudgetExceeded。"""

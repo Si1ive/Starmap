@@ -32,6 +32,7 @@
 | 执行阶段 | 文件 | 符号 | 职责 |
 | --- | --- | --- | --- |
 | Artifact 工厂契约 | `backend/app/modules/agent/workflows/contracts.py` | `NodeResult.success` | render 节点可通过统一工厂方法同时返回 `output`、`next_node` 和最终 `artifact`，避免 completed 之前丢失产物 |
+| 节点输入审计 | `backend/app/modules/agent/workflows/contracts.py`、`backend/app/modules/agent/workflows/engine.py` | `ExecutionContext.audit_input`、`WorkflowEngine.execute` | 节点开始前把 `input_message`、上下文 key 和递归收敛后的变量快照写入 `AgentStep.input_data` 与 `step.started.input`；模型/工具输出仍写在完成事件中，管理端可把输入和输出配对定位 |
 | 节点进度持久化 | `backend/app/modules/agent/workflows/engine.py` | `WorkflowEngine.execute` | 每个 step 的开始、完成、失败都写 `agent_steps` 和 `agent_events`，并在关键边界 commit |
 | 当前公开步骤 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | run 进入 running 和完成时维护 `current_public_step`、最终 artifact 和消息完成事件 |
 | 最终正文与产物落库 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | workflow 返回 completed 后创建 `AgentArtifact`、写 `artifact.rendered` / `message.completed` / `run.completed`，让刷新可恢复最终正文和 artifact |
@@ -43,7 +44,7 @@
 
 | 验证目标 | 文件 | 符号 | 覆盖内容 |
 | --- | --- | --- | --- |
-| 工作流公开步骤持久化 | `backend/tests/test_agent_workflow_engine.py` | `test_engine_persists_public_step_for_timeline_snapshot` | 校验 step.started / step.completed 真实提交后，时间线刷新仍能恢复当前步骤 |
+| 工作流公开步骤与输入持久化 | `backend/tests/test_agent_workflow_engine.py` | `test_engine_persists_public_step_for_timeline_snapshot` | 校验 step.started / step.completed 真实提交后，时间线刷新仍能恢复当前步骤，并且事件与 `AgentStep.input_data` 保存同一份节点输入 |
 | Explain 最终 Artifact 不再丢失 | `backend/tests/test_agent_workflow_engine.py` | `test_explain_workflow_keeps_artifact_through_render_and_completion` | 真正执行 explain workflow 到 `render_artifact -> completed`，确认 `NodeResult.success(..., artifact=...)` 可把 artifact 保留到最终结果 |
 | Explain 无资料回退在 worker 持久化后仍可刷新恢复 | `backend/tests/test_agent_explain_worker.py` | `test_worker_persists_zero_hit_fallback_answer_without_citations`、`test_worker_persists_retrieval_error_fallback_answer_without_citations` | 真实执行 `AgentWorker.process_run`，覆盖零命中和检索异常两条路径的活动卡片、artifact、最终消息与线程刷新恢复 |
 | Plan 拒绝与恢复守卫 | `backend/tests/test_agent_plan_worker.py` | `test_rejected_plan_stops_without_outbox_or_artifact`（L165-L201）、`test_plan_apply_node_rejects_unapproved_checkpoint`（L205-L220）、`test_approved_plan_resumes_and_creates_artifact`（L224-L283） | 覆盖拒绝不重投递/不产物/不写记忆、错误恢复仍被节点拒绝，以及批准后生成计划并幂等写确认事实 |

@@ -46,3 +46,10 @@
 - 验证：管理端观测/Outbox/路由后端回归 14 项通过；前端 ESLint 和生产构建通过。无头 Chrome 模拟真实管理
   API 验证桌面 Outbox、桌面/390px Run 抽屉均无横向页面溢出或运行时异常，恶意 HTML 样例未生成 DOM 图片。
 - 提交信息：`完成管理端记忆观测与 Outbox 运维界面`
+
+## 2026-07-27：补充工作流节点输入审计
+
+- 目标：让管理员在事件流中同时看到节点开始前收到的上下文，而不是只能从 `step.completed.output` 反推。
+- 实现：`backend/app/modules/agent/workflows/contracts.py::ExecutionContext.audit_input` 将运行输入、上下文 key 和变量递归收敛为有上限的 JSON；`backend/app/modules/agent/workflows/engine.py::WorkflowEngine.execute` 在创建 `AgentStep` 和追加 `step.started` 时复用同一快照，因而 `generate_explanation` 等 action 的输入与完成输出可以按 `step_id` 配对。
+- 验证：`backend/tests/test_agent_workflow_engine.py::test_engine_persists_public_step_for_timeline_snapshot` 校验事件与数据库步骤输入一致；相关工作流回归通过。
+- 提交信息：`补充 Agent 工作流节点输入审计`

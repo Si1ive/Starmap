@@ -58,6 +58,8 @@ class WorkflowEngine:
                 logger.error("节点不存在", node=current_node_name)
                 return NodeResult.failure(f"节点不存在: {current_node_name}")
 
+            step_input = context.audit_input()
+
             # 当前公开步骤必须落到 run 上，timeline snapshot 才能与实时
             # workflow.step.updated 事件保持一致，刷新后不会回退为空。
             run.current_public_step = node.name
@@ -70,6 +72,7 @@ class WorkflowEngine:
                 node_name=node.name,
                 node_type=node.node_type,
                 status="running",
+                input_data=step_input,
                 started_at=utc_now(),
             )
             self.db.add(step)
@@ -84,6 +87,7 @@ class WorkflowEngine:
                     "step_id": step.id,
                     "node_name": node.name,
                     "node_type": node.node_type,
+                    "input": step_input,
                 },
             )
             # 把步骤开始作为独立、可恢复的公开边界提交。否则 SSE 只能在

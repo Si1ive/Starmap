@@ -117,9 +117,12 @@ async def test_engine_persists_public_step_for_timeline_snapshot(db_session, mon
 
     commit = AsyncMock(wraps=db_session.commit)
     monkeypatch.setattr(db_session, "commit", commit)
+    context = ExecutionContext(run.id, run.user_id, db_session)
+    context.set("input_message", "请说明二分查找")
+    context.set("workflow", "explain")
     result = await WorkflowEngine(db_session).execute(
         workflow,
-        ExecutionContext(run.id, run.user_id, db_session),
+        context,
         run,
     )
     await db_session.flush()
@@ -141,6 +144,24 @@ async def test_engine_persists_public_step_for_timeline_snapshot(db_session, mon
     assert commit.await_count >= 2
     assert persisted_run.current_public_step == "generate_explanation"
     assert page.items[0]["workflow"]["current_step"] == "组织讲解"
+
+    started_event = await db_session.scalar(
+        select(AgentEvent).where(
+            AgentEvent.run_id == run.id,
+            AgentEvent.event_type == "step.started",
+        )
+    )
+    persisted_step = await db_session.scalar(
+        select(AgentStep).where(AgentStep.run_id == run.id)
+    )
+    assert started_event is not None
+    assert started_event.payload["input"]["input_message"] == "请说明二分查找"
+    assert started_event.payload["input"]["context_keys"] == [
+        "input_message",
+        "workflow",
+    ]
+    assert persisted_step is not None
+    assert persisted_step.input_data == started_event.payload["input"]
 
 
 class ExplanationRuntimeStub:
