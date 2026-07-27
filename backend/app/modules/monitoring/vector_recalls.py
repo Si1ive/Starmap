@@ -58,6 +58,14 @@ class VectorRecallRecorder:
         purpose: Optional[str] = None,
         query_entity_id: Optional[str] = None,
         subject_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+        activity_id: Optional[str] = None,
+        attempt_id: Optional[str] = None,
+        phase: Optional[str] = None,
+        collection_name: Optional[str] = None,
+        query_kind: Optional[str] = None,
+        raw_query_text: Optional[str] = None,
     ):
         self.id = _generate_id()
         self.called_by = called_by
@@ -65,6 +73,14 @@ class VectorRecallRecorder:
         self.query_text = _truncate(query_text, MAX_QUERY_PERSIST_LEN)
         self.query_entity_id = query_entity_id
         self.subject_id = subject_id
+        self.trace_id = trace_id
+        self.run_id = run_id
+        self.activity_id = activity_id
+        self.attempt_id = attempt_id
+        self.phase = phase
+        self.collection_name = collection_name
+        self.query_kind = query_kind
+        self.raw_query_text = _truncate(raw_query_text, MAX_QUERY_PERSIST_LEN)
 
         self._start_time: Optional[float] = None
         self._latency_ms = 0
@@ -117,6 +133,8 @@ class VectorRecallRecorder:
         *,
         threshold: float = DEFAULT_VECTOR_RECALL_THRESHOLD,
         collection_name: Optional[str] = None,
+        title_by_entity_id: Optional[Dict[str, str]] = None,
+        title_by_segment_id: Optional[Dict[str, str]] = None,
     ) -> None:
         """记录内容检索实际收到的 Qdrant dense 命中。"""
         self._latency_ms = self._elapsed_ms()
@@ -126,6 +144,8 @@ class VectorRecallRecorder:
             reverse=True,
         )[:MAX_TOP_RESULTS]
         top: List[Dict[str, Any]] = []
+        entity_titles = title_by_entity_id or {}
+        segment_titles = title_by_segment_id or {}
         for rank, hit in enumerate(ranked_hits):
             payload = hit.get("payload") or {}
             raw_title = (
@@ -133,6 +153,8 @@ class VectorRecallRecorder:
                 or payload.get("entity_title")
                 or payload.get("content_preview")
                 or payload.get("text")
+                or entity_titles.get(str(payload.get("entity_id") or ""))
+                or segment_titles.get(str(payload.get("segment_id") or ""))
             )
             top.append(
                 {
@@ -167,6 +189,14 @@ class VectorRecallRecorder:
                     id=self.id,
                     called_by=self.called_by,
                     purpose=self.purpose,
+                    trace_id=self.trace_id,
+                    run_id=self.run_id,
+                    activity_id=self.activity_id,
+                    attempt_id=self.attempt_id,
+                    phase=self.phase,
+                    collection_name=self.collection_name,
+                    query_kind=self.query_kind,
+                    raw_query_text=self.raw_query_text,
                     query_text=self.query_text,
                     query_entity_id=self.query_entity_id,
                     subject_id=self.subject_id,
@@ -194,6 +224,8 @@ async def list_vector_recalls(
     called_by: Optional[str] = None,
     status: Optional[str] = None,
     keyword: Optional[str] = None,
+    trace_id: Optional[str] = None,
+    run_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     query = select(VectorRecallLog).order_by(VectorRecallLog.created_at.desc())
     count_query = select(func.count(VectorRecallLog.id))
@@ -208,6 +240,12 @@ async def list_vector_recalls(
         like = f"%{keyword}%"
         query = query.where(VectorRecallLog.query_text.like(like))
         count_query = count_query.where(VectorRecallLog.query_text.like(like))
+    if trace_id:
+        query = query.where(VectorRecallLog.trace_id == trace_id)
+        count_query = count_query.where(VectorRecallLog.trace_id == trace_id)
+    if run_id:
+        query = query.where(VectorRecallLog.run_id == run_id)
+        count_query = count_query.where(VectorRecallLog.run_id == run_id)
 
     total = (await session.execute(count_query)).scalar_one()
     paged_query = query.offset((page - 1) * page_size).limit(page_size)
@@ -283,6 +321,14 @@ def _recall_to_dict(row: VectorRecallLog) -> Dict[str, Any]:
         "id": row.id,
         "called_by": row.called_by,
         "purpose": row.purpose,
+        "trace_id": row.trace_id,
+        "run_id": row.run_id,
+        "activity_id": row.activity_id,
+        "attempt_id": row.attempt_id,
+        "phase": row.phase,
+        "collection_name": row.collection_name,
+        "query_kind": row.query_kind,
+        "raw_query_text": row.raw_query_text,
         "query_text": row.query_text,
         "query_entity_id": row.query_entity_id,
         "subject_id": row.subject_id,

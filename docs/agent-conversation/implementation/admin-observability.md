@@ -62,6 +62,7 @@ Outbox 的调度状态。Worker 后续仍走 `MemoryOutboxConsumer.process_claim
 | 工作流步骤链 | `backend/app/modules/agent/workflows/engine.py` | `WorkflowEngine.execute` | L56-L174 | WorkflowDefinition 与 RunContext | 逐节点写 step started/completed/failed，并把节点开始前的 `input_message/context_keys/variables` 快照同时写入 `AgentStep.input_data` 与 `step.started.input` | agent_steps、agent_events 与可配对的节点输出 | 管理端事件时间线 |
 | Memory Outbox 投影边界 | `backend/app/modules/agent/memory_outbox.py` | `MemoryOutboxConsumer.process_claimed` | L231-L366 | 已认领且带 Run 的记忆任务 | 投影/失败状态前后复用记忆状态采集器；成功或失败都追加 `memory.outbox.*` trace，投影失败仍只回写 Outbox 状态 | `agent_memory_traces` 与原 Outbox 状态；不反向修改已完成 Run | Run 记忆变化时间线 |
 | 检索实际参数 | `backend/app/modules/agent/tools/retrieve_knowledge.py` | `retrieve_knowledge` | L132-L345 | query、实体类型、章节、难度过滤、排除 ID 与 Run ID | 在真实检索前写 `tool.called.public_metadata`，完成后写结果事件；异常转失败活动 | 可复盘的实际 query/filter/attempt；检索服务副作用 | `get_run_memory_observability` |
+| 向量检索调用树 | `backend/app/modules/monitoring/vector_recalls.py`、`backend/app/modules/monitoring/router.py`、`frontend-admin/src/pages/Monitor/VectorRecall.tsx` | `VectorRecallRecorder`（L43-L216）、`list_vector_recalls`（L222-L263）、`list_vector_recall_logs`、`VectorRecallMonitor`（L83-L424） | 原始/实际 query、Trace、Run、activity、attempt、phase、collection 与 Qdrant hits | 独立事务记录每个大纲/内容召回；列表可按 Trace/Run 精确过滤，详情同时展示原始焦点、实际入参和关联 ID。标题优先使用 payload 或 MySQL 水合预览，UUID 仅作技术回退 | `vector_recall_logs` 与只读管理 DTO；记录失败不回滚业务检索 | 管理员核对一次用户活动内的全部底层召回 |
 
 ## 错误与安全传播
 

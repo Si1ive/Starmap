@@ -129,6 +129,12 @@ const VectorRecallMonitor = () => {
       },
     },
     {
+      title: '阶段',
+      dataIndex: 'phase',
+      width: 120,
+      render: (v: string) => <Tag>{v || '-'}</Tag>,
+    },
+    {
       title: '查询文本（入参）',
       dataIndex: 'query_text',
       ellipsis: true,
@@ -338,6 +344,13 @@ const VectorRecallMonitor = () => {
                 <Tag color={calledByConfig[detail.called_by || '']?.color}>{calledByConfig[detail.called_by || '']?.text || detail.called_by || '-'}</Tag>
               </Descriptions.Item>
               <Descriptions.Item label="用途">{detail.purpose || '-'}</Descriptions.Item>
+              <Descriptions.Item label="召回阶段">{detail.phase || '-'}</Descriptions.Item>
+              <Descriptions.Item label="Collection">{detail.collection_name || '-'}</Descriptions.Item>
+              <Descriptions.Item label="Run ID">{detail.run_id || '-'}</Descriptions.Item>
+              <Descriptions.Item label="检索 Trace">{detail.trace_id || '-'}</Descriptions.Item>
+              <Descriptions.Item label="活动 / Attempt" span={2}>
+                {detail.activity_id || '-'} / {detail.attempt_id || '-'}
+              </Descriptions.Item>
               <Descriptions.Item label="触发实体ID">{detail.query_entity_id || '-'}</Descriptions.Item>
               <Descriptions.Item label="学科范围">{detail.subject_id || '全学科'}</Descriptions.Item>
               <Descriptions.Item label="状态">
@@ -363,6 +376,13 @@ const VectorRecallMonitor = () => {
                 {detail.query_text || '-'}
               </pre>
             </Card>
+            {detail.raw_query_text && detail.raw_query_text !== detail.query_text && (
+              <Card size="small" title="扩展前检索焦点">
+                <pre style={{ background: '#fafafa', padding: 12, borderRadius: 4, fontSize: 12, whiteSpace: 'pre-wrap' }}>
+                  {detail.raw_query_text}
+                </pre>
+              </Card>
+            )}
 
             <Card size="small" title={`Top-${detail.top_results.length} 召回结果`}>
               <Table

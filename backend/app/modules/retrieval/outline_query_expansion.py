@@ -12,6 +12,7 @@ from app.infrastructure.ai.embedding_service import (
     get_embedding_service_from_settings,
 )
 from app.models.mysql_models import CanonicalChapter
+from app.modules.monitoring.vector_recalls import VectorRecallRecorder
 
 
 @dataclass
@@ -28,6 +29,7 @@ async def expand_query_with_outline(
     db: AsyncSession,
     query: str,
     top_k: int = 3,
+    recall_context: Dict[str, Any] | None = None,
 ) -> OutlineExpansionResult:
     """
     使用标准章节标题和内容向量扩展查询，并提取学科、章节过滤条件。
@@ -40,16 +42,20 @@ async def expand_query_with_outline(
     embedding = await get_embedding_service_from_settings(db)
     query_vector = await embedding.embed_text(query)
 
-    title_hits = _search_chapter_segments(
-        query_vector,
-        segment_type="title",
-        limit=top_k * 2,
-    )
-    content_hits = _search_chapter_segments(
-        query_vector,
-        segment_type="content",
-        limit=top_k * 2,
-    )
+    try:
+        title_hits = _search_chapter_segments(
+            query_vector, segment_type="title", limit=top_k * 2
+        )
+    except Exception as exc:
+        await _persist_outline_error(query, recall_context, "title", exc)
+        raise
+    try:
+        content_hits = _search_chapter_segments(
+            query_vector, segment_type="content", limit=top_k * 2
+        )
+    except Exception as exc:
+        await _persist_outline_error(query, recall_context, "content", exc)
+        raise
 
     chapter_scores: Dict[str, float] = {}
     for hit in title_hits + content_hits:
@@ -73,6 +79,13 @@ async def expand_query_with_outline(
         key=lambda item: -item[1],
     )[:top_k]
     if not top_chapters:
+        await _persist_outline_recalls(
+            query=query,
+            recall_context=recall_context,
+            title_hits=title_hits,
+            content_hits=content_hits,
+            chapter_titles={},
+        )
         return OutlineExpansionResult(expanded_query=query)
 
     top_ids = [chapter_id for chapter_id, _ in top_chapters]
@@ -84,6 +97,14 @@ async def expand_query_with_outline(
         )
     ).scalars().all()
     chapter_map = {chapter.id: chapter for chapter in chapters}
+
+    await _persist_outline_recalls(
+        query=query,
+        recall_context=recall_context,
+        title_hits=title_hits,
+        content_hits=content_hits,
+        chapter_titles={chapter_id: chapter.name for chapter_id, chapter in chapter_map.items()},
+    )
 
     # 大纲命中只负责收窄结构化范围，并用最高分章节名补足短查询语义。
     # 禁止把多个章节的 keywords/enhanced_description 串成超长 dense query；
@@ -115,6 +136,63 @@ async def expand_query_with_outline(
         chapter_ids=top_ids,
         matched_chapters=matched_chapters,
     )
+
+
+async def _persist_outline_recalls(
+    *,
+    query: str,
+    recall_context: Dict[str, Any] | None,
+    title_hits: List[Dict[str, Any]],
+    content_hits: List[Dict[str, Any]],
+    chapter_titles: Dict[str, str],
+) -> None:
+    if not recall_context:
+        return
+    for segment_type, hits in (("title", title_hits), ("content", content_hits)):
+        recorder = VectorRecallRecorder(
+            called_by=recall_context.get("called_by", "retrieval_service"),
+            purpose="大纲章节向量召回",
+            query_text=query,
+            trace_id=recall_context.get("trace_id"),
+            run_id=recall_context.get("run_id"),
+            activity_id=recall_context.get("activity_id"),
+            attempt_id=recall_context.get("attempt_id"),
+            phase=f"outline_{segment_type}",
+            collection_name=qdrant_manager.COLLECTION_KNOWLEDGE_SEGMENTS,
+            query_kind="raw",
+            raw_query_text=query,
+        ).start()
+        recorder.record_qdrant_results(
+            hits,
+            collection_name=qdrant_manager.COLLECTION_KNOWLEDGE_SEGMENTS,
+            title_by_entity_id=chapter_titles,
+        )
+        await recorder.persist()
+
+
+async def _persist_outline_error(
+    query: str,
+    recall_context: Dict[str, Any] | None,
+    segment_type: str,
+    exc: Exception,
+) -> None:
+    if not recall_context:
+        return
+    recorder = VectorRecallRecorder(
+        called_by=recall_context.get("called_by", "retrieval_service"),
+        purpose="大纲章节向量召回",
+        query_text=query,
+        trace_id=recall_context.get("trace_id"),
+        run_id=recall_context.get("run_id"),
+        activity_id=recall_context.get("activity_id"),
+        attempt_id=recall_context.get("attempt_id"),
+        phase=f"outline_{segment_type}",
+        collection_name=qdrant_manager.COLLECTION_KNOWLEDGE_SEGMENTS,
+        query_kind="raw",
+        raw_query_text=query,
+    ).start()
+    recorder.record_error(exc)
+    await recorder.persist()
 
 
 def _search_chapter_segments(

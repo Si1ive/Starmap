@@ -18,6 +18,7 @@
 | 线程治理任务 | `backend/alembic/versions/20260727_thread_memory_delete.py` | `upgrade`、`downgrade` | L19-L50 | Run/type Outbox | 允许 `run_id` 为空并添加唯一 `task_key`；降级先清治理任务 | 无 Run 的删除任务可幂等入队 | 失败摘要迁移 |
 | Outbox 失败摘要 | `backend/alembic/versions/20260727_memory_outbox_error.py` | `upgrade`、`downgrade` | L19-L27 | 已支持治理 task key 的 Outbox | 添加或移除 nullable `last_error_message` | 失败详情可持久化 | ORM / Consumer |
 | 记忆前后状态观测 | `backend/alembic/versions/20260727_memory_trace.py` | `upgrade`、`downgrade` | L20-L51 | 已存在 Agent Run/Thread 表 | 创建带 Run、事件序号和 before/after JSON 的不可变观测表及查询索引 | `agent_memory_traces`；保存关键事件与 Memory Outbox 边界 | 管理端记忆时间线 |
+| 向量召回关联审计 | `backend/alembic/versions/20260728_vector_recall_trace.py` | `upgrade`、`downgrade` | L19-L35 | 已存在 `vector_recall_logs` 且迁移位于 `20260727_memory_trace` | 前向增加 trace/run/activity/attempt/phase/collection/query kind/raw query 八个 nullable 字段和 Trace/Run 时间索引，旧记录无需回填即可安全升级 | 新记录可还原一次 Agent 工具活动内的大纲和内容召回；降级仅移除新增审计字段 | `VectorRecallRecorder` / 管理端向量召回页 |
 | 启动期门禁 | `backend/app/main.py` | `lifespan` | L91-L107 | 已连接 MySQL | 在 Worker 和调度器前调用 schema guard | 漂移时关闭连接并中止启动 | Worker 启动 |
 | 版本与真结构校验 | `backend/app/modules/operations/schema_guard.py` | `AGENT_REQUIRED_TABLES`、`MEMORY_OUTBOX_REQUIRED_COLUMNS`、`verify_database_schema` | L13-L30、L45-L221 | Alembic revision 与 information_schema | 同时核对 head、Agent 表/列、Outbox 失败列和唯一索引、模型 nullable 约束 | 通过返回 revision；失败抛 `DatabaseSchemaError` | FastAPI lifespan |
 
@@ -37,7 +38,7 @@
 
 ## 故障定位顺序
 
-1. 先检查 `alembic_version` 是否等于当前 head `20260727_memory_trace`，禁止用 `alembic stamp head` 掩盖缺失迁移。
+1. 先检查 `alembic_version` 是否等于当前 head `20260728_vector_recall_trace`，禁止用 `alembic stamp head` 掩盖缺失迁移。
 2. 若应用层已有字段但数据库报列不存在，执行 `alembic upgrade head`，再走 `verify_database_schema` 同时确认真列。
 3. Memory Outbox 没有失败详情时，检查 `last_error_message` 真列以及 `MemoryOutboxStore.fail` 是否收到异常摘要。
 4. 工具活动无法恢复时，确认 `workflow.activity.updated` 已进入数据库 ENUM。

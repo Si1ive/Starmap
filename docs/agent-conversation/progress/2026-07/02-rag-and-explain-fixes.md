@@ -1,5 +1,37 @@
 # 2026-07 RAG、Explain 与故障修复进展
 
+## 2026-07-28：建立 Agent RAG 向量调用树
+
+### 目标
+
+修复用户只看到一个逻辑检索活动、后台又无法还原大纲与内容底层调用的问题，并让旧索引缺少标题时的
+召回结果显示可读正文而不是 UUID。
+
+### 实现
+
+- `backend/app/modules/agent/tools/retrieve_knowledge.py::retrieve_knowledge`（L133-L356）为每个真实 attempt
+  生成 `retrieval_trace_id`，与 Run、稳定 activity 和 attempt ID 一起传入检索服务并写入工具事件。
+- `backend/app/modules/retrieval/outline_query_expansion.py::_persist_outline_recalls`、`_persist_outline_error`
+  （L151-L226）分别记录大纲 title/content 的命中、miss 和异常；`backend/app/modules/retrieval/service.py::RetrievalService.search`
+  与 `_load_recall_segment_titles`（L247-L423）记录每个内容 collection，并从 MySQL segment 回填旧 payload 的正文预览。
+- `backend/app/modules/monitoring/vector_recalls.py::VectorRecallRecorder`（L43-L216）持久化 trace/run/activity/attempt、
+  phase、collection、raw/expanded query 和可读 Top 命中；列表 API 支持 Trace/Run 精确过滤。
+- `backend/alembic/versions/20260728_vector_recall_trace.py::upgrade`（L19-L28）以 nullable 字段安全升级既有日志表；
+  管理端 `frontend-admin/src/pages/Monitor/VectorRecall.tsx::VectorRecallMonitor`（L83-L424）展示阶段、关联 ID、
+  实际 query、扩展前焦点和可读命中。
+
+### 验证
+
+- 后端 RAG、向量记录、迁移图和数据库监控相关测试：40 passed；Python 编译通过，Alembic 单 head 为
+  `20260728_vector_recall_trace`。
+- `alembic upgrade head` 已将真实 MySQL 从 `20260727_memory_trace` 前向升级到新 head，未使用 stamp。
+- `cd frontend-admin && npm run lint && npm run build` 通过；仅保留既有大 chunk warning。
+- `git diff --check` 通过。
+
+### 提交信息
+
+`建立 Agent RAG 向量调用树`
+
 ## 2026-07-28：收敛 Agent RAG 检索查询
 
 ### 目标

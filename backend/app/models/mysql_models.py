@@ -1539,6 +1539,14 @@ class VectorRecallLog(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     called_by: Mapped[Optional[str]] = mapped_column(String(100), comment="调用方：question / knowledge_point")
     purpose: Mapped[Optional[str]] = mapped_column(String(100), comment="召回用途说明")
+    trace_id: Mapped[Optional[str]] = mapped_column(String(64), comment="一次逻辑检索的关联ID")
+    run_id: Mapped[Optional[str]] = mapped_column(String(32), comment="Agent Run ID")
+    activity_id: Mapped[Optional[str]] = mapped_column(String(64), comment="公开工具活动ID")
+    attempt_id: Mapped[Optional[str]] = mapped_column(String(64), comment="工具实际尝试ID")
+    phase: Mapped[Optional[str]] = mapped_column(String(32), comment="召回阶段")
+    collection_name: Mapped[Optional[str]] = mapped_column(String(120), comment="Qdrant collection")
+    query_kind: Mapped[Optional[str]] = mapped_column(String(32), comment="raw / expanded")
+    raw_query_text: Mapped[Optional[str]] = mapped_column(Text, comment="扩展前检索焦点")
 
     query_text: Mapped[Optional[str]] = mapped_column(Text, comment="向量化的查询文本（入参）")
     query_entity_id: Mapped[Optional[str]] = mapped_column(String(32), comment="触发召回的题目/知识点ID")
@@ -1564,6 +1572,8 @@ class VectorRecallLog(Base):
         Index("idx_vec_recall_created_at", "created_at"),
         Index("idx_vec_recall_called_by", "called_by"),
         Index("idx_vec_recall_status", "status"),
+        Index("idx_vec_recall_trace", "trace_id", "created_at"),
+        Index("idx_vec_recall_run", "run_id", "created_at"),
         {"comment": "向量召回日志"}
     )
 

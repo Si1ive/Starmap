@@ -163,6 +163,7 @@ async def retrieve_knowledge(
     """
     service = RetrievalService(db)
     attempt_id = f"attempt_{uuid.uuid4().hex[:20]}"
+    retrieval_trace_id = f"retrieval_{uuid.uuid4().hex[:20]}"
     activity_id = _logical_activity_id(
         run_id=run_id,
         query=query,
@@ -211,6 +212,7 @@ async def retrieve_knowledge(
                 "logical_activity_id": activity_id,
                 "attempt_id": attempt_id,
                 "attempt_no": attempt_no,
+                "retrieval_trace_id": retrieval_trace_id,
                 "activity_type": "retrieval",
                 "title": "检索 408 知识库",
                 "detail": detail,
@@ -227,6 +229,7 @@ async def retrieve_knowledge(
                     "exclude_entity_ids": exclude_entity_ids or [],
                     "limit": limit,
                     "attempt_no": attempt_no,
+                    "retrieval_trace_id": retrieval_trace_id,
                 },
             },
         )
@@ -246,6 +249,10 @@ async def retrieve_knowledge(
             exclude_entity_ids=exclude_entity_ids,
             recall_called_by="agent_rag",
             recall_purpose="Agent RAG 内容向量召回",
+            recall_trace_id=retrieval_trace_id,
+            recall_run_id=run_id,
+            recall_activity_id=activity_id,
+            recall_attempt_id=attempt_id,
         )
         
         normalized = [

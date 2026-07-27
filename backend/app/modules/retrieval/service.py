@@ -10,6 +10,7 @@
 
 from typing import Any, Dict, List, Optional
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
@@ -30,6 +31,7 @@ from app.modules.monitoring.vector_recalls import (
 from app.infrastructure.ai.embedding_service import (
     get_embedding_service_from_settings,
 )
+from app.models.mysql_models import RetrievalSegment
 
 logger = get_logger(__name__)
 
@@ -63,6 +65,10 @@ class RetrievalService:
         exclude_entity_ids: Optional[List[str]] = None,
         recall_called_by: str = "retrieval_service",
         recall_purpose: str = "内容向量召回",
+        recall_trace_id: Optional[str] = None,
+        recall_run_id: Optional[str] = None,
+        recall_activity_id: Optional[str] = None,
+        recall_attempt_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Phase 0 + Phase 1 检索：先用大纲扩展 query，再做内容检索。
@@ -81,7 +87,17 @@ class RetrievalService:
             }
         """
         # Phase 0: 大纲扩展
-        expansion = await expand_query_with_outline(self.db, query)
+        expansion = await expand_query_with_outline(
+            self.db,
+            query,
+            recall_context={
+                "called_by": recall_called_by,
+                "trace_id": recall_trace_id,
+                "run_id": recall_run_id,
+                "activity_id": recall_activity_id,
+                "attempt_id": recall_attempt_id,
+            },
+        )
 
         # 非严格范围合并高置信 top-2 大纲章节；用户显式章节属于严格范围，
         # 只允许扩 query，不能把额外章节并入过滤条件。
@@ -117,6 +133,11 @@ class RetrievalService:
             exclude_entity_ids=exclude_entity_ids,
             recall_called_by=recall_called_by,
             recall_purpose=recall_purpose,
+            recall_trace_id=recall_trace_id,
+            recall_run_id=recall_run_id,
+            recall_activity_id=recall_activity_id,
+            recall_attempt_id=recall_attempt_id,
+            raw_query=query,
         )
 
         return {
@@ -237,6 +258,11 @@ class RetrievalService:
         exclude_entity_ids: Optional[List[str]] = None,
         recall_called_by: str = "retrieval_service",
         recall_purpose: str = "内容向量召回",
+        recall_trace_id: Optional[str] = None,
+        recall_run_id: Optional[str] = None,
+        recall_activity_id: Optional[str] = None,
+        recall_attempt_id: Optional[str] = None,
+        raw_query: Optional[str] = None,
     ) -> List[RetrievalResult]:
         """
         统一检索入口
@@ -287,6 +313,14 @@ class RetrievalService:
                 query_text=query,
                 query_entity_id=None,
                 subject_id=subject_id,
+                trace_id=recall_trace_id,
+                run_id=recall_run_id,
+                activity_id=recall_activity_id,
+                attempt_id=recall_attempt_id,
+                phase="content_dense",
+                collection_name=collection,
+                query_kind="expanded" if raw_query and raw_query != query else "raw",
+                raw_query_text=raw_query or query,
             ).start()
             # dense 检索
             try:
@@ -309,10 +343,12 @@ class RetrievalService:
                 raise
 
             try:
+                segment_titles = await self._load_recall_segment_titles(dense_hits)
                 recorder.record_qdrant_results(
                     dense_hits,
                     threshold=DEFAULT_VECTOR_RECALL_THRESHOLD,
                     collection_name=collection,
+                    title_by_segment_id=segment_titles,
                 )
                 await recorder.persist()
             except Exception as record_error:
@@ -357,6 +393,31 @@ class RetrievalService:
         # 按 score 排序，截取 top-N
         all_results.sort(key=lambda r: r.score, reverse=True)
         return all_results[:limit]
+
+    async def _load_recall_segment_titles(
+        self,
+        hits: List[Dict[str, Any]],
+    ) -> Dict[str, str]:
+        """旧索引 payload 缺预览时，从 MySQL segment 回填管理员可读文本。"""
+        if self.db is None:
+            return {}
+        segment_ids = list(dict.fromkeys(
+            str((hit.get("payload") or {}).get("segment_id") or "").strip()
+            for hit in hits
+            if (hit.get("payload") or {}).get("segment_id")
+        ))
+        if not segment_ids:
+            return {}
+        rows = (await self.db.execute(
+            select(RetrievalSegment.id, RetrievalSegment.content_text).where(
+                RetrievalSegment.id.in_(segment_ids)
+            )
+        )).all()
+        return {
+            segment_id: str(content).strip()[:200]
+            for segment_id, content in rows
+            if content and str(content).strip()
+        }
 
     async def search_with_relations(
         self,

@@ -115,6 +115,50 @@ async def test_outline_expansion_merges_title_and_content_hits(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_outline_expansion_records_title_and_content_phases(monkeypatch):
+    recorded = []
+
+    class Recorder:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+        def start(self):
+            return self
+        def record_qdrant_results(self, hits, **kwargs):
+            recorded.append((self.kwargs, hits, kwargs))
+        async def persist(self):
+            return None
+
+    monkeypatch.setattr(outline_query_expansion, "VectorRecallRecorder", Recorder)
+    monkeypatch.setattr(
+        outline_query_expansion,
+        "get_embedding_service_from_settings",
+        AsyncMock(return_value=SimpleNamespace(embed_text=AsyncMock(return_value=[0.1]))),
+    )
+    monkeypatch.setattr(
+        outline_query_expansion.qdrant_manager,
+        "search",
+        Mock(side_effect=[[_hit("chapter-1", "title", 0.8)], [_hit("chapter-1", "content", 0.8)]]),
+    )
+    db = SimpleNamespace(execute=AsyncMock(return_value=_scalars_result([_chapter(name="TCP连接管理")])))
+
+    await outline_query_expansion.expand_query_with_outline(
+        db,
+        "TCP 三次握手",
+        recall_context={
+            "called_by": "agent_rag",
+            "trace_id": "retrieval-1",
+            "run_id": "run-1",
+            "activity_id": "activity-1",
+            "attempt_id": "attempt-1",
+        },
+    )
+
+    assert [item[0]["phase"] for item in recorded] == ["outline_title", "outline_content"]
+    assert {item[0]["trace_id"] for item in recorded} == {"retrieval-1"}
+    assert recorded[0][2]["title_by_entity_id"] == {"chapter-1": "TCP连接管理"}
+
+
+@pytest.mark.asyncio
 async def test_low_score_hits_leave_query_unchanged(monkeypatch):
     embedding = SimpleNamespace(
         embed_text=AsyncMock(return_value=[0.1, 0.2]),

@@ -258,6 +258,8 @@ async def list_vector_recall_logs(
     ),
     status: Optional[str] = Query(None, description="hit / miss / error"),
     keyword: Optional[str] = Query(None, description="查询文本模糊搜索"),
+    trace_id: Optional[str] = Query(None, description="逻辑检索 Trace ID"),
+    run_id: Optional[str] = Query(None, description="Agent Run ID"),
     db: AsyncSession = Depends(get_db),
 ):
     result = await list_vector_recalls(
@@ -267,6 +269,8 @@ async def list_vector_recall_logs(
         called_by=called_by,
         status=status,
         keyword=keyword,
+        trace_id=trace_id,
+        run_id=run_id,
     )
     return ApiResponse(data=result)
 

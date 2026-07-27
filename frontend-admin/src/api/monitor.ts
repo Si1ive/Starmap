@@ -203,6 +203,14 @@ export interface VectorRecallItem {
   id: string
   called_by?: string
   purpose?: string
+  trace_id?: string
+  run_id?: string
+  activity_id?: string
+  attempt_id?: string
+  phase?: string
+  collection_name?: string
+  query_kind?: string
+  raw_query_text?: string
   query_text?: string
   query_entity_id?: string
   subject_id?: string
@@ -235,6 +243,8 @@ export const listVectorRecalls = (params: {
   called_by?: string
   status?: string
   keyword?: string
+  trace_id?: string
+  run_id?: string
 }): Promise<ApiResponse<{ total: number; page: number; page_size: number; items: VectorRecallItem[] }>> => {
   return adminClient.get('/monitor/vector-recalls', { params })
 }

@@ -359,11 +359,12 @@ async def test_retrieval_service_records_agent_rag_dense_qdrant_recall(monkeypat
         def start(self):
             return self
 
-        def record_qdrant_results(self, hits, *, threshold, collection_name):
+        def record_qdrant_results(self, hits, *, threshold, collection_name, **kwargs):
             self.results = {
                 "hits": hits,
                 "threshold": threshold,
                 "collection_name": collection_name,
+                **kwargs,
             }
 
         async def persist(self):
@@ -416,11 +417,20 @@ async def test_retrieval_service_records_agent_rag_dense_qdrant_recall(monkeypat
         "query_text": "二分查找",
         "query_entity_id": None,
         "subject_id": None,
+        "trace_id": None,
+        "run_id": None,
+        "activity_id": None,
+        "attempt_id": None,
+        "phase": "content_dense",
+        "collection_name": "knowledge_segments",
+        "query_kind": "raw",
+        "raw_query_text": "二分查找",
     }
     assert recorder.results == {
         "hits": dense_hits,
         "threshold": pytest.approx(0.55),
         "collection_name": "knowledge_segments",
+        "title_by_segment_id": {},
     }
     assert recorder.persisted is True
 

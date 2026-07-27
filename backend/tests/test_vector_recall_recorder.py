@@ -64,3 +64,27 @@ def test_recorder_serializes_generic_qdrant_content_hits():
             "score": 0.61,
         },
     ]
+
+
+def test_recorder_uses_hydrated_text_before_falling_back_to_ids():
+    recorder = VectorRecallRecorder(
+        called_by="agent_rag",
+        purpose="内容召回",
+        query_text="TCP",
+    ).start()
+
+    recorder.record_qdrant_results(
+        [{
+            "id": "uuid-point",
+            "score": 0.8,
+            "payload": {
+                "segment_id": "segment-old",
+                "entity_id": "question-old",
+                "entity_type": "question",
+            },
+        }],
+        collection_name="question_segments",
+        title_by_segment_id={"segment-old": "TCP 三次握手题面"},
+    )
+
+    assert recorder._top_results[0]["title"] == "TCP 三次握手题面"
