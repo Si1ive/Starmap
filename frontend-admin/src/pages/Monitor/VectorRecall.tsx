@@ -24,6 +24,26 @@ const statusConfig: Record<string, { color: string; text: string }> = {
 const calledByConfig: Record<string, { color: string; text: string }> = {
   question: { color: 'blue', text: '题目' },
   knowledge_point: { color: 'geekblue', text: '知识点' },
+  agent_rag: { color: 'purple', text: 'Agent RAG' },
+  retrieval_service: { color: 'cyan', text: '检索服务' },
+}
+
+const entityTypeConfig: Record<string, { color: string; text: string }> = {
+  question: { color: 'gold', text: '题目' },
+  knowledge_point: { color: 'blue', text: '知识点' },
+  canonical_chapter: { color: 'green', text: '章节' },
+}
+
+function recallResultLabel(result: VectorRecallTopResult): string {
+  return (
+    result.title
+    || result.chapter_name
+    || result.entity_id
+    || result.chapter_id
+    || result.segment_id
+    || result.point_id
+    || '未命名命中'
+  )
 }
 
 // 分数配色：越高越绿
@@ -43,8 +63,13 @@ function TopResultsCell({ results }: { results: VectorRecallTopResult[] }) {
           <Tag color={r.is_primary ? 'green' : 'default'} style={{ margin: 0, minWidth: 28, textAlign: 'center' }}>
             {r.rank + 1}
           </Tag>
+          {r.entity_type && (
+            <Tag color={entityTypeConfig[r.entity_type]?.color || 'default'} style={{ margin: 0 }}>
+              {entityTypeConfig[r.entity_type]?.text || r.entity_type}
+            </Tag>
+          )}
           <span style={{ flex: 1, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {r.chapter_name || r.chapter_id}
+            {recallResultLabel(r)}
           </span>
           <span style={{ fontFamily: 'monospace', fontSize: 12, color: scoreColor(r.score) }}>
             {r.score.toFixed(4)}
@@ -264,6 +289,8 @@ const VectorRecallMonitor = () => {
               options={[
                 { label: '题目', value: 'question' },
                 { label: '知识点', value: 'knowledge_point' },
+                { label: 'Agent RAG', value: 'agent_rag' },
+                { label: '检索服务', value: 'retrieval_service' },
               ]}
             />
             <Select
@@ -346,12 +373,17 @@ const VectorRecallMonitor = () => {
                 columns={[
                   { title: '#', dataIndex: 'rank', width: 50, render: (v: number) => v + 1 },
                   {
-                    title: '章节', dataIndex: 'chapter_name',
+                    title: '命中内容', dataIndex: 'title',
                     render: (v: string, r: VectorRecallTopResult) => (
-                      <span>
-                        {v || r.chapter_id}
-                        {r.is_primary && <Tag color="green" style={{ marginLeft: 8 }}>采信</Tag>}
-                      </span>
+                      <Space size={6} wrap>
+                        {r.entity_type && (
+                          <Tag color={entityTypeConfig[r.entity_type]?.color || 'default'}>
+                            {entityTypeConfig[r.entity_type]?.text || r.entity_type}
+                          </Tag>
+                        )}
+                        <span>{v || recallResultLabel(r)}</span>
+                        {r.is_primary && <Tag color="green">采信</Tag>}
+                      </Space>
                     ),
                   },
                   {

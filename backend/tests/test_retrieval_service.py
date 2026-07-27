@@ -310,6 +310,86 @@ async def test_retrieval_service_delegates_storage_steps_to_search_engine():
 
 
 @pytest.mark.asyncio
+async def test_retrieval_service_records_agent_rag_dense_qdrant_recall(monkeypatch):
+    class FakeVectorRecallRecorder:
+        instances = []
+
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.results = None
+            self.persisted = False
+            self.__class__.instances.append(self)
+
+        def start(self):
+            return self
+
+        def record_qdrant_results(self, hits, *, threshold, collection_name):
+            self.results = {
+                "hits": hits,
+                "threshold": threshold,
+                "collection_name": collection_name,
+            }
+
+        async def persist(self):
+            self.persisted = True
+
+    monkeypatch.setattr(
+        retrieval_service_module,
+        "VectorRecallRecorder",
+        FakeVectorRecallRecorder,
+        raising=False,
+    )
+    dense_hits = [
+        {
+            "id": "point-1",
+            "score": 0.93,
+            "payload": {
+                "segment_id": "segment-1",
+                "entity_id": "kp-1",
+                "entity_type": "knowledge_point",
+                "content_preview": "二分查找要求有序。",
+            },
+        }
+    ]
+    service = RetrievalService(None)
+    service.embedding = SimpleNamespace(
+        embed_text=AsyncMock(return_value=[0.1, 0.2]),
+    )
+    service.qdrant = SimpleNamespace(search=Mock(return_value=dense_hits))
+    service.search_engine = SimpleNamespace(
+        build_filter=Mock(return_value=None),
+        get_collections=Mock(return_value=["knowledge_segments"]),
+        sparse_search=AsyncMock(return_value=[]),
+        merge_hits=Mock(return_value=dense_hits),
+        hydrate_results=AsyncMock(return_value=[]),
+    )
+
+    await service.search(
+        query="二分查找",
+        entity_type="knowledge_point",
+        mode="hybrid",
+        limit=5,
+        recall_called_by="agent_rag",
+        recall_purpose="Agent RAG 内容向量召回",
+    )
+
+    recorder = FakeVectorRecallRecorder.instances[0]
+    assert recorder.kwargs == {
+        "called_by": "agent_rag",
+        "purpose": "Agent RAG 内容向量召回",
+        "query_text": "二分查找",
+        "query_entity_id": None,
+        "subject_id": None,
+    }
+    assert recorder.results == {
+        "hits": dense_hits,
+        "threshold": pytest.approx(0.55),
+        "collection_name": "knowledge_segments",
+    }
+    assert recorder.persisted is True
+
+
+@pytest.mark.asyncio
 async def test_sparse_search_applies_structured_filters_before_limit():
     db_result = SimpleNamespace(
         scalars=lambda: SimpleNamespace(all=lambda: []),

@@ -29,6 +29,8 @@ async def test_retrieve_knowledge_forwards_strict_chapter_scope(monkeypatch):
 
     assert search.await_args.kwargs["chapter_ids"] == ["cchap_ds_03"]
     assert search.await_args.kwargs["strict_chapter_scope"] is True
+    assert search.await_args.kwargs["recall_called_by"] == "agent_rag"
+    assert search.await_args.kwargs["recall_purpose"] == "Agent RAG 内容向量召回"
 
 
 @pytest.mark.asyncio

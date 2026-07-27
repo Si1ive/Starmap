@@ -24,6 +24,8 @@ from app.models.mysql_models import VectorRecallLog
 logger = get_logger(__name__)
 
 MAX_QUERY_PERSIST_LEN = 4000
+MAX_TOP_RESULTS = 20
+DEFAULT_VECTOR_RECALL_THRESHOLD = 0.55
 
 
 def _generate_id() -> str:
@@ -105,6 +107,47 @@ class VectorRecallRecorder:
             )
         self._top_results = top
         self._result_count = len(top)
+        self._top_score = top[0]["score"] if top else 0.0
+        self._threshold_hit = bool(top) and self._top_score >= threshold
+        self._status = "hit" if top else "miss"
+
+    def record_qdrant_results(
+        self,
+        hits: List[Dict[str, Any]],
+        *,
+        threshold: float = DEFAULT_VECTOR_RECALL_THRESHOLD,
+        collection_name: Optional[str] = None,
+    ) -> None:
+        """记录内容检索实际收到的 Qdrant dense 命中。"""
+        self._latency_ms = self._elapsed_ms()
+        ranked_hits = sorted(
+            hits,
+            key=lambda hit: float(hit.get("score", 0) or 0),
+            reverse=True,
+        )[:MAX_TOP_RESULTS]
+        top: List[Dict[str, Any]] = []
+        for rank, hit in enumerate(ranked_hits):
+            payload = hit.get("payload") or {}
+            raw_title = (
+                payload.get("title")
+                or payload.get("entity_title")
+                or payload.get("content_preview")
+                or payload.get("text")
+            )
+            top.append(
+                {
+                    "rank": rank,
+                    "collection": collection_name,
+                    "point_id": str(hit.get("id")) if hit.get("id") is not None else None,
+                    "segment_id": payload.get("segment_id"),
+                    "entity_id": payload.get("entity_id"),
+                    "entity_type": payload.get("entity_type"),
+                    "title": _truncate(str(raw_title), 200) if raw_title else None,
+                    "score": round(float(hit.get("score", 0) or 0), 4),
+                }
+            )
+        self._top_results = top
+        self._result_count = len(hits)
         self._top_score = top[0]["score"] if top else 0.0
         self._threshold_hit = bool(top) and self._top_score >= threshold
         self._status = "hit" if top else "miss"

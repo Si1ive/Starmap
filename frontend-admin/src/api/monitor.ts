@@ -187,10 +187,16 @@ export const getSystemMetrics = (hours = 24): Promise<ApiResponse<{
 
 export interface VectorRecallTopResult {
   rank: number
+  collection?: string | null
+  point_id?: string | null
+  segment_id?: string | null
+  entity_id?: string | null
+  entity_type?: string | null
+  title?: string | null
   chapter_id?: string
   chapter_name?: string | null
   score: number
-  is_primary: boolean
+  is_primary?: boolean
 }
 
 export interface VectorRecallItem {

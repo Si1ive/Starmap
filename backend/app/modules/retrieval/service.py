@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.logging import get_logger
 from app.db.qdrant import qdrant_manager
 from app.modules.retrieval.chapter_scope_retrieval import retrieve_by_chapters
 from app.modules.retrieval.outline_query_expansion import (
@@ -22,9 +23,16 @@ from app.modules.retrieval.search_engine import (
     RetrievalResult,
     RetrievalSearchEngine,
 )
+from app.modules.monitoring.vector_recalls import (
+    DEFAULT_VECTOR_RECALL_THRESHOLD,
+    VectorRecallRecorder,
+)
 from app.infrastructure.ai.embedding_service import (
     get_embedding_service_from_settings,
 )
+
+logger = get_logger(__name__)
+
 
 class RetrievalService:
     """检索服务"""
@@ -53,6 +61,8 @@ class RetrievalService:
         limit: int = 10,
         filters: Optional[Dict[str, Any]] = None,
         exclude_entity_ids: Optional[List[str]] = None,
+        recall_called_by: str = "retrieval_service",
+        recall_purpose: str = "内容向量召回",
     ) -> Dict[str, Any]:
         """
         Phase 0 + Phase 1 检索：先用大纲扩展 query，再做内容检索。
@@ -105,6 +115,8 @@ class RetrievalService:
             limit=limit,
             filters=filters,
             exclude_entity_ids=exclude_entity_ids,
+            recall_called_by=recall_called_by,
+            recall_purpose=recall_purpose,
         )
 
         return {
@@ -223,6 +235,8 @@ class RetrievalService:
         filters: Optional[Dict[str, Any]] = None,
         sparse_query: Optional[str] = None,
         exclude_entity_ids: Optional[List[str]] = None,
+        recall_called_by: str = "retrieval_service",
+        recall_purpose: str = "内容向量召回",
     ) -> List[RetrievalResult]:
         """
         统一检索入口
@@ -267,13 +281,47 @@ class RetrievalService:
         all_results: List[RetrievalResult] = []
 
         for collection in collections:
+            recorder = VectorRecallRecorder(
+                called_by=recall_called_by,
+                purpose=recall_purpose,
+                query_text=query,
+                query_entity_id=None,
+                subject_id=subject_id,
+            ).start()
             # dense 检索
-            dense_hits = self.qdrant.search(
-                collection_name=collection,
-                query_vector=query_vector,
-                limit=limit * 2,
-                query_filter=qdrant_filter,
-            )
+            try:
+                dense_hits = self.qdrant.search(
+                    collection_name=collection,
+                    query_vector=query_vector,
+                    limit=limit * 2,
+                    query_filter=qdrant_filter,
+                )
+            except Exception as exc:
+                try:
+                    recorder.record_error(exc)
+                    await recorder.persist()
+                except Exception as record_error:
+                    logger.warning(
+                        "Qdrant 异常召回记录失败",
+                        collection=collection,
+                        error=str(record_error),
+                    )
+                raise
+
+            try:
+                recorder.record_qdrant_results(
+                    dense_hits,
+                    threshold=DEFAULT_VECTOR_RECALL_THRESHOLD,
+                    collection_name=collection,
+                )
+                await recorder.persist()
+            except Exception as record_error:
+                # 召回记录是旁路观测，任何序列化或日志数据库异常都不能阻断主检索。
+                logger.warning(
+                    "Qdrant 召回记录失败",
+                    collection=collection,
+                    error=str(record_error),
+                )
 
             if mode == "dense":
                 hits = dense_hits

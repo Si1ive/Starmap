@@ -1529,7 +1529,7 @@ class LLMCallLog(Base):
 
 
 class VectorRecallLog(Base):
-    """向量召回日志：记录每次 Qdrant 章节召回的入参、top-N 结果与分数。
+    """向量召回日志：记录每次 Qdrant 召回的入参、top-N 结果与分数。
 
     与 LLMCallLog 同为"外部调用可观测"日志，但语义不同——召回是向量检索，
     无 model/token/cost，核心是 query + top 结果 + 分数，供分析召回质量/命中率。
@@ -1545,7 +1545,7 @@ class VectorRecallLog(Base):
     subject_id: Mapped[Optional[str]] = mapped_column(String(32), comment="检索范围学科ID（空=全学科）")
 
     top_results: Mapped[Optional[list]] = mapped_column(
-        JSON, comment="top-N 召回结果：[{rank, chapter_id, chapter_name, score, is_primary}]"
+        JSON, comment="top-N 召回结果：章节或内容实体及其分数"
     )
     top_score: Mapped[float] = mapped_column(DECIMAL(6, 4), default=0, comment="最高召回分数")
     result_count: Mapped[int] = mapped_column(Integer, default=0, comment="召回结果数")

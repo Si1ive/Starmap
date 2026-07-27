@@ -159,3 +159,27 @@
 ### 提交信息
 
 `修复 Agent 工作流最终 Artifact 契约`
+
+## 2026-07-27：补齐 Agent RAG 向量召回监控
+
+### 目标
+
+解释“embedding 在 LLM 监控里可见，但 Agent RAG 的 Qdrant 命中在向量召回页不可见”的原因，并让实际内容召回进入同一套向量日志。
+
+### 实现
+
+- 根因确认：原 `VectorRecallRecorder` 只在 `backend/app/modules/catalog/chapter_matcher.py::ChapterMatcher.match_by_vector_search`（L108-L157）记录章节归属向量召回；`backend/app/modules/retrieval/service.py::RetrievalService.search`（L226-L359）在生成 query embedding 和调用 Qdrant 后没有记录。
+- 在 `backend/app/modules/monitoring/vector_recalls.py::VectorRecallRecorder.record_qdrant_results`（L114-L153）增加通用内容命中序列化，保留 collection、point/segment/entity、标题预览、分数和阈值状态；不改变旧章节 `record_results` 记录格式。
+- 在 `backend/app/modules/retrieval/service.py::RetrievalService.search`（L226-L359）对每个实际内容 collection 的 dense Qdrant 请求记录一条 `vector_recall_logs`；Qdrant 异常会记录 `status=error` 后继续向上抛出，日志序列化/落库异常只告警，不影响 sparse、hybrid 和 MySQL 回填。
+- 在 `backend/app/modules/agent/tools/retrieve_knowledge.py::retrieve_knowledge`（L236-L249）明确传入 `agent_rag` 调用方和用途；管理端 `frontend-admin/src/pages/Monitor/VectorRecall.tsx::VectorRecallMonitor`（L83-L403）增加 Agent RAG 筛选，并按知识点/题目/章节兼容展示新旧 Top 命中。
+
+### 验证
+
+- `cd backend && venv/bin/pytest -q tests/test_retrieval_service.py tests/test_agent_retrieve_activity.py tests/test_vector_recall_recorder.py`：16 passed。
+- `cd backend && python3 -m py_compile app/modules/monitoring/vector_recalls.py app/modules/retrieval/service.py app/modules/agent/tools/retrieve_knowledge.py` 通过。
+- `cd frontend-admin && npm run lint && npm run build` 通过；构建保留已有大 chunk warning。
+- `git diff --check` 通过。
+
+### 提交信息
+
+`补齐 Agent RAG 向量召回记录`

@@ -244,6 +244,8 @@ async def retrieve_knowledge(
             limit=limit,
             filters=filters,
             exclude_entity_ids=exclude_entity_ids,
+            recall_called_by="agent_rag",
+            recall_purpose="Agent RAG 内容向量召回",
         )
         
         normalized = [
