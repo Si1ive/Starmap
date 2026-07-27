@@ -191,6 +191,10 @@ class MemoryVectorLifecycle:
             points_selector=PointIdsList(points=point_ids),
         )
 
+    def delete_sources(self, sources: list[dict[str, Any]]) -> None:
+        """供治理任务复用的幂等删除入口；连接/删除错误继续向 Outbox 传播。"""
+        self._delete_sources(sources)
+
     async def process_outbox(
         self,
         db: AsyncSession,

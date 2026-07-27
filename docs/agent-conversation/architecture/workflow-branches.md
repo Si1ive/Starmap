@@ -75,7 +75,7 @@
 | 后端接收输入 | `backend/app/modules/agent/router.py`、`backend/app/modules/agent/service.py` | `submit_input_answer`、`submit_input_answer` | 校验等待项归属，保存用户答案并重新投递 Run |
 | 用户审批 | `frontend/src/store/agent-context.tsx` | `AgentProvider.decideWorkflowApproval` | 调用批准/拒绝 API，成功后刷新时间线 |
 | 后端审批 | `backend/app/modules/agent/router.py` | `approve_approval`、`reject_approval` | 更新审批事实，并恢复或终止相应 workflow |
-| 偏好候选列表与决定 | `backend/app/modules/agent/router.py` | `get_preference_candidates`、`decide_user_preference_candidate`（L673-L709） | 只列出当前用户候选；pending 可批准或拒绝，重复同决定幂等，跨用户或终态反向修改返回无结果 |
+| 偏好候选列表与决定 | `backend/app/modules/agent/router.py` | `get_preference_candidates`、`decide_user_preference_candidate`（L674-L710） | 只列出当前用户候选；pending 可批准或拒绝，重复同决定幂等，跨用户或终态反向修改返回无结果 |
 
 ## 下一步阅读
 

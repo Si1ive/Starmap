@@ -615,9 +615,9 @@ class AgentMemoryUpdateOutbox(Base):
     __tablename__ = "agent_memory_update_outbox"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    run_id: Mapped[str] = mapped_column(
+    run_id: Mapped[Optional[str]] = mapped_column(
         String(32), ForeignKey("agent_runs.id", ondelete="CASCADE"),
-        nullable=False, comment="来源运行ID"
+        nullable=True, comment="来源运行ID；线程治理任务可为空"
     )
     thread_id: Mapped[str] = mapped_column(
         String(32), ForeignKey("agent_threads.id", ondelete="CASCADE"),
@@ -625,6 +625,9 @@ class AgentMemoryUpdateOutbox(Base):
     )
     user_id: Mapped[str] = mapped_column(String(32), nullable=False, comment="用户ID")
     event_type: Mapped[str] = mapped_column(String(64), nullable=False, comment="待投影事件类型")
+    task_key: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True, comment="非 Run 治理任务幂等键"
+    )
     status: Mapped[str] = mapped_column(
         SAEnum("pending", "processing", "completed", "failed"),
         default="pending",
@@ -645,6 +648,7 @@ class AgentMemoryUpdateOutbox(Base):
             "event_type",
             name="uk_agent_memory_outbox_run_event",
         ),
+        UniqueConstraint("task_key", name="uk_agent_memory_outbox_task_key"),
         {"comment": "Agent 记忆更新 Outbox 表"}
     )
 

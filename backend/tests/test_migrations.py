@@ -31,7 +31,7 @@ def test_migration_graph_has_single_head():
     config.set_main_option("script_location", str(backend_dir / "alembic"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_heads() == ["20260727_preference_candidates"]
+    assert scripts.get_heads() == ["20260727_thread_memory_delete"]
 
 
 def test_user_identity_migration_renders_mysql_ddl():
@@ -290,6 +290,34 @@ def test_agent_preference_candidate_migration_renders_mysql_ddl():
     assert "pending" in ddl
     assert "approved" in ddl
     assert "rejected" in ddl
+
+
+def test_thread_memory_delete_migration_renders_mysql_ddl():
+    backend_dir = Path(__file__).resolve().parents[1]
+    migration_path = (
+        backend_dir / "alembic" / "versions" / "20260727_thread_memory_delete.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "thread_memory_delete_migration",
+        migration_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    output = io.StringIO()
+    context = MigrationContext.configure(
+        dialect=mysql.dialect(),
+        opts={"as_sql": True, "output_buffer": output},
+    )
+    migration.op = Operations(context)
+    migration.upgrade()
+    ddl = output.getvalue()
+
+    assert "MODIFY run_id VARCHAR(32) NULL" in ddl
+    assert "ADD COLUMN task_key VARCHAR(128)" in ddl
+    assert "uk_agent_memory_outbox_task_key" in ddl
 
 
 def _load_agent_parent_repair_migration():

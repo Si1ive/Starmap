@@ -2,8 +2,8 @@
 
 ## 状态与设计边界
 
-状态：进行中。增量摘要、Snapshot 冻结消费、明确重复题覆盖当前排除视图、线程主题六轮 TTL、临时
-练习约束单轮失效、掌握度衰减、向量生命周期与偏好冲突治理已完成；线程删除仍待实现。
+状态：已完成。增量摘要、Snapshot 冻结、单轮约束、主题 TTL、掌握度衰减、向量生命周期、偏好冲突
+与线程删除治理均已实现并验证。
 
 稳定边界是事实模型、作用域、版本和选择协议，不是 Explain/Validate/Grade/Plan 的工作流名称。原始消息、
 Artifact、Grade 证据和业务审批保持不可变；排除集、薄弱点、有效掌握度和召回结果均在读取时派生。
@@ -59,9 +59,9 @@ PracticeBundle；Turn B 再从 `active_topic` 继承主题。回归证明 Turn B
 | 执行阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理与副作用 | 下游消费 |
 | --- | --- | --- | --- | --- | --- | --- |
 | 生成版本化任务 | `backend/app/modules/agent/conversation_summary.py`、`backend/app/modules/agent/memory_item_projection.py` | `ConversationSummaryMaintainer.maintain`、`_enqueue_item_vector` | L91-L231、L76-L113 | 新 active source、同作用域旧版本、completed Run | 摘要或记忆项与 pending Outbox 同事务可见；任务只携带 source kind/ID/version 与待删旧 source，不携带正文 | `MemoryOutboxConsumer.process_claimed` |
-| 生成与删除向量 | `backend/app/modules/agent/memory_vector.py` | `memory_vector_point_id`、`enqueue_memory_vector_task`、`MemoryVectorLifecycle._delete_sources`、`MemoryVectorLifecycle.process_outbox` | L86-L249 | 版本化任务、当前 MySQL source、运行时 Embedding 配置 | 稳定 UUID upsert `agent_memory`，成功后删旧点；失效 source 只删点，collection 已不存在幂等完成；连接、生成、upsert 或删除错误传播给 Outbox 重试 | Qdrant 当前版本点 |
-| 双层过滤召回 | `backend/app/modules/agent/memory_vector.py` | `MemoryVectorLifecycle.recall`、`MemoryVectorLifecycle._hydrate_hit` | L251-L300、L444-L520 | query、user/thread、允许分区、Qdrant 候选 | Qdrant 先过滤 user/scope/thread/partition/status，再重读 MySQL 复核 source version 和 active 状态；跨用户、跨线程与旧版本被丢弃 | `MemoryVectorLifecycle.recall_for_snapshot` |
-| 冻结与重放 | `backend/app/modules/agent/memory_vector.py` | `MemoryVectorLifecycle.recall_for_snapshot`、`MemoryVectorLifecycle._load_frozen_hits` | L302-L375、L522-L567 | Snapshot、MemoryNeed、经复核的候选 | 首次召回锁 Snapshot，冻结正文副本、source/version、score 和 token 估算；同 Snapshot 重放不再访问 Qdrant 或当前 source | 能力 selector / MEM-008 Snapshot 复现 |
+| 生成与删除向量 | `backend/app/modules/agent/memory_vector.py` | `memory_vector_point_id`、`enqueue_memory_vector_task`、`MemoryVectorLifecycle._delete_sources`、`MemoryVectorLifecycle.process_outbox` | L86-L253 | 版本化任务、当前 MySQL source、Embedding 配置 | 稳定 UUID upsert，成功后删旧点；失效 source 只删点 | Qdrant 当前版本点 |
+| 双层过滤召回 | `backend/app/modules/agent/memory_vector.py` | `MemoryVectorLifecycle.recall`、`MemoryVectorLifecycle._hydrate_hit` | L255-L303、L448-L523 | query、user/thread、允许分区、Qdrant 候选 | Qdrant 过滤后重读 MySQL 复核 version/status | `recall_for_snapshot` |
+| 冻结与重放 | `backend/app/modules/agent/memory_vector.py` | `MemoryVectorLifecycle.recall_for_snapshot`、`MemoryVectorLifecycle._load_frozen_hits` | L306-L379、L526-L571 | Snapshot/MemoryNeed | 锁 Snapshot 冻结正文/source/score；重放不查当前 source | MEM-008 复现 |
 
 `backend/tests/test_agent_memory_vector.py` 的五项回归（L122-L427）覆盖摘要 upsert 后删除旧点、双层作用域与
 版本复核、Snapshot 重放、主题 supersede、向量故障只重试 Outbox，以及 collection 已不存在时删除幂等完成。
@@ -87,7 +87,7 @@ ID 决胜。低置信候选保持 pending，不进入 Router/Bundle；达到阈�
 | 执行阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理与副作用 | 下游消费 |
 | --- | --- | --- | --- | --- | --- | --- |
 | 异步抽取 | `backend/app/modules/agent/model_runtime/preference_extractor.py`、`backend/app/modules/agent/preference_memory.py` | `PreferenceExtractionRuntime.extract`、`PreferenceCandidateProjector.process_outbox` | L92-L144、L175-L244 | 根 conversation 的原始 user message、Run 模型配置 | 受控模型最多返回五个结构化候选；重复 key 或非法值失败，Outbox 写完整 source/confidence/scope/extractor/model 审计且统一 pending | 候选治理接口 |
-| 用户治理 | `backend/app/modules/agent/router.py`、`backend/app/modules/agent/preference_memory.py` | `get_preference_candidates`、`decide_user_preference_candidate`、`decide_preference_candidate`、`_materialize_approved_preference` | L673-L709、L304-L399 | 当前认证用户、pending candidate、决定 | 同 key 行锁串行；approved 物化长期项并 supersede 旧 active 项，rejected 保留 tombstone；跨用户和终态反向修改无结果 | 偏好冲突选择器 |
+| 用户治理 | `backend/app/modules/agent/router.py`、`backend/app/modules/agent/preference_memory.py` | `get_preference_candidates`、`decide_user_preference_candidate`、`decide_preference_candidate`、`_materialize_approved_preference` | L674-L710、L304-L399 | 当前认证用户、pending candidate、决定 | 同 key 行锁串行；approved 物化长期项并 supersede 旧 active 项，rejected 保留 tombstone；跨用户和终态反向修改无结果 | 偏好冲突选择器 |
 | 三层决胜与冻结 | `backend/app/modules/agent/preference_memory.py` | `extract_explicit_preferences`、`_resolve_preference_sources`、`_freeze_preference_bundle`、`load_preference_bundle` | L95-L119、L422-L662 | 本轮明确陈述、批准/拒绝事件、pending 候选、user/thread/Snapshot | 按固定优先级和事件时间/稳定 ID 决胜；selected、dropped reason 与空结果 marker 锁内冻结，同 Snapshot 重放不读新决定 | PlanningBundle / MEM-008 复现 |
 | Plan 消费 | `backend/app/modules/agent/memory_selector.py`、`backend/app/modules/agent/workflows/plan.py` | `load_planning_bundle`、`_aggregate_learning_evidence_node`、`_propose_plan_delta_node` | L306-L511、L26-L103 | 冻结偏好、目标、掌握度 | 把选中偏好及 source 加入 PlanningBundle；目标自身分钟数优先，其次使用 `daily_study_minutes`，最后才回退 30 | Plan 草案与审批 Artifact |
 
@@ -96,15 +96,19 @@ ID 决胜。低置信候选保持 pending，不进入 Router/Bundle；达到阈�
 `backend/tests/test_agent_plan_worker.py::test_plan_consumes_approved_daily_minutes_preference`（L287-L334）覆盖
 完整来源、0.95/0.42 均 pending、批准/拒绝、跨用户/线程隔离、三层冲突、重放冻结与最终 Plan 参数。
 
-## 删除线程
+## 已完成：删除线程
 
-删除线程的业务事务必须标记线程级热状态、对话摘要和线程级记忆项失效，并写唯一删除 Outbox；消费者
-按 thread/user/source version 删除所有线程向量。重放删除应幂等，即使部分 source 或向量已经不存在也
-视为成功。线程删除失败不得留下可被下一轮召回的半活跃记忆。
+`backend/app/modules/agent/thread_memory_deletion.py::delete_thread_memory`（L30-L161）在用户归属锁内软删线程，
+删除热状态，用 self-supersede tombstone 失效全部摘要，将所有含该 thread 来源的候选置 invalidated，并把线程
+项及线程来源用户偏好置 deleted；独立批准的用户级 learning_goal 和 `UserLearningMastery` 明确保留。事务同时
+以 `task_key=thread_memory_delete:{user}:{thread}` 写唯一治理 Outbox，payload 冻结所有摘要/记忆项 source version。
 
-用户级 `UserLearningMastery` 和已经独立批准、明确标记为用户级的学习目标不随线程删除；任何包含
-`thread_id` 的候选、摘要或记忆项都必须删除/失效。测试必须覆盖跨用户同线程样式 ID、重复删除、向量
-服务暂时失败后重试，以及用户级画像保留。
+`ThreadMemoryDeletionProcessor.process_outbox`（L171-L196）复核 task key、user/thread 和 deleted 状态后调用
+`MemoryVectorLifecycle.delete_sources`（L194-L196）。Qdrant 暂时失败只使 Outbox pending/failed；MySQL 来源已先
+失效，所以残留向量也会被召回二次复核丢弃。重复删除、向量不存在和 collection 不存在均幂等。
+
+`backend/tests/test_agent_thread_memory_deletion.py`（L220-L350）覆盖跨用户拒绝、重复删除、热状态/摘要/候选/
+线程项失效、线程来源用户偏好删除、用户目标与掌握度保留，以及 Qdrant 失败后重试删除稳定点 ID。
 
 ## 设计基线
 

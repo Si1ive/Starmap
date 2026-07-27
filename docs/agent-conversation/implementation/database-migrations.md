@@ -14,6 +14,7 @@
 | 记忆基础表前向迁移 | `backend/alembic/versions/20260726_agent_memory_foundation.py` | `upgrade` | 创建线程热状态、记忆事件、快照、快照项、记忆 Outbox、掌握度、对话摘要和长期记忆项表，作为后续记忆读写的统一结构底座 |
 | Memory Outbox 幂等约束 | `backend/alembic/versions/20260726_memory_outbox_unique.py` | `upgrade`（L18-L25）、`downgrade`（L28-L34） | 为 `agent_memory_update_outbox(run_id, event_type)` 增加 `uk_agent_memory_outbox_run_event`，由数据库阻止同一事实类型的并发重复任务；降级只移除该约束 |
 | 偏好候选治理表 | `backend/alembic/versions/20260727_preference_candidates.py` | `upgrade`（L19-L70）、`downgrade`（L73-L82） | 从唯一 head 前向创建 `agent_preference_candidates`，保存用户/线程作用域、source、结构化 key/value、confidence、pending/approved/rejected/invalidated、抽取模型与决定审计；唯一约束阻止同 source/key 重放复活 |
+| 线程治理 Outbox | `backend/alembic/versions/20260727_thread_memory_delete.py` | `upgrade`（L19-L34）、`downgrade`（L37-L50） | 把 Memory Outbox `run_id` 改为可空并增加唯一 `task_key`，允许无 Run 的线程删除治理任务；降级先清除无 Run 任务再恢复非空约束 |
 | 无限 Token 结构调整 | `backend/alembic/versions/20260724_agent_unlimited_tokens.py` | `upgrade` | 把 `agent_model_configs.max_tokens` 改为 nullable，支持“不设上限” |
 | 启动期结构校验 | `backend/app/main.py` | `lifespan` | FastAPI 启动时在 Worker、调度器之前执行 schema guard |
 | 版本与真表校验 | `backend/app/modules/operations/schema_guard.py` | `AGENT_REQUIRED_TABLES`（L13-L26）、`verify_database_schema`（L44-L193） | 同时核对 Alembic head、`agent_runs` 必需列、模型配置/记忆/偏好候选表、Memory Outbox 复合唯一索引和模型列约束；任一漂移都在 Worker 启动前抛 `DatabaseSchemaError` |
@@ -27,7 +28,7 @@
 | 模型配置空值 | `backend/app/modules/agent/models.py` | `AgentModelConfigRecord.max_tokens` | 显式 `None` 必须保存为 SQL `NULL`，不能被 ORM 默认值覆盖 |
 | Outbox | `backend/app/modules/agent/models.py` | `AgentOutbox` | HTTP 事务只负责入队，LLM 调用与 workflow 执行在 Worker 中异步完成 |
 | 记忆分区与能力标签 | `backend/app/modules/agent/memory_contracts.py` | `MemoryPartition`、`MemoryNeed`、`MEMORY_NEED_PARTITIONS` | 长期记忆按事实分区建模，workflow 只声明能力标签，不把 explain/validate/grade/plan 名称写死进存储契约 |
-| 记忆与偏好治理表 | `backend/app/modules/agent/models.py` | `AgentThreadMemoryState`、`AgentMemoryEvent`、`AgentMemorySnapshot`、`AgentMemorySnapshotItem`、`AgentMemoryUpdateOutbox`（L612-L650）、`UserLearningMastery`、`AgentConversationSummary`、`AgentMemoryItem`、`AgentPreferenceCandidate`（L762-L839） | 热状态、快照、Outbox、掌握度、长期项与偏好候选具备明确结构；Outbox 按 Run/type 幂等，候选按 user/source/key 幂等，拒绝记录不能被同 source 重放复活 |
+| 记忆与偏好治理表 | `backend/app/modules/agent/models.py` | `AgentThreadMemoryState`、`AgentMemoryEvent`、`AgentMemorySnapshot`、`AgentMemorySnapshotItem`、`AgentMemoryUpdateOutbox`（L612-L654）、`UserLearningMastery`、`AgentConversationSummary`、`AgentMemoryItem`、`AgentPreferenceCandidate`（L766-L843） | Outbox 同时支持 Run/type 与治理 task key 幂等；候选按 user/source/key 幂等，拒绝不可被同 source 重放复活 |
 
 ## 故障定位顺序
 
@@ -35,7 +36,7 @@
 2. 若应用层提示字段存在但数据库报列不存在，优先跑 `verify_database_schema` 路径，确认是否漏跑迁移。
 3. 如果是 Agent 事件或时间线恢复异常，确认 `workflow.activity.updated` 是否已在数据库枚举中存在。
 4. 如果是模型“无限输出 Token”行为不生效，确认数据库列是否允许 `NULL`，再核对 ORM `evaluates_none()` 是否生效。
-5. 如果是分层记忆功能启动失败，先确认已升级到当前 head `20260727_preference_candidates`，再检查记忆表、`agent_preference_candidates` 和 `uk_agent_memory_outbox_run_event` 是否存在；schema guard 会主动检查，禁止用 stamp 掩盖漏迁移。
+5. 如果是分层记忆功能启动失败，先确认已升级到当前 head `20260727_thread_memory_delete`，再检查记忆表、偏好表和 Outbox 唯一约束；禁止用 stamp 掩盖漏迁移。
 6. `agent_memory_update_outbox` 缺表的实际诊断、升级证据和 Worker 重放结果见 `../incidents/2026-07-27-memory-outbox-table-missing.md`。
 
 ## 下一步阅读

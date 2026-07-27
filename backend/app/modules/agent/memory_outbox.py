@@ -30,6 +30,11 @@ from .preference_memory import (
     preference_candidate_projector,
 )
 from .time_utils import utc_now
+from .thread_memory_deletion import (
+    THREAD_MEMORY_DELETE_TASK,
+    ThreadMemoryDeletionProcessor,
+    thread_memory_deletion_processor,
+)
 
 logger = get_logger(__name__)
 
@@ -202,6 +207,9 @@ class MemoryOutboxConsumer:
         preference_projector: PreferenceCandidateProjector = (
             preference_candidate_projector
         ),
+        thread_deletion_processor: ThreadMemoryDeletionProcessor = (
+            thread_memory_deletion_processor
+        ),
         lease_seconds: int = 300,
         retry_delay_seconds: int = 30,
         max_retries: int = 3,
@@ -211,6 +219,7 @@ class MemoryOutboxConsumer:
         self.summary_maintainer = summary_maintainer
         self.vector_lifecycle = vector_lifecycle
         self.preference_projector = preference_projector
+        self.thread_deletion_processor = thread_deletion_processor
         self.lease_seconds = lease_seconds
         self.retry_delay_seconds = retry_delay_seconds
         self.max_retries = max_retries
@@ -234,7 +243,9 @@ class MemoryOutboxConsumer:
 
         try:
             async with db.begin_nested():
-                if outbox.event_type == PREFERENCE_EXTRACTION_TASK:
+                if outbox.event_type == THREAD_MEMORY_DELETE_TASK:
+                    await self.thread_deletion_processor.process_outbox(db, outbox)
+                elif outbox.event_type == PREFERENCE_EXTRACTION_TASK:
                     await self.preference_projector.process_outbox(db, outbox)
                 elif is_memory_vector_task(outbox.event_type):
                     await self.vector_lifecycle.process_outbox(db, outbox)

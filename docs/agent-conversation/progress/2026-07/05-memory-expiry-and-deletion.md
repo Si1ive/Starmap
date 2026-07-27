@@ -1,17 +1,25 @@
 # 2026-07 记忆失效与删除治理进展
 
+## 2026-07-27：让线程删除同步收口分层记忆
+
+- 目标：完成 `MEM-007` 最后一个生命周期单元，确保删除线程后没有仍可被召回的热状态、摘要、候选、长期项或向量，同时保留独立用户画像。
+- 实现：`backend/app/modules/agent/thread_memory_deletion.py::delete_thread_memory`（L30-L161）锁定同用户线程并软删，清除热状态，以 self-supersede tombstone 失效摘要，invalidated 所有含 thread 来源候选，deleted 线程项和线程来源用户偏好；批准的用户级 `learning_goal` 与 `UserLearningMastery` 保持不变。事务以唯一 task key 写无 Run 的 Memory Outbox。`ThreadMemoryDeletionProcessor.process_outbox`（L171-L196）复核 deleted thread 后调用 `backend/app/modules/agent/memory_vector.py::MemoryVectorLifecycle.delete_sources`（L194-L196）删除全部冻结 source version；失败只重试 Outbox，MySQL 二次复核已阻止残留向量被召回。
+- 迁移：`backend/alembic/versions/20260727_thread_memory_delete.py::upgrade`（L19-L34）把 Memory Outbox `run_id` 改为 nullable 并增加唯一 `task_key`。当前 MySQL 已实际 `alembic upgrade head` 到 `20260727_thread_memory_delete`，未使用 stamp。
+- 验证：线程删除、Outbox、向量、迁移和 schema guard 聚焦回归 36 项通过；全部 Agent 回归 227 passed、101 warnings；Python 编译、三个新增文件的 Black 检查和 `git diff --check` 通过。
+- 提交信息：`让线程删除同步收口分层记忆`
+
 ## 2026-07-27：建立受治理的偏好候选与冲突优先级
 
 - 目标：完成 `MEM-007` 的偏好候选来源、置信度、审批状态和完整冲突优先级，确保模型推测永远不能直接成为 trusted memory。
 - 实现：`backend/app/modules/agent/model_runtime/preference_extractor.py::PreferenceExtractionRuntime.extract`（L92-L144）把根 conversation 原始消息限制为最多五个结构化提案；`backend/app/modules/agent/preference_memory.py::PreferenceCandidateProjector.process_outbox`（L175-L244）通过 Memory Outbox 写 source kind/ID/version、user/thread scope、confidence、extractor/model 版本并统一保持 pending。`decide_preference_candidate` / `_materialize_approved_preference`（L304-L399）只允许归属用户批准或拒绝，批准物化 active 项，拒绝形成 tombstone。`extract_explicit_preferences`、`_resolve_preference_sources`、`_freeze_preference_bundle` 与 `load_preference_bundle`（L95-L119、L422-L662）执行“本轮明确陈述 > 真实批准/拒绝事件 > 模型候选”，冻结 selected、dropped reason 和空结果 marker；PlanningBundle 把已决胜 `daily_study_minutes` 传给 Plan 草案。
-- 迁移：`backend/alembic/versions/20260727_preference_candidates.py::upgrade`（L19-L70）从唯一 head 前向创建 `agent_preference_candidates`；`backend/app/modules/operations/schema_guard.py::verify_database_schema`（L44-L193）把真表纳入启动门禁。已对当前 MySQL 实际执行 `venv/bin/alembic upgrade head` 升至 `20260727_preference_candidates`，未使用 stamp。
+- 迁移：`backend/alembic/versions/20260727_preference_candidates.py::upgrade`（L19-L70）创建 `agent_preference_candidates`；schema guard 把真表纳入门禁。该提交当时 MySQL 已实际升至对应 head，未使用 stamp；当前 head 已由后续线程治理迁移继续前移。
 - 验证：偏好、模型运行时、迁移、schema guard、Memory Outbox、MemorySelector 与 Plan 聚焦回归 53 项通过；全部 Agent 回归 224 passed、101 warnings，Python 编译、五个新增文件的 Black 检查和 `git diff --check` 通过。
 - 提交信息：`建立受治理的 Agent 偏好候选`
 
 ## 2026-07-27：打通 Agent 记忆向量生命周期
 
 - 目标：完成 `MEM-007` 的 Embedding、向量召回、来源版本更新与删除，让摘要和长期记忆项可以被治理且可回查。
-- 实现：`backend/app/modules/agent/memory_vector.py::enqueue_memory_vector_task`、`memory_vector_point_id` 与 `MemoryVectorLifecycle.process_outbox`（L86-L249）用 source kind/ID/version 形成稳定点 ID，重读 MySQL active source 后生成 Embedding 并幂等 upsert，新版本成功后删除旧点；collection 已不存在时删除幂等完成，服务故障交给 Memory Outbox 重试。`MemoryVectorLifecycle.recall`、`MemoryVectorLifecycle.recall_for_snapshot`、`MemoryVectorLifecycle._hydrate_hit` 与 `MemoryVectorLifecycle._load_frozen_hits`（L251-L567）执行 Qdrant 与 MySQL 双层作用域/版本复核，首次选择冻结正文副本和 score，同 Snapshot 重放不访问当前 source。摘要和主题/批准目标的生产入口分别位于 `backend/app/modules/agent/conversation_summary.py::ConversationSummaryMaintainer.maintain`（L91-L231）和 `backend/app/modules/agent/memory_item_projection.py::_enqueue_item_vector`（L76-L113）。
+- 实现：`backend/app/modules/agent/memory_vector.py::enqueue_memory_vector_task`、`memory_vector_point_id` 与 `MemoryVectorLifecycle.process_outbox`（L86-L253）用 source kind/ID/version 形成稳定点 ID，重读 MySQL active source 后生成 Embedding 并幂等 upsert，新版本成功后删除旧点；collection 已不存在时删除幂等完成，服务故障交给 Memory Outbox 重试。`MemoryVectorLifecycle.recall`、`MemoryVectorLifecycle.recall_for_snapshot`、`MemoryVectorLifecycle._hydrate_hit` 与 `MemoryVectorLifecycle._load_frozen_hits`（L255-L571）执行 Qdrant 与 MySQL 双层作用域/版本复核，首次选择冻结正文副本和 score，同 Snapshot 重放不访问当前 source。摘要和主题/批准目标的生产入口分别位于 `backend/app/modules/agent/conversation_summary.py::ConversationSummaryMaintainer.maintain`（L91-L231）和 `backend/app/modules/agent/memory_item_projection.py::_enqueue_item_vector`（L76-L113）。
 - 验证：向量、Outbox、摘要、事实投影与 Plan 聚焦回归 25 项通过；全部 Agent 回归 215 passed、101 warnings，Python 编译、两个新增文件的 Black 检查和 `git diff --check` 通过。
 - 提交信息：`打通 Agent 记忆向量生命周期`
 

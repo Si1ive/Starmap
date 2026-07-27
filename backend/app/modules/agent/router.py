@@ -37,6 +37,7 @@ from .events import event_store, serialize_sse, serialize_sse_from_dict
 from .state_machine import RunStatus
 from .thread_events import thread_event_store
 from .time_utils import encode_utc_datetimes, utc_isoformat
+from .thread_memory_deletion import delete_thread_memory
 
 logger = get_logger(__name__)
 
@@ -707,3 +708,19 @@ async def decide_user_preference_candidate(
     if candidate is None:
         raise HTTPException(status_code=404, detail="偏好候选不存在或已完成治理")
     return _serialize_preference_candidate(candidate)
+
+
+@router.delete("/threads/{thread_id}")
+async def delete_agent_thread(
+    thread_id: str,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    thread = await delete_thread_memory(
+        db,
+        thread_id=thread_id,
+        user_id=user_id,
+    )
+    if thread is None:
+        raise HTTPException(status_code=404, detail="线程不存在")
+    return {"id": thread.id, "status": thread.status}
