@@ -1,5 +1,34 @@
 # 2026-07 RAG、Explain 与故障修复进展
 
+## 2026-07-28：收敛 Agent RAG 检索查询
+
+### 目标
+
+修复新主题直接使用完整用户句子、随后又把多个大纲章节关键词和增强描述串成超长 dense query 的问题，
+让用户问题焦点、大纲结构化范围和实际检索入参可分别理解与验证。
+
+### 实现
+
+- 在 `backend/app/modules/agent/turn_understanding.py::TurnUnderstanding`（L65-L73）增加本轮冻结的
+  `retrieval_query`；`_derive_retrieval_query`（L127-L158）对新主题剥离讲解/出题交互外壳但保留具体问题，
+  对已有可信主题组合标题与别名，结果限制为 160 字。
+- `backend/app/modules/agent/turn_understanding.py::build_turn_understanding`（L382-L442）把检索焦点随
+  `TurnUnderstanding` 写入不可变 Snapshot；它不伪造实体 ID，也不把临时字符串直接升级为长期主题。
+- `backend/app/modules/agent/memory_selector.py::load_conversation_bundle`（L1067-L1239）按“唯一题面、可信主题、
+  冻结 retrieval query、旧 Snapshot 回退”顺序复现 Explain 检索入参。
+- `backend/app/modules/retrieval/outline_query_expansion.py::expand_query_with_outline`（L27-L117）保留大纲
+  subject/chapter 结构化收窄，只允许最高分章节名补充 dense query，硬上限 200 字；不再拼接多个章节的
+  `keywords` 和 `enhanced_description`。embedding 或 Qdrant 失败仍沿原检索错误链传播。
+
+### 验证
+
+- `cd backend && venv/bin/pytest -q tests/test_agent_turn_understanding.py tests/test_outline_query_expansion.py tests/test_agent_memory_selector.py tests/test_agent_conversation_workflow.py tests/test_agent_explain_workflow.py`：47 passed。
+- `git diff --check` 通过。
+
+### 提交信息
+
+`收敛 Agent RAG 检索查询`
+
 ## 2026-07-26：补齐二分查找题进入 Validate 候选集的整体验收
 
 ### 目标

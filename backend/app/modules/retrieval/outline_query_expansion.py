@@ -85,6 +85,9 @@ async def expand_query_with_outline(
     ).scalars().all()
     chapter_map = {chapter.id: chapter for chapter in chapters}
 
+    # 大纲命中只负责收窄结构化范围，并用最高分章节名补足短查询语义。
+    # 禁止把多个章节的 keywords/enhanced_description 串成超长 dense query；
+    # 那会把一个具体问题稀释成整章概览，也会让监控入参失去可读性。
     query_parts = [query]
     subject_ids: List[str] = []
     matched_chapters: List[Dict[str, Any]] = []
@@ -92,10 +95,8 @@ async def expand_query_with_outline(
         chapter = chapter_map.get(chapter_id)
         if not chapter:
             continue
-        if chapter.keywords:
-            query_parts.append(" ".join(chapter.keywords[:8]))
-        if chapter.enhanced_description:
-            query_parts.append(chapter.enhanced_description[:100])
+        if not matched_chapters and chapter.name.strip() not in query:
+            query_parts.append(chapter.name.strip())
         if chapter.subject_id and chapter.subject_id not in subject_ids:
             subject_ids.append(chapter.subject_id)
         matched_chapters.append(
@@ -109,7 +110,7 @@ async def expand_query_with_outline(
         )
 
     return OutlineExpansionResult(
-        expanded_query=" ".join(query_parts)[:2000],
+        expanded_query=" ".join(query_parts)[:200],
         subject_ids=subject_ids,
         chapter_ids=top_ids,
         matched_chapters=matched_chapters,

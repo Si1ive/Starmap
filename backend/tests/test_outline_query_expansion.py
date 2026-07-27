@@ -94,10 +94,8 @@ async def test_outline_expansion_merges_title_and_content_hits(monkeypatch):
     assert [call.kwargs["limit"] for call in search.call_args_list] == [4, 4]
     assert result.chapter_ids == ["chapter-2", "chapter-1"]
     assert result.subject_ids == ["subject-2", "subject-1"]
-    assert result.expanded_query == (
-        "队列 调度 队首 队尾 掌握循环队列下标计算。 "
-        "时间片 周转时间 比较不同调度算法。"
-    )
+    assert result.expanded_query == "队列 调度 循环队列"
+    assert len(result.expanded_query) <= 200
     assert result.matched_chapters == [
         {
             "chapter_id": "chapter-2",

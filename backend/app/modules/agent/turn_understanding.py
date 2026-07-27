@@ -65,6 +65,7 @@ class TopicEntity(BaseModel):
 class TurnUnderstanding(BaseModel):
     raw_input: str
     standalone_request: str
+    retrieval_query: str | None = None
     intent_hint: str | None = None
     topic_entities: list[TopicEntity] = Field(default_factory=list)
     constraints: list[str] = Field(default_factory=list)
@@ -121,6 +122,40 @@ def _derive_standalone_request(raw_input: str, topic: TopicEntity | None) -> tup
     if any(hint in raw_input for hint in _EXPLAIN_HINTS):
         return f"给用户讲解{topic.title}", "topic_explanation"
     return raw_input, None
+
+
+_RETRIEVAL_QUERY_PREFIXES = (
+    re.compile(
+        r"^(?:请|麻烦)?\s*(?:你\s*)?(?:给我|帮我)?\s*"
+        r"(?:详细|系统(?:地)?|简单)?\s*"
+        r"(?:讲解|讲讲|解释|介绍|说明)\s*(?:一下|下)?\s*(?:关于)?\s*"
+    ),
+    re.compile(
+        r"^(?:请|麻烦)?\s*(?:你\s*)?(?:给我|帮我)?\s*"
+        r"(?:找|出|来|推荐)\s*(?:一|两|几|道|套)?\s*(?:关于)?\s*"
+    ),
+    re.compile(r"^(?:我想|想要|希望)\s*(?:学习|了解|复习|弄懂)\s*(?:一下|下)?\s*"),
+)
+_RETRIEVAL_QUERY_SUFFIX = re.compile(
+    r"\s*(?:的)?\s*(?:练习题|题目|题)\s*[。！？!?]?$"
+)
+
+
+def _derive_retrieval_query(raw_input: str, topic: TopicEntity | None) -> str:
+    """生成面向检索的短焦点，不把交互话术或大纲正文混入 query。"""
+    if topic is not None:
+        terms = [topic.title, *topic.aliases]
+        return " ".join(dict.fromkeys(term.strip() for term in terms if term.strip()))[:160]
+
+    query = " ".join(raw_input.strip().split())
+    for pattern in _RETRIEVAL_QUERY_PREFIXES:
+        stripped = pattern.sub("", query, count=1).strip()
+        if stripped != query:
+            query = stripped
+            break
+    query = _RETRIEVAL_QUERY_SUFFIX.sub("", query).strip()
+    query = query.strip("“”‘’\"'：:，,。！？!? ")
+    return (query or raw_input.strip())[:160]
 
 
 def _parse_chapter_ordinal(value: str) -> int | None:
@@ -366,6 +401,10 @@ def build_turn_understanding(agent_context: AgentRunContext) -> TurnUnderstandin
         raw_input,
         deduped_topics[0] if deduped_topics else None,
     )
+    retrieval_query = _derive_retrieval_query(
+        raw_input,
+        deduped_topics[0] if deduped_topics else None,
+    )
     constraints = _derive_constraints(raw_input)
     reference_sources = [
         {
@@ -395,6 +434,7 @@ def build_turn_understanding(agent_context: AgentRunContext) -> TurnUnderstandin
     return TurnUnderstanding(
         raw_input=raw_input,
         standalone_request=standalone_request,
+        retrieval_query=retrieval_query,
         intent_hint=intent_hint,
         topic_entities=deduped_topics,
         constraints=constraints,

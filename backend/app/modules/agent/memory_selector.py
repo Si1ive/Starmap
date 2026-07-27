@@ -1215,10 +1215,13 @@ async def load_conversation_bundle(
                 Question.review_status != "rejected",
             )
         )
+    frozen_retrieval_query = str(understanding.get("retrieval_query") or "").strip()
     if question_content and str(question_content).strip():
         retrieval_query = str(question_content).strip()[:500]
     elif topic is not None:
         retrieval_query = " ".join(dict.fromkeys([topic.title, *topic.aliases]))
+    elif frozen_retrieval_query:
+        retrieval_query = frozen_retrieval_query
     else:
         retrieval_query = snapshot.standalone_request or run.input_message
 
