@@ -195,6 +195,8 @@ async def list_llm_call_logs(
     ),
     called_by: Optional[str] = None,
     keyword: Optional[str] = Query(None, description="响应文本模糊搜索"),
+    trace_id: Optional[str] = Query(None, description="模型调用 Trace ID"),
+    run_id: Optional[str] = Query(None, description="Agent Run ID"),
     db: AsyncSession = Depends(get_db),
 ):
     result = await list_llm_calls(
@@ -205,6 +207,8 @@ async def list_llm_call_logs(
         status=status,
         called_by=called_by,
         keyword=keyword,
+        trace_id=trace_id,
+        run_id=run_id,
     )
     return ApiResponse(data=result)
 

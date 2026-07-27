@@ -110,7 +110,7 @@ class ReferentRuntime:
                 model=self.model,
             )
         elif db is not None:
-            async with open_agent_model(db, run_id=deps.turn_id) as session:
+            async with open_agent_model(db, run_id=deps.turn_id, purpose="Agent 指代消解") as session:
                 logger.info(
                     "Agent 指代消解模型调用开始",
                     thread_id=deps.thread_id,

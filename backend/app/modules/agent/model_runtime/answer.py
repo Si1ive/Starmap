@@ -119,7 +119,7 @@ class DirectAnswerRuntime:
                 )
                 output = result.output
         elif db is not None:
-            async with open_agent_model(db, run_id=deps.turn_id) as session:
+            async with open_agent_model(db, run_id=deps.turn_id, purpose="Agent 直接回答") as session:
                 logger.info(
                     "Agent 回答模型调用开始",
                     thread_id=deps.thread_id,

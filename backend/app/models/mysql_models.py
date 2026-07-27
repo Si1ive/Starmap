@@ -1499,6 +1499,8 @@ class LLMCallLog(Base):
     model: Mapped[str] = mapped_column(String(100), nullable=False, comment="模型名")
     called_by: Mapped[Optional[str]] = mapped_column(String(100), comment="调用方标识，如 chat_service / pdf_structure")
     purpose: Mapped[Optional[str]] = mapped_column(String(100), comment="调用用途说明")
+    trace_id: Mapped[Optional[str]] = mapped_column(String(64), comment="模型调用关联ID")
+    run_id: Mapped[Optional[str]] = mapped_column(String(32), comment="Agent Run ID")
 
     request_messages: Mapped[Optional[dict]] = mapped_column(JSON, comment="请求 messages（截断后）")
     request_params: Mapped[Optional[dict]] = mapped_column(JSON, comment="temperature/max_tokens 等参数")
@@ -1524,6 +1526,8 @@ class LLMCallLog(Base):
         Index("idx_llm_calls_status", "status"),
         Index("idx_llm_calls_model", "model"),
         Index("idx_llm_calls_called_by", "called_by"),
+        Index("idx_llm_calls_trace", "trace_id", "created_at"),
+        Index("idx_llm_calls_run", "run_id", "created_at"),
         {"comment": "LLM 调用日志"}
     )
 

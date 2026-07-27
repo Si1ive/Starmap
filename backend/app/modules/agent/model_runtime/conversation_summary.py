@@ -90,7 +90,7 @@ class ConversationSummaryRuntime:
         if self.model is not None:
             result = await self._run(prompt, deps=deps, model=self.model)
         elif db is not None:
-            async with open_agent_model(db, run_id=deps.trigger_run_id) as session:
+            async with open_agent_model(db, run_id=deps.trigger_run_id, purpose="Agent 对话摘要") as session:
                 logger.info(
                     "Agent 对话摘要模型调用开始",
                     thread_id=deps.thread_id,

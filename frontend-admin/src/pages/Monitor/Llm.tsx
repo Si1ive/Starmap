@@ -320,6 +320,8 @@ const LLMMonitor = () => {
               <Descriptions.Item label="提供商">{detail.provider}</Descriptions.Item>
               <Descriptions.Item label="调用方">{detail.called_by || '-'}</Descriptions.Item>
               <Descriptions.Item label="用途">{detail.purpose || '-'}</Descriptions.Item>
+              <Descriptions.Item label="Run ID">{detail.run_id || '-'}</Descriptions.Item>
+              <Descriptions.Item label="模型 Trace">{detail.trace_id || '-'}</Descriptions.Item>
               <Descriptions.Item label="状态">
                 <Tag color={statusConfig[detail.status]?.color}>{statusConfig[detail.status]?.text}</Tag>
               </Descriptions.Item>

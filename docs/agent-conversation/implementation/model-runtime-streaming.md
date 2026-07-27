@@ -5,6 +5,14 @@
 本分卷解释 Router、普通回答、Explain 与历史摘要模型调用的运行时契约，重点覆盖模型配置、输出 Token 语义、
 结构化流式正文、异步压缩和 child run 如何继承本轮模型选择。
 
+## Pydantic AI 实际请求审计
+
+| 执行阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 审计模型请求 | `backend/app/modules/agent/model_runtime/config.py` | `_audit_model_messages`、`_audit_model_response`、`AuditedOpenAIChatModel.request`、`AuditedOpenAIChatModel.request_stream` | L68-L144 | Pydantic AI `ModelMessage`、模型设置、结构化参数或流式请求 | 每次真实 model request 创建记录器；非流式记录归一化响应，流式消费结束后通过 `stream.get()` 取得完整正文和最终单次 usage。结构化校验触发重试时会再次经过该边界 | 每个真实 request 一条 `llm_call_logs`，含请求/响应、Token、耗时、错误、Run、Trace；记录失败不改变模型异常传播 | Router/指代/Explain/回答/摘要/偏好运行时 |
+| 打开审计会话 | `backend/app/modules/agent/model_runtime/config.py` | `open_agent_model` | L251-L327 | Run ID、用途与最终模型配置 | 生成 `model_call_*` Trace，构造审计模型，把无密钥配置和用途追加到 Run metadata；finally 关闭隔离客户端 | `AgentModelSession`；LLM 日志用同一 Trace 关联实际 request | 各 Pydantic AI Agent |
+| 归一化日志写入 | `backend/app/modules/monitoring/llm_calls.py` | `LLMCallRecorder.record_pydantic_response`、`LLMCallRecorder.persist` | L205-L270 | 响应正文、`RequestUsage` 和安全 JSON 副本 | 映射 input/output/total Token、成本、耗时和完整响应；独立 session 提交，异常自动记录 error/timeout 且原异常继续传播 | `llm_call_logs` | 管理端 LLM 调用详情 |
+
 ## 模型配置进入一次 Run
 
 | 执行阶段 | 文件 | 符号 | 入口条件 | 处理与副作用 | 最终消费 |

@@ -108,7 +108,7 @@ class PreferenceExtractionRuntime:
             model_name = self.model_name
             model_config_id = None
         elif db is not None:
-            async with open_agent_model(db, run_id=deps.run_id) as session:
+            async with open_agent_model(db, run_id=deps.run_id, purpose="Agent 偏好候选提取") as session:
                 logger.info(
                     "Agent 偏好候选抽取开始",
                     run_id=deps.run_id,

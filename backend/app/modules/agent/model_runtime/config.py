@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, AsyncIterator
+import json
+from typing import Any, AsyncGenerator, AsyncIterator
 import uuid
 
 import openai
 from pydantic_ai.models import Model
+from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
+from pydantic_ai.models import ModelRequestParameters, StreamedResponse
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +24,8 @@ from app.modules.agent.model_configs import (
     AgentModelConfigService,
 )
 from app.modules.operations.settings_service import SystemSettingsService
+from app.modules.monitoring.llm_calls import LLMCallRecorder
+from pydantic_core import to_jsonable_python
 
 logger = get_logger(__name__)
 
@@ -58,6 +63,85 @@ class AgentModelSession:
     model: Model
     config: AgentModelConfig
     invocation_id: str
+
+
+def _audit_model_messages(messages: list[ModelMessage]) -> list[dict[str, str]]:
+    return [{
+        "role": "pydantic_ai",
+        "content": json.dumps(to_jsonable_python(messages), ensure_ascii=False),
+    }]
+
+
+def _audit_model_response(response: ModelResponse) -> tuple[str, dict[str, Any]]:
+    text = "\n".join(
+        part.content for part in response.parts if isinstance(part, TextPart)
+    )
+    return text, to_jsonable_python(response)
+
+
+class AuditedOpenAIChatModel(OpenAIChatModel):
+    """在 Pydantic AI 的每次真实 model request 边界写统一 LLM 审计。"""
+
+    def __init__(self, *args, audit_run_id: str | None, audit_trace_id: str, audit_purpose: str, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._audit_run_id = audit_run_id
+        self._audit_trace_id = audit_trace_id
+        self._audit_purpose = audit_purpose
+
+    def _recorder(self, messages: list[ModelMessage], settings: Any) -> LLMCallRecorder:
+        return LLMCallRecorder(
+            model=self.model_name,
+            called_by="agent_runtime",
+            purpose=self._audit_purpose,
+            provider=self.system,
+            base_url=self.base_url,
+            request_messages=_audit_model_messages(messages),
+            request_params=to_jsonable_python(settings or {}),
+            trace_id=self._audit_trace_id,
+            run_id=self._audit_run_id,
+        )
+
+    async def request(
+        self,
+        messages: list[ModelMessage],
+        model_settings: Any,
+        model_request_parameters: ModelRequestParameters,
+    ) -> ModelResponse:
+        async with self._recorder(messages, model_settings) as recorder:
+            response = await super().request(messages, model_settings, model_request_parameters)
+            response_text, response_full = _audit_model_response(response)
+            recorder.record_pydantic_response(
+                response_text=response_text,
+                usage=response.usage,
+                response_full=response_full,
+            )
+            return response
+
+    @asynccontextmanager
+    async def request_stream(
+        self,
+        messages: list[ModelMessage],
+        model_settings: Any,
+        model_request_parameters: ModelRequestParameters,
+        run_context: Any = None,
+    ) -> AsyncGenerator[StreamedResponse]:
+        async with self._recorder(messages, model_settings) as recorder:
+            async with super().request_stream(
+                messages,
+                model_settings,
+                model_request_parameters,
+                run_context,
+            ) as stream:
+                try:
+                    yield stream
+                finally:
+                    response = stream.get()
+                    response_text, response_full = _audit_model_response(response)
+                    recorder.record_pydantic_response(
+                        response_text=response_text,
+                        usage=response.usage,
+                        response_full=response_full,
+                    )
 
 
 def _record_to_runtime_config(record: Any) -> AgentModelConfig:
@@ -169,6 +253,7 @@ async def open_agent_model(
     db: AsyncSession,
     *,
     run_id: str | None = None,
+    purpose: str = "Agent 模型调用",
 ) -> AsyncIterator[AgentModelSession]:
     """创建独立 OpenAI 兼容客户端，并在模型调用结束后可靠关闭。"""
     run = None
@@ -192,9 +277,15 @@ async def open_agent_model(
         options["base_url"] = config.base_url
 
     client = openai.AsyncOpenAI(**options)
-    provider = OpenAIProvider(openai_client=client)
-    model = OpenAIChatModel(config.model_name, provider=provider)
     invocation_id = f"model_call_{uuid.uuid4().hex[:20]}"
+    provider = OpenAIProvider(openai_client=client)
+    model = AuditedOpenAIChatModel(
+        config.model_name,
+        provider=provider,
+        audit_run_id=run_id,
+        audit_trace_id=invocation_id,
+        audit_purpose=purpose,
+    )
     if run:
         metadata = dict(run.metadata_json or {})
         model_calls = list(metadata.get("model_calls") or [])
@@ -205,6 +296,7 @@ async def open_agent_model(
                 "model_name": config.model_name,
                 "provider": config.provider,
                 "config_source": config.source,
+                "purpose": purpose,
             }
         )
         metadata.update(

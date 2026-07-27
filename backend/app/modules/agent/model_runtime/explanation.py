@@ -110,7 +110,7 @@ class ExplanationRuntime:
                 model=self.decision_model,
             )
         elif db is not None:
-            async with open_agent_model(db, run_id=deps.run_id) as session:
+            async with open_agent_model(db, run_id=deps.run_id, purpose="Agent 证据行动决策") as session:
                 logger.info(
                     "讲解资料规划模型调用开始",
                     run_id=deps.run_id,
@@ -156,7 +156,7 @@ class ExplanationRuntime:
                 model=self.generation_model,
             )
         elif db is not None:
-            async with open_agent_model(db, run_id=deps.run_id) as session:
+            async with open_agent_model(db, run_id=deps.run_id, purpose="Agent 讲解生成") as session:
                 logger.info(
                     "讲解正文模型调用开始",
                     run_id=deps.run_id,

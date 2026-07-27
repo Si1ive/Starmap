@@ -1,5 +1,14 @@
 # 2026-07 管理端记忆可观测进展
 
+## 2026-07-28：补齐 Agent Pydantic AI 实际调用审计
+
+- 目标：修复 Run metadata 只能证明打开过模型会话、LLM 调用页却漏掉 Router、指代、Explain、直接回答、摘要和偏好提取真实请求的问题，并完整记录流式正文与结构化重试。
+- 实现：`backend/app/modules/agent/model_runtime/config.py::AuditedOpenAIChatModel`（L82-L144）覆盖非流式和流式 request 边界；每次实际 request 用同一 `model_call_*` Trace 记录序列化消息、模型参数、完整响应正文、单次 Token、耗时和异常。流式请求在消费结束后读取 `stream.get()`；结构化输出重试会形成同 Trace 下的多条请求记录。
+- 用途：`open_agent_model`（L251-L327）接收显式 purpose；Router、指代消解、证据决策、讲解生成、直接回答、对话摘要和偏好候选提取分别传入稳定用途，Run metadata 与 `llm_call_logs` 可按 Trace 对齐。
+- 迁移与管理端：`backend/alembic/versions/20260728_agent_llm_audit.py::upgrade`（L18-L22）为旧日志表安全增加 nullable Trace/Run 字段与索引；管理 API 支持 Trace/Run 过滤，LLM 详情页展示两种关联 ID。
+- 验证：66 个模型运行时、流式/非流式审计和迁移回归通过；Python 编译、Alembic 单 head、管理端 lint/build、`git diff --check` 通过。真实 MySQL 已用 `alembic upgrade head` 前向升级到 `20260728_agent_llm_audit`。
+- 提交信息：`补齐 Agent LLM 实际调用审计`
+
 ## 2026-07-27：实现 Run/Snapshot/source 只读观测与复现
 
 - 目标：推进 `MEM-008` 第一阶段，让管理员从具体 Run 查看当前轮理解、冻结 Snapshot、selected/dropped、

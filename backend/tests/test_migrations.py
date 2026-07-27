@@ -31,7 +31,7 @@ def test_migration_graph_has_single_head():
     config.set_main_option("script_location", str(backend_dir / "alembic"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_heads() == ["20260728_vector_recall_trace"]
+    assert scripts.get_heads() == ["20260728_agent_llm_audit"]
 
 
 def test_vector_recall_trace_migration_adds_correlation_fields():
@@ -51,6 +51,25 @@ def test_vector_recall_trace_migration_adds_correlation_fields():
     assert "ADD COLUMN trace_id VARCHAR(64)" in ddl
     assert "ADD COLUMN phase VARCHAR(32)" in ddl
     assert "idx_vec_recall_trace" in ddl
+
+
+def test_agent_llm_audit_migration_adds_run_correlation():
+    backend_dir = Path(__file__).resolve().parents[1]
+    path = backend_dir / "alembic" / "versions" / "20260728_agent_llm_audit.py"
+    spec = importlib.util.spec_from_file_location("agent_llm_audit_migration", path)
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    output = io.StringIO()
+    context = MigrationContext.configure(
+        dialect=mysql.dialect(), opts={"as_sql": True, "output_buffer": output}
+    )
+    migration.op = Operations(context)
+    migration.upgrade()
+    ddl = output.getvalue()
+    assert "ADD COLUMN trace_id VARCHAR(64)" in ddl
+    assert "ADD COLUMN run_id VARCHAR(32)" in ddl
+    assert "idx_llm_calls_run" in ddl
 
 
 def test_user_identity_migration_renders_mysql_ddl():

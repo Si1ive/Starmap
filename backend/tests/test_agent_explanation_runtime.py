@@ -71,7 +71,7 @@ async def test_explanation_runtime_uses_run_bound_agent_model_config(monkeypatch
     )
 
     @asynccontextmanager
-    async def fake_open_agent_model(db, *, run_id=None):
+    async def fake_open_agent_model(db, *, run_id=None, purpose=None):
         opened_run_ids.append(run_id)
         yield SimpleNamespace(
             model=model,

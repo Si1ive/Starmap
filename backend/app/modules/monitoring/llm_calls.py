@@ -114,6 +114,8 @@ class LLMCallRecorder:
         base_url: Optional[str] = None,
         request_messages: Optional[List[Dict[str, Any]]] = None,
         request_params: Optional[Dict[str, Any]] = None,
+        trace_id: Optional[str] = None,
+        run_id: Optional[str] = None,
     ):
         self.id = _generate_id()
         self.model = model
@@ -123,6 +125,8 @@ class LLMCallRecorder:
         self.base_url = base_url
         self.request_messages = _truncate_messages(request_messages or [])
         self.request_params = request_params or {}
+        self.trace_id = trace_id
+        self.run_id = run_id
 
         self._start_time: Optional[float] = None
         self._latency_ms = 0
@@ -198,6 +202,27 @@ class LLMCallRecorder:
         self._error_msg = msg[:2000]
         self._status = "timeout" if "timeout" in msg.lower() else "error"
 
+    def record_pydantic_response(
+        self,
+        *,
+        response_text: str = "",
+        usage: Any = None,
+        response_full: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """记录 Pydantic AI 已归一化的响应和单次请求 usage。"""
+        self._response_text = _truncate(response_text, MAX_RESPONSE_PERSIST_LEN)
+        self._latency_ms = int((time.perf_counter() - (self._start_time or time.perf_counter())) * 1000)
+        if usage is not None:
+            self._prompt_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+            self._completion_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+            self._total_tokens = int(
+                getattr(usage, "total_tokens", 0)
+                or self._prompt_tokens + self._completion_tokens
+            )
+        self._cost_usd = _estimate_cost(self.model, self._prompt_tokens, self._completion_tokens)
+        self._response_full = self._truncate_full_dump(response_full) if response_full else None
+        self._status = "success"
+
     @staticmethod
     def _truncate_full_dump(payload: Dict[str, Any]) -> Dict[str, Any]:
         try:
@@ -224,6 +249,8 @@ class LLMCallRecorder:
                     model=self.model,
                     called_by=self.called_by,
                     purpose=self.purpose,
+                    trace_id=self.trace_id,
+                    run_id=self.run_id,
                     request_messages=self.request_messages,
                     request_params=self.request_params,
                     response_text=self._response_text,
@@ -254,6 +281,8 @@ async def list_llm_calls(
     status: Optional[str] = None,
     called_by: Optional[str] = None,
     keyword: Optional[str] = None,
+    trace_id: Optional[str] = None,
+    run_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """分页查询 LLM 调用列表"""
     query = select(LLMCallLog).order_by(LLMCallLog.created_at.desc())
@@ -272,6 +301,12 @@ async def list_llm_calls(
         like = f"%{keyword}%"
         query = query.where(LLMCallLog.response_text.like(like))
         count_query = count_query.where(LLMCallLog.response_text.like(like))
+    if trace_id:
+        query = query.where(LLMCallLog.trace_id == trace_id)
+        count_query = count_query.where(LLMCallLog.trace_id == trace_id)
+    if run_id:
+        query = query.where(LLMCallLog.run_id == run_id)
+        count_query = count_query.where(LLMCallLog.run_id == run_id)
 
     total = (await session.execute(count_query)).scalar_one()
     paged_query = query.offset((page - 1) * page_size).limit(page_size)
@@ -389,6 +424,8 @@ def _log_to_summary(row: LLMCallLog) -> Dict[str, Any]:
         "model": row.model,
         "called_by": row.called_by,
         "purpose": row.purpose,
+        "trace_id": row.trace_id,
+        "run_id": row.run_id,
         "status": row.status,
         "prompt_tokens": int(row.prompt_tokens or 0),
         "completion_tokens": int(row.completion_tokens or 0),

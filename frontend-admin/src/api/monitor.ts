@@ -58,6 +58,8 @@ export interface LLMCallSummary {
   model: string
   called_by?: string
   purpose?: string
+  trace_id?: string
+  run_id?: string
   status: 'success' | 'error' | 'timeout'
   prompt_tokens: number
   completion_tokens: number
@@ -98,6 +100,8 @@ export const listLLMCalls = (params: {
   status?: string
   called_by?: string
   keyword?: string
+  trace_id?: string
+  run_id?: string
 }): Promise<ApiResponse<{ total: number; page: number; page_size: number; items: LLMCallSummary[] }>> => {
   return adminClient.get('/monitor/llm-calls', { params })
 }

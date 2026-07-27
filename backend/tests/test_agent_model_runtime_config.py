@@ -7,6 +7,7 @@ import pytest
 
 from app.modules.agent.model_runtime.config import (
     AgentModelConfigurationError,
+    AuditedOpenAIChatModel,
     load_agent_model_config,
     open_agent_model,
 )
@@ -143,6 +144,7 @@ async def test_agent_model_uses_isolated_async_openai_client(monkeypatch):
         assert session.config.model_name == "chat-model"
         assert session.model.model_name == "chat-model"
         assert session.invocation_id.startswith("model_call_")
+        assert isinstance(session.model, AuditedOpenAIChatModel)
 
     constructor.assert_called_once_with(
         api_key="admin-key",
@@ -150,6 +152,125 @@ async def test_agent_model_uses_isolated_async_openai_client(monkeypatch):
         base_url="https://llm.example.com/v1",
     )
     client.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_agent_model_records_each_pydantic_ai_request(monkeypatch):
+    from pydantic_ai.messages import ModelResponse, TextPart
+    from pydantic_ai.models.openai import OpenAIChatModel
+    from pydantic_ai.usage import RequestUsage
+    from app.modules.agent.model_runtime import config as runtime_config
+
+    async def fake_load(self):
+        return {"llm": {"enabled": True, "api_key": "key", "model": "chat-model"}}
+
+    class FakeRecorder:
+        instances = []
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.response = None
+            self.__class__.instances.append(self)
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return False
+        def record_pydantic_response(self, **kwargs):
+            self.response = kwargs
+
+    monkeypatch.setattr(SystemSettingsService, "load", fake_load)
+    monkeypatch.setattr(runtime_config, "LLMCallRecorder", FakeRecorder)
+    monkeypatch.setattr(
+        OpenAIChatModel,
+        "request",
+        AsyncMock(return_value=ModelResponse(
+            parts=[TextPart(content="审计成功")],
+            usage=RequestUsage(input_tokens=12, output_tokens=4),
+        )),
+    )
+    client = MagicMock()
+    client.close = AsyncMock()
+    monkeypatch.setattr(runtime_config.openai, "AsyncOpenAI", MagicMock(return_value=client))
+
+    db = MagicMock()
+    db.get = AsyncMock(return_value=None)
+    async with open_agent_model(db, run_id="run-audit", purpose="Agent 路由决策") as session:
+        response = await session.model.request([], {"temperature": 0.2}, MagicMock())
+
+    assert response.parts[0].content == "审计成功"
+    recorder = FakeRecorder.instances[0]
+    assert recorder.kwargs["called_by"] == "agent_runtime"
+    assert recorder.kwargs["purpose"] == "Agent 路由决策"
+    assert recorder.kwargs["run_id"] == "run-audit"
+    assert recorder.kwargs["trace_id"].startswith("model_call_")
+    assert recorder.response["response_text"] == "审计成功"
+    assert recorder.response["usage"].total_tokens == 16
+
+
+def test_llm_recorder_maps_pydantic_ai_usage():
+    from pydantic_ai.usage import RequestUsage
+    from app.modules.monitoring.llm_calls import LLMCallRecorder
+
+    recorder = LLMCallRecorder(
+        model="chat-model",
+        called_by="agent_runtime",
+        trace_id="model-call-1",
+        run_id="run-1",
+    )
+    recorder.record_pydantic_response(
+        response_text="完整回答",
+        usage=RequestUsage(input_tokens=30, output_tokens=12),
+        response_full={"finish_reason": "stop"},
+    )
+
+    assert recorder._prompt_tokens == 30
+    assert recorder._completion_tokens == 12
+    assert recorder._total_tokens == 42
+    assert recorder._response_text == "完整回答"
+
+
+@pytest.mark.asyncio
+async def test_agent_model_records_completed_stream_text(monkeypatch):
+    from contextlib import asynccontextmanager
+    from pydantic_ai.messages import ModelResponse, TextPart
+    from pydantic_ai.models.openai import OpenAIChatModel
+    from pydantic_ai.usage import RequestUsage
+    from app.modules.agent.model_runtime import config as runtime_config
+
+    response = ModelResponse(
+        parts=[TextPart(content="流式完整回答")],
+        usage=RequestUsage(input_tokens=8, output_tokens=5),
+    )
+    stream = MagicMock()
+    stream.get.return_value = response
+
+    @asynccontextmanager
+    async def fake_request_stream(*args, **kwargs):
+        yield stream
+
+    class FakeRecorder:
+        response = None
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): return False
+        def record_pydantic_response(self, **kwargs):
+            FakeRecorder.response = kwargs
+
+    async def fake_load(self):
+        return {"llm": {"enabled": True, "api_key": "key", "model": "chat-model"}}
+
+    monkeypatch.setattr(SystemSettingsService, "load", fake_load)
+    monkeypatch.setattr(runtime_config, "LLMCallRecorder", FakeRecorder)
+    monkeypatch.setattr(OpenAIChatModel, "request_stream", fake_request_stream)
+    client = MagicMock()
+    client.close = AsyncMock()
+    monkeypatch.setattr(runtime_config.openai, "AsyncOpenAI", MagicMock(return_value=client))
+
+    async with open_agent_model(MagicMock()) as session:
+        async with session.model.request_stream([], {}, MagicMock()):
+            pass
+
+    assert FakeRecorder.response["response_text"] == "流式完整回答"
+    assert FakeRecorder.response["usage"].total_tokens == 13
 
 
 @pytest.mark.asyncio

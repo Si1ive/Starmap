@@ -59,7 +59,7 @@ async def test_summary_runtime_uses_trigger_run_model_configuration(monkeypatch)
     model = TestModel(custom_output_args={"summary": "合并后的摘要"})
 
     @asynccontextmanager
-    async def fake_open_agent_model(db, *, run_id=None):
+    async def fake_open_agent_model(db, *, run_id=None, purpose=None):
         opened_run_ids.append(run_id)
         yield SimpleNamespace(
             model=model,
