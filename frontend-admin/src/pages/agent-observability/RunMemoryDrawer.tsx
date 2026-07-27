@@ -29,6 +29,7 @@ import dayjs from 'dayjs'
 import * as agentRunsApi from '@/api/agentRuns'
 import type {
   AdminMemoryTrace,
+  AdminRuntimeContextTrace,
   AdminMemorySnapshotItem,
   AdminMemorySourceComparison,
   AdminRunMemoryObservability,
@@ -152,6 +153,39 @@ function MemoryTraceCard({ trace }: { trace: AdminMemoryTrace }) {
   )
 }
 
+function RuntimeContextCard({ trace }: { trace: AdminRuntimeContextTrace }) {
+  const changed = trace.changed_keys.length > 0
+  return (
+    <Collapse
+      items={[{
+        key: trace.step_id,
+        label: (
+          <Space wrap size={8}>
+            <Tag color={changed ? 'processing' : 'default'}>
+              {changed ? `${trace.changed_keys.length} 个 key 变化` : '无相邻上下文变化'}
+            </Tag>
+            <Text strong>{trace.node_name}</Text>
+            {trace.added_keys.map((key) => <Tag color="green" key={key}>+ {key}</Tag>)}
+          </Space>
+        ),
+        children: (
+          <Space direction="vertical" style={{ width: '100%' }}>
+            <Text type="secondary">
+              这里展示工作流临时上下文；检索焦点、候选章节和 RAG 证据不会因此成为长期记忆。
+            </Text>
+            <Row gutter={[12, 12]}>
+              <Col xs={24} lg={8}><Text strong>步骤前上下文</Text><PlainDataBlock value={trace.before} maxHeight={260} /></Col>
+              <Col xs={24} lg={8}><Text strong>步骤输出</Text><PlainDataBlock value={trace.output} maxHeight={260} /></Col>
+              <Col xs={24} lg={8}><Text strong>下一步骤输入</Text><PlainDataBlock value={trace.next_step_before || {}} maxHeight={260} /></Col>
+            </Row>
+          </Space>
+        ),
+      }]}
+      size="small"
+    />
+  )
+}
+
 const RunMemoryDrawer = ({ open, runId, onClose }: RunMemoryDrawerProps) => {
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState<AdminRunMemoryObservability | null>(null)
@@ -223,8 +257,8 @@ const RunMemoryDrawer = ({ open, runId, onClose }: RunMemoryDrawerProps) => {
         open={open}
         title={
           <div>
-            <p className="admin-eyebrow">Memory flight recorder</p>
-            <span>Run 记忆观测</span>
+            <p className="admin-eyebrow">Run context &amp; persistent memory</p>
+            <span>Run 上下文与记忆观测</span>
           </div>
         }
         width="min(980px, 96vw)"
@@ -381,12 +415,36 @@ const RunMemoryDrawer = ({ open, runId, onClose }: RunMemoryDrawerProps) => {
               )}
             </section>
 
+            <section aria-labelledby="runtime-context-title">
+              <div className="memory-section-heading">
+                <div>
+                  <p className="admin-eyebrow">Ephemeral execution state</p>
+                  <Title id="runtime-context-title" level={5}>运行上下文轨迹</Title>
+                </div>
+                <Text type="secondary">{data.runtime_context_trace.length} 个工作流步骤</Text>
+              </div>
+              <Alert
+                message="运行上下文与持久化 Memory 分开观测"
+                description="关键词、大纲命中、RAG 证据和节点中间结果属于本次 Run 的临时上下文；下方持久化记忆无变化并不表示工作流上下文没有变化。"
+                showIcon
+                type="info"
+                style={{ marginBottom: 12 }}
+              />
+              {data.runtime_context_trace.length ? (
+                <div className="memory-trace-list">
+                  {data.runtime_context_trace.map((trace) => <RuntimeContextCard key={trace.step_id} trace={trace} />)}
+                </div>
+              ) : (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该 Run 没有可用的步骤上下文快照" />
+              )}
+            </section>
+
             <section aria-labelledby="memory-trace-title">
               <div className="memory-section-heading">
                 <div>
                   <p className="admin-eyebrow">Before / after</p>
                   <Title id="memory-trace-title" level={5}>
-                    记忆变化时间线
+                    持久化记忆变化时间线
                   </Title>
                 </div>
                 <Text type="secondary">
@@ -401,7 +459,7 @@ const RunMemoryDrawer = ({ open, runId, onClose }: RunMemoryDrawerProps) => {
                 </div>
               ) : (
                 <Alert
-                  message="该 Run 尚未产生记忆前后观测"
+                  message="该 Run 尚未产生持久化记忆前后观测"
                   description="旧 Run 可能是在记忆观测上线前执行；新 Run 会在工作流关键事件和 Memory Outbox 投影边界记录前后状态。"
                   showIcon
                   type="info"

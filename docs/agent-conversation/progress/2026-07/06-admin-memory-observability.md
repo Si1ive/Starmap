@@ -1,5 +1,14 @@
 # 2026-07 管理端记忆可观测进展
 
+## 2026-07-28：拆分运行上下文与持久化记忆观测
+
+- 目标：修复 Memory 抽屉把 `changed=false` 误解成“整个工作流上下文没变化”的问题，同时避免为了可见性把关键词、大纲候选和 RAG 证据错误写入长期记忆。
+- 后端：`backend/app/modules/agent/admin_memory.py::_runtime_context_trace`（L137-L169）按执行顺序比较相邻 `AgentStep.input_data.variables`，返回每步执行前上下文、节点输出、下一步输入以及 added/removed/changed keys；`get_run_memory_observability`（L172-L327）把它作为独立 `runtime_context_trace` 返回，仍对所有嵌套正文脱敏。数据库只读，无模型、工具或记忆写入副作用。
+- 前端：`frontend-admin/src/pages/agent-observability/RunMemoryDrawer.tsx::RuntimeContextCard`（L156-L187）并排展示步骤前、输出和下一步输入；`RunMemoryDrawer`（L189-L598）改名为“Run 上下文与记忆观测”，增加临时运行上下文专区，并把旧时间线明确命名为“持久化记忆变化时间线”。
+- 语义：检索焦点、候选章节、RAG 证据和节点中间结果留在 Run/Step 审计；只有线程热状态、Snapshot、长期项、掌握度、摘要或 Outbox 前后不同，持久化 Memory 才标记变化。
+- 验证：后端管理观测、路由和工作流引擎 11 项通过；Python 编译、管理端 lint/build 与 `git diff --check` 通过。
+- 提交信息：`拆分 Agent 运行上下文与记忆观测`
+
 ## 2026-07-28：补齐 Agent Pydantic AI 实际调用审计
 
 - 目标：修复 Run metadata 只能证明打开过模型会话、LLM 调用页却漏掉 Router、指代、Explain、直接回答、摘要和偏好提取真实请求的问题，并完整记录流式正文与结构化重试。

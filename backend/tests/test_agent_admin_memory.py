@@ -25,6 +25,7 @@ from app.modules.agent.models import (
     AgentMemoryUpdateOutbox,
     AgentMessage,
     AgentRun,
+    AgentStep,
     AgentThread,
 )
 from app.modules.agent.time_utils import utc_now
@@ -35,6 +36,7 @@ ADMIN_MEMORY_TABLES = [
     AgentMessage.__table__,
     AgentRun.__table__,
     AgentEvent.__table__,
+    AgentStep.__table__,
     AgentMemorySnapshot.__table__,
     AgentMemorySnapshotItem.__table__,
     AgentMemoryTrace.__table__,
@@ -186,6 +188,36 @@ async def _seed_snapshot(db_session):
             ),
         ]
     )
+    db_session.add_all([
+        AgentStep(
+            id="step_scope",
+            run_id=run.id,
+            node_name="load_scope",
+            node_type="action",
+            status="completed",
+            input_data={"variables": {"input_message": "继续讲二分查找"}},
+            output_data={"scope": {"mode": "snapshot"}},
+            started_at=now,
+            completed_at=now,
+        ),
+        AgentStep(
+            id="step_evidence",
+            run_id=run.id,
+            node_name="evidence_loop",
+            node_type="action",
+            status="completed",
+            input_data={
+                "variables": {
+                    "input_message": "继续讲二分查找",
+                    "conversation_bundle": {"retrieval_query": "二分查找"},
+                    "evidence": [{"title": "二分查找知识点"}],
+                }
+            },
+            output_data={"evidence_count": 1},
+            started_at=now + timedelta(seconds=1),
+            completed_at=now + timedelta(seconds=1),
+        ),
+    ])
     db_session.add(
         AgentMemoryTrace(
             run_id=run.id,
@@ -243,6 +275,14 @@ async def test_run_memory_observability_uses_frozen_snapshot_and_actual_tool_eve
             "after": {"thread_state": {"version": 7}},
             "created_at": payload["memory_trace"][0]["created_at"],
         }
+    ]
+    assert payload["runtime_context_trace"][0]["node_name"] == "load_scope"
+    assert payload["runtime_context_trace"][0]["added_keys"] == [
+        "conversation_bundle",
+        "evidence",
+    ]
+    assert payload["runtime_context_trace"][0]["next_step_before"]["evidence"] == [
+        {"title": "二分查找知识点"}
     ]
 
 

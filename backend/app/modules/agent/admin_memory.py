@@ -21,6 +21,7 @@ from .models import (
     AgentMessage,
     AgentPreferenceCandidate,
     AgentRun,
+    AgentStep,
     UserLearningMastery,
 )
 from .time_utils import utc_isoformat
@@ -133,6 +134,41 @@ def _actual_tool_calls(events: list[AgentEvent]) -> list[dict[str, Any]]:
     return calls
 
 
+def _runtime_context_trace(steps: list[AgentStep]) -> list[dict[str, Any]]:
+    """用相邻步骤的冻结输入还原运行时上下文变化，不混入长期 Memory。"""
+    traces: list[dict[str, Any]] = []
+    for index, step in enumerate(steps):
+        input_data = step.input_data if isinstance(step.input_data, dict) else {}
+        before = input_data.get("variables") if isinstance(input_data.get("variables"), dict) else {}
+        next_input = (
+            steps[index + 1].input_data
+            if index + 1 < len(steps) and isinstance(steps[index + 1].input_data, dict)
+            else {}
+        )
+        after = next_input.get("variables") if isinstance(next_input.get("variables"), dict) else None
+        before_keys = set(before)
+        after_keys = set(after or {})
+        changed_keys = sorted(
+            key for key in before_keys | after_keys
+            if before.get(key) != (after or {}).get(key)
+        ) if after is not None else []
+        traces.append({
+            "step_id": step.id,
+            "node_name": step.node_name,
+            "node_type": step.node_type,
+            "status": step.status,
+            "before": redact_admin_value(before),
+            "output": redact_admin_value(step.output_data or {}),
+            "next_step_before": redact_admin_value(after) if after is not None else None,
+            "added_keys": sorted(after_keys - before_keys),
+            "removed_keys": sorted(before_keys - after_keys),
+            "changed_keys": changed_keys,
+            "started_at": utc_isoformat(step.started_at),
+            "completed_at": utc_isoformat(step.completed_at),
+        })
+    return traces
+
+
 async def get_run_memory_observability(
     db: AsyncSession,
     run_id: str,
@@ -188,6 +224,15 @@ async def get_run_memory_observability(
                 select(AgentMemoryTrace)
                 .where(AgentMemoryTrace.run_id == run.id)
                 .order_by(AgentMemoryTrace.id)
+            )
+        ).scalars()
+    )
+    steps = list(
+        (
+            await db.execute(
+                select(AgentStep)
+                .where(AgentStep.run_id == run.id)
+                .order_by(AgentStep.started_at, AgentStep.id)
             )
         ).scalars()
     )
@@ -251,6 +296,7 @@ async def get_run_memory_observability(
             "calls": safe_model_calls,
         },
         "tool_calls": _actual_tool_calls(events),
+        "runtime_context_trace": _runtime_context_trace(steps),
         "memory_outbox": [
             {
                 "id": row.id,

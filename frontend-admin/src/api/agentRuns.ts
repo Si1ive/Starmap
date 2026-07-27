@@ -177,6 +177,7 @@ export interface AdminRunMemoryObservability {
     calls: Record<string, unknown>[]
   }
   tool_calls: Record<string, unknown>[]
+  runtime_context_trace: AdminRuntimeContextTrace[]
   memory_outbox: Array<{
     id: number
     event_type: string
@@ -189,6 +190,21 @@ export interface AdminRunMemoryObservability {
     created_at: string
   }>
   memory_trace: AdminMemoryTrace[]
+}
+
+export interface AdminRuntimeContextTrace {
+  step_id: string
+  node_name: string
+  node_type: string
+  status: string
+  before: Record<string, unknown>
+  output: Record<string, unknown>
+  next_step_before: Record<string, unknown> | null
+  added_keys: string[]
+  removed_keys: string[]
+  changed_keys: string[]
+  started_at: string
+  completed_at: string | null
 }
 
 export interface AdminMemoryTrace {
