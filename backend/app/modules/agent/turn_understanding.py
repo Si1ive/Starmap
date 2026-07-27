@@ -455,6 +455,9 @@ async def ensure_turn_memory_snapshot(
         selection_metadata_json={
             "selected_message_ids": agent_context.selected_message_ids,
             "selected_artifact_ids": agent_context.selected_artifact_ids,
+            "conversation_summary_id": (
+                (agent_context.conversation_summary_source or {}).get("id")
+            ),
             "pending_interaction_ids": [
                 item.id for item in agent_context.pending_interactions
             ],
@@ -477,6 +480,28 @@ async def ensure_turn_memory_snapshot(
         payload_json=understanding.model_dump(mode="json"),
     )
     db.add(snapshot_item)
+    summary_source = agent_context.conversation_summary_source or {}
+    if agent_context.conversation_summary and summary_source.get("id"):
+        db.add(
+            AgentMemorySnapshotItem(
+                snapshot_id=snapshot.id,
+                memory_need="conversation_continuity",
+                memory_partition="historical_summaries",
+                source_kind="conversation_summary",
+                source_id=summary_source["id"],
+                item_key=summary_source["id"],
+                version=summary_source.get("version"),
+                selected=True,
+                selection_reason="active_summary_before_recent_history",
+                token_estimate=int(summary_source.get("token_estimate") or 0),
+                payload_json={
+                    "summary_text": agent_context.conversation_summary,
+                    "start_sequence": summary_source.get("start_sequence"),
+                    "end_sequence": summary_source.get("end_sequence"),
+                    "source_message_ids": summary_source.get("source_message_ids") or [],
+                },
+            )
+        )
     await db.flush()
     if understanding.topic_entities:
         await project_topic_confirmed_fact(

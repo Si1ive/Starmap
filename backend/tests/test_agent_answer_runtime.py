@@ -1,5 +1,7 @@
 """Pydantic AI 普通问答运行时测试。"""
 
+from types import SimpleNamespace
+
 import pytest
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 from pydantic_ai.models.test import TestModel
@@ -87,3 +89,20 @@ async def test_direct_answer_context_selection_budget_does_not_limit_output():
     )
 
     assert output.content.startswith("红黑树通过颜色约束")
+
+
+def test_direct_answer_deps_carry_frozen_summary_as_controlled_data():
+    deps = DirectAnswerDeps.from_context(
+        SimpleNamespace(
+            thread_id="thread_001",
+            user_id="user_001",
+            turn_id="run_001",
+            recent_artifacts=[],
+            attachments=[],
+            context_refs=[],
+            conversation_summary="用户此前在复习二分查找。",
+            token_budget=4096,
+        )
+    )
+
+    assert deps.conversation_summary == "用户此前在复习二分查找。"

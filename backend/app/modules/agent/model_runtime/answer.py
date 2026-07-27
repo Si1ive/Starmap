@@ -29,6 +29,7 @@ class DirectAnswerDeps:
     artifact_summaries: tuple[str, ...] = ()
     attachment_names: tuple[str, ...] = ()
     context_reference_ids: tuple[str, ...] = ()
+    conversation_summary: str | None = None
     token_budget: int = 4096
 
     @classmethod
@@ -48,6 +49,7 @@ class DirectAnswerDeps:
             context_reference_ids=tuple(
                 str(item.get("id")) for item in context.context_refs if item.get("id")
             ),
+            conversation_summary=context.conversation_summary,
             token_budget=context.token_budget,
         )
 
@@ -68,6 +70,8 @@ direct_answer_agent = Agent(
 def _controlled_context(context: RunContext[DirectAnswerDeps]) -> str:
     deps = context.deps
     sections: list[str] = []
+    if deps.conversation_summary:
+        sections.append("冻结的历史对话摘要：\n" + deps.conversation_summary)
     if deps.artifact_summaries:
         sections.append("既有公开产物摘要：\n- " + "\n- ".join(deps.artifact_summaries))
     if deps.attachment_names:

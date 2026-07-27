@@ -20,13 +20,15 @@
 | 执行阶段 | 文件 | 符号 | 入口条件 | 处理与副作用 | 最终消费 |
 | --- | --- | --- | --- | --- | --- |
 | 历史选择预算 | `backend/app/modules/agent/workflows/conversation.py` | `_route_node` | conversation run 开始路由 | `token_budget=4096` 只用于筛历史消息，不限制模型最终生成长度 | `AgentRunContext` 与 `RouterDeps` |
-| Conversation 总调用预算 | `backend/app/modules/agent/workflows/conversation.py`（L305-L328） | `build_conversation_workflow` | conversation workflow 注册 | `max_model_calls=3`，容纳可选指代消解 + Router + direct answer；无歧义时不消费指代调用 | `ExecutionContext.charge_model_call` |
+| Conversation 总调用预算 | `backend/app/modules/agent/workflows/conversation.py`（L312-L335） | `build_conversation_workflow` | conversation workflow 注册 | `max_model_calls=3`，容纳可选指代消解 + Router + direct answer；摘要选择不调用模型，无歧义时不消费指代调用 | `ExecutionContext.charge_model_call` |
 | 指代请求保护 | `backend/app/modules/agent/model_runtime/referent.py`（L73-L169） | `ReferentRuntime.resolve`、`ReferentRuntime._run` | 确定性指代未解且存在语义候选 | 使用 `UsageLimits(request_limit=2)`；非法候选键报错，低置信度降级 unresolved | `TurnUnderstanding.reference_resolution` |
 | Router 请求保护 | `backend/app/modules/agent/model_runtime/router.py` | `RouterRuntime.decide` / `_run` | Router 调用 | 使用 `UsageLimits(request_limit=2)` 防止单次路由无限重试 | 结构化 `RouterDecision` |
 | 普通回答请求保护 | `backend/app/modules/agent/model_runtime/answer.py` | `DirectAnswerRuntime._run_stream` / `_run` | 普通回答流式或非流式调用 | 只限制请求次数；输出上限由模型配置的 `max_tokens` 决定 | 流式 delta 或完整回答 |
 | Explain 请求保护 | `backend/app/modules/agent/model_runtime/explanation.py` | `ExplanationRuntime._run_decision` / `_run_generation` | explain 规划或正文生成 | 只限制请求次数，不把项目内部 Token 预算误作总输出上限 | `LoopDecision` / `ExplanationOutput` |
 | 摘要请求保护 | `backend/app/modules/agent/model_runtime/conversation_summary.py`（L59-L133） | `ConversationSummaryRuntime.summarize`、`ConversationSummaryRuntime._run` | Outbox 选出旧摘要和一批新增消息 | 使用触发 Run 绑定模型配置与 `UsageLimits(request_limit=2)`，结构化正文最多 6000 字；不会消费当前 Run 的 workflow 调用预算 | 新版本 `AgentConversationSummary.summary_text` |
 | 模型配置 `null` 语义 | `backend/app/modules/agent/model_configs.py`、`backend/app/modules/agent/models.py` | `AgentModelConfigService.create` / `update`、`AgentModelConfigRecord.max_tokens` | 管理员把 `max_tokens` 设为 `null` | 明确保留“不设上限”，运行时完全省略该参数 | OpenAI 兼容请求 |
+
+历史摘要的首批消费锚点：`backend/app/modules/agent/model_runtime/router.py::RouterDeps` / `_router_policy`（L30-L114）与 `backend/app/modules/agent/model_runtime/answer.py::DirectAnswerDeps` / `_controlled_context`（L22-L86）。两者只接收 snapshot 前由服务端按用户、线程、范围和预算筛过的摘要；动态 instructions 明确其为不可信数据，摘要不会被伪装成历史 user 消息，也不会改变模型调用预算。
 
 ## 普通回答结构化流式输出
 

@@ -109,6 +109,7 @@ async def _route_node(context: ExecutionContext, db: AsyncSession) -> NodeResult
             turn_id=agent_context.turn_id,
             allowed_actions=CONVERSATION_ACTIONS,
             token_budget=agent_context.token_budget,
+            conversation_summary=agent_context.conversation_summary,
         ),
         message_history=agent_context.to_message_history(),
         db=db,
@@ -123,6 +124,9 @@ async def _route_node(context: ExecutionContext, db: AsyncSession) -> NodeResult
         "dropped_message_ids": agent_context.dropped_message_ids,
         "selected_artifact_ids": agent_context.selected_artifact_ids,
         "dropped_artifact_ids": agent_context.dropped_artifact_ids,
+        "conversation_summary_id": (
+            (agent_context.conversation_summary_source or {}).get("id")
+        ),
         "estimated_tokens": agent_context.estimated_tokens,
         "token_budget": agent_context.token_budget,
     }
@@ -231,6 +235,9 @@ def _child_context_metadata(
             "token_budget": agent_context.token_budget,
             "active_topic": agent_context.active_topic,
             "standalone_request": agent_context.standalone_request,
+            "conversation_summary_id": (
+                (agent_context.conversation_summary_source or {}).get("id")
+            ),
         },
         "memory_snapshot_id": agent_context.memory_snapshot_id,
     }

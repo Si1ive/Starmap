@@ -23,6 +23,7 @@ from .models import (
     AgentInput,
     AgentMessage,
     AgentRun,
+    AgentConversationSummary,
     AgentThreadMemoryState,
     AgentThread,
     AgentThreadItem,
@@ -91,6 +92,7 @@ class AgentRunContext(BaseModel):
     current_input: str
     recent_messages: list[ConversationMessage] = Field(default_factory=list)
     conversation_summary: str | None = None
+    conversation_summary_source: dict[str, Any] | None = None
     recent_artifacts: list[ArtifactContext] = Field(default_factory=list)
     attachments: list[dict[str, Any]] = Field(default_factory=list)
     context_refs: list[dict[str, Any]] = Field(default_factory=list)
@@ -223,6 +225,15 @@ class ThreadContextBuilder:
             candidates,
             token_budget=history_token_budget,
         )
+        selected_history_tokens = sum(message.estimated_tokens for message in selected)
+        conversation_summary, conversation_summary_source = (
+            await self._load_conversation_summary(
+                user_id=user_id,
+                thread_id=thread.id,
+                before_sequence=(selected[0].sequence if selected else current_sequence),
+                token_budget=max(0, history_token_budget - selected_history_tokens),
+            )
+        )
 
         selected_artifact_ids = [artifact.id for artifact in artifacts]
         return AgentRunContext(
@@ -232,6 +243,8 @@ class ThreadContextBuilder:
             current_message_id=current_message.id,
             current_input=current_input,
             recent_messages=selected,
+            conversation_summary=conversation_summary,
+            conversation_summary_source=conversation_summary_source,
             recent_artifacts=artifacts,
             attachments=attachments,
             context_refs=context_refs,
@@ -253,7 +266,8 @@ class ThreadContextBuilder:
             estimated_tokens=(
                 current_tokens
                 + supplemental_tokens
-                + sum(message.estimated_tokens for message in selected)
+                + selected_history_tokens
+                + int((conversation_summary_source or {}).get("token_estimate") or 0)
             ),
             selected_message_ids=[message.id for message in selected],
             dropped_message_ids=[message.id for message in dropped],
@@ -515,6 +529,44 @@ class ThreadContextBuilder:
             )
         )
         return result.scalar_one_or_none()
+
+    async def _load_conversation_summary(
+        self,
+        *,
+        user_id: str,
+        thread_id: str,
+        before_sequence: int,
+        token_budget: int,
+    ) -> tuple[str | None, dict[str, Any] | None]:
+        result = await self.db.execute(
+            select(AgentConversationSummary)
+            .where(
+                AgentConversationSummary.thread_id == thread_id,
+                AgentConversationSummary.user_id == user_id,
+                AgentConversationSummary.superseded_by_id.is_(None),
+                AgentConversationSummary.end_sequence < before_sequence,
+            )
+            .order_by(AgentConversationSummary.end_sequence.desc())
+            .limit(2)
+        )
+        summaries = list(result.scalars())
+        if len(summaries) > 1:
+            raise ContextIntegrityError("同一线程存在多条活跃对话摘要")
+        if not summaries:
+            return None, None
+        summary = summaries[0]
+        content = summary.summary_text.strip()
+        token_estimate = self.estimate_tokens(content) if content else 0
+        if not content or token_estimate > token_budget:
+            return None, None
+        return content, {
+            "id": summary.id,
+            "version": summary.version,
+            "start_sequence": summary.start_sequence,
+            "end_sequence": summary.end_sequence,
+            "source_message_ids": list(summary.source_message_ids_json or []),
+            "token_estimate": token_estimate,
+        }
 
     def _select_recent_artifacts(
         self,

@@ -6,6 +6,7 @@ import pytest
 import pytest_asyncio
 from pydantic_ai.messages import ModelRequest, ModelResponse
 from pydantic_ai.models.test import TestModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
@@ -15,12 +16,19 @@ from app.modules.agent.context_builder import (
     ContextNotFoundError,
     ThreadContextBuilder,
 )
+from app.modules.agent.turn_understanding import (
+    TurnUnderstanding,
+    ensure_turn_memory_snapshot,
+)
 from app.modules.agent.model_runtime.router import RouterDeps, RouterRuntime
 from app.modules.agent.models import (
     AgentApproval,
     AgentArtifact,
     AgentInput,
     AgentMessage,
+    AgentConversationSummary,
+    AgentMemorySnapshot,
+    AgentMemorySnapshotItem,
     AgentRun,
     AgentThreadMemoryState,
     AgentThread,
@@ -36,6 +44,9 @@ CONTEXT_TABLES = [
     AgentInput.__table__,
     AgentApproval.__table__,
     AgentThreadMemoryState.__table__,
+    AgentConversationSummary.__table__,
+    AgentMemorySnapshot.__table__,
+    AgentMemorySnapshotItem.__table__,
 ]
 
 
@@ -302,6 +313,74 @@ async def test_context_budget_keeps_latest_complete_turn(db_session):
         "最近回答内容一二三四",
     ]
     assert context.estimated_tokens <= budget
+
+
+@pytest.mark.asyncio
+async def test_context_selects_only_active_summary_that_fits_remaining_budget(db_session):
+    await _add_thread(db_session, thread_id="thread_001", user_id="user_001")
+    _, run = await _add_current_turn(db_session, content="继续")
+    summary = AgentConversationSummary(
+        id="convsum_context_001",
+        thread_id="thread_001",
+        user_id="user_001",
+        start_sequence=1,
+        end_sequence=20,
+        summary_text="用户此前在复习二分查找，并希望继续理解循环不变量。",
+        source_message_ids_json=["msg_old_user", "msg_old_assistant"],
+        version=3,
+    )
+    db_session.add(summary)
+    await db_session.flush()
+    builder = ThreadContextBuilder(db_session)
+    summary_tokens = builder.estimate_tokens(summary.summary_text)
+    current_tokens = builder.estimate_tokens("继续")
+
+    context = await builder.build(
+        user_id="user_001",
+        thread_id="thread_001",
+        turn_id=run.id,
+        token_budget=current_tokens + summary_tokens,
+    )
+
+    assert context.conversation_summary == summary.summary_text
+    assert context.conversation_summary_source == {
+        "id": summary.id,
+        "version": 3,
+        "start_sequence": 1,
+        "end_sequence": 20,
+        "source_message_ids": ["msg_old_user", "msg_old_assistant"],
+        "token_estimate": summary_tokens,
+    }
+    assert context.estimated_tokens == current_tokens + summary_tokens
+
+    snapshot = await ensure_turn_memory_snapshot(
+        db_session,
+        run=run,
+        agent_context=context,
+        understanding=TurnUnderstanding(
+            raw_input="继续",
+            standalone_request="继续",
+        ),
+    )
+    summary_item = await db_session.scalar(
+        select(AgentMemorySnapshotItem).where(
+            AgentMemorySnapshotItem.snapshot_id == snapshot.id,
+            AgentMemorySnapshotItem.source_kind == "conversation_summary",
+        )
+    )
+    assert snapshot.selection_metadata_json["conversation_summary_id"] == summary.id
+    assert summary_item is not None
+    assert summary_item.version == 3
+    assert summary_item.payload_json["summary_text"] == summary.summary_text
+
+    budget_limited = await builder.build(
+        user_id="user_001",
+        thread_id="thread_001",
+        turn_id=run.id,
+        token_budget=current_tokens,
+    )
+    assert budget_limited.conversation_summary is None
+    assert budget_limited.conversation_summary_source is None
 
 
 @pytest.mark.asyncio
