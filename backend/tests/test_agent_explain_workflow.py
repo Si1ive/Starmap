@@ -167,6 +167,9 @@ async def test_explain_uses_conversation_bundle_history_and_frozen_topic_query(m
                 sequence=2,
             ),
         ],
+        conversation_summary="用户此前在复习二分查找，并希望继续理解边界条件。",
+        conversation_summary_id="convsum_explain_001",
+        conversation_summary_version=3,
         artifact_summaries=["二分查找基础讲解"],
         reference_sources=[{"type": "knowledge_point", "id": "kp_binary_search"}],
         retrieval_query="二分查找 折半查找",
@@ -195,6 +198,9 @@ async def test_explain_uses_conversation_bundle_history_and_frozen_topic_query(m
     assert runtime.decide_calls[0]["current_input"] == "给用户继续讲解二分查找"
     assert len(runtime.decide_calls[0]["message_history"]) == 2
     assert runtime.decide_calls[0]["deps"].artifact_summaries == ("二分查找基础讲解",)
+    assert runtime.decide_calls[0]["deps"].conversation_summary == (
+        "用户此前在复习二分查找，并希望继续理解边界条件。"
+    )
 
 
 @pytest.mark.asyncio

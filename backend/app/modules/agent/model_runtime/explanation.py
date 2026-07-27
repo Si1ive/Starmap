@@ -23,6 +23,7 @@ class ExplanationDeps:
     run_id: str
     user_id: str
     topic_title: str | None = None
+    conversation_summary: str | None = None
     artifact_summaries: tuple[str, ...] = ()
     reference_ids: tuple[str, ...] = ()
     token_budget: int = 8192
@@ -58,6 +59,8 @@ def _controlled_context(context: RunContext[ExplanationDeps]) -> str:
     sections = []
     if deps.topic_title:
         sections.append(f"本轮冻结主题：{deps.topic_title}")
+    if deps.conversation_summary:
+        sections.append("冻结的历史对话摘要：\n" + deps.conversation_summary)
     if deps.artifact_summaries:
         sections.append("既有公开产物摘要：\n- " + "\n- ".join(deps.artifact_summaries))
     if deps.reference_ids:

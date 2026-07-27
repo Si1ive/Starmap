@@ -1,5 +1,12 @@
 # 2026-07 记忆基础、可信事实与 Outbox 进展
 
+## 2026-07-27：让 Explain 消费 snapshot 冻结摘要
+
+- 目标：补齐历史摘要的首个 child workflow 消费者，保证 Explain 使用父 Run snapshot 的内容副本而不是执行时的最新摘要。
+- 实现：`backend/app/modules/agent/memory_selector.py::load_conversation_bundle`（L832-L1001）要求唯一 snapshot item 并复核源摘要 user/thread/version 后读取冻结正文；版本不符或重复条目不注入摘要。`_conversation_inputs`（L50-L66）把摘要交给 `ExplanationDeps`，模型通过 `_controlled_context`（L57-L73）将其作为不可信数据。
+- 测试：Memory selector、Explain workflow/runtime/Worker 聚焦回归 23 项通过；全部 Agent 回归 195 passed、75 warnings，Python 编译与 `git diff --check` 通过。
+- 提交信息：`让 Explain 消费 snapshot 冻结摘要`
+
 ## 2026-07-27：让 Router 与普通回答消费冻结历史摘要
 
 - 目标：继续 `MEM-007`，把已生成摘要接入通用 conversation 上下文，同时保证近期原文优先、范围不重叠、预算可控和 snapshot 可复现。
@@ -20,8 +27,8 @@
 ## 2026-07-27：让 Explain 消费 ConversationBundle 冻结上下文
 
 - 目标：完成 `MEM-004`，让 Explain 真正消费 Router 前按权限和 Token 预算筛选并冻结到 snapshot 的消息、Artifact、主题与引用，移除无实际约束的全学科固定 scope。
-- 实现：`backend/app/modules/agent/memory_selector.py::load_conversation_bundle`（L829-L956）只按 snapshot ID 集合重读同用户/线程的 visible completed 消息和公开 Artifact，并按唯一题面→主题 aliases→standalone request 生成首次 query；`backend/app/modules/agent/workflows/explain.py::_load_scope_node`（L36-L47）接入 bundle，`_evidence_loop_node`（L68-L204）与 `_generate_explanation_node`（L234-L287）向规划/生成模型传入同一 history；`ExplanationRuntime.decide` / `generate`（L88-L177）把 history 交给 Pydantic AI，并用动态 instructions 标记主题、摘要和引用均为不可信数据。
-- 测试：`backend/tests/test_agent_memory_selector.py::test_load_conversation_bundle_replays_only_snapshot_selected_visible_context`（L341-L458）覆盖冻结选择、hidden 丢弃、Artifact 摘要和 aliases query；`backend/tests/test_agent_explain_workflow.py::test_explain_uses_conversation_bundle_history_and_frozen_topic_query`（L145-L198）覆盖模型首个动作无法跳过/改写冻结检索；`backend/tests/test_agent_explain_worker.py::test_explain_worker_replays_snapshot_selected_history`（L314-L441）覆盖 Worker 端到端重放。
+- 实现：`backend/app/modules/agent/memory_selector.py::load_conversation_bundle`（当前 L832-L1001）按 snapshot ID 复现同用户/线程的上下文和首次 query；`_evidence_loop_node`（当前 L69-L206）与 `_generate_explanation_node`（当前 L236-L289）向规划/生成模型传入同一 history。
+- 测试：`backend/tests/test_agent_memory_selector.py::test_load_conversation_bundle_replays_only_snapshot_selected_visible_context`（当前 L341-L526）覆盖冻结选择、摘要副本、版本/重复保护、hidden 丢弃、Artifact 和 aliases query；`backend/tests/test_agent_explain_workflow.py::test_explain_uses_conversation_bundle_history_and_frozen_topic_query`（当前 L145-L203）覆盖冻结检索与摘要依赖；`backend/tests/test_agent_explain_worker.py::test_explain_worker_replays_snapshot_selected_history`（L314-L441）覆盖 Worker 端到端重放。
 - 验证：全部 Agent 回归通过（185 passed，75 warnings）；Python 编译和 `git diff --check` 通过，旧状态/旧锚点扫描未发现残留。
 - 提交信息：`让 Explain 消费冻结的 ConversationBundle`
 

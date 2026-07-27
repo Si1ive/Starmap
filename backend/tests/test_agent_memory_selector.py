@@ -26,7 +26,7 @@ from app.modules.agent.memory_selector import (
     load_practice_bundle,
 )
 from app.modules.agent.models import (
-    AgentArtifact,
+    AgentArtifact, AgentConversationSummary,
     AgentMemoryItem,
     AgentMessage,
     AgentMemoryEvent,
@@ -46,7 +46,7 @@ SELECTOR_TABLES = [
     AgentArtifact.__table__,
     AgentMemoryEvent.__table__,
     AgentMemorySnapshot.__table__,
-    AgentMemorySnapshotItem.__table__,
+    AgentMemorySnapshotItem.__table__, AgentConversationSummary.__table__,
     AgentMemoryItem.__table__,
     Subject.__table__,
     Chapter.__table__,
@@ -408,6 +408,17 @@ async def test_load_conversation_bundle_replays_only_snapshot_selected_visible_c
         content_json={"summary": "二分查找基础讲解"},
     )
     db_session.add(artifact)
+    summary = AgentConversationSummary(
+        id="convsum_conversation_bundle",
+        thread_id=thread.id,
+        user_id="user_001",
+        start_sequence=1,
+        end_sequence=2,
+        summary_text="当前版本可能已经变化，但 Explain 必须使用 snapshot 副本。",
+        source_message_ids_json=["msg_old_user", "msg_old_assistant"],
+        version=3,
+    )
+    db_session.add(summary)
     await db_session.flush()
     db_session.add(
         AgentMemorySnapshot(
@@ -436,6 +447,28 @@ async def test_load_conversation_bundle_replays_only_snapshot_selected_visible_c
                     "msg_hidden",
                 ],
                 "selected_artifact_ids": [artifact.id],
+                "conversation_summary_id": summary.id,
+            },
+        )
+    )
+    await db_session.flush()
+    db_session.add(
+        AgentMemorySnapshotItem(
+            snapshot_id="snapshot_conversation_bundle",
+            memory_need="conversation_continuity",
+            memory_partition="historical_summaries",
+            source_kind="conversation_summary",
+            source_id=summary.id,
+            item_key=summary.id,
+            version=3,
+            selected=True,
+            selection_reason="active_summary_before_recent_history",
+            token_estimate=10,
+            payload_json={
+                "summary_text": "用户此前在复习二分查找，并希望继续理解边界条件。",
+                "start_sequence": 1,
+                "end_sequence": 2,
+                "source_message_ids": ["msg_old_user", "msg_old_assistant"],
             },
         )
     )
@@ -452,9 +485,45 @@ async def test_load_conversation_bundle_replays_only_snapshot_selected_visible_c
         "msg_selected_assistant",
     ]
     assert bundle.artifact_summaries == ["二分查找基础讲解"]
+    assert bundle.conversation_summary == (
+        "用户此前在复习二分查找，并希望继续理解边界条件。"
+    )
+    assert bundle.conversation_summary_id == summary.id
+    assert bundle.conversation_summary_version == 3
     assert bundle.retrieval_query == "二分查找 折半查找"
     assert bundle.standalone_request == "给用户详细讲解二分查找"
     assert len(bundle.to_message_history()) == 2
+
+    summary.version = 4
+    await db_session.flush()
+    version_mismatch_bundle = await load_conversation_bundle(
+        db_session,
+        run_id=run.id,
+        user_id="user_001",
+    )
+    assert version_mismatch_bundle.conversation_summary is None
+
+    summary.version = 3
+    db_session.add(
+        AgentMemorySnapshotItem(
+            snapshot_id="snapshot_conversation_bundle",
+            memory_need="conversation_continuity",
+            memory_partition="historical_summaries",
+            source_kind="conversation_summary",
+            source_id=summary.id,
+            item_key="duplicate_conversation_summary",
+            version=3,
+            selected=True,
+            payload_json={"summary_text": "重复条目不能静默进入 Explain。"},
+        )
+    )
+    await db_session.flush()
+    duplicate_bundle = await load_conversation_bundle(
+        db_session,
+        run_id=run.id,
+        user_id="user_001",
+    )
+    assert duplicate_bundle.conversation_summary is None
 
 
 _chapter_link_id = 0

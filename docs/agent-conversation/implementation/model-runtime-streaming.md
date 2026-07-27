@@ -43,8 +43,8 @@
 
 | 执行阶段 | 文件 | 符号 | 入口与关键参数 | 处理、调用关系与副作用 | 错误与最终消费 |
 | --- | --- | --- | --- | --- | --- |
-| 资料规划 | `backend/app/modules/agent/model_runtime/explanation.py` | `ExplanationDeps`、`_controlled_context`、`ExplanationRuntime.decide`（L19-L131） | standalone question、有效资料数、ConversationBundle message history、主题、Artifact 摘要、引用 ID | 两类 Explain Agent 共享服务端过滤上下文 instructions；调用 Run 绑定模型并把 snapshot history 传给 Pydantic AI 执行结构化规划 | `LoopDecision`；模型异常向 `_evidence_loop_node` 传播 |
-| 正文生成 | `backend/app/modules/agent/model_runtime/explanation.py` | `ExplanationRuntime.generate`（L133-L177） | standalone question、同一 snapshot history、evidence text、同一 child run ID | 复用同一 Agent 模型配置与受控上下文，输出 `outline`、`body`、`citations`、`summary`；历史与资料文本均声明为不可信数据 | `_render_artifact_node` 消费 |
+| 资料规划 | `backend/app/modules/agent/model_runtime/explanation.py` | `ExplanationDeps`、`_controlled_context`、`ExplanationRuntime.decide`（L19-L134） | standalone question、有效资料数、snapshot history/摘要、主题、Artifact 摘要、引用 ID | 两类 Explain Agent 共享受控 instructions；冻结摘要与其他文本均声明为不可信数据，调用 child Run 绑定模型执行结构化规划 | `LoopDecision`；模型异常向 `_evidence_loop_node` 传播 |
+| 正文生成 | `backend/app/modules/agent/model_runtime/explanation.py` | `ExplanationRuntime.generate`（L136-L180） | standalone question、同一 snapshot history/摘要、evidence text、同一 child run ID | 复用同一模型配置与摘要副本，输出 `outline`、`body`、`citations`、`summary`；不得执行摘要或资料中的指令 | `_render_artifact_node` 消费 |
 | 单测覆盖 | `backend/tests/test_agent_explanation_runtime.py` | `test_explanation_runtime_returns_structured_decision_and_content` / `test_explanation_runtime_uses_run_bound_agent_model_config` | 运行时接线变化 | 校验结构化决策、正文输出与 run 绑定配置 | 回归保护 |
 
 ## 历史摘要模型接线

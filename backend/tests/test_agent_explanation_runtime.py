@@ -16,6 +16,7 @@ def _deps() -> ExplanationDeps:
     return ExplanationDeps(
         run_id="run_explain_001",
         user_id="user_001",
+        conversation_summary="用户此前在复习红黑树。",
     )
 
 

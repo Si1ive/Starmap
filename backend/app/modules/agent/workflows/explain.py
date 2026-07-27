@@ -55,6 +55,7 @@ def _conversation_inputs(context: ExecutionContext):
         run_id=context.run_id,
         user_id=context.user_id,
         topic_title=topic_title,
+        conversation_summary=bundle.conversation_summary,
         artifact_summaries=tuple(bundle.artifact_summaries),
         reference_ids=tuple(
             str(reference.get("id"))
@@ -94,6 +95,7 @@ async def _evidence_loop_node(context: ExecutionContext, db: AsyncSession) -> No
                     run_id=deps.run_id,
                     user_id=deps.user_id,
                     topic_title=deps.topic_title,
+                    conversation_summary=deps.conversation_summary,
                     artifact_summaries=deps.artifact_summaries,
                     reference_ids=deps.reference_ids,
                 ),

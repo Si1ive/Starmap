@@ -183,7 +183,7 @@ load_scope completed
 - 已补 `backend/tests/test_agent_memory_selector.py::test_load_practice_bundle_uses_snapshot_topic_and_context_metadata`，覆盖 snapshot topic aliases、约束、difficulty、knowledge point IDs 和 selected artifacts 都能被组装进 `PracticeBundle`。
 - 已完成 `PlanningBundle`：`PlanningTarget` / `PlanningBundle`（L59-L77）和 `load_planning_bundle`（L185-L337）只从同用户 snapshot 主题、最新 active 已批准目标和有评分证据的低掌握度知识点选取规划目标；`plan._aggregate_learning_evidence_node`（L26-L49）已接入。无真实目标时前置门失败且不创建审批，硬编码的“数据结构 / 操作系统 / 计算机网络 / 60 分钟”已删除。
 - 已完成 `EvaluationBundle`：`EvaluationQuestion` / `EvaluationBundle` / `_extract_user_answer`（L80-L137）和 `load_evaluation_bundle`（L340-L471）按 run/user/thread 校验 snapshot，只接受唯一 question 引用，重读 active、未拒绝且有可信答案来源的题面，并从显式“我的答案是 / 我选”表达提取作答；跨用户、跨线程、多题、失效题、缺答案均返回稳定 unresolved reason。Grade 的 `_load_attempt_snapshot_node`（L40-L78）已接入。
-- 已完成 `ConversationBundle`：`ConversationTurn`、`ConversationBundle.to_message_history` 与 `load_conversation_bundle`（L800-L956）只按 snapshot 冻结 ID 重读同用户/线程的 visible completed 消息和公开 Artifact；唯一 question 题面、topic title+aliases、standalone request 依次生成首次 query。Explain 的 `_load_scope_node`（L36-L47）已接入，`_evidence_loop_node`（L68-L204）和 `_generate_explanation_node`（L234-L287）把同一份受控 history 传给模型，并阻止模型首个 query 覆盖冻结焦点。
+- 已完成 `ConversationBundle`：`ConversationTurn`、`ConversationBundle.to_message_history` 与 `load_conversation_bundle`（L800-L1001）复现同用户/线程 snapshot 的 visible completed 消息、冻结摘要和公开 Artifact；首次 query 仍按唯一题面、topic aliases、standalone request 决定。Explain 的 `_evidence_loop_node`（L69-L206）和 `_generate_explanation_node`（L236-L289）把同一份受控 history/摘要交给模型。
 - `MEM-004` 已无剩余 Bundle/首批消费接入；历史摘要属于 `MEM-007`，主观题可靠评分器属于后续 Grade 能力扩展，不阻塞本任务的分层记忆最小闭环。
 
 - 定义类型化 `MemoryNeed`，把消费能力固定为 `conversation_continuity`、`topic_focus`、`practice_generation`、
@@ -246,11 +246,12 @@ load_scope completed
 
 ### MEM-007 压缩、冲突、失效与删除
 
-- 状态：进行中（2026-07-27 已完成连续区间增量摘要生产及 Router/普通回答首批消费；child Bundle、冲突、衰减和删除仍待实现）。
+- 状态：进行中（已完成增量摘要生产及 Router、普通回答、Explain 消费；冲突、衰减、Embedding 和删除仍待实现）。
 - 已由 `backend/app/modules/agent/conversation_summary.py::ConversationSummaryMaintainer`（L72-L318）固定保留最近 12 个用户轮次，只从上个活跃摘要 `end_sequence` 之后选择最多 24 条同用户/线程的 visible completed user/assistant 消息；不足 13 轮不调用模型，也不在每次 Run 重读整线程。模型返回后短暂锁定线程并复核活跃版本，避免多 Worker 产生双活摘要，冲突交给 Outbox 基于新版本重试。
 - `backend/app/modules/agent/model_runtime/conversation_summary.py::ConversationSummaryRuntime.summarize`（L65-L117）把旧摘要和新增消息当作不可信数据，使用触发 Run 绑定模型生成结构化非空摘要；`maintain` 新建递增版本、保留起止 sequence 和来源消息 ID，再用 `superseded_by_id` 标记旧摘要。原 `AgentMessage` 不覆盖，摘要正文不进入公开 SSE。
 - 成功 Run 只在 `AgentWorker.process_run`（L185-L227）当前事务写摘要维护 Outbox；`MemoryOutboxConsumer.process_claimed`（L202-L276）在独立消费事务复核 Run/thread/user/type，模型或存储失败只重试任务，不把 completed Run 改成失败。`backend/tests/test_agent_conversation_summary.py`（L169-L436）覆盖近期窗口、隐藏/失败/system 排除、重放幂等、新区间合并、并发版本复核、跨作用域隔离和失败隔离。
 - `backend/app/modules/agent/context_builder.py::ThreadContextBuilder._load_conversation_summary`（L533-L569）只在近期原始轮次选完后用剩余 Token 预算选择同用户/线程、范围不重叠的唯一 active 摘要；`ensure_turn_memory_snapshot`（L405-L515）冻结内容副本和来源版本。`RouterDeps` / `DirectAnswerDeps` 将摘要作为不可信动态上下文消费，child metadata 和公开 SSE 均不含正文。`backend/tests/test_agent_context_builder.py::test_context_selects_only_active_summary_that_fits_remaining_budget`（L319-L384）覆盖预算选择与 snapshot item。
+- `backend/app/modules/agent/memory_selector.py::load_conversation_bundle`（L832-L1001）让 Explain 复现唯一 snapshot 摘要副本，并复核源摘要 user/thread/version；版本不符或重复条目均安全降级。`ExplanationDeps`（L19-L75）把同一副本交给规划和正文模型，摘要不进入 message history、child metadata 或 SSE。
 - 用户明确陈述和真实业务事件优先于模型抽取；低置信度候选不能覆盖高置信度活跃记忆。
 - 线程主题按轮次衰减；临时约束随 Turn/Practice 结束；学习画像长期保存并按时间衰减。
 - 排除集的衰减与覆盖是读取策略而非存储变更：事实事件永久保留，selector 默认只取近期窗口（当前为最近 10 个练习事件 / 50 道题，后续可加时间衰减）；用户显式引用（“再出一遍上次那道题”）按冲突优先级最高级覆盖排除集。这类调整只改 selector 参数，不迁移事实表。

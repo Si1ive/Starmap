@@ -809,6 +809,9 @@ class ConversationBundle(BaseModel):
     standalone_request: str | None = None
     topic: TopicBundle | None = None
     messages: list[ConversationTurn] = Field(default_factory=list)
+    conversation_summary: str | None = None
+    conversation_summary_id: str | None = None
+    conversation_summary_version: int | None = None
     artifact_summaries: list[str] = Field(default_factory=list)
     reference_sources: list[dict[str, Any]] = Field(default_factory=list)
     retrieval_query: str | None = None
@@ -833,7 +836,12 @@ async def load_conversation_bundle(
     user_id: str,
 ) -> ConversationBundle:
     """严格复现 snapshot 选中的对话连续性、Artifact 摘要与检索焦点。"""
-    from .models import AgentArtifact, AgentMessage, AgentThreadItem
+    from .models import (
+        AgentArtifact,
+        AgentConversationSummary,
+        AgentMessage,
+        AgentThreadItem,
+    )
 
     run = await db.scalar(
         select(AgentRun).where(AgentRun.id == run_id, AgentRun.user_id == user_id)
@@ -854,6 +862,40 @@ async def load_conversation_bundle(
         return ConversationBundle(standalone_request=run.input_message)
 
     metadata = snapshot.selection_metadata_json or {}
+    conversation_summary = None
+    conversation_summary_id = metadata.get("conversation_summary_id")
+    conversation_summary_version = None
+    if conversation_summary_id:
+        summary_items = list(
+            (
+                await db.execute(
+                    select(AgentMemorySnapshotItem)
+                    .where(
+                        AgentMemorySnapshotItem.snapshot_id == snapshot.id,
+                        AgentMemorySnapshotItem.memory_need == "conversation_continuity",
+                        AgentMemorySnapshotItem.memory_partition == "historical_summaries",
+                        AgentMemorySnapshotItem.source_kind == "conversation_summary",
+                        AgentMemorySnapshotItem.source_id == conversation_summary_id,
+                        AgentMemorySnapshotItem.selected.is_(True),
+                    )
+                    .limit(2)
+                )
+            ).scalars()
+        )
+        summary_item = summary_items[0] if len(summary_items) == 1 else None
+        summary_source = await db.scalar(
+            select(AgentConversationSummary).where(
+                AgentConversationSummary.id == conversation_summary_id,
+                AgentConversationSummary.thread_id == run.thread_id,
+                AgentConversationSummary.user_id == user_id,
+            )
+        )
+        if summary_item is not None and summary_source is not None:
+            payload = summary_item.payload_json or {}
+            frozen_text = str(payload.get("summary_text") or "").strip()
+            if frozen_text and summary_item.version == summary_source.version:
+                conversation_summary = frozen_text
+                conversation_summary_version = summary_item.version
     selected_message_ids = list(dict.fromkeys(metadata.get("selected_message_ids") or []))
     message_rows = []
     if selected_message_ids:
@@ -950,6 +992,9 @@ async def load_conversation_bundle(
         standalone_request=snapshot.standalone_request or run.input_message,
         topic=topic,
         messages=messages,
+        conversation_summary=conversation_summary,
+        conversation_summary_id=(conversation_summary_id if conversation_summary else None),
+        conversation_summary_version=conversation_summary_version,
         artifact_summaries=artifact_summaries,
         reference_sources=reference_sources,
         retrieval_query=str(retrieval_query).strip() if retrieval_query else None,
