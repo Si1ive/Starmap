@@ -2,8 +2,8 @@
 
 ## 状态与设计边界
 
-状态：进行中。增量摘要、Snapshot 冻结消费、明确重复题覆盖当前排除视图、线程主题六轮 TTL 已完成；
-临时约束回归、掌握度衰减、Embedding 生命周期、偏好候选冲突治理和线程删除仍待实现。
+状态：进行中。增量摘要、Snapshot 冻结消费、明确重复题覆盖当前排除视图、线程主题六轮 TTL 和临时
+练习约束单轮失效已完成；掌握度衰减、Embedding 生命周期、偏好候选冲突治理和线程删除仍待实现。
 
 稳定边界是事实模型、作用域、版本和选择协议，不是 Explain/Validate/Grade/Plan 的工作流名称。原始消息、
 Artifact、Grade 证据和业务审批保持不可变；排除集、薄弱点、有效掌握度和召回结果均在读取时派生。
@@ -20,19 +20,21 @@ Artifact、Grade 证据和业务审批保持不可变；排除集、薄弱点、
 | 唯一重复题覆盖 | `backend/app/modules/agent/memory_selector.py` | `_apply_explicit_question_repeat` | L1004-L1024 | 当前排除 ID 与本轮理解 | 仅在唯一结构化题目引用时从当前视图移除该 ID；不删除事实 | `PracticeBundle.excluded_question_ids` |
 | 对话摘要选择 | `backend/app/modules/agent/context_builder.py` | `ThreadContextBuilder._load_conversation_summary` | L533-L569 | user、thread、原始历史边界与剩余 Token | 只选范围不重叠、未 supersede 且预算可容纳的唯一摘要；双活直接报完整性错误 | Turn Snapshot 冻结内容与版本 |
 
-## 下一单元：临时练习约束单轮失效
+## 已完成：临时练习约束单轮失效
 
-目标：把现有“只从当前原始输入解析”的隐含行为固化为端到端契约，不新增持久化字段。
+已把“只从当前原始输入解析”的行为固化为端到端契约，没有新增持久化字段。
 
 验收：同一线程 Turn A 明确要求 `difficulty:hard` 和 `chapter_ordinal:N`，其 Snapshot 与 PracticeBundle
 必须包含这两个约束；Turn B 不再出现难度和章节表达时，新 Snapshot、子 Run 的 PracticeBundle 与最终
 工具参数均不得继承旧值。线程 `active_topic_json` 只允许保存主题及确认版本，不保存 difficulty、chapter
 或 repeat 约束；Turn A 的 Snapshot、Artifact 和可信事实保持不变。
 
-必须覆盖显式主题继承与 active topic 两条路径、同用户同线程作用域、旧 Snapshot 不被修改，以及 Turn B
-没有旧 difficulty/chapter filters。若当前实现已满足，提交只增加端到端回归、状态断言和教学说明。
+`backend/tests/test_agent_conversation_workflow.py::test_practice_constraints_expire_after_the_current_turn`
+（L894-L1078）从显式 `context_ref` 创建 Turn A，经过 Router、不可变 Snapshot 和 Validate child Run 装载
+PracticeBundle；Turn B 再从 `active_topic` 继承主题。回归证明 Turn B 的 constraints、difficulty、chapter
+和 filters 均为空，线程热状态不含临时约束，Turn A Snapshot、唯一主题事实和 Artifact 集合保持不变。
 
-## UserLearningMastery 时间衰减
+## 下一单元：UserLearningMastery 时间衰减
 
 目标：保留原始累计分数和 Grade evidence 审计，同时为消费者提供由同一时钟确定性计算的有效掌握度。
 

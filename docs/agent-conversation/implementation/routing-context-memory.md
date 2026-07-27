@@ -40,13 +40,14 @@
 1. 当前系统已经能选取近期消息、Artifact、待处理交互，并在 Router 前只读取确认后 6 个后续轮次内的 `active_topic`；过期主题不再静默影响新请求。
 2. `MEM-003` 已闭环：conversation run 先做确定性理解；最新单题直接绑定，裸词“这个”或多题场景才进入候选受限的结构化模型。模型只能选择带 active 题面/Artifact 摘要的候选键，低置信度保持 unresolved，最终选择与审计一并冻结到 snapshot 并传给 child run。
 3. `MEM-004` / `MEM-005` 的第二阶段已打通到过滤参数和首个澄清闭环：Validate 会从 snapshot 装载 `PracticeBundle`，继承主题、别名、难度约束、知识点 ID 和选中的 Artifact，并据此生成检索 query 与 retrieval filters；若缺少主题，会创建 `practice_topic` 输入项并在用户补充后从断点继续检索。
-4. 真实排除集已闭环：Validate 完成时写 `practice_artifact_created` 事实事件，下一次练习默认排除近期已出过的题；用户明确要求重出唯一引用题时只覆盖当前读取视图，否定表达或歧义引用不放宽，历史事实不修改。
-5. 掌握度已形成首个真实读写闭环：无主题时按“唯一低掌握度知识点”回退练习主题；Grade 通过 `EvaluationBundle` 读取唯一可信客观题、标准答案和显式作答，确定性产生 verdict 后由 Feedback Artifact 写 `grade_result_confirmed` 并更新 `user_learning_mastery`。主观题、缺快照、歧义题目或无可信标准答案会在 Artifact 前失败，不写掌握度。
-6. 本轮显式 `context_ref` 主题已在 Router 调用前写成 `topic_confirmed`；因此 Router/模型失败只会阻止 Agent 输出，不会丢失用户已表达的主题。继承的热状态主题不会重复产生确认事件。
-7. Explain 成功产出 Artifact 时已写 `explanation_artifact_created`，包括零命中/检索异常后的无引用 fallback；事件不复制正文，也不修改掌握度。
-8. Plan 只有在审批记录属于同一 Run、状态为 approved，且成功生成携带 approval ID 的 Artifact 后才写用户级 `plan_confirmed`；拒绝、pending、缺失审批或旁路恢复均不写长期目标。
-9. PlanningBundle 已接入 Plan，EvaluationBundle 已接入 Grade，ConversationBundle 已接入 Explain；硬编码学习证据和固定批改反馈均已移除。Explain 的规划与生成模型使用 snapshot 冻结 history 和历史摘要，首次检索使用冻结题面/主题 query；结构化指代 unresolved 仍由 Router 决定是否澄清。
-10. 历史摘要已形成“异步生成→预算选择→snapshot 冻结→Router/普通回答/Explain 消费”闭环；正文只作为动态 instructions 中的不可信数据，不伪装成 user history，也不进入公开 SSE。Embedding 仍待实现。
+4. difficulty、chapter ordinal 与重复题标记都是当前轮约束：只从本轮 `raw_input` 生成并冻结在本轮 Snapshot，不进入 `active_topic_json`。后续轮次可继承主题，但新 Snapshot 与 PracticeBundle 不继承旧约束；旧 Snapshot、Artifact 和事实事件保持不变。
+5. 真实排除集已闭环：Validate 完成时写 `practice_artifact_created` 事实事件，下一次练习默认排除近期已出过的题；用户明确要求重出唯一引用题时只覆盖当前读取视图，否定表达或歧义引用不放宽，历史事实不修改。
+6. 掌握度已形成首个真实读写闭环：无主题时按“唯一低掌握度知识点”回退练习主题；Grade 通过 `EvaluationBundle` 读取唯一可信客观题、标准答案和显式作答，确定性产生 verdict 后由 Feedback Artifact 写 `grade_result_confirmed` 并更新 `user_learning_mastery`。主观题、缺快照、歧义题目或无可信标准答案会在 Artifact 前失败，不写掌握度。
+7. 本轮显式 `context_ref` 主题已在 Router 调用前写成 `topic_confirmed`；因此 Router/模型失败只会阻止 Agent 输出，不会丢失用户已表达的主题。继承的热状态主题不会重复产生确认事件。
+8. Explain 成功产出 Artifact 时已写 `explanation_artifact_created`，包括零命中/检索异常后的无引用 fallback；事件不复制正文，也不修改掌握度。
+9. Plan 只有在审批记录属于同一 Run、状态为 approved，且成功生成携带 approval ID 的 Artifact 后才写用户级 `plan_confirmed`；拒绝、pending、缺失审批或旁路恢复均不写长期目标。
+10. PlanningBundle 已接入 Plan，EvaluationBundle 已接入 Grade，ConversationBundle 已接入 Explain；硬编码学习证据和固定批改反馈均已移除。Explain 的规划与生成模型使用 snapshot 冻结 history 和历史摘要，首次检索使用冻结题面/主题 query；结构化指代 unresolved 仍由 Router 决定是否澄清。
+11. 历史摘要已形成“异步生成→预算选择→snapshot 冻结→Router/普通回答/Explain 消费”闭环；正文只作为动态 instructions 中的不可信数据，不伪装成 user history，也不进入公开 SSE。Embedding 仍待实现。
 
 ## 现状问题与整改入口
 

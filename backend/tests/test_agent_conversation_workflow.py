@@ -888,3 +888,191 @@ async def test_streaming_failure_retains_partial_content_and_explains_reason(
     assert failed_event.payload["message"]["content"].startswith("红黑树")
     assert failed_event.payload["error_code"] == "agent_response_too_long"
     assert "长度" in failed_event.payload["error_message"]
+
+
+@pytest.mark.asyncio
+async def test_practice_constraints_expire_after_the_current_turn(
+    db_session,
+    monkeypatch,
+):
+    """难度和章节只属于创建它们的 Snapshot，后续轮次只继承主题。"""
+    from copy import deepcopy
+
+    from app.models.mysql_models import KnowledgePoint, KnowledgePointChapterLink
+    from app.modules.agent.memory_selector import (
+        build_practice_filters,
+        load_practice_bundle,
+    )
+
+    connection = await db_session.connection()
+    await connection.run_sync(
+        lambda sync_connection: Base.metadata.create_all(
+            sync_connection,
+            tables=[KnowledgePoint.__table__, KnowledgePointChapterLink.__table__],
+        )
+    )
+    await _create_thread(db_session)
+    db_session.add(Subject(id="subject_ds", name="数据结构", code="ds"))
+    await db_session.flush()
+    db_session.add(
+        Chapter(
+            id="chapter_ds_search",
+            subject_id="subject_ds",
+            name="查找",
+        )
+    )
+    db_session.add_all(
+        [
+            CanonicalChapter(
+                id=f"cchap_ds_0{ordinal}",
+                subject_id="subject_ds",
+                level=1,
+                name=name,
+                sort_order=ordinal - 1,
+                status="active",
+            )
+            for ordinal, name in enumerate(("绪论", "线性表", "栈、队列和数组"), start=1)
+        ]
+    )
+    await db_session.flush()
+    db_session.add(
+        KnowledgePoint(
+            id="kp_binary_search",
+            chapter_id="chapter_ds_search",
+            subject_id="subject_ds",
+            title="二分查找",
+            content="二分查找要求有序表。",
+            aliases=["折半查找"],
+        )
+    )
+    await db_session.flush()
+
+    router = RouterStub(
+        [
+            RouterDecision(
+                action="validate",
+                confidence=0.95,
+                reason_code="explicit_practice_constraints",
+            ),
+            RouterDecision(
+                action="validate",
+                confidence=0.94,
+                reason_code="follow_up_practice",
+            ),
+        ]
+    )
+    monkeypatch.setattr(conversation, "router_runtime", router)
+
+    constrained_turn = await _create_turn(
+        db_session,
+        content="给我出一道第三章难一点的题",
+        client_message_id="client_constraints_turn_a",
+        context_refs=[
+            {
+                "type": "knowledge_point",
+                "id": "kp_binary_search",
+                "title": "二分查找",
+                "aliases": ["折半查找"],
+            }
+        ],
+    )
+    assert await AgentWorker().process_run(db_session, constrained_turn.run) is True
+
+    child_a = await db_session.scalar(
+        select(AgentRun).where(AgentRun.parent_run_id == constrained_turn.run.id)
+    )
+    snapshot_a = await db_session.scalar(
+        select(AgentMemorySnapshot).where(
+            AgentMemorySnapshot.run_id == constrained_turn.run.id
+        )
+    )
+    assert child_a is not None
+    assert snapshot_a is not None
+    original_snapshot_a = deepcopy(snapshot_a.understanding_json)
+    bundle_a = await load_practice_bundle(
+        db_session,
+        run_id=child_a.id,
+        user_id="user_001",
+    )
+
+    assert bundle_a.constraints == ["difficulty:hard", "chapter_ordinal:3"]
+    assert bundle_a.difficulty == "hard"
+    assert bundle_a.chapter_ids == ["cchap_ds_03"]
+    assert bundle_a.chapter_scope_source == "explicit"
+    assert build_practice_filters(bundle_a) == {"difficulty": "hard"}
+
+    unconstrained_turn = await _create_turn(
+        db_session,
+        content="再给我出一道题",
+        client_message_id="client_constraints_turn_b",
+    )
+    assert await AgentWorker().process_run(db_session, unconstrained_turn.run) is True
+
+    child_b = await db_session.scalar(
+        select(AgentRun).where(AgentRun.parent_run_id == unconstrained_turn.run.id)
+    )
+    snapshot_b = await db_session.scalar(
+        select(AgentMemorySnapshot).where(
+            AgentMemorySnapshot.run_id == unconstrained_turn.run.id
+        )
+    )
+    state = await db_session.scalar(
+        select(AgentThreadMemoryState).where(
+            AgentThreadMemoryState.thread_id == "thread_001",
+            AgentThreadMemoryState.user_id == "user_001",
+        )
+    )
+    assert child_b is not None
+    assert snapshot_b is not None
+    assert state is not None
+    bundle_b = await load_practice_bundle(
+        db_session,
+        run_id=child_b.id,
+        user_id="user_001",
+    )
+
+    assert router.inputs == [
+        "给用户出一道关于二分查找的练习题",
+        "给用户出一道关于二分查找的练习题",
+    ]
+    assert snapshot_b.id != snapshot_a.id
+    assert snapshot_b.understanding_json["constraints"] == []
+    assert bundle_b.constraints == []
+    assert bundle_b.difficulty is None
+    assert bundle_b.chapter_ids == []
+    assert bundle_b.chapter_scope_source is None
+    assert build_practice_filters(bundle_b) == {}
+    assert bundle_b.topic is not None
+    assert bundle_b.topic.title == "二分查找"
+    assert bundle_b.topic.source == "thread_memory"
+
+    await db_session.refresh(snapshot_a)
+    assert snapshot_a.understanding_json == original_snapshot_a
+    assert state.active_topic_json == {
+        "entity_type": "knowledge_point",
+        "entity_id": "kp_binary_search",
+        "title": "二分查找",
+        "source": "thread_memory",
+        "aliases": ["折半查找"],
+        "confirmed_state_version": 1,
+    }
+    assert not {
+        "constraints",
+        "difficulty",
+        "chapter_ids",
+        "chapter_ordinal",
+    }.intersection(state.active_topic_json)
+
+    topic_events = list(
+        (
+            await db_session.execute(
+                select(AgentMemoryEvent).where(
+                    AgentMemoryEvent.fact_type == "topic_confirmed"
+                )
+            )
+        ).scalars()
+    )
+    assert len(topic_events) == 1
+    assert topic_events[0].run_id == constrained_turn.run.id
+    artifacts = list((await db_session.execute(select(AgentArtifact))).scalars())
+    assert artifacts == []
