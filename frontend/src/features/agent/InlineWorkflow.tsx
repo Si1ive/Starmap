@@ -52,12 +52,99 @@ function publicText(value: unknown): string | null {
   }
   if (value && typeof value === 'object') {
     const record = value as Record<string, unknown>
-    for (const key of ['summary', 'content', 'description', 'text', 'message']) {
+    for (const key of [
+      'summary',
+      'content',
+      'description',
+      'text',
+      'message',
+      'name',
+      'title',
+      'filename',
+      'source_label',
+      'outline_code',
+    ]) {
       const text = publicText(record[key])
       if (text) return text
     }
   }
   return null
+}
+
+type PublicRecord = Record<string, unknown>
+
+const HIT_GROUPS = [
+  { type: 'knowledge_point', label: '命中知识点' },
+  { type: 'question', label: '命中题目' },
+  { type: 'other', label: '其他命中' },
+] as const
+
+const SEGMENT_LABELS: Record<string, string> = {
+  summary: '知识点摘要',
+  content: '正文',
+  title: '标题',
+  explanation: '解析',
+  option: '选项',
+}
+
+function asRecord(value: unknown): PublicRecord | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as PublicRecord
+    : null
+}
+
+function asRecords(value: unknown): PublicRecord[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is PublicRecord => Boolean(asRecord(item)))
+    : []
+}
+
+function segmentLabel(segmentType: string | null, entityType: string): string {
+  if (entityType === 'question' && segmentType === 'content') return '题面'
+  if (entityType === 'knowledge_point' && segmentType === 'content') return '知识点正文'
+  return (segmentType && SEGMENT_LABELS[segmentType]) || '命中片段'
+}
+
+function chapterSummary(document: PublicRecord): string | null {
+  const chapters = asRecords(document.chapters)
+  const names = chapters
+    .map((chapter) => publicText(chapter.name) || publicText(chapter.title))
+    .filter((name): name is string => Boolean(name))
+  if (names.length > 0) return `章节：${names.slice(0, 2).join(' / ')}`
+
+  const chapterIds = Array.isArray(document.chapter_ids)
+    ? document.chapter_ids.map(publicText).filter((id): id is string => Boolean(id))
+    : []
+  return chapterIds.length > 0 ? '章节信息待同步' : null
+}
+
+function sourceSummary(document: PublicRecord): string | null {
+  const source = asRecord(document.source)
+  if (!source) return null
+  const sourceName = publicText(source.filename) || publicText(source.title) || publicText(source.source_label)
+  const page = publicText(source.page_no)
+  if (!sourceName && !page) return null
+  return [sourceName, page ? `第 ${page} 页` : null].filter(Boolean).join(' · ')
+}
+
+function HitSummary({ document, index }: { document: PublicRecord; index: number }) {
+  const entityType = publicText(document.entity_type) || 'other'
+  const title = publicText(document.title) || publicText(document.entity_title) || `未命名命中 ${index + 1}`
+  const details = [
+    chapterSummary(document),
+    segmentLabel(publicText(document.segment_type), entityType),
+    sourceSummary(document),
+  ].filter((item): item is string => Boolean(item))
+
+  return (
+    <li className={`inline-workflow__source-hit is-${entityType}`}>
+      <span className="inline-workflow__source-hit-mark" aria-hidden="true" />
+      <span className="inline-workflow__source-hit-body">
+        <strong>{title}</strong>
+        <small>{details.join(' · ')}</small>
+      </span>
+    </li>
+  )
 }
 
 function ArtifactCard({ artifact }: { artifact: WorkflowArtifactView }) {
@@ -95,9 +182,19 @@ function ActivityCard({ activity }: { activity: WorkflowActivityView }) {
       (item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'),
     )
     : []
-  const backend = publicText(activity.metadata.backend)
   const query = publicText(activity.metadata.query)
   const total = publicText(activity.metadata.total)
+  const parsedTotal = Number(activity.metadata.total)
+  const totalCount = Number.isFinite(parsedTotal) ? parsedTotal : documents.length
+  const visibleDocuments = documents.slice(0, 6)
+  const groupedDocuments = HIT_GROUPS.map((group) => ({
+    ...group,
+    items: visibleDocuments.filter((document) => {
+      const type = publicText(document.entity_type)
+      return group.type === 'other' ? !['knowledge_point', 'question'].includes(type || '') : type === group.type
+    }),
+  })).filter((group) => group.items.length > 0)
+  const hiddenCount = Math.max(0, totalCount - visibleDocuments.length)
   const running = activity.status === 'running'
 
   return (
@@ -110,22 +207,35 @@ function ActivityCard({ activity }: { activity: WorkflowActivityView }) {
       <div>
         <strong>{activity.title}</strong>
         {activity.detail ? <p>{activity.detail}</p> : null}
-        {backend || query ? (
+        {query || total ? (
           <dl>
-            {backend ? <><dt>数据通道</dt><dd>{backend}</dd></> : null}
             {query ? <><dt>查询内容</dt><dd>{query}</dd></> : null}
             {total ? <><dt>命中数量</dt><dd>{total}</dd></> : null}
           </dl>
         ) : null}
-        {documents.length > 0 ? (
-          <ul className="inline-workflow__sources">
-            {documents.map((document, index) => (
-              <li key={publicText(document.id) || `${activity.id}_${index}`}>
-                <span>{publicText(document.title) || '未命名资料'}</span>
-                {publicText(document.score) ? <small>相关度 {publicText(document.score)}</small> : null}
-              </li>
+        {groupedDocuments.length > 0 ? (
+          <div className="inline-workflow__source-groups">
+            {groupedDocuments.map((group) => (
+              <section className={`inline-workflow__source-group is-${group.type}`} key={group.type}>
+                <div className="inline-workflow__source-group-heading">
+                  <strong>{group.label}</strong>
+                  <small>{group.items.length} 条摘要</small>
+                </div>
+                <ul className="inline-workflow__sources">
+                  {group.items.map((document, index) => (
+                    <HitSummary
+                      document={document}
+                      index={index}
+                      key={publicText(document.id) || `${activity.id}_${group.type}_${index}`}
+                    />
+                  ))}
+                </ul>
+              </section>
             ))}
-          </ul>
+            {hiddenCount > 0 ? (
+              <p className="inline-workflow__source-more">其余 {hiddenCount} 条命中已省略，展开结果请查看最终讲解。</p>
+            ) : null}
+          </div>
         ) : null}
       </div>
     </li>

@@ -52,6 +52,7 @@ def _normalize_agent_result(item: Dict[str, Any]) -> Dict[str, Any]:
         "score": item.get("score"),
         "subject_id": item.get("subject_id"),
         "chapter_ids": item.get("chapter_ids") or [],
+        "chapters": item.get("chapters") or [],
         "source": item.get("source") or {},
         "question_meta": item.get("question_meta"),
         "knowledge_point_meta": item.get("knowledge_point_meta"),
@@ -216,7 +217,6 @@ async def retrieve_knowledge(
                 "started_at": utc_isoformat(started_at),
                 "public_metadata": {
                     "tool": "retrieve_knowledge",
-                    "backend": "Qdrant 混合检索 + MySQL 内容索引",
                     "query": query[:200],
                     "subject_id": subject_id,
                     "chapter_ids": chapter_ids or [],
@@ -268,7 +268,9 @@ async def retrieve_knowledge(
                     "id": item.get("entity_id"),
                     "title": item.get("entity_title") or "未命名资料",
                     "entity_type": item.get("entity_type"),
+                    "segment_type": item.get("segment_type"),
                     "score": item.get("score"),
+                    "chapters": item.get("chapters") or [],
                     "source": item.get("source") or {},
                 }
                 for item in simplified[:5]
@@ -295,7 +297,6 @@ async def retrieve_knowledge(
                     "completed_at": utc_isoformat(completed_at),
                     "public_metadata": {
                         "tool": "retrieve_knowledge",
-                        "backend": "Qdrant 混合检索 + MySQL 内容索引",
                         "query": query[:200],
                         "total": len(simplified),
                         "documents": document_summaries,
@@ -337,7 +338,6 @@ async def retrieve_knowledge(
                     "error": str(e),
                     "public_metadata": {
                         "tool": "retrieve_knowledge",
-                        "backend": "Qdrant 混合检索 + MySQL 内容索引",
                         "query": query[:200],
                         "attempt_no": attempt_no,
                     },

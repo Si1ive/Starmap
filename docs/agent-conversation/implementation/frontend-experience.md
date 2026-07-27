@@ -14,7 +14,15 @@
 | 消息归并 | `frontend/src/features/agent/timeline-state.ts` | `applyMessageEvent` | `message.delta`、`message.completed`、`message.failed` | 对 delta 有序追加，对 completed/failed 收敛状态和错误信息 | `messagesById` |
 | 工作流归并 | `frontend/src/features/agent/timeline-state.ts` | `applyWorkflowEvent` | `workflow.activity.updated` 等工作流事件 | 以 activity ID 为键维护活动、步骤、审批和产物状态 | `workflowByRunId` |
 | 消息与工作流渲染 | `frontend/src/features/agent/ConversationStream.tsx` | `AssistantPending`、`TimelineItemView`、`ConversationStream` | timeline items | 无正文时显示等待三点；失败时保留 partial 正文并单独显示原因；工作流项展示内嵌卡片 | 对话滚动区 |
-| 内嵌工作流卡片 | `frontend/src/features/agent/InlineWorkflow.tsx` | `ActivityCard` / `InlineWorkflow` | `workflow.activities[]` 与步骤链 | 展示检索状态、命中资料、审批/输入和最终产物 | 工作流消息块 |
+| 内嵌工作流卡片 | `frontend/src/features/agent/InlineWorkflow.tsx` | `HitSummary`（L130-L148）、`ActivityCard`（L179-L243）、`InlineWorkflow`（L245-L414） | `workflow.activities[]` 与步骤链 | 展示检索状态、查询和命中数量；把知识点、题目和其他命中分组，每条只显示标题、章节、段落类型和来源页，最多显示 6 条，不展示内部数据通道 | 工作流消息块 |
+
+## 检索命中摘要
+
+| 执行阶段 | 文件 | 符号 | 入口条件 | 处理与副作用 | 最终消费 |
+| --- | --- | --- | --- | --- | --- |
+| 章节引用回填 | `backend/app/modules/retrieval/search_engine.py` | `RetrievalSearchEngine._load_chapter_refs`（L385-L406） | `RetrievalSegment.chapter_ids` | 只读查询 canonical chapter，把 ID 补成名称、层级、章节编码；缺失章节仍保留 ID 和空名称，不阻断检索结果 | `RetrievalResult.to_dict` 的 `chapters` |
+| 用户工具摘要 | `frontend/src/features/agent/InlineWorkflow.tsx` | `HitSummary`（L130-L148）、`ActivityCard`（L179-L243） | `tool.result.public_metadata.documents` | 按 `entity_type` 分为知识点/题目/其他，段落类型翻译为摘要、正文、解析、题面等；每组保留紧凑摘要并提示省略数量，不渲染 `backend` | 用户端工作流活动卡片 |
+| 摘要视觉层 | `frontend/src/features/agent/agent-chat.css` | `.inline-workflow__source-groups` 至 `.inline-workflow__source-more`（L453-L546） | 分组摘要 DOM | 用知识点/题目不同边框色、标题层级和换行规则限制卡片宽度，避免命中资料撑大对话框 | 用户端响应式布局 |
 
 ## 输入区与首页/会话内双形态
 

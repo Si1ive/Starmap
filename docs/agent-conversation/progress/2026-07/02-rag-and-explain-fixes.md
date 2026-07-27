@@ -183,3 +183,28 @@
 ### 提交信息
 
 `补齐 Agent RAG 向量召回记录`
+
+## 2026-07-27：优化用户端检索命中摘要
+
+### 目标
+
+让用户知道命中的是哪个章节的哪一部分知识点或哪道题，同时避免把整批资料和内部“Qdrant 混合检索 + MySQL 内容索引”文案挤进对话框。
+
+### 实现
+
+- 在 `backend/app/modules/retrieval/search_engine.py::RetrievalResult`（L21-L60）和 `to_dict`（L62-L99）增加 `chapters`；`RetrievalSearchEngine.hydrate_results`（L283-L383）通过 `_load_chapter_refs`（L385-L406）把 canonical chapter ID 补成名称、层级和编码。
+- 在 `backend/app/modules/agent/tools/retrieve_knowledge.py::_normalize_agent_result`（L35-L59）和 `retrieve_knowledge`（L133-L347）透传 `chapters`、`segment_type`；工具结果摘要只保留标题、类型、章节、段落和来源页，并移除用户公开元数据里的内部数据通道字段。
+- 在 `frontend/src/features/agent/InlineWorkflow.tsx::HitSummary`（L130-L148）与 `ActivityCard`（L179-L243）将命中分为“命中知识点”“命中题目”“其他命中”，段落类型翻译为知识点摘要、正文、解析、题面等，最多展示 6 条并提示剩余数量。
+- 在 `frontend/src/features/agent/agent-chat.css` 的 `.inline-workflow__source-groups` 至 `.inline-workflow__source-more`（L453-L546）增加主题化分组卡片、知识点/题目色彩区分和长标题换行约束，避免工具结果撑大对话框。
+
+### 验证
+
+- `cd backend && venv/bin/pytest -q tests/test_retrieval_service.py tests/test_agent_retrieve_activity.py`：15 passed。
+- `cd backend && python3 -m py_compile app/modules/retrieval/search_engine.py app/modules/agent/tools/retrieve_knowledge.py` 通过。
+- `cd frontend && npm run build` 和针对本次文件的 ESLint 检查通过。
+- `frontend` 全量 `npm run lint` 仍被既有 `src/pages/AgentPage.tsx:68` 非空断言警告阻断；本次未修改该文件。
+- `git diff --check` 通过。
+
+### 提交信息
+
+`优化 Agent 用户端检索命中摘要`

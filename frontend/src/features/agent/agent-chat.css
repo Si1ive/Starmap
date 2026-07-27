@@ -450,35 +450,99 @@ button.agent-chat-connection:hover {
   overflow-wrap: anywhere;
 }
 
+.inline-workflow__source-groups {
+  display: grid;
+  gap: 7px;
+  margin-top: 9px;
+}
+
+.inline-workflow__source-group {
+  background: color-mix(in srgb, var(--chat-surface) 78%, var(--chat-canvas));
+  border: 1px solid var(--chat-line);
+  border-left: 3px solid var(--chat-accent);
+  border-radius: 7px;
+  padding: 7px 9px 8px;
+}
+
+.inline-workflow__source-group.is-question {
+  border-left-color: var(--chat-warning);
+}
+
+.inline-workflow__source-group.is-other {
+  border-left-color: var(--chat-muted);
+}
+
+.inline-workflow__source-group-heading {
+  align-items: baseline;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.inline-workflow__source-group-heading strong {
+  color: var(--chat-ink);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.inline-workflow__source-group-heading small,
+.inline-workflow__source-more {
+  color: var(--ink-faint);
+  font-size: 10px;
+}
+
 .inline-workflow__sources {
   display: grid;
   gap: 4px;
   list-style: none;
-  margin-top: 8px;
+  margin-top: 6px;
 }
 
 .inline-workflow__sources li {
-  align-items: baseline;
+  align-items: flex-start;
   border-top: 1px dashed var(--chat-line);
   display: flex;
   gap: 8px;
-  justify-content: space-between;
-  padding-top: 5px;
+  padding-top: 6px;
 }
 
-.inline-workflow__sources span {
+.inline-workflow__source-hit-mark {
+  background: var(--chat-accent);
+  border-radius: 50%;
+  flex: 0 0 auto;
+  height: 5px;
+  margin-top: 5px;
+  width: 5px;
+}
+
+.inline-workflow__source-hit.is-question .inline-workflow__source-hit-mark {
+  background: var(--chat-warning);
+}
+
+.inline-workflow__source-hit-body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.inline-workflow__source-hit-body strong {
   color: var(--chat-ink);
   font-size: 11px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-weight: 600;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
-.inline-workflow__sources small {
+.inline-workflow__source-hit-body small {
   color: var(--ink-faint);
-  flex: 0 0 auto;
-  font-family: var(--mono);
-  font-size: 9px;
+  font-size: 10px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.inline-workflow__source-more {
+  margin: 0;
+  padding: 0 2px;
 }
 
 .inline-workflow__interaction {

@@ -126,6 +126,19 @@ async def test_hydrate_results_preserves_hit_order_and_adds_source_display_name(
             ]
         ),
     )
+    chapter_result = SimpleNamespace(
+        scalars=lambda: SimpleNamespace(
+            all=lambda: [
+                SimpleNamespace(
+                    id="chapter-process",
+                    name="进程管理",
+                    level=2,
+                    code="OS-2",
+                    outline_code="2.3",
+                )
+            ]
+        ),
+    )
     question_result = SimpleNamespace(
         scalars=lambda: SimpleNamespace(
             all=lambda: [
@@ -150,7 +163,7 @@ async def test_hydrate_results_preserves_hit_order_and_adds_source_display_name(
     )
     db = SimpleNamespace(
         execute=AsyncMock(
-            side_effect=[segment_result, document_result, question_result]
+            side_effect=[segment_result, document_result, chapter_result, question_result]
         ),
     )
 
@@ -179,6 +192,15 @@ async def test_hydrate_results_preserves_hit_order_and_adds_source_display_name(
     assert payload["entity"]["review_status"] == "approved"
     assert payload["question_meta"]["question_type"] == "choice"
     assert payload["question_meta"]["paper_name"] == "操作系统真题"
+    assert payload["chapters"] == [
+        {
+            "id": "chapter-process",
+            "name": "进程管理",
+            "level": 2,
+            "code": "OS-2",
+            "outline_code": "2.3",
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -219,6 +241,19 @@ async def test_hydrate_results_falls_back_to_title_and_handles_missing_source():
             ]
         ),
     )
+    chapter_result = SimpleNamespace(
+        scalars=lambda: SimpleNamespace(
+            all=lambda: [
+                SimpleNamespace(
+                    id="chapter-search",
+                    name="查找算法",
+                    level=3,
+                    code="DS-3.1",
+                    outline_code="3.1",
+                )
+            ]
+        ),
+    )
     knowledge_result = SimpleNamespace(
         scalars=lambda: SimpleNamespace(
             all=lambda: [
@@ -251,7 +286,7 @@ async def test_hydrate_results_falls_back_to_title_and_handles_missing_source():
     )
     db = SimpleNamespace(
         execute=AsyncMock(
-            side_effect=[segment_result, document_result, knowledge_result]
+            side_effect=[segment_result, document_result, chapter_result, knowledge_result]
         ),
     )
 
@@ -276,6 +311,7 @@ async def test_hydrate_results_falls_back_to_title_and_handles_missing_source():
     payload = results[0].to_dict()
     assert payload["knowledge_point_meta"]["difficulty"] == "medium"
     assert payload["knowledge_point_meta"]["aliases"] == ["折半查找"]
+    assert payload["chapters"][0]["name"] == "查找算法"
 
 
 @pytest.mark.asyncio

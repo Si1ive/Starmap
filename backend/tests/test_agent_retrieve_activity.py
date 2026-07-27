@@ -50,6 +50,14 @@ async def test_retrieve_knowledge_emits_public_running_and_completed_activity(mo
                     "entity_type": "knowledge_point",
                     "subject_id": "subject_ds",
                     "chapter_ids": ["chapter_queue"],
+                    "chapters": [
+                        {
+                            "id": "chapter_queue",
+                            "name": "队列",
+                            "level": 2,
+                            "outline_code": "2.4",
+                        }
+                    ],
                     "entity": {
                         "id": "kp_001",
                         "type": "knowledge_point",
@@ -106,6 +114,8 @@ async def test_retrieve_knowledge_emits_public_running_and_completed_activity(mo
     assert completed["detail"] == "混合检索完成，命中 1 份资料"
     assert completed["attempt_no"] == 1
     assert completed["public_metadata"]["documents"][0]["title"] == "循环队列"
+    assert completed["public_metadata"]["documents"][0]["chapters"][0]["name"] == "队列"
+    assert "backend" not in completed["public_metadata"]
     assert db.commit.await_count == 2
 
 

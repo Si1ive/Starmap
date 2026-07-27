@@ -10,6 +10,7 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from app.db.qdrant import QdrantManager
 from app.models.mysql_models import (
+    CanonicalChapter,
     Document,
     KnowledgePoint,
     Question,
@@ -38,6 +39,7 @@ class RetrievalResult:
         review_status: Optional[str] = None,
         status: Optional[str] = None,
         entity_metadata: Optional[Dict[str, Any]] = None,
+        chapter_refs: Optional[List[Dict[str, Any]]] = None,
     ):
         self.segment_id = segment_id
         self.entity_type = entity_type
@@ -55,6 +57,7 @@ class RetrievalResult:
         self.review_status = review_status
         self.status = status
         self.entity_metadata = entity_metadata or {}
+        self.chapter_refs = chapter_refs or []
 
     def to_dict(self) -> Dict[str, Any]:
         question_meta = (
@@ -78,6 +81,7 @@ class RetrievalResult:
             "score": self.score,
             "subject_id": self.subject_id,
             "chapter_ids": self.chapter_ids,
+            "chapters": self.chapter_refs,
             "entity": {
                 "id": self.entity_id,
                 "type": self.entity_type,
@@ -316,6 +320,13 @@ class RetrievalSearchEngine:
                 document.id: self._document_source_name(document)
                 for document in document_result.scalars().all()
             }
+        chapter_details = await self._load_chapter_refs(
+            [
+                chapter_id
+                for segment in segments_by_id.values()
+                for chapter_id in (segment.chapter_ids or [])
+            ]
+        )
         knowledge_point_details = await self._load_knowledge_point_details(
             [
                 segment.entity_id
@@ -360,9 +371,39 @@ class RetrievalSearchEngine:
                     review_status=entity_details.get("review_status"),
                     status=entity_details.get("status"),
                     entity_metadata=entity_details.get("metadata"),
+                    chapter_refs=[
+                        chapter_details.get(
+                            chapter_id,
+                            {"id": chapter_id, "name": None},
+                        )
+                        for chapter_id in (segment.chapter_ids or [])
+                    ],
                 )
             )
         return retrieval_results
+
+    async def _load_chapter_refs(
+        self,
+        chapter_ids: List[str],
+    ) -> Dict[str, Dict[str, Any]]:
+        """把章节 ID 补成用户可读的名称和层级信息。"""
+        unique_ids = list(dict.fromkeys(chapter_ids))
+        if not unique_ids:
+            return {}
+
+        result = await self.db.execute(
+            select(CanonicalChapter).where(CanonicalChapter.id.in_(unique_ids))
+        )
+        return {
+            chapter.id: {
+                "id": chapter.id,
+                "name": chapter.name,
+                "level": chapter.level,
+                "code": chapter.code,
+                "outline_code": chapter.outline_code,
+            }
+            for chapter in result.scalars().all()
+        }
 
     @staticmethod
     def _document_source_name(document: Document) -> Optional[str]:
