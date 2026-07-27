@@ -1,5 +1,12 @@
 # 2026-07 Validate 记忆消费闭环进展
 
+## 2026-07-27：让明确重复题覆盖本轮排除视图
+
+- 目标：落实 `MEM-007` 的排除集冲突策略，让“再出一遍上次那道题”可重出唯一可信引用题，同时不删除历史练习事实。
+- 实现：`backend/app/modules/agent/turn_understanding.py::requests_question_repeat`（L518-L536）识别肯定/否定表达，`_derive_constraints`（L139-L152）冻结 `repeat_referenced_question`；`backend/app/modules/agent/memory_selector.py::_apply_explicit_question_repeat`（L1004-L1024）只在唯一 question 引用时从本轮排除视图移除该 ID，多引用保持原排除集；`backend/app/modules/agent/model_runtime/router.py::_explicit_workflow_action`（L88-L95）把肯定重复请求路由到 Validate。
+- 验证：TurnUnderstanding、Memory selector、Router、Validate workflow 聚焦回归 42 项通过；全部 Agent 回归 200 passed、75 warnings，Python 编译和 `git diff --check` 通过。
+- 提交信息：`让明确重复题覆盖本轮排除集`
+
 ## 2026-07-26：让显式章节约束进入 Validate 检索
 
 - 目标：让“第三章的题”形成真实标准章节过滤，不能被知识点默认章节覆盖，也不能在解析失败时退化成宽检索。

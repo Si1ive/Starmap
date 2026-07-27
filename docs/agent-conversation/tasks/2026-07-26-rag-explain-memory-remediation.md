@@ -202,7 +202,7 @@ load_scope completed
 - 已在 `backend/app/modules/agent/workflows/validate.py` 的 `_load_learning_evidence_node()` 中装载 `PracticeBundle`，优先使用 bundle topic 填充 `weak_areas` / `recent_topics`，并把 bundle 本身写回 `ExecutionContext`。
 - 已在 `_question_discovery_node()` 中通过 `build_practice_query()` 构造 query，并把 `knowledge_point_ids`、`difficulty` 与 `exclude_entity_ids` 下发到 `retrieve_knowledge()`；当 bundle topic 存在时会发起 `query="二分查找 折半查找"` 的题目检索；当 topic 与 fallback terms 都为空时，会创建 `practice_topic` 输入项并进入 waiting，用户补充后从 checkpoint 恢复到同一节点继续检索。
 - 已补 `backend/tests/test_agent_validate_workflow.py::test_validate_uses_practice_bundle_topic_for_query` 与 `test_validate_stops_when_no_topic_or_fallback_terms`，分别覆盖 topic aliases + knowledge point + difficulty 过滤，以及“缺少主题进入 waiting”的行为；并新增 `backend/tests/test_agent_validate_worker.py::test_validate_waits_for_topic_clarification_and_resumes_with_answer`，覆盖输入项创建、时间线 `pending_input` 展示与回答后恢复执行。
-- 已打通真实 `exclude_ids` 回写（2026-07-26）：练习产物 content 携带 `question_ids`，Run 完成事务写 `practice_artifact_created` 事实事件；`load_practice_bundle` 从近期事件装载去重后的 `excluded_question_ids`（按最新优先，最多 10 个事件 / 50 道题），`_question_discovery_node` 已把它下发为 `exclude_entity_ids`。覆盖测试：`backend/tests/test_agent_memory_selector.py::test_load_practice_bundle_excludes_recent_practice_questions` 与 `backend/tests/test_agent_validate_worker.py::test_validate_completion_writes_practice_fact_event_for_exclusion`。
+- 已打通真实 `exclude_ids` 回写：练习事实永久保留，`backend/app/modules/agent/memory_selector.py::load_practice_bundle`（L638-L762）默认按最新优先读取 10 个事件 / 50 道题；`backend/app/modules/agent/turn_understanding.py::requests_question_repeat`（L518-L536）把明确重出意图冻结为约束，`backend/app/modules/agent/memory_selector.py::_apply_explicit_question_repeat`（L1004-L1024）只在唯一 question 引用时移除本轮排除项，否定或歧义表达不放宽。
 - 已落地唯一高优先级薄弱点回退（2026-07-26）：`_load_unique_weak_topic()` 只在快照拿不到主题时查 `user_learning_mastery`，恰好一个 `mastery_score < 0.6` 且 `evidence_count > 0` 的知识点才回退为 `source="learning_mastery"` 的 TopicBundle（标题与 aliases 取自 `knowledge_points`），并把命中行记入 `mastery_signals` 供审计；0 个或多个薄弱点保持 `practice_topic` 澄清路径。覆盖测试：`test_load_practice_bundle_falls_back_to_unique_weak_point`、`test_load_practice_bundle_skips_weak_point_when_multiple_candidates`，以及快照主题优先于薄弱点的断言。
 - 已冻结并落地 `chapter_ids` 稳定来源（2026-07-26）。优先级为：① 用户显式“第 N 章”在唯一学科内解析并启用 strict scope；② 无显式约束时由知识点章节关系读取标准 ID；③ 都没有时交给大纲扩展。显式解析失败禁止工具调用；成功后 RetrievalService 也不得并入扩展章节。回归覆盖解析、优先级、工具透传、底层合并守卫和既有非严格检索。
 
@@ -246,7 +246,7 @@ load_scope completed
 
 ### MEM-007 压缩、冲突、失效与删除
 
-- 状态：进行中（已完成增量摘要生产及 Router、普通回答、Explain 消费；冲突、衰减、Embedding 和删除仍待实现）。
+- 状态：进行中（已完成增量摘要消费和显式重复题覆盖；其余冲突、衰减、Embedding 和删除仍待实现）。
 - 已由 `backend/app/modules/agent/conversation_summary.py::ConversationSummaryMaintainer`（L72-L318）固定保留最近 12 个用户轮次，只从上个活跃摘要 `end_sequence` 之后选择最多 24 条同用户/线程的 visible completed user/assistant 消息；不足 13 轮不调用模型，也不在每次 Run 重读整线程。模型返回后短暂锁定线程并复核活跃版本，避免多 Worker 产生双活摘要，冲突交给 Outbox 基于新版本重试。
 - `backend/app/modules/agent/model_runtime/conversation_summary.py::ConversationSummaryRuntime.summarize`（L65-L117）把旧摘要和新增消息当作不可信数据，使用触发 Run 绑定模型生成结构化非空摘要；`maintain` 新建递增版本、保留起止 sequence 和来源消息 ID，再用 `superseded_by_id` 标记旧摘要。原 `AgentMessage` 不覆盖，摘要正文不进入公开 SSE。
 - 成功 Run 只在 `AgentWorker.process_run`（L185-L227）当前事务写摘要维护 Outbox；`MemoryOutboxConsumer.process_claimed`（L202-L276）在独立消费事务复核 Run/thread/user/type，模型或存储失败只重试任务，不把 completed Run 改成失败。`backend/tests/test_agent_conversation_summary.py`（L169-L436）覆盖近期窗口、隐藏/失败/system 排除、重放幂等、新区间合并、并发版本复核、跨作用域隔离和失败隔离。
@@ -254,7 +254,7 @@ load_scope completed
 - `backend/app/modules/agent/memory_selector.py::load_conversation_bundle`（L832-L1001）让 Explain 复现唯一 snapshot 摘要副本，并复核源摘要 user/thread/version；版本不符或重复条目均安全降级。`ExplanationDeps`（L19-L75）把同一副本交给规划和正文模型，摘要不进入 message history、child metadata 或 SSE。
 - 用户明确陈述和真实业务事件优先于模型抽取；低置信度候选不能覆盖高置信度活跃记忆。
 - 线程主题按轮次衰减；临时约束随 Turn/Practice 结束；学习画像长期保存并按时间衰减。
-- 排除集的衰减与覆盖是读取策略而非存储变更：事实事件永久保留，selector 默认只取近期窗口（当前为最近 10 个练习事件 / 50 道题，后续可加时间衰减）；用户显式引用（“再出一遍上次那道题”）按冲突优先级最高级覆盖排除集。这类调整只改 selector 参数，不迁移事实表。
+- 排除集覆盖已按读取策略落地：`backend/app/modules/agent/turn_understanding.py::requests_question_repeat`（L518-L536）排除“不要/别/不想/无需”等否定表达，`backend/app/modules/agent/memory_selector.py::_apply_explicit_question_repeat`（L1004-L1024）只允许唯一结构化 question 引用覆盖本轮排除视图；事实事件不变。时间衰减仍待实现。
 - 删除线程时失效线程记忆并通过 Outbox 删除向量；用户级学习画像单独控制。
 
 ### MEM-008 记忆可观测性与安全

@@ -116,7 +116,7 @@ def _topic_from_memory(active_topic: dict[str, Any] | None) -> TopicEntity | Non
 def _derive_standalone_request(raw_input: str, topic: TopicEntity | None) -> tuple[str, str | None]:
     if topic is None:
         return raw_input, None
-    if any(hint in raw_input for hint in _PRACTICE_HINTS):
+    if any(hint in raw_input for hint in _PRACTICE_HINTS) or requests_question_repeat(raw_input):
         return f"给用户出一道关于{topic.title}的练习题", "practice_generation"
     if any(hint in raw_input for hint in _EXPLAIN_HINTS):
         return f"给用户讲解{topic.title}", "topic_explanation"
@@ -149,7 +149,7 @@ def _derive_constraints(raw_input: str) -> list[str]:
         ordinal = _parse_chapter_ordinal(chapter_match.group(1))
         if ordinal is not None:
             constraints.append(f"chapter_ordinal:{ordinal}")
-    return constraints
+    return [*constraints, *(["repeat_referenced_question"] if requests_question_repeat(raw_input) else [])]
 
 
 def _resolve_question_artifact_reference(
@@ -157,7 +157,7 @@ def _resolve_question_artifact_reference(
     raw_input: str,
 ) -> dict[str, Any] | None:
     """从最新练习产物确定性解析题目指代；歧义时不猜测也不回退。"""
-    if not any(hint in raw_input for hint in _QUESTION_REFERENT_HINTS):
+    if not any(hint in raw_input for hint in _QUESTION_REFERENT_HINTS) and not requests_question_repeat(raw_input):
         return None
     if any(
         ref.get("type") == "question" and ref.get("id")
@@ -513,3 +513,24 @@ async def ensure_turn_memory_snapshot(
             topic=understanding.topic_entities[0].model_dump(mode="json"),
         )
     return snapshot
+
+
+def requests_question_repeat(raw_input: str) -> bool:
+    """识别明确重出已有题目的当前轮意图，并排除常见否定表达。"""
+    normalized = "".join(raw_input.split())
+    repeat_hints = ("再出", "重新出", "重复出", "再来", "再做", "重做")
+    reference_hints = (
+        *_QUESTION_REFERENT_HINTS,
+        "上次那道题",
+        "刚才那题",
+        "刚才那道题",
+    )
+    if any(
+        prefix + repeat_hint in normalized
+        for prefix in ("不要", "别", "不想", "无需")
+        for repeat_hint in repeat_hints
+    ):
+        return False
+    return any(hint in normalized for hint in repeat_hints) and any(
+        hint in normalized for hint in reference_hints
+    )

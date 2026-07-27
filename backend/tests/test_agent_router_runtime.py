@@ -82,6 +82,7 @@ async def test_router_rejects_action_outside_runtime_scope():
         ("给我讲解一下红黑树", "explain"),
         ("讲清楚循环队列 front 的推导", "explain"),
         ("给我找一道二分查找的题目", "validate"),
+        ("再出一遍上次那道题", "validate"),
         ("帮我批改这份答案", "grade"),
         ("给我安排一份操作系统复习计划", "plan"),
     ],
@@ -125,6 +126,24 @@ async def test_router_context_selection_budget_does_not_limit_model_usage():
     )
 
     assert decision.action == "direct_answer"
+
+
+@pytest.mark.asyncio
+async def test_router_does_not_route_negative_repeat_request_to_validate():
+    runtime = RouterRuntime(
+        TestModel(
+            custom_output_args={
+                "action": "direct_answer",
+                "confidence": 0.95,
+                "reason_code": "respect_negative_constraint",
+            }
+        )
+    )
+
+    decision = await runtime.decide("不要再出上次那道题", deps=_deps())
+
+    assert decision.action == "direct_answer"
+    assert decision.reason_code == "respect_negative_constraint"
 
 
 @pytest.mark.asyncio

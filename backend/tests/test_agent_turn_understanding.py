@@ -200,3 +200,36 @@ def test_explicit_reference_prevents_bare_referent_model_candidates():
     understanding = build_turn_understanding(context)
 
     assert build_ambiguous_referent_candidates(context, understanding) == []
+
+
+def test_explicit_repeat_marks_unique_previous_question_for_exclusion_override():
+    understanding = build_turn_understanding(
+        _context(
+            current_input="再出一遍上次那道题",
+            active_topic={
+                "entity_type": "knowledge_point",
+                "entity_id": "kp_binary_search",
+                "title": "二分查找",
+            },
+            recent_artifacts=[
+                _practice_artifact("artifact_practice", "question_001")
+            ],
+        )
+    )
+
+    assert understanding.intent_hint == "practice_generation"
+    assert understanding.constraints == ["repeat_referenced_question"]
+    assert understanding.reference_sources[-1]["id"] == "question_001"
+
+
+def test_negative_repeat_phrase_does_not_relax_exclusion_policy():
+    understanding = build_turn_understanding(
+        _context(
+            current_input="不要再出上次那道题",
+            recent_artifacts=[
+                _practice_artifact("artifact_practice", "question_001")
+            ],
+        )
+    )
+
+    assert "repeat_referenced_question" not in understanding.constraints

@@ -758,7 +758,7 @@ async def load_practice_bundle(
         reference_sources=list(understanding.get("reference_sources") or []),
         selected_artifact_ids=list(context_snapshot.get("selected_artifact_ids") or []),
         mastery_signals=mastery_signals,
-        excluded_question_ids=excluded_question_ids,
+        excluded_question_ids=_apply_explicit_question_repeat(excluded_question_ids, understanding),
     )
 
 
@@ -999,3 +999,26 @@ async def load_conversation_bundle(
         reference_sources=reference_sources,
         retrieval_query=str(retrieval_query).strip() if retrieval_query else None,
     )
+
+
+def _apply_explicit_question_repeat(
+    excluded_question_ids: list[str],
+    understanding: dict[str, Any],
+) -> list[str]:
+    """唯一显式题目引用可覆盖本轮排除视图；事实事件本身保持不变。"""
+    if "repeat_referenced_question" not in (understanding.get("constraints") or []):
+        return excluded_question_ids
+    referenced_ids = {
+        str(reference.get("id") or "").strip()
+        for reference in understanding.get("reference_sources") or []
+        if isinstance(reference, dict)
+        and reference.get("type") == "question"
+        and str(reference.get("id") or "").strip()
+    }
+    if len(referenced_ids) != 1:
+        return excluded_question_ids
+    return [
+        question_id
+        for question_id in excluded_question_ids
+        if question_id not in referenced_ids
+    ]

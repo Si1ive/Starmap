@@ -1072,3 +1072,96 @@ async def test_load_practice_bundle_excludes_recent_practice_questions(db_sessio
         "question_003",
         "question_001",
     ]
+
+
+@pytest.mark.asyncio
+async def test_explicit_repeat_removes_only_unique_referenced_question_from_exclusions(
+    db_session,
+):
+    thread = AgentThread(
+        id="thread_repeat_question",
+        user_id="user_001",
+        title="重复题目线程",
+        status="active",
+    )
+    old_run = AgentRun(
+        id="run_repeat_question_old",
+        thread_id=thread.id,
+        user_id="user_001",
+        workflow_name="validate",
+        status="completed",
+        input_message="给我出道题",
+    )
+    repeat_run = AgentRun(
+        id="run_repeat_question_new",
+        thread_id=thread.id,
+        user_id="user_001",
+        workflow_name="validate",
+        status="queued",
+        input_message="再出一遍上次那道题",
+        metadata_json={"memory_snapshot_id": "snapshot_repeat_question"},
+    )
+    db_session.add(thread)
+    await db_session.flush()
+    db_session.add_all([old_run, repeat_run])
+    await db_session.flush()
+    snapshot = AgentMemorySnapshot(
+        id="snapshot_repeat_question",
+        run_id=repeat_run.id,
+        thread_id=thread.id,
+        user_id="user_001",
+        state_version=1,
+        standalone_request="再次生成用户明确引用的题目",
+        understanding_json={
+            "constraints": ["repeat_referenced_question"],
+            "reference_sources": [
+                {"type": "question", "id": "question_repeat"}
+            ],
+        },
+        selection_metadata_json={},
+    )
+    db_session.add_all(
+        [
+            snapshot,
+            AgentMemoryEvent(
+                user_id="user_001",
+                thread_id=thread.id,
+                run_id=old_run.id,
+                memory_scope="user",
+                source_kind="artifact",
+                fact_type="practice_artifact_created",
+                idempotency_key="practice_artifact_created:repeat_question_old",
+                payload_json={
+                    "artifact_id": "artifact_repeat_question_old",
+                    "question_ids": ["question_repeat", "question_other"],
+                },
+            ),
+        ]
+    )
+    await db_session.flush()
+
+    bundle = await load_practice_bundle(
+        db_session,
+        run_id=repeat_run.id,
+        user_id="user_001",
+    )
+
+    assert bundle.excluded_question_ids == ["question_other"]
+
+    snapshot.understanding_json = {
+        **snapshot.understanding_json,
+        "reference_sources": [
+            {"type": "question", "id": "question_repeat"},
+            {"type": "question", "id": "question_other"},
+        ],
+    }
+    await db_session.flush()
+    ambiguous_bundle = await load_practice_bundle(
+        db_session,
+        run_id=repeat_run.id,
+        user_id="user_001",
+    )
+    assert ambiguous_bundle.excluded_question_ids == [
+        "question_repeat",
+        "question_other",
+    ]
