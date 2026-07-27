@@ -24,6 +24,7 @@ from .checkpoints import checkpoint_store
 from .conversation_summary import enqueue_conversation_summary_maintenance
 from .memory_projection import project_completed_run_facts
 from .memory_outbox import memory_outbox_consumer
+from .preference_memory import enqueue_preference_candidate_extraction
 from .workflows.contracts import NodeStatus
 from .public_errors import classify_agent_error
 from .time_utils import utc_now
@@ -225,6 +226,7 @@ class AgentWorker:
                     "artifacts": result.output.get("artifacts", []) if result.output else [],
                 })
                 await enqueue_conversation_summary_maintenance(db, run)
+                await enqueue_preference_candidate_extraction(db, run)
 
             elif result.status == NodeStatus.WAITING:
                 waiting_output = result.output or {}

@@ -757,3 +757,83 @@ class AgentMemoryItem(Base):
         Index("idx_agent_memory_item_type", "item_type", "status"),
         {"comment": "Agent 长期记忆项表"}
     )
+
+
+class AgentPreferenceCandidate(Base):
+    """模型从用户消息中抽取、等待用户治理的偏好候选。"""
+
+    __tablename__ = "agent_preference_candidates"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(32), nullable=False, comment="用户ID")
+    thread_id: Mapped[Optional[str]] = mapped_column(
+        String(32), ForeignKey("agent_threads.id", ondelete="SET NULL"),
+        comment="抽取来源线程ID"
+    )
+    run_id: Mapped[Optional[str]] = mapped_column(
+        String(32), ForeignKey("agent_runs.id", ondelete="SET NULL"),
+        comment="抽取来源运行ID"
+    )
+    scope: Mapped[str] = mapped_column(
+        SAEnum("user", "thread"), nullable=False, comment="候选生效作用域"
+    )
+    source_kind: Mapped[str] = mapped_column(
+        String(64), nullable=False, comment="不可变来源类型"
+    )
+    source_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, comment="不可变来源ID"
+    )
+    source_version: Mapped[int] = mapped_column(
+        Integer, default=1, nullable=False, comment="来源版本"
+    )
+    preference_key: Mapped[str] = mapped_column(
+        String(64), nullable=False, comment="结构化偏好键"
+    )
+    preference_value_json: Mapped[dict] = mapped_column(
+        JSON, nullable=False, comment="结构化偏好值"
+    )
+    confidence: Mapped[float] = mapped_column(
+        Float, nullable=False, comment="模型抽取置信度"
+    )
+    status: Mapped[str] = mapped_column(
+        SAEnum("pending", "approved", "rejected", "invalidated"),
+        default="pending", nullable=False, comment="候选治理状态"
+    )
+    extractor_version: Mapped[str] = mapped_column(
+        String(64), nullable=False, comment="抽取器版本"
+    )
+    model_name: Mapped[str] = mapped_column(
+        String(200), nullable=False, comment="抽取模型名称"
+    )
+    model_config_id: Mapped[Optional[str]] = mapped_column(
+        String(32), comment="抽取模型配置ID"
+    )
+    decided_by: Mapped[Optional[str]] = mapped_column(
+        String(32), comment="批准或拒绝用户ID"
+    )
+    decision_reason: Mapped[Optional[str]] = mapped_column(
+        String(255), comment="治理决定原因"
+    )
+    decided_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, comment="治理决定时间"
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, onupdate=utc_now
+    )
+
+    __table_args__ = (
+        Index(
+            "idx_agent_preference_candidate_user_status",
+            "user_id", "status", "preference_key"
+        ),
+        Index(
+            "idx_agent_preference_candidate_thread",
+            "thread_id", "status"
+        ),
+        UniqueConstraint(
+            "user_id", "source_kind", "source_id", "preference_key",
+            name="uk_agent_preference_candidate_source_key",
+        ),
+        {"comment": "Agent 用户偏好候选表"},
+    )

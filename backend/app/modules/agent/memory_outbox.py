@@ -24,6 +24,11 @@ from .memory_vector import (
     memory_vector_lifecycle,
 )
 from .models import AgentMemoryEvent, AgentMemoryUpdateOutbox, AgentRun
+from .preference_memory import (
+    PREFERENCE_EXTRACTION_TASK,
+    PreferenceCandidateProjector,
+    preference_candidate_projector,
+)
 from .time_utils import utc_now
 
 logger = get_logger(__name__)
@@ -194,6 +199,9 @@ class MemoryOutboxConsumer:
             conversation_summary_maintainer
         ),
         vector_lifecycle: MemoryVectorLifecycle = memory_vector_lifecycle,
+        preference_projector: PreferenceCandidateProjector = (
+            preference_candidate_projector
+        ),
         lease_seconds: int = 300,
         retry_delay_seconds: int = 30,
         max_retries: int = 3,
@@ -202,6 +210,7 @@ class MemoryOutboxConsumer:
         self.projector = projector
         self.summary_maintainer = summary_maintainer
         self.vector_lifecycle = vector_lifecycle
+        self.preference_projector = preference_projector
         self.lease_seconds = lease_seconds
         self.retry_delay_seconds = retry_delay_seconds
         self.max_retries = max_retries
@@ -225,7 +234,9 @@ class MemoryOutboxConsumer:
 
         try:
             async with db.begin_nested():
-                if is_memory_vector_task(outbox.event_type):
+                if outbox.event_type == PREFERENCE_EXTRACTION_TASK:
+                    await self.preference_projector.process_outbox(db, outbox)
+                elif is_memory_vector_task(outbox.event_type):
                     await self.vector_lifecycle.process_outbox(db, outbox)
                 elif outbox.event_type == CONVERSATION_SUMMARY_TASK:
                     trigger_run_id = str(

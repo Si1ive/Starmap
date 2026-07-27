@@ -37,6 +37,10 @@ async def _aggregate_learning_evidence_node(context: ExecutionContext, db: Async
         "period": bundle.period,
         "learning_goal_item_ids": bundle.learning_goal_item_ids,
         "mastery_signals": bundle.mastery_signals,
+        "preferences": bundle.preferences,
+        "preference_sources": [
+            source.model_dump(mode="json") for source in bundle.preference_sources
+        ],
     }
     context.set("planning_bundle", bundle.model_dump(mode="json"))
     context.set("learning_evidence", evidence)
@@ -66,6 +70,15 @@ async def _propose_plan_delta_node(context: ExecutionContext, db: AsyncSession) 
     
     targets = evidence.get("targets", [])
     period = evidence.get("period") or "7天"
+    preferred_daily_minutes = (evidence.get("preferences") or {}).get(
+        "daily_study_minutes"
+    )
+    if (
+        not isinstance(preferred_daily_minutes, int)
+        or isinstance(preferred_daily_minutes, bool)
+        or not 1 <= preferred_daily_minutes <= 1440
+    ):
+        preferred_daily_minutes = 30
     plan_draft = {
         "title": f"{context.user_id} 的学习计划",
         "period": period,
@@ -73,7 +86,7 @@ async def _propose_plan_delta_node(context: ExecutionContext, db: AsyncSession) 
             {
                 "subject": target["title"],
                 "target": target["target"],
-                "daily_minutes": target.get("daily_minutes") or 30,
+                "daily_minutes": target.get("daily_minutes") or preferred_daily_minutes,
                 "source": target["source"],
                 "source_id": target.get("source_id"),
             }

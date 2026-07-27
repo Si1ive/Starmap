@@ -32,6 +32,7 @@ from app.modules.agent.models import (
     AgentMemoryEvent,
     AgentMemorySnapshot,
     AgentMemorySnapshotItem,
+    AgentPreferenceCandidate,
     AgentRun,
     AgentThread,
     AgentThreadItem,
@@ -48,6 +49,7 @@ SELECTOR_TABLES = [
     AgentMemorySnapshot.__table__,
     AgentMemorySnapshotItem.__table__, AgentConversationSummary.__table__,
     AgentMemoryItem.__table__,
+    AgentPreferenceCandidate.__table__,
     Subject.__table__,
     Chapter.__table__,
     # KnowledgePoint / CanonicalChapter 的可空外键在 SQLite 下也要求父表存在。

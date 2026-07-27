@@ -4,7 +4,7 @@ Agent Router：创建/查询 run，SSE events
 P0 核心 API 路由。
 """
 
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator, Literal, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -25,6 +25,11 @@ from .schemas import (
     ThreadCreateRequest, ThreadResponse, RunCreateRequest,
     RunStatusResponse, EventResponse, ArtifactResponse,
     ThreadEventsResponse, TimelineResponse, TurnCreateRequest, TurnCreateResponse,
+    PreferenceCandidateDecisionRequest,
+)
+from .preference_memory import (
+    decide_preference_candidate,
+    list_preference_candidates,
 )
 from .service import AgentService
 from .timeline import AgentTimelineService, ThreadNotFoundError, TurnConflictError
@@ -639,3 +644,66 @@ async def reject_approval(
         "status": approval.status,
         "message": "已拒绝",
     }
+
+
+# ==================== Preference Candidate API ====================
+
+
+def _serialize_preference_candidate(candidate) -> dict:
+    return {
+        "id": candidate.id,
+        "thread_id": candidate.thread_id,
+        "scope": candidate.scope,
+        "source_kind": candidate.source_kind,
+        "source_id": candidate.source_id,
+        "source_version": candidate.source_version,
+        "preference_key": candidate.preference_key,
+        "preference_value": (candidate.preference_value_json or {}).get("value"),
+        "confidence": candidate.confidence,
+        "status": candidate.status,
+        "extractor_version": candidate.extractor_version,
+        "model_name": candidate.model_name,
+        "decided_at": utc_isoformat(candidate.decided_at),
+        "created_at": utc_isoformat(candidate.created_at),
+        "updated_at": utc_isoformat(candidate.updated_at),
+    }
+
+
+@router.get("/preferences/candidates")
+async def get_preference_candidates(
+    status: Optional[
+        Literal["pending", "approved", "rejected", "invalidated"]
+    ] = Query(default=None),
+    limit: int = Query(100, ge=1, le=200),
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    candidates = await list_preference_candidates(
+        db,
+        user_id=user_id,
+        status=status,
+        limit=limit,
+    )
+    return {
+        "items": [_serialize_preference_candidate(item) for item in candidates],
+        "total": len(candidates),
+    }
+
+
+@router.post("/preferences/candidates/{candidate_id}/decision")
+async def decide_user_preference_candidate(
+    candidate_id: str,
+    request: PreferenceCandidateDecisionRequest,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    candidate = await decide_preference_candidate(
+        db,
+        candidate_id=candidate_id,
+        user_id=user_id,
+        decision=request.decision,
+        reason=request.reason,
+    )
+    if candidate is None:
+        raise HTTPException(status_code=404, detail="偏好候选不存在或已完成治理")
+    return _serialize_preference_candidate(candidate)

@@ -97,6 +97,11 @@ class SubmitInputResponse(BaseModel):
     message: str
 
 
+class PreferenceCandidateDecisionRequest(BaseModel):
+    decision: Literal["approved", "rejected"]
+    reason: Optional[str] = Field(default=None, max_length=255)
+
+
 class TurnCreateRequest(BaseModel):
     """用户端创建一轮对话请求。"""
 

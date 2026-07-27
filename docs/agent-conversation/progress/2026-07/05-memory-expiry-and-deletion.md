@@ -1,5 +1,13 @@
 # 2026-07 记忆失效与删除治理进展
 
+## 2026-07-27：建立受治理的偏好候选与冲突优先级
+
+- 目标：完成 `MEM-007` 的偏好候选来源、置信度、审批状态和完整冲突优先级，确保模型推测永远不能直接成为 trusted memory。
+- 实现：`backend/app/modules/agent/model_runtime/preference_extractor.py::PreferenceExtractionRuntime.extract`（L92-L144）把根 conversation 原始消息限制为最多五个结构化提案；`backend/app/modules/agent/preference_memory.py::PreferenceCandidateProjector.process_outbox`（L175-L244）通过 Memory Outbox 写 source kind/ID/version、user/thread scope、confidence、extractor/model 版本并统一保持 pending。`decide_preference_candidate` / `_materialize_approved_preference`（L304-L399）只允许归属用户批准或拒绝，批准物化 active 项，拒绝形成 tombstone。`extract_explicit_preferences`、`_resolve_preference_sources`、`_freeze_preference_bundle` 与 `load_preference_bundle`（L95-L119、L422-L662）执行“本轮明确陈述 > 真实批准/拒绝事件 > 模型候选”，冻结 selected、dropped reason 和空结果 marker；PlanningBundle 把已决胜 `daily_study_minutes` 传给 Plan 草案。
+- 迁移：`backend/alembic/versions/20260727_preference_candidates.py::upgrade`（L19-L70）从唯一 head 前向创建 `agent_preference_candidates`；`backend/app/modules/operations/schema_guard.py::verify_database_schema`（L44-L193）把真表纳入启动门禁。已对当前 MySQL 实际执行 `venv/bin/alembic upgrade head` 升至 `20260727_preference_candidates`，未使用 stamp。
+- 验证：偏好、模型运行时、迁移、schema guard、Memory Outbox、MemorySelector 与 Plan 聚焦回归 53 项通过；全部 Agent 回归 224 passed、101 warnings，Python 编译、五个新增文件的 Black 检查和 `git diff --check` 通过。
+- 提交信息：`建立受治理的 Agent 偏好候选`
+
 ## 2026-07-27：打通 Agent 记忆向量生命周期
 
 - 目标：完成 `MEM-007` 的 Embedding、向量召回、来源版本更新与删除，让摘要和长期记忆项可以被治理且可回查。
@@ -10,7 +18,7 @@
 ## 2026-07-27：让学习掌握度按证据时间衰减
 
 - 目标：完成 `MEM-007` 的学习画像时间治理，保留 Grade 原始聚合与事实审计，同时让 Practice 和 Planning 使用同一可复现有效分数。
-- 实现：`backend/app/modules/agent/mastery_decay.py::calculate_effective_mastery`（L26-L58）固定 `mastery-decay-v1` 的 90 天半衰期和不抬高低分的 0.2 地板；`backend/app/modules/agent/memory_selector.py::_mastery_signal`、`_load_frozen_mastery_signals`、`_freeze_mastery_signals`（L188-L300）统一 UTC、版本化审计和 Snapshot 锁内幂等冻结。`load_planning_bundle`（L303-L499）与 `_load_unique_weak_topic` / `load_practice_bundle`（L750-L985）都按 effective score 选取，并冻结题名/别名，原始 score/evidence 不修改。
+- 实现：`backend/app/modules/agent/mastery_decay.py::calculate_effective_mastery`（L26-L58）固定 `mastery-decay-v1` 的 90 天半衰期和不抬高低分的 0.2 地板；`backend/app/modules/agent/memory_selector.py::_mastery_signal`、`_load_frozen_mastery_signals`、`_freeze_mastery_signals`（L191-L303）统一 UTC、版本化审计和 Snapshot 锁内幂等冻结。`load_planning_bundle`（L306-L511）与 `_load_unique_weak_topic` / `load_practice_bundle`（L762-L997）都按 effective score 选取，并冻结题名/别名，原始 score/evidence 不修改。
 - 验证：纯函数与 selector/Grade/Plan/Validate 聚焦回归 43 项通过；全部 Agent 回归 210 passed、101 warnings，Python 编译与 `git diff --check` 通过。
 - 提交信息：`让学习掌握度按证据时间衰减`
 

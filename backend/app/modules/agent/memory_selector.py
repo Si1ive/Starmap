@@ -28,6 +28,7 @@ from .models import (
     AgentRun,
     UserLearningMastery,
 )
+from .preference_memory import PreferenceSource, load_preference_bundle
 from .time_utils import utc_isoformat, utc_now
 
 _EXCLUDED_EVENT_LIMIT = 10
@@ -78,6 +79,8 @@ class PlanningBundle(BaseModel):
     targets: list[PlanningTarget] = Field(default_factory=list)
     learning_goal_item_ids: list[str] = Field(default_factory=list)
     mastery_signals: list[dict[str, Any]] = Field(default_factory=list)
+    preferences: dict[str, str | int | bool] = Field(default_factory=dict)
+    preference_sources: list[PreferenceSource] = Field(default_factory=list)
 
 
 class EvaluationQuestion(BaseModel):
@@ -330,6 +333,13 @@ async def load_planning_bundle(
             )
         )
 
+    preference_bundle = await load_preference_bundle(
+        db,
+        run_id=run_id,
+        user_id=user_id,
+        memory_need=MemoryNeed.PLANNING_GOAL,
+    )
+
     goal_items = list(
         (
             await db.execute(
@@ -496,6 +506,8 @@ async def load_planning_bundle(
         targets=targets,
         learning_goal_item_ids=[item.id for item in goal_items],
         mastery_signals=mastery_signals,
+        preferences=preference_bundle.values,
+        preference_sources=preference_bundle.selected_sources,
     )
 
 

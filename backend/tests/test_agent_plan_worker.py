@@ -1,5 +1,7 @@
 """Plan 审批恢复、拒绝终止与事实投影的 worker 级测试。"""
 
+from datetime import datetime
+
 import pytest
 import pytest_asyncio
 from sqlalchemy import select
@@ -24,6 +26,7 @@ from app.modules.agent.models import (
     AgentInput,
     AgentMemoryEvent,
     AgentMemoryItem,
+    AgentPreferenceCandidate,
     AgentMemorySnapshot,
     AgentMemoryUpdateOutbox,
     AgentMessage,
@@ -56,6 +59,7 @@ PLAN_TABLES = [
     AgentMemoryUpdateOutbox.__table__,
     AgentMemorySnapshot.__table__,
     AgentMemoryItem.__table__,
+    AgentPreferenceCandidate.__table__,
     Subject.__table__,
     Chapter.__table__,
     ExamOutline.__table__,
@@ -88,6 +92,7 @@ async def _create_plan_run(
     *,
     run_id: str,
     seed_learning_goal: bool = True,
+    goal_daily_minutes: int | None = 30,
 ) -> AgentRun:
     thread = AgentThread(
         id=f"thread_{run_id}",
@@ -113,6 +118,12 @@ async def _create_plan_run(
     await db_session.flush()
     run.root_run_id = run.id
     if seed_learning_goal:
+        goal = {
+            "subject": "二分查找",
+            "target": "掌握边界条件",
+        }
+        if goal_daily_minutes is not None:
+            goal["daily_minutes"] = goal_daily_minutes
         db_session.add(
             AgentMemoryItem(
                 id=f"memory_{run_id}",
@@ -124,13 +135,7 @@ async def _create_plan_run(
                 content_text="二分查找复习目标",
                 metadata_json={
                     "period": "7天",
-                    "goals": [
-                        {
-                            "subject": "二分查找",
-                            "target": "掌握边界条件",
-                            "daily_minutes": 30,
-                        }
-                    ],
+                    "goals": [goal],
                 },
             )
         )
@@ -276,3 +281,54 @@ async def test_approved_plan_resumes_and_creates_artifact(db_session):
         ).scalars()
     )
     assert len(replayed_events) == 1
+
+
+@pytest.mark.asyncio
+async def test_plan_consumes_approved_daily_minutes_preference(db_session):
+    run = await _create_plan_run(
+        db_session,
+        run_id="run_plan_preference_001",
+        goal_daily_minutes=None,
+    )
+    db_session.add(
+        AgentPreferenceCandidate(
+            id="prefcand_plan_minutes",
+            user_id=run.user_id,
+            thread_id=run.thread_id,
+            scope="user",
+            source_kind="message",
+            source_id="msg_plan_minutes",
+            source_version=1,
+            preference_key="daily_study_minutes",
+            preference_value_json={"value": 45},
+            confidence=0.94,
+            status="approved",
+            extractor_version="preference-extractor-v1",
+            model_name="test-preference-model",
+            decided_by=run.user_id,
+            decided_at=datetime(2026, 7, 27, 12, 0, 0),
+        )
+    )
+    await db_session.flush()
+
+    assert await AgentWorker().process_run(db_session, run) is True
+    approval = await db_session.scalar(
+        select(AgentApproval).where(AgentApproval.run_id == run.id)
+    )
+    assert approval is not None
+    assert (
+        await AgentService(db_session).decide_approval(
+            run.id,
+            approval.id,
+            "approved",
+            run.user_id,
+        )
+        is approval
+    )
+    assert await AgentWorker().process_run(db_session, run) is True
+
+    artifact = await db_session.scalar(
+        select(AgentArtifact).where(AgentArtifact.run_id == run.id)
+    )
+    assert artifact is not None
+    assert artifact.content_json["content"]["goals"][0]["daily_minutes"] == 45

@@ -3,7 +3,7 @@
 ## 2026-07-27：让 Explain 消费 snapshot 冻结摘要
 
 - 目标：补齐历史摘要的首个 child workflow 消费者，保证 Explain 使用父 Run snapshot 的内容副本而不是执行时的最新摘要。
-- 实现：`backend/app/modules/agent/memory_selector.py::load_conversation_bundle`（L1055-L1224）要求唯一 snapshot item 并复核源摘要 user/thread/version 后读取冻结正文；版本不符或重复条目不注入摘要。`_conversation_inputs`（L50-L66）把摘要交给 `ExplanationDeps`，模型通过 `_controlled_context`（L57-L73）将其作为不可信数据。
+- 实现：`backend/app/modules/agent/memory_selector.py::load_conversation_bundle`（L1067-L1236）要求唯一 snapshot item 并复核源摘要 user/thread/version 后读取冻结正文；版本不符或重复条目不注入摘要。`_conversation_inputs`（L50-L66）把摘要交给 `ExplanationDeps`，模型通过 `_controlled_context`（L57-L73）将其作为不可信数据。
 - 测试：Memory selector、Explain workflow/runtime/Worker 聚焦回归 23 项通过；全部 Agent 回归 195 passed、75 warnings，Python 编译与 `git diff --check` 通过。
 - 提交信息：`让 Explain 消费 snapshot 冻结摘要`
 
@@ -19,7 +19,7 @@
 
 - 目标：推进 `MEM-007` 的首个可独立验证单元，在不阻塞成功 Run、不覆盖原消息的前提下，把最近 12 个用户轮次之前的历史按稳定 sequence 区间滚动压缩。
 - 实现：`backend/app/modules/agent/conversation_summary.py::enqueue_conversation_summary_maintenance`（L38-L70）让每个成功 Run 同事务幂等写摘要维护 Outbox；`ConversationSummaryMaintainer.maintain`（L91-L231）按 run/thread/user 复核作用域，只选择活跃摘要末尾到近期窗口之前最多 24 条 visible completed user/assistant 消息，模型返回后锁线程复核活跃版本，生成新版本后以 `superseded_by_id` 失效旧摘要。`backend/app/modules/agent/model_runtime/conversation_summary.py::ConversationSummaryRuntime.summarize`（L65-L117）使用触发 Run 绑定模型，把旧摘要和消息都按不可信数据处理。
-- 异步边界：`backend/app/modules/agent/memory_outbox.py::MemoryOutboxConsumer.process_claimed`（L209-L285）识别摘要任务并在 SAVEPOINT 内调用 maintainer；模型或持久化失败只让 Outbox 延迟重试，原 completed Run、原始消息和公开 SSE 均不改变。
+- 异步边界：`backend/app/modules/agent/memory_outbox.py::MemoryOutboxConsumer.process_claimed`（L218-L296）识别摘要任务并在 SAVEPOINT 内调用 maintainer；模型或持久化失败只让 Outbox 延迟重试，原 completed Run、原始消息和公开 SSE 均不改变。
 - 测试：`backend/tests/test_agent_conversation_summary.py`（L169-L436）覆盖近期窗口、隐藏/失败/system 消息排除、重放幂等、增量合并与 supersede、并发版本变化重试、跨用户/线程隔离和失败隔离；`backend/tests/test_agent_conversation_summary_runtime.py`（L42-L86）覆盖结构化输出与触发 Run 模型配置；Explain Worker 回归证明完成链真实入队。
 - 验证：全部 Agent 回归通过（192 passed，75 warnings）；Python 编译通过，`git diff --check` 通过。
 - 提交信息：`按连续消息区间增量生成对话摘要`
@@ -27,31 +27,31 @@
 ## 2026-07-27：让 Explain 消费 ConversationBundle 冻结上下文
 
 - 目标：完成 `MEM-004`，让 Explain 真正消费 Router 前按权限和 Token 预算筛选并冻结到 snapshot 的消息、Artifact、主题与引用，移除无实际约束的全学科固定 scope。
-- 实现：`backend/app/modules/agent/memory_selector.py::load_conversation_bundle`（当前 L1055-L1224）按 snapshot ID 复现同用户/线程的上下文和首次 query；`_evidence_loop_node`（当前 L69-L206）与 `_generate_explanation_node`（当前 L236-L289）向规划/生成模型传入同一 history。
-- 测试：`backend/tests/test_agent_memory_selector.py::test_load_conversation_bundle_replays_only_snapshot_selected_visible_context`（当前 L341-L526）覆盖冻结选择、摘要副本、版本/重复保护、hidden 丢弃、Artifact 和 aliases query；`backend/tests/test_agent_explain_workflow.py::test_explain_uses_conversation_bundle_history_and_frozen_topic_query`（当前 L145-L203）覆盖冻结检索与摘要依赖；`backend/tests/test_agent_explain_worker.py::test_explain_worker_replays_snapshot_selected_history`（L314-L441）覆盖 Worker 端到端重放。
+- 实现：`backend/app/modules/agent/memory_selector.py::load_conversation_bundle`（当前 L1067-L1236）按 snapshot ID 复现同用户/线程的上下文和首次 query；`_evidence_loop_node`（当前 L69-L206）与 `_generate_explanation_node`（当前 L236-L289）向规划/生成模型传入同一 history。
+- 测试：`backend/tests/test_agent_memory_selector.py::test_load_conversation_bundle_replays_only_snapshot_selected_visible_context`（当前 L343-L528）覆盖冻结选择、摘要副本、版本/重复保护、hidden 丢弃、Artifact 和 aliases query；`backend/tests/test_agent_explain_workflow.py::test_explain_uses_conversation_bundle_history_and_frozen_topic_query`（当前 L145-L203）覆盖冻结检索与摘要依赖；`backend/tests/test_agent_explain_worker.py::test_explain_worker_replays_snapshot_selected_history`（L314-L441）覆盖 Worker 端到端重放。
 - 验证：全部 Agent 回归通过（185 passed，75 warnings）；Python 编译和 `git diff --check` 通过，旧状态/旧锚点扫描未发现残留。
 - 提交信息：`让 Explain 消费冻结的 ConversationBundle`
 
 ## 2026-07-27：让 Grade 以 EvaluationBundle 产生真实客观题证据
 
 - 目标：推进 `MEM-004` / `MEM-006`，删除 Grade 的固定反馈和伪 attempt，让真实客观题、标准答案与显式作答形成可审计掌握度证据。
-- 实现：`backend/app/modules/agent/memory_selector.py::load_evaluation_bundle`（L502-L633）按 run/user/thread 校验 snapshot，要求唯一 question 引用并重读 active、未拒绝、答案来源可信的题面；`backend/app/modules/agent/workflows/grade.py::_load_attempt_snapshot_node`（L40-L78）装载 bundle，`_objective_grade_node`（L81-L129）只对 choice/fill/judge 确定性比较并生成 verdict/score/error type，`_render_artifact_node`（L191-L218）交给既有事实投影。主观题或不可信/歧义输入在 Artifact 前失败。
-- 测试：`backend/tests/test_agent_memory_selector.py`（L189-L337）覆盖真实题面装载、Artifact 来源、跨用户和多题歧义；`backend/tests/test_agent_grade_worker.py`（L153-L243）覆盖正确/错误 verdict 到 `grade_result_confirmed` / `user_learning_mastery`、主观题零副作用拒绝与判断题否定表达；`test_grade_run_without_snapshot_fails_without_touching_mastery`（L398-L415）覆盖缺快照守卫。
+- 实现：`backend/app/modules/agent/memory_selector.py::load_evaluation_bundle`（L514-L645）按 run/user/thread 校验 snapshot，要求唯一 question 引用并重读 active、未拒绝、答案来源可信的题面；`backend/app/modules/agent/workflows/grade.py::_load_attempt_snapshot_node`（L40-L78）装载 bundle，`_objective_grade_node`（L81-L129）只对 choice/fill/judge 确定性比较并生成 verdict/score/error type，`_render_artifact_node`（L191-L218）交给既有事实投影。主观题或不可信/歧义输入在 Artifact 前失败。
+- 测试：`backend/tests/test_agent_memory_selector.py`（L191-L339）覆盖真实题面装载、Artifact 来源、跨用户和多题歧义；`backend/tests/test_agent_grade_worker.py`（L153-L243）覆盖正确/错误 verdict 到 `grade_result_confirmed` / `user_learning_mastery`、主观题零副作用拒绝与判断题否定表达；`test_grade_run_without_snapshot_fails_without_touching_mastery`（L398-L415）覆盖缺快照守卫。
 - 验证：全部 Agent 回归通过（182 passed，75 warnings）；Python 编译、`git diff --check` 与旧状态/旧锚点扫描通过。
 - 提交信息：`让 Grade 消费真实 EvaluationBundle`
 
 ## 2026-07-27：让 Plan 消费真实 PlanningBundle
 
 - 目标：推进 `MEM-004`，移除 Plan 固定注入的学科、强弱项和 60 分钟目标，只允许真实记忆产生审批草案。
-- 实现：`backend/app/modules/agent/memory_selector.py::load_planning_bundle`（L303-L499）按用户/线程校验 Run/snapshot，选择当前主题、最新 active 已批准 goals 和按统一策略衰减后的有效薄弱点，按标题去重并冻结题名/别名、分数与证据版本；`backend/app/modules/agent/workflows/plan.py::_aggregate_learning_evidence_node`（L26-L49）接入 bundle，targets 为空时由前置门失败且不创建审批。
-- 测试：`backend/tests/test_agent_memory_selector.py::test_load_planning_bundle_uses_approved_goals_and_real_weak_mastery`（L66-L155）覆盖用户隔离、批准目标、周期和真实薄弱点；`backend/tests/test_agent_plan_worker.py::test_plan_without_real_memory_fails_before_creating_approval`（L142-L156）与 `test_approved_plan_resumes_and_creates_artifact`（L219-L278）覆盖无证据零审批和真实目标 Artifact。
+- 实现：`backend/app/modules/agent/memory_selector.py::load_planning_bundle`（L306-L511）按用户/线程校验 Run/snapshot，选择当前主题、最新 active 已批准 goals、按统一策略衰减后的有效薄弱点和已决胜偏好，按标题去重并冻结题名/别名、分数与证据版本；`backend/app/modules/agent/workflows/plan.py::_aggregate_learning_evidence_node`（L26-L53）接入 bundle，targets 为空时由前置门失败且不创建审批。
+- 测试：`backend/tests/test_agent_memory_selector.py::test_load_planning_bundle_uses_approved_goals_and_real_weak_mastery`（L68-L157）覆盖用户隔离、批准目标、周期和真实薄弱点；`backend/tests/test_agent_plan_worker.py::test_plan_without_real_memory_fails_before_creating_approval`（L147-L161）与 `test_approved_plan_resumes_and_creates_artifact`（L224-L283）覆盖无证据零审批和真实目标 Artifact。
 - 验证：Memory selector、Plan Worker、Memory Outbox、Validate 与 Conversation 组合回归通过（36 passed，53 warnings）；Python 编译与 `git diff --check` 通过。
 - 提交信息：`让 Plan 只消费真实 PlanningBundle`
 
 ## 2026-07-27：修复运行库缺失 Memory Outbox 真表
 
 - 目标：消除 Worker 扫描 `agent_memory_update_outbox` 时的 MySQL 1146，并让同类结构漂移在 Worker 启动前失败。
-- 根因与修复：代码 head 为 `20260726_memory_outbox_unique`，实际 `starmap` 仅到 `20260725_agent_activity`；执行 `alembic upgrade head` 后创建八张记忆表并添加 `(run_id,event_type)` 唯一约束。`backend/app/modules/operations/schema_guard.py::verify_database_schema`（L43-L191）进一步校验全部记忆真表和 `uk_agent_memory_outbox_run_event`，不再只相信 revision。
+- 根因与修复：事故发生时代码 head 为 `20260726_memory_outbox_unique`，实际 `starmap` 仅到 `20260725_agent_activity`；执行 `alembic upgrade head` 后创建八张记忆表并添加 `(run_id,event_type)` 唯一约束。当前 `backend/app/modules/operations/schema_guard.py::verify_database_schema`（L44-L193）继续校验全部 Agent 真表和 `uk_agent_memory_outbox_run_event`，不再只相信 revision。
 - 验证：真实数据库 current=head、真表/两列复合索引存在；回滚事务重放 `MemoryOutboxStore.scan_due` 成功且 `due_count=0`；真实 schema guard 通过。迁移、Outbox 与 guard 回归共 26 项通过，`git diff --check` 通过。
 - 故障单：`incidents/2026-07-27-memory-outbox-table-missing.md`。
 - 提交信息：`在启动前阻断 Memory Outbox 结构漂移`
@@ -76,14 +76,14 @@
 ## 2026-07-26：启用可信事实异步派生
 
 - 目标：让 Memory Outbox 产生真实长期记忆落点并进入后台循环，而不是空消费任务。
-- 实现：`backend/app/modules/agent/memory_item_projection.py::project_trusted_memory_event`（L212-L224）按事实分派，线程主题与批准计划分别物化 `topic_context` / `learning_goal`；`backend/app/modules/agent/worker.py::AgentWorker.start`（L370-L394）在 Run 批次后消费记忆任务，异常仍只重试 Outbox。
+- 实现：`backend/app/modules/agent/memory_item_projection.py::project_trusted_memory_event`（L212-L224）按事实分派，线程主题与批准计划分别物化 `topic_context` / `learning_goal`；`backend/app/modules/agent/worker.py::AgentWorker.start`（L372-L396）在 Run 批次后消费记忆任务，异常仍只重试 Outbox。
 - 验证：记忆/迁移组 32 项、workflow/Worker 组 22 项通过；Python 编译与 `git diff --check` 通过。
 - 提交信息：`启用可信事实异步派生`
 
 ## 2026-07-26：建立 Memory Outbox 消费状态机
 
 - 目标：让记忆任务具备可竞争认领、崩溃恢复、延迟重试和失败隔离能力。
-- 实现：新增 `backend/app/modules/agent/memory_outbox.py::MemoryOutboxStore`（当前 L35-L182）与 `MemoryOutboxConsumer`（当前 L185-L317）；processing 复用 `scheduled_at` 作为租约截止，状态更新校验 worker 所有权，投影异常由 SAVEPOINT 隔离，耗尽预算进入 failed。
+- 实现：新增 `backend/app/modules/agent/memory_outbox.py::MemoryOutboxStore`（当前 L40-L187）与 `MemoryOutboxConsumer`（当前 L190-L328）；processing 复用 `scheduled_at` 作为租约截止，状态更新校验 worker 所有权，投影异常由 SAVEPOINT 隔离，耗尽预算进入 failed。
 - 边界：该提交的默认 projector 只验证可信事实且未接入 Agent Worker；实际派生与运行时启用由后续 `启用可信事实异步派生` 提交完成。
 - 验证：`cd backend && PYTHONPATH=. venv/bin/pytest -q tests/test_agent_memory_outbox.py` 通过（4 passed）；Python 编译与 `git diff --check` 通过。
 - 提交信息：`建立 Memory Outbox 消费状态机`
@@ -140,7 +140,7 @@
 
 ### 实现
 
-- 在 `backend/app/modules/agent/workflows/plan.py::_render_plan_result_node`（L198-L221）把已通过守卫的 approval ID 写入 Plan Artifact，使事实投影可以回查真实批准来源。
+- 在 `backend/app/modules/agent/workflows/plan.py::_render_plan_result_node`（L211-L234）把已通过守卫的 approval ID 写入 Plan Artifact，使事实投影可以回查真实批准来源。
 - 扩展 `backend/app/modules/agent/memory_projection.py::project_completed_run_facts`（L125-L140），由 `_record_plan_confirmed`（L185-L251）校验 approval ID、同 Run 归属和数据库 approved 状态，再按 approval ID 幂等写用户级 `plan_confirmed`。
 - 事件只保存 Artifact、approval 和可选 snapshot ID，计划正文仍以 `agent_artifacts` 为权威来源；拒绝与未批准路径维持零 Artifact、零长期事实。
 - 扩展 `backend/tests/test_agent_plan_worker.py`（L92-L200），覆盖拒绝/旁路不写事实、批准后 Artifact 携带审批来源、事实载荷和重放幂等。
@@ -165,8 +165,8 @@
 ### 实现
 
 - 修改 `backend/app/modules/agent/service.py::AgentService.decide_approval`（L424-L476）：只接受 approved/rejected；批准时恢复 running 并写 Run Outbox，拒绝时转 failed、记录用户拒绝原因、删除 checkpoint 且不投递，二者统一投影 `run.status_changed`。
-- 在 `backend/app/modules/agent/workflows/plan.py::_apply_plan_change_node`（L171-L195）增加纵深守卫，从数据库重读 checkpoint 携带的 approval ID，只有状态为 approved 才应用草案；pending、rejected 或缺失均失败且不生成 Artifact。
-- 新增 `backend/tests/test_agent_plan_worker.py::test_rejected_plan_stops_without_outbox_or_artifact`（L92-L128）、`test_plan_apply_node_rejects_unapproved_checkpoint`（L132-L147）和 `test_approved_plan_resumes_and_creates_artifact`（L151-L200），同时锁定拒绝、旁路恢复和正常批准三条链路。
+- 在 `backend/app/modules/agent/workflows/plan.py::_apply_plan_change_node`（L184-L208）增加纵深守卫，从数据库重读 checkpoint 携带的 approval ID，只有状态为 approved 才应用草案；pending、rejected 或缺失均失败且不生成 Artifact。
+- 新增 `backend/tests/test_agent_plan_worker.py::test_rejected_plan_stops_without_outbox_or_artifact`（L165-L201）、`test_plan_apply_node_rejects_unapproved_checkpoint`（L205-L220）和 `test_approved_plan_resumes_and_creates_artifact`（L224-L283），同时锁定拒绝、旁路恢复和正常批准三条链路。
 - 同步更新事件/错误实现分卷、Plan 执行全景和 `MEM-006` 任务状态，为下一提交的 `plan_confirmed` 事实投影建立可信前置条件。
 
 ### 验证

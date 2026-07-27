@@ -10,7 +10,7 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `backend/alembic/versions/20260723_agent_model_configs.py` | `upgrade` | 旧数据库位于 `20260723_repair_agent_parent` | 创建 `agent_model_configs`、默认项唯一约束和索引，并回填启用的旧配置 | 模型配置表和可选默认记录 | schema guard |
 | 2 | `backend/alembic/versions/20260724_agent_unlimited_tokens.py` | `upgrade` | 已存在 `agent_model_configs` | 把 `max_tokens` 改成 nullable | 数据库支持“不设上限” | runtime config |
-| 3 | `backend/app/modules/operations/schema_guard.py` | `verify_database_schema` | 启动期 `AsyncSession`、Alembic heads 与 information_schema | 校验 revision、`agent_runs` 必需列、模型配置/记忆基础真表、Memory Outbox 唯一索引和模型列约束 | 结构正确才允许 Worker 与后端服务启动；漂移抛 `DatabaseSchemaError` | 用户模型接口 / Agent Worker |
+| 3 | `backend/app/modules/operations/schema_guard.py` | `verify_database_schema` | 启动期 `AsyncSession`、Alembic heads 与 information_schema | 校验 revision、`agent_runs` 必需列、模型配置/记忆/偏好候选真表、Memory Outbox 唯一索引和模型列约束 | 结构正确才允许 Worker 与后端服务启动；漂移抛 `DatabaseSchemaError` | 用户模型接口 / Agent Worker |
 | 4 | `backend/app/modules/agent/router.py` | `list_selectable_models` | 当前用户 | 查询公开且可选的 Agent 模型配置 | `{items}` | `AgentPage.loadModels` |
 | 5 | `backend/app/modules/agent/model_configs.py` | `AgentModelConfigService.list_public` | `agent_model_configs` 表 | 筛选 `online=true` 且 `selectable=true`，默认项优先 | 模型列表 | 用户端选择器 |
 | 6 | `backend/app/modules/agent/model_runtime/config.py` | `open_agent_model` | 当前 run ID 与 child metadata | 解析模型配置、API Key、Base URL、超时和 Token 限额，并把实际使用配置写回 run metadata | 与本轮 Run 绑定的独立模型客户端 | Router / Answer / Explain runtime |

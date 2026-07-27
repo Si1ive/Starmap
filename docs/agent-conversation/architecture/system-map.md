@@ -24,10 +24,10 @@
 | 执行调度 | `backend/app/modules/agent/outbox.py`、`backend/app/modules/agent/worker.py` | `OutboxStore.enqueue`、`AgentWorker.process_run` | 使用 outbox 保证可靠执行，串行处理同一线程下的 Run，维护完成/失败状态 |
 | 工作流引擎 | `backend/app/modules/agent/workflows/engine.py` | `WorkflowEngine.execute` | 逐节点执行 workflow，写 step 事件，保存 WAITING checkpoint，向 worker 返回最终 NodeResult |
 | Conversation 路由 | `backend/app/modules/agent/workflows/conversation.py` | `_route_node`、`_dispatch_workflow_node` | 选择 direct answer 或 explain/validate/grade/plan child Run，并绑定本轮模型配置 |
-| 模型运行时 | `backend/app/modules/agent/model_runtime/router.py`、`answer.py`、`explanation.py` | `RouterRuntime.decide`、`DirectAnswerRuntime.answer`、`ExplanationRuntime.generate` | 负责结构化路由、普通回答流式生成和 explain 双阶段模型调用 |
+| 模型运行时 | `backend/app/modules/agent/model_runtime/router.py`、`answer.py`、`explanation.py`、`preference_extractor.py` | `RouterRuntime.decide`、`DirectAnswerRuntime.answer`、`ExplanationRuntime.generate`、`PreferenceExtractionRuntime.extract` | 负责结构化路由、普通回答流式生成、explain 双阶段调用，以及只产出 pending 记录的偏好候选抽取 |
 | 上下文选择 | `backend/app/modules/agent/context_builder.py` | `ThreadContextBuilder.build` | 从消息、Artifact 和 root run 历史中选取本轮上下文，并记录丢弃审计 |
 | 检索与工具 | `backend/app/modules/agent/tools/retrieve_knowledge.py`、`backend/app/modules/retrieval/service.py` | `retrieve_knowledge`、`RetrievalService.search_with_outline_expansion` | explain/validate 的知识检索入口，负责公开工具活动和真实混合检索 |
-| 领域持久化 | `backend/app/modules/agent/models.py` | `AgentThread`、`AgentRun`、`AgentEvent`、`AgentArtifact` 等模型 | 定义对话、Run、步骤、事件、Artifact、审批、输入和 outbox 的结构与约束 |
+| 领域持久化 | `backend/app/modules/agent/models.py` | `AgentThread`、`AgentRun`、`AgentEvent`、`AgentArtifact`、`AgentPreferenceCandidate` 等模型 | 定义对话、执行事实、审批、候选治理、输入和 outbox 的结构与约束 |
 | 管理员监控 | `backend/app/modules/agent/admin_router.py` | `list_all_runs`、`get_run_detail` | 以 Thread 为主实体聚合会话统计、详情和多轮运行事实 |
 | 管理员页面 | `frontend-admin/src/pages/AgentRunsPage.tsx`、`AgentRunDetailPage.tsx`、`AgentModelsPage.tsx` | `AgentRunsPage`、`AgentRunDetailPage`、`AgentModelsPage` | 负责会话监控、单轮审计和模型配置管理 |
 
