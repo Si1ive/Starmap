@@ -150,7 +150,135 @@ button.agent-chat-connection:hover {
 
 .agent-message__content {
   overflow-wrap: anywhere;
-  white-space: pre-wrap;
+}
+
+.agent-markdown {
+  color: var(--chat-ink);
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+}
+
+.agent-markdown > :first-child {
+  margin-top: 0;
+}
+
+.agent-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.agent-markdown p,
+.agent-markdown ul,
+.agent-markdown ol,
+.agent-markdown blockquote,
+.agent-markdown pre,
+.agent-markdown table {
+  margin: 0.72em 0;
+}
+
+.agent-markdown h1,
+.agent-markdown h2,
+.agent-markdown h3,
+.agent-markdown h4 {
+  color: var(--chat-ink);
+  font-family: var(--serif);
+  line-height: 1.35;
+  margin: 1.05em 0 0.45em;
+}
+
+.agent-markdown h1 {
+  font-size: 1.35em;
+}
+
+.agent-markdown h2 {
+  border-bottom: 1px solid var(--chat-line);
+  font-size: 1.16em;
+  padding-bottom: 0.25em;
+}
+
+.agent-markdown h3,
+.agent-markdown h4 {
+  font-size: 1.03em;
+}
+
+.agent-markdown ul,
+.agent-markdown ol {
+  padding-left: 1.45em;
+}
+
+.agent-markdown li + li {
+  margin-top: 0.28em;
+}
+
+.agent-markdown blockquote {
+  border-left: 3px solid var(--chat-accent);
+  color: var(--chat-muted);
+  padding: 0.1em 0 0.1em 1em;
+}
+
+.agent-markdown a {
+  color: var(--chat-accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.agent-markdown code {
+  background: var(--blue-soft);
+  border-radius: 4px;
+  color: var(--chat-ink);
+  font-family: var(--mono);
+  font-size: 0.88em;
+  padding: 0.12em 0.35em;
+}
+
+.agent-markdown pre {
+  background: #202b27;
+  border: 1px solid #35453f;
+  border-radius: 7px;
+  color: #edf4ef;
+  overflow-x: auto;
+  padding: 11px 13px;
+}
+
+.agent-markdown pre code {
+  background: transparent;
+  color: inherit;
+  display: block;
+  font-size: 0.82em;
+  line-height: 1.65;
+  padding: 0;
+  white-space: pre;
+}
+
+.agent-markdown table {
+  border-collapse: collapse;
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  width: max-content;
+}
+
+.agent-markdown th,
+.agent-markdown td {
+  border: 1px solid var(--chat-line);
+  padding: 6px 9px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.agent-markdown th {
+  background: var(--blue-soft);
+  font-weight: 650;
+}
+
+.agent-markdown hr {
+  border: 0;
+  border-top: 1px solid var(--chat-line);
+  margin: 1.15em 0;
+}
+
+.agent-markdown input[type='checkbox'] {
+  accent-color: var(--chat-accent);
+  margin-right: 6px;
 }
 
 .agent-message__pending {
@@ -681,6 +809,23 @@ button.agent-chat-connection:hover {
   padding: 10px 11px;
 }
 
+.inline-workflow__artifact.is-explanation {
+  border-left: 3px solid var(--chat-accent);
+}
+
+.inline-workflow__artifact.is-practice {
+  background: var(--amber-soft);
+  border-left: 3px solid var(--chat-warning);
+}
+
+.inline-workflow__artifact.is-feedback {
+  border-left: 3px solid var(--chat-success);
+}
+
+.inline-workflow__artifact.is-plan {
+  border-left: 3px solid #7b6aa8;
+}
+
 .inline-workflow__artifact-heading {
   align-items: flex-start;
   display: grid;
@@ -705,6 +850,27 @@ button.agent-chat-connection:hover {
   line-height: 1.45;
 }
 
+.inline-workflow__artifact-type {
+  color: var(--chat-accent) !important;
+  font-family: var(--mono);
+  font-size: 10px !important;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.inline-workflow__artifact.is-practice .inline-workflow__artifact-type {
+  color: var(--chat-warning) !important;
+}
+
+.inline-workflow__artifact.is-feedback .inline-workflow__artifact-type {
+  color: var(--chat-success) !important;
+}
+
+.inline-workflow__artifact.is-plan .inline-workflow__artifact-type {
+  color: #7b6aa8 !important;
+}
+
 .inline-workflow__artifact-heading small {
   color: var(--chat-muted);
   font-size: 12px;
@@ -722,11 +888,12 @@ button.agent-chat-connection:hover {
 .inline-workflow__artifact-content {
   border-top: 1px solid var(--chat-line);
   color: var(--chat-ink);
-  line-height: 1.65;
   margin-top: 9px;
-  overflow-wrap: anywhere;
   padding-top: 9px;
-  white-space: pre-wrap;
+}
+
+.inline-workflow__artifact-content.agent-markdown {
+  border-top: 1px solid var(--chat-line);
 }
 
 .agent-chat-notice {

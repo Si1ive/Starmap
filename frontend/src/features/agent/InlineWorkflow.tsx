@@ -14,6 +14,7 @@ import type {
   WorkflowStepView,
   WorkflowView,
 } from '../../api/agent'
+import MarkdownContent from './MarkdownContent'
 
 interface InlineWorkflowProps {
   workflow: WorkflowView
@@ -147,17 +148,41 @@ function HitSummary({ document, index }: { document: PublicRecord; index: number
   )
 }
 
+const ARTIFACT_TYPE_LABELS: Record<string, string> = {
+  explanation: '讲解',
+  practice: '题目练习',
+  feedback: '批改结果',
+  plan: '学习计划',
+  message: '回答',
+}
+
+function artifactTypeLabel(type: string): string {
+  return ARTIFACT_TYPE_LABELS[type] || '执行结果'
+}
+
+function artifactMarkdown(content: unknown): string | null {
+  if (typeof content === 'string') return content.trim() || null
+  const record = asRecord(content)
+  if (!record) return null
+  for (const key of ['content', 'body', 'markdown', 'text']) {
+    if (typeof record[key] === 'string' && record[key].trim()) return record[key].trim()
+  }
+  return null
+}
+
 function ArtifactCard({ artifact }: { artifact: WorkflowArtifactView }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(artifact.type === 'explanation')
+  const typeLabel = artifactTypeLabel(artifact.type)
   const summary = publicText(artifact.summary) || '已生成一项结果'
-  const detail = publicText(artifact.content)
+  const detail = artifactMarkdown(artifact.content)
   const canExpand = Boolean(detail && detail !== summary)
 
   return (
-    <article className="inline-workflow__artifact">
+    <article className={`inline-workflow__artifact is-${artifact.type}`}>
       <div className="inline-workflow__artifact-heading">
         <FileText aria-hidden="true" size={14} />
         <span>
+          <small className="inline-workflow__artifact-type">{typeLabel}</small>
           <strong>{artifact.title}</strong>
           <small>{summary}</small>
         </span>
@@ -171,7 +196,7 @@ function ArtifactCard({ artifact }: { artifact: WorkflowArtifactView }) {
           </button>
         ) : null}
       </div>
-      {open && detail ? <p className="inline-workflow__artifact-content">{detail}</p> : null}
+      {open && detail ? <MarkdownContent className="inline-workflow__artifact-content" content={detail} /> : null}
     </article>
   )
 }

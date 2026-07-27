@@ -28,7 +28,7 @@
 | Run 事件投影 | `backend/app/modules/agent/thread_events.py` | `ThreadEventStore.project_run_event`（tool 分支） | 只转发显式 `public_metadata`，投影成 `workflow.activity.updated` |
 | 时间线活动归并 | `backend/app/modules/agent/timeline.py` | `AgentTimelineService._activity_views` | 按 `activity_id` 聚合 `tool.called` 与 `tool.result`；同一逻辑检索复用稳定 ID 后，重试只会更新同一活动卡片 |
 | 前端实时归并 | `frontend/src/features/agent/timeline-state.ts` | `applyWorkflowEvent` | 以 activity ID 为键更新工作流活动状态；相同 ID 的后续 attempt 会覆盖旧状态而不是新增卡片 |
-| 工作流卡片渲染 | `frontend/src/features/agent/InlineWorkflow.tsx` | `HitSummary`（L130-L148）、`ActivityCard`（L179-L243）、`InlineWorkflow`（L245-L414） | 渲染查询、命中数、知识点/题目分组、章节/段落/来源摘要和零命中/异常提示；隐藏内部数据通道文案，最多展示 6 条摘要 | 用户端工作流卡片 |
+| 工作流卡片渲染 | `frontend/src/features/agent/InlineWorkflow.tsx` | `HitSummary`（L130-L148）、`ActivityCard`（L204-L268）、`InlineWorkflow`（L270-L460） | 渲染查询、命中数、知识点/题目分组、章节/段落/来源摘要和零命中/异常提示；隐藏内部数据通道文案，最多展示 6 条摘要 | 用户端工作流卡片 |
 
 ## 当前任务锚点
 

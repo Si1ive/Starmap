@@ -208,3 +208,28 @@
 ### 提交信息
 
 `优化 Agent 用户端检索命中摘要`
+
+## 2026-07-27：支持 Agent Markdown 分类型渲染
+
+### 目标
+
+修复助手回答和工作流产物完全没有 Markdown 样式的问题，让讲解、题目练习、批改/计划和原生知识点命中在用户端有清晰区别。
+
+### 实现
+
+- 在 `frontend/src/features/agent/MarkdownContent.tsx::MarkdownContent`（L14-L23）引入 `react-markdown` 与 `remark-gfm`，启用标题、列表、代码块、表格、任务列表和引用渲染，并通过 `skipHtml` 禁止 raw HTML。
+- 在 `frontend/src/features/agent/ConversationStream.tsx::TimelineItemView`（L32-L106）让正常 assistant 正文、streaming 正文和失败时保留的 partial 正文统一进入 Markdown 渲染；错误原因继续单独展示。
+- 在 `frontend/src/features/agent/InlineWorkflow.tsx::ArtifactCard`（L173-L202）按 Artifact 类型显示“讲解/题目练习/批改结果/学习计划/回答”；讲解默认展开 Markdown，结构化题目/计划不把 JSON 强行当正文。
+- 在 `frontend/src/features/agent/agent-chat.css` 的 `.agent-markdown`（L155-L281）和 Artifact 分型样式（L798-L895）建立与现有主题一致的排版、代码块、表格、引用和类型色彩；RAG 命中知识点分组仍由 `frontend/src/features/agent/InlineWorkflow.tsx::ActivityCard`（L204-L268）单独展示。
+- `frontend/package.json` 与 lockfile 新增 `react-markdown`、`remark-gfm`；安装使用本机 npm 缓存完成。
+
+### 验证
+
+- `cd frontend && npm run build` 通过。
+- `cd frontend && npx eslint src/features/agent/ConversationStream.tsx src/features/agent/InlineWorkflow.tsx src/features/agent/MarkdownContent.tsx --report-unused-disable-directives --max-warnings 0` 通过。
+- `git diff --check` 通过。
+- 全量 `frontend npm run lint` 仍受既有 `src/pages/AgentPage.tsx:68` 非空断言警告影响；本次未修改该文件。
+
+### 提交信息
+
+`支持 Agent Markdown 分类型渲染`

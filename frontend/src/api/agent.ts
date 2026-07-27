@@ -156,7 +156,7 @@ export interface WorkflowArtifactView {
   type: string
   title: string
   summary: unknown
-  content: Record<string, unknown>
+  content: unknown
   actions: Record<string, unknown>[]
   created_at: string
 }

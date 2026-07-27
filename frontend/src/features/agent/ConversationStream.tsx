@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import type { TimelineItem } from '../../api/agent'
 import InlineWorkflow from './InlineWorkflow'
+import MarkdownContent from './MarkdownContent'
 
 interface ConversationStreamProps {
   items: TimelineItem[]
@@ -62,7 +63,9 @@ function TimelineItemView({
         {item.message.status === 'failed' ? (
           <>
             {retainedContent ? (
-              <div className="agent-message__content">{retainedContent}</div>
+              <div className="agent-message__content">
+                <MarkdownContent content={retainedContent} />
+              </div>
             ) : null}
             <small className="agent-message__error">{errorMessage}</small>
           </>
@@ -72,7 +75,7 @@ function TimelineItemView({
               <AssistantPending />
             ) : (
               <>
-                {item.message.content}
+                <MarkdownContent content={item.message.content} />
                 {isStreaming ? <span className="agent-message__cursor" /> : null}
               </>
             )}

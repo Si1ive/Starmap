@@ -13,8 +13,8 @@
 | 全局状态容器 | `frontend/src/store/agent-context.tsx` | `AgentProvider` | thread、timeline、SSE 事件 | 统一处理 turn 请求、EventSource、工作流输入/审批和错误恢复 | React context |
 | 消息归并 | `frontend/src/features/agent/timeline-state.ts` | `applyMessageEvent` | `message.delta`、`message.completed`、`message.failed` | 对 delta 有序追加，对 completed/failed 收敛状态和错误信息 | `messagesById` |
 | 工作流归并 | `frontend/src/features/agent/timeline-state.ts` | `applyWorkflowEvent` | `workflow.activity.updated` 等工作流事件 | 以 activity ID 为键维护活动、步骤、审批和产物状态 | `workflowByRunId` |
-| 消息与工作流渲染 | `frontend/src/features/agent/ConversationStream.tsx` | `AssistantPending`、`TimelineItemView`、`ConversationStream` | timeline items | 无正文时显示等待三点；失败时保留 partial 正文并单独显示原因；工作流项展示内嵌卡片 | 对话滚动区 |
-| 内嵌工作流卡片 | `frontend/src/features/agent/InlineWorkflow.tsx` | `HitSummary`（L130-L148）、`ActivityCard`（L179-L243）、`InlineWorkflow`（L245-L414） | `workflow.activities[]` 与步骤链 | 展示检索状态、查询和命中数量；把知识点、题目和其他命中分组，每条只显示标题、章节、段落类型和来源页，最多显示 6 条，不展示内部数据通道 | 工作流消息块 |
+| 消息与工作流渲染 | `frontend/src/features/agent/ConversationStream.tsx` | `AssistantPending`（L19-L29）、`TimelineItemView`（L32-L106）、`ConversationStream`（L108-L173） | timeline items | 无正文时显示等待三点；助手正文和失败时保留的 partial 正文交给 `MarkdownContent` 渲染；工作流项展示内嵌卡片 | 对话滚动区 |
+| 内嵌工作流卡片 | `frontend/src/features/agent/InlineWorkflow.tsx` | `HitSummary`（L130-L148）、`ActivityCard`（L204-L268）、`InlineWorkflow`（L270-L460） | `workflow.activities[]` 与步骤链 | 展示检索状态、查询和命中数量；把知识点、题目和其他命中分组，每条只显示标题、章节、段落类型和来源页，最多显示 6 条，不展示内部数据通道 | 工作流消息块 |
 
 ## 检索命中摘要
 
@@ -39,6 +39,15 @@
 1. `pendingResponse` 在发送请求后立刻进入等待态，直到时间线出现新的 assistant 消息或 workflow 项才清除。
 2. `message.failed` 必须保留已收到的 partial 正文；前端只在红色小字区域显示安全错误原因。
 3. 工作流活动卡片直接消费后端公开文案，例如“没有检索到相关文档”“暂时无法检索相关文档”，前端不额外翻译内部错误策略。
+
+## Markdown 正文与产物分型
+
+| 执行阶段 | 文件 | 符号 | 入口条件 | 处理与副作用 | 最终消费 |
+| --- | --- | --- | --- | --- | --- |
+| Markdown 安全渲染 | `frontend/src/features/agent/MarkdownContent.tsx` | `MarkdownContent`（L14-L23） | 助手消息或允许展示正文的 Artifact 字符串 | 使用 `react-markdown` + `remark-gfm` 渲染标题、列表、代码、表格、任务列表和引用；显式 `skipHtml`，不启用 raw HTML/HTML 注入 | 助手气泡与讲解 Artifact |
+| 助手消息归并 | `frontend/src/features/agent/ConversationStream.tsx` | `TimelineItemView`（L32-L106） | assistant `message.completed`、streaming 或 failed partial content | 正文和失败时保留的 partial 内容都进入同一 Markdown 组件；失败原因仍作为独立红色纯文本显示，避免覆盖正文 | 用户对话流 |
+| Artifact 分型 | `frontend/src/features/agent/InlineWorkflow.tsx` | `artifactTypeLabel`（L151-L161）、`artifactMarkdown`（L163-L171）、`ArtifactCard`（L173-L202） | `workflow.artifacts[]` | 讲解默认展开 Markdown；题目练习、批改、学习计划和普通回答显示类型眉标与不同边框/底色；结构化题目/计划内容不被强行当正文解析 | 工作流结果卡片 |
+| Markdown 主题样式 | `frontend/src/features/agent/agent-chat.css` | `.agent-markdown`（L155-L281）、`.inline-workflow__artifact` 分型样式（L798-L895） | Markdown DOM 与 Artifact 类型 class | 统一标题、列表、引用、代码块、GFM 表格、链接和分型色彩；代码块可横向滚动，长文本换行，不撑破对话框 | 用户端响应式 UI |
 
 ## 下一步阅读
 
