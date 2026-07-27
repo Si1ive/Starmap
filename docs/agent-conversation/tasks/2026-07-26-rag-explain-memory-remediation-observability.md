@@ -2,7 +2,7 @@
 
 ## 状态与范围
 
-状态：进行中。Run/Snapshot/source 只读观测与复现后端已完成；Memory Outbox 运维 API 和管理端界面待完成。
+状态：进行中。Run/Snapshot/source 只读观测与复现、Memory Outbox 运维 API 已完成；管理端界面待完成。
 本分卷冻结管理员 Agent Runs 对分层记忆的观测、复现和运维验收面。用户端时间线和
 公开 SSE 不暴露记忆正文；管理端读取也必须经过现有管理员权限和数据作用域校验。
 
@@ -48,6 +48,12 @@ Item，当前 source 只作对照；缺失、越权或版本漂移统一返回 4
   的任务不可重放。
 - 重放接口必须记录管理员、时间和目标 Outbox ID；消费者仍执行 user/thread/source version 归属复核。
 - UI/API 都不得提供跳过版本校验、强制标成功或直接写 derived memory 的旁路。
+
+当前实现由 `backend/app/modules/agent/admin_memory_outbox.py::list_memory_outbox`（L59-L132）完成组合筛选，
+`get_memory_outbox_detail`（L135-L146）返回脱敏载荷和失败摘要，`replay_memory_outbox`（L149-L204）锁定原行、
+保留 Run/type 或 task key 幂等身份并追加管理员审计。`backend/app/modules/agent/memory_outbox.py::MemoryOutboxStore.fail`
+（L160-L195）持久化安全错误；completed 与有效 processing 租约不能重放，过期 processing 可恢复后仍由消费者
+执行原有的 user/thread/source version 复核。
 
 ## 安全与验收
 

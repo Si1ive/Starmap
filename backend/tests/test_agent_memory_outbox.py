@@ -286,6 +286,7 @@ async def test_projection_failure_retries_without_changing_completed_run(db_sess
     assert outbox.worker_id is None
     assert outbox.scheduled_at > utc_now() + timedelta(seconds=40)
     assert outbox.processed_at is None
+    assert outbox.last_error_message == "embedding service unavailable"
 
 
 @pytest.mark.asyncio
@@ -314,4 +315,5 @@ async def test_consumer_marks_task_failed_after_retry_budget_is_exhausted(db_ses
     assert outbox.retry_count == 3
     assert outbox.worker_id == "memory_worker_1"
     assert outbox.processed_at is not None
+    assert outbox.last_error_message == "permanent projection failure"
     assert await store.scan_due(db_session, limit=10) == []

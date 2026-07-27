@@ -17,6 +17,7 @@ from .conversation_summary import (
     ConversationSummaryMaintainer,
     conversation_summary_maintainer,
 )
+from .admin_memory import safe_error_summary
 from .memory_item_projection import project_trusted_memory_event
 from .memory_vector import (
     MemoryVectorLifecycle,
@@ -162,6 +163,7 @@ class MemoryOutboxStore:
         outbox_id: int,
         worker_id: str,
         *,
+        error_message: str | None = None,
         retry_delay_seconds: int = 30,
         max_retries: int = 3,
     ) -> bool:
@@ -186,6 +188,7 @@ class MemoryOutboxStore:
                     else_=now + timedelta(seconds=retry_delay_seconds),
                 ),
                 processed_at=case((exhausted, now), else_=None),
+                last_error_message=safe_error_summary(error_message),
             )
             .execution_options(synchronize_session=False)
         )
@@ -299,6 +302,7 @@ class MemoryOutboxConsumer:
                 db,
                 outbox_id,
                 worker_id,
+                error_message=str(error),
                 retry_delay_seconds=self.retry_delay_seconds,
                 max_retries=self.max_retries,
             )

@@ -7,40 +7,43 @@
 
 ## 关键迁移与结构守卫
 
-| 执行阶段 | 文件 | 符号 | 职责 |
-| --- | --- | --- | --- |
-| 定义模型配置前向迁移 | `backend/alembic/versions/20260723_agent_model_configs.py` | `upgrade` | 创建 `agent_model_configs`，建立唯一约束和索引，并回填启用的旧模型配置 |
-| 时间线事件枚举扩展 | `backend/alembic/versions/20260725_agent_activity.py` | `upgrade` | 给 thread event ENUM 增加 `workflow.activity.updated`，使工具活动能持久化 |
-| 记忆基础表前向迁移 | `backend/alembic/versions/20260726_agent_memory_foundation.py` | `upgrade` | 创建线程热状态、记忆事件、快照、快照项、记忆 Outbox、掌握度、对话摘要和长期记忆项表，作为后续记忆读写的统一结构底座 |
-| Memory Outbox 幂等约束 | `backend/alembic/versions/20260726_memory_outbox_unique.py` | `upgrade`（L18-L25）、`downgrade`（L28-L34） | 为 `agent_memory_update_outbox(run_id, event_type)` 增加 `uk_agent_memory_outbox_run_event`，由数据库阻止同一事实类型的并发重复任务；降级只移除该约束 |
-| 偏好候选治理表 | `backend/alembic/versions/20260727_preference_candidates.py` | `upgrade`（L19-L70）、`downgrade`（L73-L82） | 从唯一 head 前向创建 `agent_preference_candidates`，保存用户/线程作用域、source、结构化 key/value、confidence、pending/approved/rejected/invalidated、抽取模型与决定审计；唯一约束阻止同 source/key 重放复活 |
-| 线程治理 Outbox | `backend/alembic/versions/20260727_thread_memory_delete.py` | `upgrade`（L19-L34）、`downgrade`（L37-L50） | 把 Memory Outbox `run_id` 改为可空并增加唯一 `task_key`，允许无 Run 的线程删除治理任务；降级先清除无 Run 任务再恢复非空约束 |
-| 无限 Token 结构调整 | `backend/alembic/versions/20260724_agent_unlimited_tokens.py` | `upgrade` | 把 `agent_model_configs.max_tokens` 改为 nullable，支持“不设上限” |
-| 启动期结构校验 | `backend/app/main.py` | `lifespan` | FastAPI 启动时在 Worker、调度器之前执行 schema guard |
-| 版本与真表校验 | `backend/app/modules/operations/schema_guard.py` | `AGENT_REQUIRED_TABLES`（L13-L26）、`verify_database_schema`（L44-L193） | 同时核对 Alembic head、`agent_runs` 必需列、模型配置/记忆/偏好候选表、Memory Outbox 复合唯一索引和模型列约束；任一漂移都在 Worker 启动前抛 `DatabaseSchemaError` |
+| 执行阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 定义模型配置 | `backend/alembic/versions/20260723_agent_model_configs.py` | `upgrade` | L21-L90 | 旧库位于 `20260723_repair_agent_parent` | 创建配置表、唯一约束和索引，回填启用的旧配置 | `agent_model_configs` | 后续模型迁移 |
+| 无限 Token 调整 | `backend/alembic/versions/20260724_agent_unlimited_tokens.py` | `upgrade` | L20-L27 | 已存在模型配置表 | 把 `max_tokens` 改为 nullable | 支持“不设上限” | schema guard |
+| 时间线事件扩展 | `backend/alembic/versions/20260725_agent_activity.py` | `upgrade` | L34-L41 | 已存在 thread event ENUM | 加入 `workflow.activity.updated` | 工具活动可持久化 | Agent timeline |
+| 建立记忆底座 | `backend/alembic/versions/20260726_agent_memory_foundation.py` | `upgrade` | L21-L325 | 已有 Agent 核心表 | 创建热状态、事实、Snapshot/Item、Memory Outbox、掌握度、摘要和长期记忆项 | 八张记忆表及索引/外键 | 幂等约束迁移 |
+| Run/type 幂等约束 | `backend/alembic/versions/20260726_memory_outbox_unique.py` | `upgrade`、`downgrade` | L18-L34 | Memory Outbox 真表 | 添加或移除 `(run_id,event_type)` 唯一约束 | 阻止同事实类型并发重复任务 | 偏好候选迁移 |
+| 偏好候选治理 | `backend/alembic/versions/20260727_preference_candidates.py` | `upgrade`、`downgrade` | L19-L82 | 唯一迁移 head | 创建带 source/version/status/决定审计的候选表 | `agent_preference_candidates` | 线程治理 Outbox |
+| 线程治理任务 | `backend/alembic/versions/20260727_thread_memory_delete.py` | `upgrade`、`downgrade` | L19-L50 | Run/type Outbox | 允许 `run_id` 为空并添加唯一 `task_key`；降级先清治理任务 | 无 Run 的删除任务可幂等入队 | 失败摘要迁移 |
+| Outbox 失败摘要 | `backend/alembic/versions/20260727_memory_outbox_error.py` | `upgrade`、`downgrade` | L19-L27 | 已支持治理 task key 的 Outbox | 添加或移除 nullable `last_error_message` | 当前 head `20260727_memory_outbox_error`；失败详情可持久化 | ORM / Consumer |
+| 启动期门禁 | `backend/app/main.py` | `lifespan` | L91-L107 | 已连接 MySQL | 在 Worker 和调度器前调用 schema guard | 漂移时关闭连接并中止启动 | Worker 启动 |
+| 版本与真结构校验 | `backend/app/modules/operations/schema_guard.py` | `AGENT_REQUIRED_TABLES`、`MEMORY_OUTBOX_REQUIRED_COLUMNS`、`verify_database_schema` | L13-L30、L45-L221 | Alembic revision 与 information_schema | 同时核对 head、Agent 表/列、Outbox 失败列和唯一索引、模型 nullable 约束 | 通过返回 revision；失败抛 `DatabaseSchemaError` | FastAPI lifespan |
 
 ## 当前 Agent 结构契约
 
-| 数据类型 | 文件 | 符号 | 契约 |
-| --- | --- | --- | --- |
-| Run / Step / Event / Artifact / Approval / Input | `backend/app/modules/agent/models.py` | `AgentRun` 至 `AgentApproval` 等模型 | 对话事实、执行状态、事件顺序、审批和 Artifact 都以数据库表为单一事实源 |
-| 线程时间线项 | `backend/app/modules/agent/models.py` | `AgentThreadItem`、`AgentThreadEvent` | 用户端与管理端刷新时依赖这些投影恢复消息和工作流时间线 |
-| 模型配置空值 | `backend/app/modules/agent/models.py` | `AgentModelConfigRecord.max_tokens` | 显式 `None` 必须保存为 SQL `NULL`，不能被 ORM 默认值覆盖 |
-| Outbox | `backend/app/modules/agent/models.py` | `AgentOutbox` | HTTP 事务只负责入队，LLM 调用与 workflow 执行在 Worker 中异步完成 |
-| 记忆分区与能力标签 | `backend/app/modules/agent/memory_contracts.py` | `MemoryPartition`、`MemoryNeed`、`MEMORY_NEED_PARTITIONS` | 长期记忆按事实分区建模，workflow 只声明能力标签，不把 explain/validate/grade/plan 名称写死进存储契约 |
-| 记忆与偏好治理表 | `backend/app/modules/agent/models.py` | `AgentThreadMemoryState`、`AgentMemoryEvent`、`AgentMemorySnapshot`、`AgentMemorySnapshotItem`、`AgentMemoryUpdateOutbox`（L612-L654）、`UserLearningMastery`、`AgentConversationSummary`、`AgentMemoryItem`、`AgentPreferenceCandidate`（L766-L843） | Outbox 同时支持 Run/type 与治理 task key 幂等；候选按 user/source/key 幂等，拒绝不可被同 source 重放复活 |
+| 数据类型 | 文件 | 符号 | 代码范围 | 入口条件与关键参数 | 数据库副作用与错误传播 | 最终消费 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Run 事实 | `backend/app/modules/agent/models.py` | `AgentRun` | L87-L158 | Thread/user/workflow 与状态机字段 | 单一 Run 事实源；外键/唯一约束错误向事务传播 | Worker、timeline、管理端 |
+| 线程时间线投影 | `backend/app/modules/agent/models.py` | `AgentThreadItem`、`AgentThreadEvent` | L202-L261 | thread sequence、visibility 与公开事件 | 单调序号唯一；刷新/SSE 只读这些公开投影 | 用户端与管理端 timeline |
+| Step 与内部 Event | `backend/app/modules/agent/models.py` | `AgentStep`、`AgentEvent` | L264-L328 | Run ID、节点、事件序号和 payload | 保存内部执行顺序；同 Run sequence 冲突回滚 | Worker 恢复与管理审计 |
+| Run Outbox | `backend/app/modules/agent/models.py` | `AgentRunOutbox` | L331-L355 | Run ID 与调度时间 | HTTP 事务入队，Worker 异步认领；错误保留 pending/failed | Agent Worker |
+| Artifact / Input / Approval | `backend/app/modules/agent/models.py` | `AgentArtifact`、`AgentInput`、`AgentApproval` | L402-L484 | Run 产物、补充输入或审批动作 | 分别写业务产物与人工决策；状态错误由服务层阻断 | timeline 与管理端详情 |
+| 记忆能力契约 | `backend/app/modules/agent/memory_contracts.py` | `MemoryPartition`、`MemoryNeed`、`MEMORY_NEED_PARTITIONS` | L8-L76 | workflow 声明稳定能力标签 | 无数据库写；非法枚举在构造阶段失败 | selector / workflow |
+| 记忆 Snapshot 与 Outbox | `backend/app/modules/agent/models.py` | `AgentThreadMemoryState`、`AgentMemoryEvent`、`AgentMemorySnapshot`、`AgentMemorySnapshotItem`、`AgentMemoryUpdateOutbox` | L487-L656 | user/thread/run/source/version、冻结 payload 与调度状态 | Snapshot 不可变追加；Outbox 用 Run/type 或 task key 幂等，失败摘要只存脱敏文本 | Memory selector、Consumer、管理员运维 |
+| 掌握度与长期项 | `backend/app/modules/agent/models.py` | `UserLearningMastery`、`AgentConversationSummary`、`AgentMemoryItem` | L659-L766 | 可信 Grade、消息序列范围、事实 source | 聚合分数、版本化摘要、active/superseded/deleted 长期项 | Validate / Plan / conversation |
+| 偏好候选 | `backend/app/modules/agent/models.py` | `AgentPreferenceCandidate` | L769-L846 | user/source/key 与治理决定 | 同 source/key 唯一；拒绝和失效不能被重放复活 | preference selector 与用户治理 |
 
 ## 故障定位顺序
 
-1. 先检查 `alembic_version` 是否等于当前 head，禁止用 `alembic stamp head` 掩盖缺失迁移。
-2. 若应用层提示字段存在但数据库报列不存在，优先跑 `verify_database_schema` 路径，确认是否漏跑迁移。
-3. 如果是 Agent 事件或时间线恢复异常，确认 `workflow.activity.updated` 是否已在数据库枚举中存在。
-4. 如果是模型“无限输出 Token”行为不生效，确认数据库列是否允许 `NULL`，再核对 ORM `evaluates_none()` 是否生效。
-5. 如果是分层记忆功能启动失败，先确认已升级到当前 head `20260727_thread_memory_delete`，再检查记忆表、偏好表和 Outbox 唯一约束；禁止用 stamp 掩盖漏迁移。
-6. `agent_memory_update_outbox` 缺表的实际诊断、升级证据和 Worker 重放结果见 `../incidents/2026-07-27-memory-outbox-table-missing.md`。
+1. 先检查 `alembic_version` 是否等于当前 head `20260727_memory_outbox_error`，禁止用 `alembic stamp head` 掩盖缺失迁移。
+2. 若应用层已有字段但数据库报列不存在，执行 `alembic upgrade head`，再走 `verify_database_schema` 同时确认真列。
+3. Memory Outbox 没有失败详情时，检查 `last_error_message` 真列以及 `MemoryOutboxStore.fail` 是否收到异常摘要。
+4. 工具活动无法恢复时，确认 `workflow.activity.updated` 已进入数据库 ENUM。
+5. 模型“无限输出 Token”不生效时，确认 `max_tokens` 允许 NULL，再核对 ORM `evaluates_none()`。
+6. `agent_memory_update_outbox` 缺表的实际诊断和修复证据见 `../incidents/2026-07-27-memory-outbox-table-missing.md`。
 
 ## 下一步阅读
 
-- 要看管理端和模型配置如何消费这些结构，转到 `architecture/admin-and-model-config.md`。
-- 要回查长期记忆新增表的任务边界，转到
-  `../tasks/2026-07-26-rag-explain-memory-remediation-completed.md` 的 `MEM-002`。
+- 管理端如何筛选、查看和重放 Outbox：`admin-observability.md`。
+- 记忆表的业务选择与冻结：`routing-context-memory.md`。

@@ -27,6 +27,7 @@ AGENT_REQUIRED_TABLES = frozenset(
 AGENT_MODEL_NULLABLE_COLUMNS = frozenset({"max_tokens"})
 MEMORY_OUTBOX_UNIQUE_INDEX = "uk_agent_memory_outbox_run_event"
 MEMORY_OUTBOX_UNIQUE_COLUMNS = ("run_id", "event_type")
+MEMORY_OUTBOX_REQUIRED_COLUMNS = frozenset({"last_error_message"})
 
 
 class DatabaseSchemaError(RuntimeError):
@@ -125,6 +126,33 @@ async def verify_database_schema(
         raise DatabaseSchemaError(
             "数据库结构与 Alembic 版本记录不一致："
             f"缺少 Agent 数据表 [{missing_label}]；"
+            "请先在 backend 目录执行 `alembic upgrade head`。"
+        )
+
+    try:
+        result = await session.execute(
+            text(
+                "SELECT column_name "
+                "FROM information_schema.columns "
+                "WHERE table_schema = DATABASE() "
+                "AND table_name = 'agent_memory_update_outbox'"
+            )
+        )
+        memory_outbox_columns = frozenset(result.scalars().all())
+    except Exception as exc:
+        raise DatabaseSchemaError(
+            "无法校验 Memory Outbox 列结构；"
+            "请先在 backend 目录执行 `alembic upgrade head`。"
+        ) from exc
+
+    missing_memory_outbox_columns = (
+        MEMORY_OUTBOX_REQUIRED_COLUMNS - memory_outbox_columns
+    )
+    if missing_memory_outbox_columns:
+        missing_label = ", ".join(sorted(missing_memory_outbox_columns))
+        raise DatabaseSchemaError(
+            "数据库结构与 Alembic 版本记录不一致："
+            f"agent_memory_update_outbox 缺少列 [{missing_label}]；"
             "请先在 backend 目录执行 `alembic upgrade head`。"
         )
 

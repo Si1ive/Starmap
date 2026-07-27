@@ -636,6 +636,9 @@ class AgentMemoryUpdateOutbox(Base):
     payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, comment="投影载荷")
     retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="重试次数")
     worker_id: Mapped[Optional[str]] = mapped_column(String(64), comment="处理 Worker 标识")
+    last_error_message: Mapped[Optional[str]] = mapped_column(
+        Text, comment="最近一次安全失败摘要"
+    )
     scheduled_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, comment="计划执行时间")
     processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, comment="处理时间")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)

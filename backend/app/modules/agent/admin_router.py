@@ -8,12 +8,14 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import exists, func, select as sa_select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.db.mysql import mysql_client
+from app.models.mysql_models import AdminUser
+from app.modules.operations.security import require_current_admin
 
 from .events import event_store
 from .admin_memory import (
@@ -22,6 +24,11 @@ from .admin_memory import (
     redact_admin_value,
     replay_run_memory_snapshot,
     safe_error_summary,
+)
+from .admin_memory_outbox import (
+    get_memory_outbox_detail,
+    list_memory_outbox,
+    replay_memory_outbox,
 )
 from .time_utils import utc_isoformat
 
@@ -378,6 +385,64 @@ async def list_all_runs(
             }
         )
     return {"data": {"items": items, "total": total, "page": page, "page_size": page_size}}
+
+
+@router.get("/memory-outbox")
+async def list_memory_outbox_admin(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    event_type: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    run_id: Optional[str] = Query(None),
+    thread_id: Optional[str] = Query(None),
+    source_id: Optional[str] = Query(None),
+    start_date: Optional[str] = Query(None),
+    end_date: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """分页筛选 Memory Outbox 运维记录。"""
+    return {
+        "data": await list_memory_outbox(
+            db,
+            page=page,
+            page_size=page_size,
+            event_type=event_type,
+            status=status,
+            run_id=run_id,
+            thread_id=thread_id,
+            source_id=source_id,
+            start_at=_parse_datetime(start_date),
+            end_at=_parse_datetime(end_date),
+        )
+    }
+
+
+@router.get("/memory-outbox/{outbox_id}")
+async def get_memory_outbox_detail_admin(
+    outbox_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """读取单条 Outbox 的脱敏载荷和最后失败摘要。"""
+    return {"data": await get_memory_outbox_detail(db, outbox_id)}
+
+
+@router.post("/memory-outbox/{outbox_id}/replay")
+async def replay_memory_outbox_admin(
+    outbox_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_admin: AdminUser = Depends(require_current_admin),
+):
+    """原记录幂等重放 Memory Outbox，并记录管理员审计。"""
+    return {
+        "data": await replay_memory_outbox(
+            db,
+            outbox_id=outbox_id,
+            admin_user_id=current_admin.id,
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("User-Agent"),
+        )
+    }
 
 
 @router.get("/{run_id}/memory")

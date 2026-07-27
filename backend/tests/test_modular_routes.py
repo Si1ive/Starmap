@@ -85,6 +85,9 @@ def test_agent_admin_routes_use_the_admin_namespace():
         "/api/v1/admin/agent-runs/{run_id}/memory",
         "/api/v1/admin/agent-runs/{run_id}/memory-replay",
         "/api/v1/admin/agent-runs/{run_id}/memory-sources/{item_id}",
+        "/api/v1/admin/agent-runs/memory-outbox",
+        "/api/v1/admin/agent-runs/memory-outbox/{outbox_id}",
+        "/api/v1/admin/agent-runs/memory-outbox/{outbox_id}/replay",
     )
     for path in expected_paths:
         assert routes[path].endpoint.__module__ == "app.modules.agent.admin_router"
@@ -94,6 +97,10 @@ def test_agent_admin_routes_use_the_admin_namespace():
     assert "POST" in methods["/api/v1/admin/agent-runs/{run_id}/replay"]
     assert "GET" in methods["/api/v1/admin/agent-runs/{run_id}/memory"]
     assert "GET" in methods["/api/v1/admin/agent-runs/{run_id}/memory-replay"]
+    assert "GET" in methods["/api/v1/admin/agent-runs/memory-outbox"]
+    assert "POST" in methods[
+        "/api/v1/admin/agent-runs/memory-outbox/{outbox_id}/replay"
+    ]
     assert "/api/v1/agent-runs" not in routes
 
 
