@@ -1,45 +1,63 @@
-# Agent Runs 与模型调用审计
+# Agent Runs、记忆与模型调用审计
 
 ## 适用场景
 
-本分卷描述管理员如何从 Thread 级列表进入多轮问答详情，并查看某一轮中的 runs、events、approvals、artifacts
-和模型配置使用情况。
+本分卷描述管理员如何从 Thread 级列表进入多轮问答详情，并查看某一 Run 的事件、审批、产物、
+冻结 Snapshot、source 当前状态、实际工具参数和模型调用。所有入口继承 `/api/v1/admin` 的管理员认证；
+冻结正文只在管理端按不可信纯文本展示，不能进入公共 SSE。
 
-## 会话列表与状态统计
+## 会话列表与单轮归并
 
-| 执行阶段 | 文件 | 符号 | 职责 |
-| --- | --- | --- | --- |
-| 会话状态统计 | `backend/app/modules/agent/admin_router.py` | `get_run_stats` | 用窗口函数取每个 Thread 最新 root run，并按状态聚合计数 |
-| 会话分页 | `backend/app/modules/agent/admin_router.py` | `list_all_runs` | 以 Thread 为主实体分页，再批量聚合该页的 run 数、turn 数和事件数 |
-| 管理端契约 | `frontend-admin/src/api/agentRuns.ts` | `AdminAgentSession` / `AdminAgentTurn` / `AdminAgentSessionDetail` | 定义会话摘要、多轮问答和单轮内嵌事实结构 |
-| 列表消费 | `frontend-admin/src/pages/AgentRunsPage.tsx` | `AgentRunsPage` | 展示会话标题、Thread ID、最新状态、回合数和事件数，并进入详情 |
+| 执行阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 最终消费 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 会话状态统计 | `backend/app/modules/agent/admin_router.py` | `get_run_stats` | L244-L280 | Agent Thread 与 root Run | 用窗口函数取每个 Thread 最新 root Run 并按状态聚合 | 会话状态计数；只读数据库 | `AgentRunsPage.fetchStats` |
+| 会话分页 | `backend/app/modules/agent/admin_router.py` | `list_all_runs` | L284-L380 | 页码、状态、workflow、用户与时间范围 | 先分页 Thread，再批量聚合 run/turn/event 数 | Thread 级 `items[]`；只读数据库 | `AgentRunsPage.fetchSessions` |
+| 管理端契约 | `frontend-admin/src/api/agentRuns.ts` | `AdminAgentSession`、`AdminAgentTurn`、`AdminAgentSessionDetail` | L12-L113 | 后端 Thread/turn JSON | 约束会话摘要、多轮问答和单轮内嵌事实结构 | TypeScript 类型 | 管理端列表与详情页 |
+| 旧链接兼容 | `backend/app/modules/agent/admin_router.py` | `_resolve_thread` | L227-L240 | Thread ID 或旧 Run ID | 统一解析为 Thread | Thread；不存在返回 `None` | `get_run_detail` |
+| 按轮归并 | `backend/app/modules/agent/admin_router.py` | `_build_turns` | L134-L224 | messages、runs、events、approvals、artifacts | 以 root Run 为边界把 child Run 和事实归入同一轮 | `turns[]`；只读 | `get_run_detail` |
+| 会话详情 | `backend/app/modules/agent/admin_router.py` | `get_run_detail` | L412-L477 | 已解析 Thread | 一次读取五类事实并调用 `_build_turns` | 完整会话详情；不存在传播安全 404 | `AgentRunDetailPage` |
+| 前端列表 | `frontend-admin/src/pages/AgentRunsPage.tsx` | `AgentRunsPage` | L55-L260 | 分页会话与统计 | 筛选、分页并进入 Thread 详情 | 会话监控表 | 管理员操作 |
+| 前端单轮详情 | `frontend-admin/src/pages/AgentRunDetailPage.tsx` | `TurnDetail`、`AgentRunDetailPage` | L95-L353 | `session.turns` | 折叠渲染运行链路、事件、审批和产物 | 管理员审计视图 | 管理员操作 |
 
-## 单轮详情如何归并 root/child Run
+## Run/Snapshot 观测与只读复现
 
-| 执行阶段 | 文件 | 符号 | 输入 | 处理 | 输出/副作用 | 最终消费 |
-| --- | --- | --- | --- | --- | --- | --- |
-| 旧链接兼容 | `backend/app/modules/agent/admin_router.py` | `_resolve_thread` | 详情路径中的 Thread ID 或旧 Run ID | 统一解析为 Thread，避免历史书签失效 | Thread 实体 | `get_run_detail` |
-| 明细查询 | `backend/app/modules/agent/admin_router.py` | `get_run_detail` | 已解析 Thread | 一次读取 messages、runs、events、approvals、artifacts | 全量事实集合 | `_build_turns` |
-| 按轮归并 | `backend/app/modules/agent/admin_router.py` | `_build_turns` | 会话内五类事实记录 | 以 root run 为边界，把用户消息、assistant 消息、child runs 和审批/产物归到同一轮 | `turns[]` | 前端详情 |
-| 多轮折叠渲染 | `frontend-admin/src/pages/AgentRunDetailPage.tsx` | `AgentRunDetailPage` | `session.turns` | 每一轮渲染一级 Collapse，默认展开最后一轮 | 轮级详情视图 | `TurnDetail` |
-| 单轮事件折叠 | `frontend-admin/src/pages/AgentRunDetailPage.tsx` | `TurnDetail` | 单轮 messages、runs、events、approvals、artifacts | 运行链路、事件流、审批和产物分别二次折叠 | 管理员审计界面 | 页面交互 |
+| 执行阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 管理 API 入口 | `backend/app/modules/agent/admin_router.py` | `get_run_memory_admin`、`replay_run_memory_admin`、`get_run_memory_source_admin` | L383-L408 | 管理员认证后的 Run ID、可选 Item ID | 把 HTTP 请求交给只读记忆观测服务 | `data` 或安全 404；不运行 workflow | 管理端记忆面板 |
+| Run 观测聚合 | `backend/app/modules/agent/admin_memory.py` | `get_run_memory_observability` | L135-L257 | Run ID | 复核 Run/绑定 Snapshot 的 user/thread 归属，按 Item ID 顺序读取冻结项，从 `tool.called` 提取实际参数并聚合派生 Outbox | 理解、Snapshot、selected/dropped、Token、模型、工具和 Outbox 摘要；只读数据库 | 详情面板或复现服务 |
+| Snapshot 复现 | `backend/app/modules/agent/admin_memory.py` | `replay_run_memory_snapshot` | L260-L278 | Run ID | 重用观测结果，按原 Item 顺序组合冻结正文、丢弃原因、Token 预算与实际工具调用 | `frozen_snapshot_read_only`；无模型、工具或写库副作用 | 管理端复现抽屉 |
+| source 绑定门 | `backend/app/modules/agent/admin_memory.py` | `get_snapshot_item_source` | L281-L328 | Run ID + Snapshot Item ID | 先要求 Item→Snapshot→Run 同链且 user/thread 一致，再回查 source 并校验版本 | 冻结副本、当前 source、superseded 标记；缺失/越权/版本漂移统一 404 | 管理端 source 对比 |
+| source 类型回查 | `backend/app/modules/agent/admin_memory.py` | `_load_current_source` | L331-L449 | Item 的 source kind/ID 与 Run 作用域 | 分类型读取 message、artifact、summary、mastery、memory item 或 preference candidate；用户级 source 校验 user，线程级 source 同时校验 thread | 当前 source DTO；不支持或不匹配返回空 | `get_snapshot_item_source` |
+| 响应脱敏 | `backend/app/modules/agent/admin_memory.py` | `redact_admin_value`、`safe_error_summary` | L44-L71 | 任意嵌套管理 DTO 或错误摘要 | 递归移除凭证字段并遮蔽 Bearer、带密码 URL、OpenAI 风格 Key 和 traceback | 脱敏副本；不修改数据库原值 | 所有 Agent 管理响应 |
+| 模型调用标识 | `backend/app/modules/agent/model_runtime/config.py` | `AgentModelSession`、`open_agent_model` | L54-L60、L168-L235 | Run ID 与最终解析的模型配置 | 每次真实打开模型会话生成 `model_call_*` ID，把无密钥的调用元数据追加进 Run metadata | 可定位的调用序列和最后调用 ID；模型客户端仍在 finally 关闭 | Run 记忆观测模型区 |
 
-## 模型调用审计入口
+复现坚持“冻结事实优先”：即使当前摘要已被 supersede，复现仍展示 Snapshot Item 的 `frozen_payload`；
+source 回查只用于对比当前状态，绝不替代旧 Run 当时消费的正文。若合规删除使 source 不再存在，回查返回
+404，但 Snapshot 保留策略允许时仍可展示冻结副本。
 
-| 执行阶段 | 文件 | 符号 | 职责 |
-| --- | --- | --- | --- |
-| 运行时模型绑定 | `backend/app/modules/agent/model_runtime/config.py` | `open_agent_model` | 读取 run 绑定的模型配置，构建独立客户端，并把实际使用的配置写回 run metadata |
-| Run 执行链 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | 在 Run 进入 running、完成或失败时统一写事件和状态，形成可审计主链 |
-| 工作流步骤链 | `backend/app/modules/agent/workflows/engine.py` | `WorkflowEngine.execute` | 每个 step 的开始、完成、失败都进入 `agent_steps` 与 `agent_events` |
-| 检索活动公开载荷 | `backend/app/modules/agent/tools/retrieve_knowledge.py` | `retrieve_knowledge` | 工具公开元数据包含 query 摘要、命中数和文档摘要，便于后台复盘 explain/validate 检索链路 |
+## 实际模型与工具审计
+
+| 执行阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 最终消费 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Run 执行链 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | L104-L275 | 已认领 Run | 统一迁移 running/completed/failed，执行 workflow 并写事件 | Run 状态、事件、模型调用计数 | 会话详情与记忆观测 |
+| 工作流步骤链 | `backend/app/modules/agent/workflows/engine.py` | `WorkflowEngine.execute` | L27-L151 | WorkflowDefinition 与 RunContext | 逐节点写 step started/completed/failed 并同步模型预算 | agent_steps 与 agent_events | 事件时间线 |
+| 检索实际参数 | `backend/app/modules/agent/tools/retrieve_knowledge.py` | `retrieve_knowledge` | L132-L345 | query、实体类型、章节、难度过滤、排除 ID 与 Run ID | 在真实检索前写 `tool.called.public_metadata`，完成后写结果事件；异常转失败活动 | 可复盘的实际 query/filter/attempt；检索服务副作用 | `get_run_memory_observability` |
+
+## 错误与安全传播
+
+1. 普通用户路由不注册上述管理接口；`main.py` 为整个 `agent_admin_router` 注入 `require_current_admin`。
+2. source 缺失、已删除、版本不符或作用域不匹配都由 `get_snapshot_item_source` 传播相同 404，调用者不能据此枚举其他用户数据。
+3. Snapshot 正文、摘要和候选值只作为 JSON/纯文本数据返回；前端不得用 `dangerouslySetInnerHTML` 或 Markdown 执行器渲染。
+4. 事件、Artifact 和错误摘要在既有会话详情序列化时也经过同一脱敏函数，API key、Authorization、DSN 凭证和 traceback 不进入响应。
 
 ## 排查建议
 
-1. 用户说“页面失败了”，先从 `get_run_detail` 看 root run 和 child run 的状态，再看 `run.error_message` 与公开 `error_code` 是否一致。
-2. 用户说“解释型工作流卡住”，优先检查该轮的 `step.started` / `step.completed` 是否完整，以及 `tool.called` / `tool.result` 是否成对出现。
-3. 用户说“模型没按我选的走”，查看 run metadata 是否记录了 `model_config_id` 与实际模型名称，再回到 `open_agent_model` 调用链。
+1. “模型没按选择运行”：先看观测响应的 `model.calls` 和 `final_model_call_id`，再按 config ID 查看模型配置。
+2. “检索范围不对”：只看 `tool_calls` 中来自 `tool.called` 的 query、chapter、difficulty、entity type 和 excludes，不用 Router 计划值代替。
+3. “历史回答无法复现”：先看 Snapshot 是否存在，再检查 ordered items 的 frozen copy；source 404 只说明当前来源不可回查，不等于旧冻结副本未被消费。
 
 ## 下一步阅读
 
-- 需要看事件和错误如何投影到用户端，转到 `implementation/events-timeline-errors.md`。
-- 需要看模型配置、Token 和 child run 继承模型，转到 `implementation/model-runtime-streaming.md`。
+- 需要看事件和错误如何投影到用户端，转到 `events-timeline-errors.md`。
+- 需要看记忆如何选择并冻结，转到 `routing-context-memory.md`。
+- 需要看模型配置如何解析，转到 `model-runtime-streaming.md`。

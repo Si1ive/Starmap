@@ -2,7 +2,8 @@
 
 ## 状态与范围
 
-状态：待实现。本分卷冻结管理员 Agent Runs 对分层记忆的观测、复现和运维验收面。用户端时间线和
+状态：进行中。Run/Snapshot/source 只读观测与复现后端已完成；Memory Outbox 运维 API 和管理端界面待完成。
+本分卷冻结管理员 Agent Runs 对分层记忆的观测、复现和运维验收面。用户端时间线和
 公开 SSE 不暴露记忆正文；管理端读取也必须经过现有管理员权限和数据作用域校验。
 
 ## Run 详情
@@ -23,12 +24,22 @@
 user/thread 作用域；不存在、已删除、版本不符和越权使用不可区分的安全 404。响应区分“冻结副本”和
 “当前 source”，便于判断 source 是否已 supersede，但不得把当前新正文冒充为旧 Run 实际消费内容。
 
+当前实现通过 `backend/app/modules/agent/admin_router.py::get_run_memory_source_admin`（L395-L408）只接收
+Run ID 与 Snapshot Item ID，不开放裸 source ID；`backend/app/modules/agent/admin_memory.py::get_snapshot_item_source`
+（L281-L328）和 `_load_current_source`（L331-L449）复核 Item→Snapshot→Run、user/thread 与版本。冻结正文来自
+Item，当前 source 只作对照；缺失、越权或版本漂移统一返回 404。
+
 ## Snapshot 复现
 
 复现是只读解释，不重新运行 workflow 或工具。输入为 Run ID，输出按当时顺序重组：TurnUnderstanding、
 选中 Snapshot Items 的冻结副本、丢弃原因、Token 预算与实际工具参数。即使当前摘要、偏好或向量已更新/
 删除，只要审计保留策略允许，旧 Snapshot 仍展示冻结副本；若正文依法清除，则明确显示 tombstone，不能
 回退到当前 source。
+
+当前实现由 `backend/app/modules/agent/admin_memory.py::get_run_memory_observability`（L135-L257）聚合冻结项、
+真实工具事件与调用审计，再由 `replay_run_memory_snapshot`（L260-L278）按 Item ID 顺序只读重组；没有模型、
+工具或数据库写副作用。生产模型会话由 `backend/app/modules/agent/model_runtime/config.py::open_agent_model`
+（L168-L235）生成 `model_call_*` 审计 ID，因而响应可定位最后一次真实模型调用。
 
 ## Memory Outbox 运维
 

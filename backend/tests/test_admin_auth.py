@@ -109,6 +109,10 @@ def test_database_admin_can_login_and_token_protects_admin_routes():
 
         anonymous_response = client.get("/api/v1/admin/dashboard/stats")
         assert anonymous_response.status_code == 401
+        anonymous_memory_response = client.get(
+            "/api/v1/admin/agent-runs/run-private/memory"
+        )
+        assert anonymous_memory_response.status_code == 401
     finally:
         app.dependency_overrides.pop(get_db, None)
 

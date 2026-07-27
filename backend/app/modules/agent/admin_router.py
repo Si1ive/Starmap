@@ -16,6 +16,13 @@ from app.core.logging import get_logger
 from app.db.mysql import mysql_client
 
 from .events import event_store
+from .admin_memory import (
+    get_run_memory_observability,
+    get_snapshot_item_source,
+    redact_admin_value,
+    replay_run_memory_snapshot,
+    safe_error_summary,
+)
 from .time_utils import utc_isoformat
 
 logger = get_logger(__name__)
@@ -62,7 +69,7 @@ def _serialize_run(run: Any, *, event_count: int = 0) -> dict[str, Any]:
         "event_count": event_count,
         "model_config_id": _metadata_value(run, "model_config_id"),
         "error_code": _metadata_value(run, "error_code"),
-        "safe_error_summary": run.error_message,
+        "safe_error_summary": safe_error_summary(run.error_message),
         "started_at": utc_isoformat(run.started_at),
         "completed_at": utc_isoformat(run.completed_at),
         "created_at": utc_isoformat(run.created_at),
@@ -89,7 +96,7 @@ def _serialize_event(event: Any) -> dict[str, Any]:
         "run_id": event.run_id,
         "sequence": event.sequence,
         "event_type": event.event_type,
-        "payload": event.payload or {},
+        "payload": redact_admin_value(event.payload or {}),
         "created_at": utc_isoformat(event.created_at),
     }
 
@@ -114,8 +121,8 @@ def _serialize_artifact(artifact: Any) -> dict[str, Any]:
         "id": artifact.id,
         "run_id": artifact.run_id,
         "type": artifact.artifact_type,
-        "content": artifact.content_json,
-        "metadata": artifact.metadata_json or {},
+        "content": redact_admin_value(artifact.content_json),
+        "metadata": redact_admin_value(artifact.metadata_json or {}),
         "created_at": utc_isoformat(artifact.created_at),
     }
 
@@ -371,6 +378,34 @@ async def list_all_runs(
             }
         )
     return {"data": {"items": items, "total": total, "page": page, "page_size": page_size}}
+
+
+@router.get("/{run_id}/memory")
+async def get_run_memory_admin(run_id: str, db: AsyncSession = Depends(get_db)):
+    """读取单个 Run 的记忆观测面。"""
+    return {"data": await get_run_memory_observability(db, run_id)}
+
+
+@router.get("/{run_id}/memory-replay")
+async def replay_run_memory_admin(run_id: str, db: AsyncSession = Depends(get_db)):
+    """只读复现 Run 当时冻结的 Snapshot，不重新执行工作流。"""
+    return {"data": await replay_run_memory_snapshot(db, run_id)}
+
+
+@router.get("/{run_id}/memory-sources/{item_id}")
+async def get_run_memory_source_admin(
+    run_id: str,
+    item_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """通过 Snapshot Item 绑定回查当前 source。"""
+    return {
+        "data": await get_snapshot_item_source(
+            db,
+            run_id=run_id,
+            item_id=item_id,
+        )
+    }
 
 
 @router.get("/{run_id}")

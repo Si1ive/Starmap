@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, AsyncIterator
+import uuid
 
 import openai
 from pydantic_ai.models import Model
@@ -56,6 +57,7 @@ class AgentModelSession:
 
     model: Model
     config: AgentModelConfig
+    invocation_id: str
 
 
 def _record_to_runtime_config(record: Any) -> AgentModelConfig:
@@ -192,14 +194,26 @@ async def open_agent_model(
     client = openai.AsyncOpenAI(**options)
     provider = OpenAIProvider(openai_client=client)
     model = OpenAIChatModel(config.model_name, provider=provider)
+    invocation_id = f"model_call_{uuid.uuid4().hex[:20]}"
     if run:
         metadata = dict(run.metadata_json or {})
+        model_calls = list(metadata.get("model_calls") or [])
+        model_calls.append(
+            {
+                "id": invocation_id,
+                "model_config_id": config.config_id,
+                "model_name": config.model_name,
+                "provider": config.provider,
+                "config_source": config.source,
+            }
+        )
         metadata.update(
             {
                 "model_config_id": config.config_id,
                 "model_config_source": config.source,
                 "model_name": config.model_name,
                 "model_provider": config.provider,
+                "model_calls": model_calls,
             }
         )
         run.metadata_json = metadata
@@ -212,6 +226,10 @@ async def open_agent_model(
         base_url=config.base_url or "(OpenAI 默认地址)",
     )
     try:
-        yield AgentModelSession(model=model, config=config)
+        yield AgentModelSession(
+            model=model,
+            config=config,
+            invocation_id=invocation_id,
+        )
     finally:
         await client.close()

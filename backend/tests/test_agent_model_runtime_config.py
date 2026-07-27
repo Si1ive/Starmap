@@ -142,6 +142,7 @@ async def test_agent_model_uses_isolated_async_openai_client(monkeypatch):
     async with open_agent_model(MagicMock()) as session:
         assert session.config.model_name == "chat-model"
         assert session.model.model_name == "chat-model"
+        assert session.invocation_id.startswith("model_call_")
 
     constructor.assert_called_once_with(
         api_key="admin-key",
