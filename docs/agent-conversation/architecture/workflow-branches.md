@@ -29,7 +29,7 @@
 | 结构化讲解生成 | `backend/app/modules/agent/workflows/explain.py` | `_fallback_evidence_text`、`_generate_explanation_node`（L236-L289） | standalone question、ConversationBundle history/摘要、证据列表和 `retrieval_outcome` | 规划和正文模型复用同一份冻结 history、摘要、主题、Artifact 摘要与引用 ID；无资料时使用 fallback 并清空 citations | `ExplanationOutput` | `_citation_gate_node` |
 | 正文/引用校验 | `backend/app/modules/agent/workflows/explain.py` | `_citation_gate_node` | 结构化讲解结果 | 只要正文非空即通过，引用列表在无资料场景下已被上游清空 | 可渲染 explanation | `_render_artifact_node` |
 | Artifact 渲染与结束 | `backend/app/modules/agent/workflows/explain.py` | `_render_artifact_node`、`_completed_node`（L307-L333） | outline、body、citations、summary | 组装 explanation artifact，并把最终 artifact 挂到 NodeResult 和上下文 | `agent_artifacts`、completed run | `AgentWorker.process_run` |
-| 讲解事实投影 | `backend/app/modules/agent/memory_projection.py`、`backend/app/modules/agent/memory_item_projection.py` | `project_completed_run_facts`、`_record_explanation_artifact_created`（L125-L182）；`project_trusted_memory_event`（L154-L166） | worker 已持久化的 explanation Artifact | 按 Run 幂等写讲解事实并确保 pending Outbox；异步消费者确认可信类型但不复制正文、不提高掌握度 | `explanation_artifact_created`、completed Outbox；正文仍以 Artifact 为权威 | 后续摘要 projector |
+| 讲解事实投影 | `backend/app/modules/agent/memory_projection.py`、`backend/app/modules/agent/memory_item_projection.py` | `project_completed_run_facts`、`_record_explanation_artifact_created`（L125-L182）；`project_trusted_memory_event`（L212-L224） | worker 已持久化的 explanation Artifact | 按 Run 幂等写讲解事实并确保 pending Outbox；异步消费者确认可信类型但不复制正文、不提高掌握度 | `explanation_artifact_created`、completed Outbox；正文仍以 Artifact 为权威 | 后续摘要 projector |
 
 ## Validate：候选题检索到练习产物
 
@@ -52,7 +52,7 @@
 | 客观判定与证据门禁 | `backend/app/modules/agent/workflows/grade.py` | `_normalize_answer`、`_objective_grade_node`、`_rubric_gate_node` | L25-L37、L81-L147 | attempt | 仅支持 choice/fill/judge；按题型归一化后确定性比较，生成 correct/incorrect、分数和 answer_mismatch，再复核作答完整、判定确定、答案来源可信。主观题直接失败 | `objective_result`、`grading_evidence`、`rubric` | `_generate_feedback_node` |
 | 证据反馈与 Artifact | `backend/app/modules/agent/workflows/grade.py` | `_generate_feedback_node`、`_feedback_gate_node`、`_render_artifact_node`、`_completed_node` | L150-L223 | 确定性结果、标准答案和可选解析 | 正确时说明一致；错误时展示用户答案、标准答案与解析；反馈门通过后把完整 `grading_evidence` 放入 Feedback Artifact | `agent_artifacts` 与 completed run；错误证据携带 `answer_mismatch` | `AgentWorker.process_run` |
 | 完成事实与摘要任务交接 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | L185-L227 | completed 结果与 Feedback Artifact | 先持久化 Artifact并调用事实投影，再写 `run.completed` 和幂等摘要维护 Outbox | Artifact、内部记忆事实、摘要任务或无副作用跳过 | `project_completed_run_facts` / `enqueue_conversation_summary_maintenance` |
-| 评分事实与掌握度 | `backend/app/modules/agent/memory_projection.py`、`backend/app/modules/agent/memory_item_projection.py` | `project_completed_run_facts`、`_record_grade_result_confirmed`、`project_trusted_memory_event` | L125-L140、L308-L413；L154-L166 | Feedback Artifact 的 `content.grading` | 校验证据、去重知识点，写幂等事实、同步更新掌握度并确保 pending Outbox；异步消费不复制评分正文；证据不完整安全跳过 | 事实、掌握度与 completed Outbox | PlanningBundle / 后续练习或摘要 |
+| 评分事实与掌握度 | `backend/app/modules/agent/memory_projection.py`、`backend/app/modules/agent/memory_item_projection.py` | `project_completed_run_facts`、`_record_grade_result_confirmed`、`project_trusted_memory_event` | L125-L140、L308-L413；L212-L224 | Feedback Artifact 的 `content.grading` | 校验证据、去重知识点，写幂等事实、同步更新掌握度并确保 pending Outbox；异步消费不复制评分正文；证据不完整安全跳过 | 事实、掌握度与 completed Outbox | PlanningBundle / 后续练习或摘要 |
 
 ## Plan：计划草案、审批与恢复执行
 
@@ -65,7 +65,7 @@
 | WAITING 断点 | `backend/app/modules/agent/workflows/plan.py` | `_wait_for_approval_node` | L164-L168 | 当前 run | 返回 `NodeResult.waiting(next_node="apply_plan_change")` | checkpoint 与待审批状态 | 用户审批 API |
 | 审批决定分流 | `backend/app/modules/agent/service.py` | `AgentService.decide_approval` | L424-L476 | waiting run、pending approval、用户决定 | approved 恢复 running 并投递；rejected 转 failed、删除 checkpoint、不投递；错误状态或跨用户无副作用返回 | approved run 或 rejected 终态 | `AgentWorker.process_run` / timeline |
 | 恢复应用与 Artifact | `backend/app/modules/agent/workflows/plan.py` | `_apply_plan_change_node`、`_render_plan_result_node`、`_completed_node` | L171-L226 | 审批通过后的 checkpoint | 应用节点复核 approval=approved；渲染时把 approval ID 和真实来源目标放入 Plan Artifact，未批准返回失败 | 携带审批来源的 Artifact 与 completed run，或无 Artifact 的 failed run | worker 完成分支 |
-| 确认计划事实与目标物化 | `backend/app/modules/agent/memory_projection.py`、`backend/app/modules/agent/memory_item_projection.py` | `project_completed_run_facts`、`_record_plan_confirmed`、`_project_confirmed_plan_goal` | L125-L140、L185-L251；L108-L151 | 已持久化 Plan Artifact、approval ID | 同步投影再查 approved 审批并写事实/Outbox；异步投影复核同 Run Artifact/approval，把周期与结构化 goals upsert 为用户级目标；未批准跳过 | `plan_confirmed`、可被下一轮 PlanningBundle 读取的 `learning_goal`、completed Outbox | 后续 Plan / 冲突治理 |
+| 确认计划事实与目标物化 | `backend/app/modules/agent/memory_projection.py`、`backend/app/modules/agent/memory_item_projection.py` | `project_completed_run_facts`、`_record_plan_confirmed`、`_project_confirmed_plan_goal` | L125-L140、L185-L251；L165-L209 | 已持久化 Plan Artifact、approval ID | 同步投影再查 approved 审批并写事实/Outbox；异步投影复核 Artifact/approval，物化新用户目标、supersede 旧目标并追加版本化向量任务；未批准跳过 | active `learning_goal`、旧项 superseded、pending 向量任务与 completed 事实 Outbox | 后续 Plan / 向量召回 / 冲突治理 |
 
 ## 旁路：等待用户输入与审批
 

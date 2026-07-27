@@ -24,6 +24,7 @@ from .models import (
     AgentThread,
     AgentThreadItem,
 )
+from .memory_vector import enqueue_memory_vector_task, summary_vector_task_type
 
 logger = get_logger(__name__)
 
@@ -199,6 +200,25 @@ class ConversationSummaryMaintainer:
         if previous:
             previous.superseded_by_id = summary.id
             await db.flush()
+        await enqueue_memory_vector_task(
+            db,
+            run=trigger_run,
+            event_type=summary_vector_task_type(summary.version),
+            source_kind="conversation_summary",
+            source_id=summary.id,
+            source_version=summary.version,
+            delete_sources=(
+                [
+                    {
+                        "source_kind": "conversation_summary",
+                        "source_id": previous.id,
+                        "source_version": previous.version,
+                    }
+                ]
+                if previous
+                else []
+            ),
+        )
         logger.info(
             "线程历史对话摘要已更新",
             thread_id=thread_id,

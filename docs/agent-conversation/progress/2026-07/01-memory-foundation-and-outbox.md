@@ -18,8 +18,8 @@
 ## 2026-07-27：按连续消息区间增量生成历史摘要
 
 - 目标：推进 `MEM-007` 的首个可独立验证单元，在不阻塞成功 Run、不覆盖原消息的前提下，把最近 12 个用户轮次之前的历史按稳定 sequence 区间滚动压缩。
-- 实现：`backend/app/modules/agent/conversation_summary.py::enqueue_conversation_summary_maintenance`（L37-L69）让每个成功 Run 同事务幂等写摘要维护 Outbox；`ConversationSummaryMaintainer.maintain`（L90-L211）按 run/thread/user 复核作用域，只选择活跃摘要末尾到近期窗口之前最多 24 条 visible completed user/assistant 消息，模型返回后锁线程复核活跃版本，生成新版本后以 `superseded_by_id` 失效旧摘要。`backend/app/modules/agent/model_runtime/conversation_summary.py::ConversationSummaryRuntime.summarize`（L65-L117）使用触发 Run 绑定模型，把旧摘要和消息都按不可信数据处理。
-- 异步边界：`backend/app/modules/agent/memory_outbox.py::MemoryOutboxConsumer.process_claimed`（L202-L276）识别摘要任务并在 SAVEPOINT 内调用 maintainer；模型或持久化失败只让 Outbox 延迟重试，原 completed Run、原始消息和公开 SSE 均不改变。
+- 实现：`backend/app/modules/agent/conversation_summary.py::enqueue_conversation_summary_maintenance`（L38-L70）让每个成功 Run 同事务幂等写摘要维护 Outbox；`ConversationSummaryMaintainer.maintain`（L91-L231）按 run/thread/user 复核作用域，只选择活跃摘要末尾到近期窗口之前最多 24 条 visible completed user/assistant 消息，模型返回后锁线程复核活跃版本，生成新版本后以 `superseded_by_id` 失效旧摘要。`backend/app/modules/agent/model_runtime/conversation_summary.py::ConversationSummaryRuntime.summarize`（L65-L117）使用触发 Run 绑定模型，把旧摘要和消息都按不可信数据处理。
+- 异步边界：`backend/app/modules/agent/memory_outbox.py::MemoryOutboxConsumer.process_claimed`（L209-L285）识别摘要任务并在 SAVEPOINT 内调用 maintainer；模型或持久化失败只让 Outbox 延迟重试，原 completed Run、原始消息和公开 SSE 均不改变。
 - 测试：`backend/tests/test_agent_conversation_summary.py`（L169-L436）覆盖近期窗口、隐藏/失败/system 消息排除、重放幂等、增量合并与 supersede、并发版本变化重试、跨用户/线程隔离和失败隔离；`backend/tests/test_agent_conversation_summary_runtime.py`（L42-L86）覆盖结构化输出与触发 Run 模型配置；Explain Worker 回归证明完成链真实入队。
 - 验证：全部 Agent 回归通过（192 passed，75 warnings）；Python 编译通过，`git diff --check` 通过。
 - 提交信息：`按连续消息区间增量生成对话摘要`
@@ -76,14 +76,14 @@
 ## 2026-07-26：启用可信事实异步派生
 
 - 目标：让 Memory Outbox 产生真实长期记忆落点并进入后台循环，而不是空消费任务。
-- 实现：`memory_item_projection.py::project_trusted_memory_event`（L154-L166）按事实分派，线程主题与批准计划分别物化 `topic_context` / `learning_goal`；`AgentWorker.start`（L370-L394）在 Run 批次后消费记忆任务，异常仍只重试 Outbox。
+- 实现：`backend/app/modules/agent/memory_item_projection.py::project_trusted_memory_event`（L212-L224）按事实分派，线程主题与批准计划分别物化 `topic_context` / `learning_goal`；`backend/app/modules/agent/worker.py::AgentWorker.start`（L370-L394）在 Run 批次后消费记忆任务，异常仍只重试 Outbox。
 - 验证：记忆/迁移组 32 项、workflow/Worker 组 22 项通过；Python 编译与 `git diff --check` 通过。
 - 提交信息：`启用可信事实异步派生`
 
 ## 2026-07-26：建立 Memory Outbox 消费状态机
 
 - 目标：让记忆任务具备可竞争认领、崩溃恢复、延迟重试和失败隔离能力。
-- 实现：新增 `backend/app/modules/agent/memory_outbox.py::MemoryOutboxStore`（当前 L30-L177）与 `MemoryOutboxConsumer`（当前 L180-L308）；processing 复用 `scheduled_at` 作为租约截止，状态更新校验 worker 所有权，投影异常由 SAVEPOINT 隔离，耗尽预算进入 failed。
+- 实现：新增 `backend/app/modules/agent/memory_outbox.py::MemoryOutboxStore`（当前 L35-L182）与 `MemoryOutboxConsumer`（当前 L185-L317）；processing 复用 `scheduled_at` 作为租约截止，状态更新校验 worker 所有权，投影异常由 SAVEPOINT 隔离，耗尽预算进入 failed。
 - 边界：该提交的默认 projector 只验证可信事实且未接入 Agent Worker；实际派生与运行时启用由后续 `启用可信事实异步派生` 提交完成。
 - 验证：`cd backend && PYTHONPATH=. venv/bin/pytest -q tests/test_agent_memory_outbox.py` 通过（4 passed）；Python 编译与 `git diff --check` 通过。
 - 提交信息：`建立 Memory Outbox 消费状态机`

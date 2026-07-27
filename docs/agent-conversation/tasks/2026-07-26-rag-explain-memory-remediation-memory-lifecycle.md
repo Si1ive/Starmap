@@ -2,8 +2,8 @@
 
 ## 状态与设计边界
 
-状态：进行中。增量摘要、Snapshot 冻结消费、明确重复题覆盖当前排除视图、线程主题六轮 TTL 和临时
-练习约束单轮失效、掌握度衰减已完成；Embedding 生命周期、偏好候选冲突治理和线程删除仍待实现。
+状态：进行中。增量摘要、Snapshot 冻结消费、明确重复题覆盖当前排除视图、线程主题六轮 TTL、临时
+练习约束单轮失效、掌握度衰减与向量生命周期已完成；偏好候选冲突治理和线程删除仍待实现。
 
 稳定边界是事实模型、作用域、版本和选择协议，不是 Explain/Validate/Grade/Plan 的工作流名称。原始消息、
 Artifact、Grade 证据和业务审批保持不可变；排除集、薄弱点、有效掌握度和召回结果均在读取时派生。
@@ -51,21 +51,21 @@ PracticeBundle；Turn B 再从 `active_topic` 继承主题。回归证明 Turn B
   （L1172-L1333）和 `test_planning_uses_the_same_effective_mastery_policy`（L1337-L1427）覆盖近期/过期、
   新证据、无证据、用户隔离、来源改名、Snapshot 重放、未来时间与时区边界。
 
-## 下一单元：Embedding 与向量生命周期
+## 已完成：Embedding 与向量生命周期
 
-目标：只为可治理的摘要和长期记忆项生成向量，并让每个向量都能回到不可变来源版本。
+已只为可治理的增量摘要、显式主题和批准目标建立版本化向量，并保留 workflow 显式选择能力的边界，
+没有让 Router 隐式读取全部长期记忆。
 
-验收边界：
+| 执行阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理与副作用 | 下游消费 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 生成版本化任务 | `backend/app/modules/agent/conversation_summary.py`、`backend/app/modules/agent/memory_item_projection.py` | `ConversationSummaryMaintainer.maintain`、`_enqueue_item_vector` | L91-L231、L76-L113 | 新 active source、同作用域旧版本、completed Run | 摘要或记忆项与 pending Outbox 同事务可见；任务只携带 source kind/ID/version 与待删旧 source，不携带正文 | `MemoryOutboxConsumer.process_claimed` |
+| 生成与删除向量 | `backend/app/modules/agent/memory_vector.py` | `memory_vector_point_id`、`enqueue_memory_vector_task`、`MemoryVectorLifecycle._delete_sources`、`MemoryVectorLifecycle.process_outbox` | L86-L249 | 版本化任务、当前 MySQL source、运行时 Embedding 配置 | 稳定 UUID upsert `agent_memory`，成功后删旧点；失效 source 只删点，collection 已不存在幂等完成；连接、生成、upsert 或删除错误传播给 Outbox 重试 | Qdrant 当前版本点 |
+| 双层过滤召回 | `backend/app/modules/agent/memory_vector.py` | `MemoryVectorLifecycle.recall`、`MemoryVectorLifecycle._hydrate_hit` | L251-L300、L444-L520 | query、user/thread、允许分区、Qdrant 候选 | Qdrant 先过滤 user/scope/thread/partition/status，再重读 MySQL 复核 source version 和 active 状态；跨用户、跨线程与旧版本被丢弃 | `MemoryVectorLifecycle.recall_for_snapshot` |
+| 冻结与重放 | `backend/app/modules/agent/memory_vector.py` | `MemoryVectorLifecycle.recall_for_snapshot`、`MemoryVectorLifecycle._load_frozen_hits` | L302-L375、L522-L567 | Snapshot、MemoryNeed、经复核的候选 | 首次召回锁 Snapshot，冻结正文副本、source/version、score 和 token 估算；同 Snapshot 重放不再访问 Qdrant 或当前 source | 能力 selector / MEM-008 Snapshot 复现 |
 
-1. Memory Outbox 为合格 source 生成 Embedding；幂等键至少包含 source kind、source ID、source version
-   和用户作用域，重复消费执行 upsert 而不是创建重复点。
-2. 向量 payload 保存 user ID、可选 thread ID、memory partition、source kind/ID/version 和状态，不保存
-   密钥；召回先做 user/thread/scope/version 过滤，再返回候选。
-3. 精确实体 ID 查询优先，向量只用于没有结构化实体 ID 的旧摘要/情景记忆；选择结果和丢弃原因冻结
-   进 Snapshot，后续 source 更新不能改变旧 Run 的复现内容。
-4. 新版本 upsert 成功后删除或失效旧版本向量；source 被 supersede、拒绝或线程删除时通过 Outbox
-   幂等删除，删除失败可重试。
-5. 向量服务失败只影响 Memory Outbox 状态，不反向失败已完成 Run；正文不得进入公开 SSE。
+`backend/tests/test_agent_memory_vector.py` 的五项回归（L122-L427）覆盖摘要 upsert 后删除旧点、双层作用域与
+版本复核、Snapshot 重放、主题 supersede、向量故障只重试 Outbox，以及 collection 已不存在时删除幂等完成。
+向量 payload 不含正文或密钥，公开 SSE 契约未改变。
 
 ## 偏好候选与完整冲突优先级
 

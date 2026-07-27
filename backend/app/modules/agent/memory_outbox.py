@@ -18,6 +18,11 @@ from .conversation_summary import (
     conversation_summary_maintainer,
 )
 from .memory_item_projection import project_trusted_memory_event
+from .memory_vector import (
+    MemoryVectorLifecycle,
+    is_memory_vector_task,
+    memory_vector_lifecycle,
+)
 from .models import AgentMemoryEvent, AgentMemoryUpdateOutbox, AgentRun
 from .time_utils import utc_now
 
@@ -188,6 +193,7 @@ class MemoryOutboxConsumer:
         summary_maintainer: ConversationSummaryMaintainer = (
             conversation_summary_maintainer
         ),
+        vector_lifecycle: MemoryVectorLifecycle = memory_vector_lifecycle,
         lease_seconds: int = 300,
         retry_delay_seconds: int = 30,
         max_retries: int = 3,
@@ -195,6 +201,7 @@ class MemoryOutboxConsumer:
         self.store = store or MemoryOutboxStore()
         self.projector = projector
         self.summary_maintainer = summary_maintainer
+        self.vector_lifecycle = vector_lifecycle
         self.lease_seconds = lease_seconds
         self.retry_delay_seconds = retry_delay_seconds
         self.max_retries = max_retries
@@ -218,7 +225,9 @@ class MemoryOutboxConsumer:
 
         try:
             async with db.begin_nested():
-                if outbox.event_type == CONVERSATION_SUMMARY_TASK:
+                if is_memory_vector_task(outbox.event_type):
+                    await self.vector_lifecycle.process_outbox(db, outbox)
+                elif outbox.event_type == CONVERSATION_SUMMARY_TASK:
                     trigger_run_id = str(
                         outbox.payload_json.get("trigger_run_id") or ""
                     )

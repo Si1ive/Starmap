@@ -1,5 +1,12 @@
 # 2026-07 记忆失效与删除治理进展
 
+## 2026-07-27：打通 Agent 记忆向量生命周期
+
+- 目标：完成 `MEM-007` 的 Embedding、向量召回、来源版本更新与删除，让摘要和长期记忆项可以被治理且可回查。
+- 实现：`backend/app/modules/agent/memory_vector.py::enqueue_memory_vector_task`、`memory_vector_point_id` 与 `MemoryVectorLifecycle.process_outbox`（L86-L249）用 source kind/ID/version 形成稳定点 ID，重读 MySQL active source 后生成 Embedding 并幂等 upsert，新版本成功后删除旧点；collection 已不存在时删除幂等完成，服务故障交给 Memory Outbox 重试。`MemoryVectorLifecycle.recall`、`MemoryVectorLifecycle.recall_for_snapshot`、`MemoryVectorLifecycle._hydrate_hit` 与 `MemoryVectorLifecycle._load_frozen_hits`（L251-L567）执行 Qdrant 与 MySQL 双层作用域/版本复核，首次选择冻结正文副本和 score，同 Snapshot 重放不访问当前 source。摘要和主题/批准目标的生产入口分别位于 `backend/app/modules/agent/conversation_summary.py::ConversationSummaryMaintainer.maintain`（L91-L231）和 `backend/app/modules/agent/memory_item_projection.py::_enqueue_item_vector`（L76-L113）。
+- 验证：向量、Outbox、摘要、事实投影与 Plan 聚焦回归 25 项通过；全部 Agent 回归 215 passed、101 warnings，Python 编译、两个新增文件的 Black 检查和 `git diff --check` 通过。
+- 提交信息：`打通 Agent 记忆向量生命周期`
+
 ## 2026-07-27：让学习掌握度按证据时间衰减
 
 - 目标：完成 `MEM-007` 的学习画像时间治理，保留 Grade 原始聚合与事实审计，同时让 Practice 和 Planning 使用同一可复现有效分数。

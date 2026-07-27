@@ -8,7 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .memory_contracts import MemoryFactType
-from .models import AgentArtifact, AgentMemoryEvent, AgentMemoryItem
+from .memory_vector import enqueue_memory_vector_task, memory_item_vector_task_type
+from .models import AgentArtifact, AgentMemoryEvent, AgentMemoryItem, AgentRun
 
 
 async def _upsert_memory_item(
@@ -21,7 +22,21 @@ async def _upsert_memory_item(
     content_text: str,
     metadata: dict,
     source_snapshot_id: str | None,
-) -> None:
+) -> tuple[AgentMemoryItem, list[AgentMemoryItem]]:
+    active_query = select(AgentMemoryItem).where(
+        AgentMemoryItem.user_id == event.user_id,
+        AgentMemoryItem.scope == scope,
+        AgentMemoryItem.item_type == item_type,
+        AgentMemoryItem.status == "active",
+        AgentMemoryItem.item_key != event.idempotency_key,
+    )
+    if thread_id is None:
+        active_query = active_query.where(AgentMemoryItem.thread_id.is_(None))
+    else:
+        active_query = active_query.where(AgentMemoryItem.thread_id == thread_id)
+    superseded = list((await db.execute(active_query)).scalars())
+    for previous in superseded:
+        previous.status = "superseded"
     query = select(AgentMemoryItem).where(
         AgentMemoryItem.user_id == event.user_id,
         AgentMemoryItem.scope == scope,
@@ -55,6 +70,47 @@ async def _upsert_memory_item(
         item.source_snapshot_id = source_snapshot_id
         item.last_confirmed_run_id = event.run_id
     await db.flush()
+    return item, superseded
+
+
+async def _enqueue_item_vector(
+    db: AsyncSession,
+    event: AgentMemoryEvent,
+    item: AgentMemoryItem,
+    superseded: list[AgentMemoryItem],
+) -> None:
+    run = await db.scalar(
+        select(AgentRun).where(
+            AgentRun.id == event.run_id,
+            AgentRun.user_id == event.user_id,
+            AgentRun.thread_id == event.thread_id,
+            AgentRun.status == "completed",
+        )
+    )
+    if run is None or event.id is None:
+        raise ValueError("记忆项向量任务缺少已完成 Run 或事实版本")
+    delete_sources = []
+    for previous in superseded:
+        previous_version = int(
+            (previous.metadata_json or {}).get("source_memory_event_id") or 0
+        )
+        if previous_version > 0:
+            delete_sources.append(
+                {
+                    "source_kind": "memory_item",
+                    "source_id": previous.id,
+                    "source_version": previous_version,
+                }
+            )
+    await enqueue_memory_vector_task(
+        db,
+        run=run,
+        event_type=memory_item_vector_task_type(event.id),
+        source_kind="memory_item",
+        source_id=item.id,
+        source_version=event.id,
+        delete_sources=delete_sources,
+    )
 
 
 async def _project_topic_context(
@@ -72,7 +128,7 @@ async def _project_topic_context(
         for alias in topic.get("aliases") or []
         if str(alias).strip()
     ]
-    await _upsert_memory_item(
+    item, superseded = await _upsert_memory_item(
         db,
         event,
         scope="thread",
@@ -88,6 +144,7 @@ async def _project_topic_context(
         },
         source_snapshot_id=event.payload_json.get("snapshot_id"),
     )
+    await _enqueue_item_vector(db, event, item, superseded)
 
 
 def _render_plan_goal_text(title: str, goals: list) -> str:
@@ -131,7 +188,7 @@ async def _project_confirmed_plan_goal(
     if not isinstance(goals, list) or not goals:
         raise ValueError("plan_confirmed 的计划 Artifact 缺少目标")
     title = str(artifact_content.get("title") or "学习计划").strip()
-    await _upsert_memory_item(
+    item, superseded = await _upsert_memory_item(
         db,
         event,
         scope="user",
@@ -149,6 +206,7 @@ async def _project_confirmed_plan_goal(
         },
         source_snapshot_id=payload.get("memory_snapshot_id"),
     )
+    await _enqueue_item_vector(db, event, item, superseded)
 
 
 async def project_trusted_memory_event(
