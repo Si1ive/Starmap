@@ -188,6 +188,18 @@ export interface AdminRunMemoryObservability {
     processed_at: string | null
     created_at: string
   }>
+  memory_trace: AdminMemoryTrace[]
+}
+
+export interface AdminMemoryTrace {
+  id: number
+  event_id: number | null
+  event_sequence: number | null
+  event_type: string
+  changed: boolean
+  before: Record<string, unknown>
+  after: Record<string, unknown>
+  created_at: string
 }
 
 export interface AdminRunMemoryReplay {

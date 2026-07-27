@@ -21,6 +21,7 @@ from app.modules.agent.models import (
     AgentEvent,
     AgentMemorySnapshot,
     AgentMemorySnapshotItem,
+    AgentMemoryTrace,
     AgentMemoryUpdateOutbox,
     AgentMessage,
     AgentRun,
@@ -36,6 +37,7 @@ ADMIN_MEMORY_TABLES = [
     AgentEvent.__table__,
     AgentMemorySnapshot.__table__,
     AgentMemorySnapshotItem.__table__,
+    AgentMemoryTrace.__table__,
     AgentConversationSummary.__table__,
     AgentMemoryUpdateOutbox.__table__,
 ]
@@ -184,6 +186,20 @@ async def _seed_snapshot(db_session):
             ),
         ]
     )
+    db_session.add(
+        AgentMemoryTrace(
+            run_id=run.id,
+            thread_id=thread.id,
+            user_id=thread.user_id,
+            event_id=1,
+            event_sequence=1,
+            event_type="step.completed",
+            changed=True,
+            before_json={"thread_state": {"version": 6}},
+            after_json={"thread_state": {"version": 7}},
+            created_at=now,
+        )
+    )
     await db_session.flush()
     return run, snapshot, item, summary
 
@@ -216,6 +232,18 @@ async def test_run_memory_observability_uses_frozen_snapshot_and_actual_tool_eve
     assert payload["memory_outbox"][0]["safe_error_summary"] == (
         "Bearer [REDACTED] failed before retry"
     )
+    assert payload["memory_trace"] == [
+        {
+            "id": 1,
+            "event_id": 1,
+            "event_sequence": 1,
+            "event_type": "step.completed",
+            "changed": True,
+            "before": {"thread_state": {"version": 6}},
+            "after": {"thread_state": {"version": 7}},
+            "created_at": payload["memory_trace"][0]["created_at"],
+        }
+    ]
 
 
 @pytest.mark.asyncio

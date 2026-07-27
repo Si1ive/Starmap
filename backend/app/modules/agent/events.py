@@ -12,7 +12,12 @@ from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from .models import AgentEvent
+from .models import AgentEvent, AgentRun
+from .memory_observability import (
+    TRACEABLE_AGENT_EVENT_TYPES,
+    capture_memory_state,
+    record_memory_trace,
+)
 from .time_utils import encode_utc_datetimes
 
 logger = get_logger(__name__)
@@ -33,6 +38,19 @@ class EventStore:
         
         sequence 通过当前run的最大sequence+1计算
         """
+        trace_before = None
+        if event_type in TRACEABLE_AGENT_EVENT_TYPES:
+            try:
+                trace_before = await capture_memory_state(session, run_id=run_id)
+            except Exception as error:
+                # 观测表或旧测试数据库缺失时不能阻断真实事件写入。
+                logger.debug(
+                    "记忆事件前状态暂不可读取",
+                    run_id=run_id,
+                    event_type=event_type,
+                    error=str(error),
+                )
+
         # 获取当前run的最大sequence
         result = await session.execute(
             select(AgentEvent.sequence)
@@ -59,6 +77,31 @@ class EventStore:
         await thread_event_store.project_run_event(
             session, run_id, event_type, payload or {}
         )
+
+        if trace_before is not None:
+            try:
+                trace_after = await capture_memory_state(session, run_id=run_id)
+                run = await session.scalar(
+                    select(AgentRun).where(AgentRun.id == run_id)
+                )
+                if run is not None:
+                    await record_memory_trace(
+                        session,
+                        run=run,
+                        event_type=event_type,
+                        event_id=event.id,
+                        event_sequence=event.sequence,
+                        before=trace_before,
+                        after=trace_after,
+                    )
+            except Exception as error:
+                # 记忆观测是旁路审计，序列化失败不应回滚用户可见事件。
+                logger.debug(
+                    "记忆事件前后状态记录失败",
+                    run_id=run_id,
+                    event_type=event_type,
+                    error=str(error),
+                )
         
         logger.debug(
             "事件追加",

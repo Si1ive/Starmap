@@ -4,6 +4,7 @@ import {
   Button,
   Card,
   Col,
+  Collapse,
   Descriptions,
   Drawer,
   Empty,
@@ -27,6 +28,7 @@ import dayjs from 'dayjs'
 
 import * as agentRunsApi from '@/api/agentRuns'
 import type {
+  AdminMemoryTrace,
   AdminMemorySnapshotItem,
   AdminMemorySourceComparison,
   AdminRunMemoryObservability,
@@ -43,6 +45,27 @@ interface RunMemoryDrawerProps {
 }
 
 const selectionColor = (selected: boolean) => (selected ? 'success' : 'warning')
+
+const memoryTraceLabels: Record<string, string> = {
+  'run.created': '运行创建',
+  'run.status_changed': '运行状态变化',
+  'run.completed': '运行完成',
+  'run.failed': '运行失败',
+  'step.started': '步骤开始',
+  'step.completed': '步骤完成',
+  'step.failed': '步骤失败',
+  'tool.called': '工具调用',
+  'tool.result': '工具返回',
+  'artifact.rendered': '产物落库',
+}
+
+const memoryTraceLabel = (eventType: string) => {
+  if (memoryTraceLabels[eventType]) return memoryTraceLabels[eventType]
+  if (eventType.startsWith('memory.outbox.')) {
+    return eventType.endsWith('.failed') ? '记忆投影失败' : '记忆投影完成'
+  }
+  return eventType
+}
 
 const SnapshotItemCard = ({
   item,
@@ -81,6 +104,53 @@ const SnapshotItemCard = ({
     )}
   </Card>
 )
+
+function MemoryTraceCard({ trace }: { trace: AdminMemoryTrace }) {
+  return (
+    <Collapse
+      className={`memory-trace-entry ${trace.changed ? 'is-changed' : 'is-unchanged'}`}
+      items={[
+        {
+          key: String(trace.id),
+          label: (
+            <Space wrap size={8}>
+              <Tag color={trace.changed ? 'processing' : 'default'}>
+                {trace.changed ? '发生变化' : '前后无变化'}
+              </Tag>
+              <Text strong>{memoryTraceLabel(trace.event_type)}</Text>
+              <Text className="memory-mono" type="secondary">
+                {trace.event_type}
+              </Text>
+              {trace.event_sequence !== null ? (
+                <Text type="secondary">事件 #{trace.event_sequence}</Text>
+              ) : null}
+              <Text type="secondary">
+                {dayjs(trace.created_at).format('MM-DD HH:mm:ss')}
+              </Text>
+            </Space>
+          ),
+          children: trace.changed ? (
+            <Row gutter={[12, 12]}>
+              <Col xs={24} md={12}>
+                <Text strong>事件前</Text>
+                <PlainDataBlock value={trace.before} maxHeight={240} />
+              </Col>
+              <Col xs={24} md={12}>
+                <Text strong>事件后</Text>
+                <PlainDataBlock value={trace.after} maxHeight={240} />
+              </Col>
+            </Row>
+          ) : (
+            <Text type="secondary">
+              该事件没有改变线程热状态、Snapshot、长期记忆、掌握度或派生任务。
+            </Text>
+          ),
+        },
+      ]}
+      size="small"
+    />
+  )
+}
 
 const RunMemoryDrawer = ({ open, runId, onClose }: RunMemoryDrawerProps) => {
   const [loading, setLoading] = useState(false)
@@ -307,6 +377,34 @@ const RunMemoryDrawer = ({ open, runId, onClose }: RunMemoryDrawerProps) => {
                 <Empty
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
                   description="没有符合条件的 Snapshot Item"
+                />
+              )}
+            </section>
+
+            <section aria-labelledby="memory-trace-title">
+              <div className="memory-section-heading">
+                <div>
+                  <p className="admin-eyebrow">Before / after</p>
+                  <Title id="memory-trace-title" level={5}>
+                    记忆变化时间线
+                  </Title>
+                </div>
+                <Text type="secondary">
+                  {data.memory_trace?.length || 0} 个关键边界；message.delta 不重复记录
+                </Text>
+              </div>
+              {data.memory_trace?.length ? (
+                <div className="memory-trace-list">
+                  {data.memory_trace.map((trace) => (
+                    <MemoryTraceCard key={trace.id} trace={trace} />
+                  ))}
+                </div>
+              ) : (
+                <Alert
+                  message="该 Run 尚未产生记忆前后观测"
+                  description="旧 Run 可能是在记忆观测上线前执行；新 Run 会在工作流关键事件和 Memory Outbox 投影边界记录前后状态。"
+                  showIcon
+                  type="info"
                 />
               )}
             </section>

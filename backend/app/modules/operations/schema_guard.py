@@ -17,6 +17,7 @@ AGENT_REQUIRED_TABLES = frozenset(
         "agent_memory_events",
         "agent_memory_snapshots",
         "agent_memory_snapshot_items",
+        "agent_memory_traces",
         "agent_memory_update_outbox",
         "user_learning_mastery",
         "agent_conversation_summaries",
@@ -104,8 +105,9 @@ async def verify_database_schema(
                 "'agent_thread_memory_states', "
                 "'agent_memory_events', "
                 "'agent_memory_snapshots', "
-                "'agent_memory_snapshot_items', "
-                "'agent_memory_update_outbox', "
+        "'agent_memory_snapshot_items', "
+        "'agent_memory_traces', "
+        "'agent_memory_update_outbox', "
                 "'user_learning_mastery', "
                 "'agent_conversation_summaries', "
                 "'agent_memory_items', "

@@ -19,10 +19,19 @@ from app.modules.agent.events import (
 )
 from app.modules.agent.models import (
     AgentEvent,
+    AgentConversationSummary,
+    AgentMemoryEvent,
+    AgentMemoryItem,
+    AgentMemorySnapshot,
+    AgentMemorySnapshotItem,
+    AgentMemoryTrace,
+    AgentMemoryUpdateOutbox,
     AgentMessage,
     AgentRun,
     AgentThread,
     AgentThreadEvent,
+    AgentThreadMemoryState,
+    UserLearningMastery,
 )
 
 # Agent tables needed for tests
@@ -32,6 +41,15 @@ AGENT_TABLES = [
     AgentMessage.__table__,
     AgentThreadEvent.__table__,
     AgentEvent.__table__,
+    AgentThreadMemoryState.__table__,
+    AgentMemoryEvent.__table__,
+    AgentMemorySnapshot.__table__,
+    AgentMemorySnapshotItem.__table__,
+    AgentMemoryTrace.__table__,
+    AgentMemoryUpdateOutbox.__table__,
+    AgentConversationSummary.__table__,
+    AgentMemoryItem.__table__,
+    UserLearningMastery.__table__,
 ]
 
 
@@ -95,6 +113,22 @@ async def test_append_creates_event_with_incrementing_sequence(db_session):
     assert event2.sequence == 2
     assert event1.run_id == run.id
     assert event2.run_id == run.id
+
+    traces = list(
+        (
+            await db_session.execute(
+                select(AgentMemoryTrace)
+                .where(AgentMemoryTrace.run_id == run.id)
+                .order_by(AgentMemoryTrace.event_sequence)
+            )
+        ).scalars()
+    )
+    assert [trace.event_type for trace in traces] == [
+        "run.created",
+        "step.started",
+    ]
+    assert all(trace.changed is False for trace in traces)
+    assert traces[1].event_id == event2.id
 
 
 @pytest.mark.asyncio

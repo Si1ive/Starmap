@@ -53,3 +53,12 @@
 - 实现：`backend/app/modules/agent/workflows/contracts.py::ExecutionContext.audit_input` 将运行输入、上下文 key 和变量递归收敛为有上限的 JSON；`backend/app/modules/agent/workflows/engine.py::WorkflowEngine.execute` 在创建 `AgentStep` 和追加 `step.started` 时复用同一快照，因而 `generate_explanation` 等 action 的输入与完成输出可以按 `step_id` 配对。
 - 验证：`backend/tests/test_agent_workflow_engine.py::test_engine_persists_public_step_for_timeline_snapshot` 校验事件与数据库步骤输入一致；相关工作流回归通过。
 - 提交信息：`补充 Agent 工作流节点输入审计`
+
+## 2026-07-27：建立记忆前后状态观测链
+
+- 目标：回答“这一事件发生前后，Agent 的上下文和长期记忆到底变了什么”，并让 Memory Outbox 页面能回到产生任务的 Run。
+- 迁移：`backend/alembic/versions/20260727_memory_trace.py::upgrade`（L20-L45）新增 `agent_memory_traces`，以 Run、事件序号和 before/after JSON 保存不可变观测边界；`backend/app/modules/operations/schema_guard.py::AGENT_REQUIRED_TABLES`（L13-L26）与 `verify_database_schema`（L46-L223）将新表纳入启动结构门禁。
+- 实现：`backend/app/modules/agent/memory_observability.py::capture_memory_state`（L130-L304）只读汇总线程热状态、Snapshot、事实事件、长期记忆项、掌握度、摘要和 Outbox；`record_memory_trace`（L307-L331）写前后副本。`backend/app/modules/agent/events.py::EventStore.append`（L29-L112）记录关键事件前后，`backend/app/modules/agent/memory_outbox.py::MemoryOutboxConsumer.process_claimed`（L231-L366）记录投影成功/失败边界；`backend/app/modules/agent/admin_memory.py::get_run_memory_observability`（L136-L281）返回脱敏 `memory_trace`。
+- 管理端：`frontend-admin/src/pages/agent-observability/RunMemoryDrawer.tsx::MemoryTraceCard`（L108-L153）展示事件前/后 JSON 与 `changed`；`RunMemoryDrawer`（L155-L520）组织时间线；`frontend-admin/src/pages/agent-observability/MemoryOutboxPanel.tsx::MemoryOutboxPanel`（L45-L423）的带 Run 任务可直接打开该抽屉，并在页首说明“事实→Outbox→Worker→长期记忆”的关系。
+- 验证：事件序列/记忆 trace、管理观测、迁移 DDL、schema guard 和相关 Outbox/工作流回归通过（56 passed）；前端 `npm run lint && npm run build`、Python 编译检查与 `git diff --check` 均通过。
+- 提交信息：`建立 Agent 记忆前后状态观测链`

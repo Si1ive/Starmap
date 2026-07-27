@@ -9,7 +9,7 @@
 
 | 执行阶段 | 文件 | 符号 | 输入 | 处理 | 输出/副作用 | 下一步 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 内部事件追加 | `backend/app/modules/agent/events.py` | `EventStore.append` | run 事件类型和 payload | 分配 run 内 sequence，写入 `agent_events`，并触发 thread 投影 | 内部事件事实 | `ThreadEventStore.project_run_event` |
+| 内部事件追加 | `backend/app/modules/agent/events.py` | `EventStore.append`（L29-L112） | run 事件类型和 payload | 分配 run 内 sequence，写入 `agent_events`，触发 thread 投影；对可诊断事件读取并持久化记忆前后状态 | 内部事件事实与 `agent_memory_traces` | `ThreadEventStore.project_run_event` / 管理端记忆时间线 |
 | Thread 投影总入口 | `backend/app/modules/agent/thread_events.py` | `ThreadEventStore.project_run_event` | `run.status_changed`、`step.*`、`tool.*`、`message.*`、`run.failed` | 把内部事件映射成统一的公开 thread 事件，并保持 cursor 单调递增 | `agent_thread_events` | SSE / 时间线刷新 |
 | 消息投影 | `backend/app/modules/agent/thread_events.py` | `_project_message_event` | `message.delta`、`message.completed`、`message.failed` | 第一个 delta 创建 assistant item，后续 delta 追加正文；completed/failed 收敛状态 | 可恢复消息事实 | `AgentTimelineService.get_timeline` |
 | 审批终态分流 | `backend/app/modules/agent/service.py` | `AgentService.decide_approval`（L424-L476） | waiting run、pending approval、用户 approve/reject | 先校验用户、状态、审批归属和 decision；批准时恢复 running 并投递 Outbox，拒绝时转 failed、删除 checkpoint 且不投递，二者都写 `run.status_changed` | 可恢复执行的 approved run，或不会再执行的 rejected run | `AgentWorker.process_run` / timeline |
@@ -39,6 +39,7 @@
 | Plan 恢复审批守卫 | `backend/app/modules/agent/workflows/plan.py` | `_apply_plan_change_node`（L184-L208） | checkpoint 中的 approval ID 与 plan draft | 从数据库重读审批，只有真实状态为 approved 才设置 final plan；pending/rejected/缺失均返回失败，阻止绕过服务层恢复 | approved 计划或失败结果，不会产生未授权 Artifact |
 | 时间线步骤重建 | `backend/app/modules/agent/timeline.py` | `AgentTimelineService._build_workflow_views` | 按 root run 聚合 child runs、steps、tool events、pending input 和 approvals |
 | 活动按 ID 归并 | `backend/app/modules/agent/timeline.py` | `AgentTimelineService._activity_views` | `tool.called` + `tool.result` 共享同一 `activity_id` 时可在刷新后重建成一个活动 |
+| 记忆变化观测 | `backend/app/modules/agent/memory_observability.py` | `capture_memory_state`（L130-L304）、`record_memory_trace`（L307-L331） | 事件或 Memory Outbox 边界前后的 Run | 只读收集线程热状态、Snapshot、事实事件、长期记忆项、掌握度、摘要和派生任务；保存前后副本并标记 `changed` | `agent_memory_traces`；不参与业务决策 | `get_run_memory_observability` |
 
 ## 回归测试入口
 

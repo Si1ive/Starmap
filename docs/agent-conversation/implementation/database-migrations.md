@@ -16,7 +16,8 @@
 | Run/type 幂等约束 | `backend/alembic/versions/20260726_memory_outbox_unique.py` | `upgrade`、`downgrade` | L18-L34 | Memory Outbox 真表 | 添加或移除 `(run_id,event_type)` 唯一约束 | 阻止同事实类型并发重复任务 | 偏好候选迁移 |
 | 偏好候选治理 | `backend/alembic/versions/20260727_preference_candidates.py` | `upgrade`、`downgrade` | L19-L82 | 唯一迁移 head | 创建带 source/version/status/决定审计的候选表 | `agent_preference_candidates` | 线程治理 Outbox |
 | 线程治理任务 | `backend/alembic/versions/20260727_thread_memory_delete.py` | `upgrade`、`downgrade` | L19-L50 | Run/type Outbox | 允许 `run_id` 为空并添加唯一 `task_key`；降级先清治理任务 | 无 Run 的删除任务可幂等入队 | 失败摘要迁移 |
-| Outbox 失败摘要 | `backend/alembic/versions/20260727_memory_outbox_error.py` | `upgrade`、`downgrade` | L19-L27 | 已支持治理 task key 的 Outbox | 添加或移除 nullable `last_error_message` | 当前 head `20260727_memory_outbox_error`；失败详情可持久化 | ORM / Consumer |
+| Outbox 失败摘要 | `backend/alembic/versions/20260727_memory_outbox_error.py` | `upgrade`、`downgrade` | L19-L27 | 已支持治理 task key 的 Outbox | 添加或移除 nullable `last_error_message` | 失败详情可持久化 | ORM / Consumer |
+| 记忆前后状态观测 | `backend/alembic/versions/20260727_memory_trace.py` | `upgrade`、`downgrade` | L20-L51 | 已存在 Agent Run/Thread 表 | 创建带 Run、事件序号和 before/after JSON 的不可变观测表及查询索引 | `agent_memory_traces`；保存关键事件与 Memory Outbox 边界 | 管理端记忆时间线 |
 | 启动期门禁 | `backend/app/main.py` | `lifespan` | L91-L107 | 已连接 MySQL | 在 Worker 和调度器前调用 schema guard | 漂移时关闭连接并中止启动 | Worker 启动 |
 | 版本与真结构校验 | `backend/app/modules/operations/schema_guard.py` | `AGENT_REQUIRED_TABLES`、`MEMORY_OUTBOX_REQUIRED_COLUMNS`、`verify_database_schema` | L13-L30、L45-L221 | Alembic revision 与 information_schema | 同时核对 head、Agent 表/列、Outbox 失败列和唯一索引、模型 nullable 约束 | 通过返回 revision；失败抛 `DatabaseSchemaError` | FastAPI lifespan |
 
@@ -30,13 +31,13 @@
 | Run Outbox | `backend/app/modules/agent/models.py` | `AgentRunOutbox` | L331-L355 | Run ID 与调度时间 | HTTP 事务入队，Worker 异步认领；错误保留 pending/failed | Agent Worker |
 | Artifact / Input / Approval | `backend/app/modules/agent/models.py` | `AgentArtifact`、`AgentInput`、`AgentApproval` | L402-L484 | Run 产物、补充输入或审批动作 | 分别写业务产物与人工决策；状态错误由服务层阻断 | timeline 与管理端详情 |
 | 记忆能力契约 | `backend/app/modules/agent/memory_contracts.py` | `MemoryPartition`、`MemoryNeed`、`MEMORY_NEED_PARTITIONS` | L8-L76 | workflow 声明稳定能力标签 | 无数据库写；非法枚举在构造阶段失败 | selector / workflow |
-| 记忆 Snapshot 与 Outbox | `backend/app/modules/agent/models.py` | `AgentThreadMemoryState`、`AgentMemoryEvent`、`AgentMemorySnapshot`、`AgentMemorySnapshotItem`、`AgentMemoryUpdateOutbox` | L487-L656 | user/thread/run/source/version、冻结 payload 与调度状态 | Snapshot 不可变追加；Outbox 用 Run/type 或 task key 幂等，失败摘要只存脱敏文本 | Memory selector、Consumer、管理员运维 |
-| 掌握度与长期项 | `backend/app/modules/agent/models.py` | `UserLearningMastery`、`AgentConversationSummary`、`AgentMemoryItem` | L659-L766 | 可信 Grade、消息序列范围、事实 source | 聚合分数、版本化摘要、active/superseded/deleted 长期项 | Validate / Plan / conversation |
-| 偏好候选 | `backend/app/modules/agent/models.py` | `AgentPreferenceCandidate` | L769-L846 | user/source/key 与治理决定 | 同 source/key 唯一；拒绝和失效不能被重放复活 | preference selector 与用户治理 |
+| 记忆 Snapshot、状态观测与 Outbox | `backend/app/modules/agent/models.py` | `AgentThreadMemoryState`、`AgentMemoryEvent`、`AgentMemorySnapshot`、`AgentMemorySnapshotItem`、`AgentMemoryTrace`、`AgentMemoryUpdateOutbox` | L487-L694 | user/thread/run/source/version、冻结 payload、before/after 状态副本与调度状态 | Snapshot 不可变追加；Trace 保存事件边界状态；Outbox 用 Run/type 或 task key 幂等，失败摘要只存脱敏文本 | Memory selector、Consumer、管理员运维 |
+| 掌握度与长期项 | `backend/app/modules/agent/models.py` | `UserLearningMastery`、`AgentConversationSummary`、`AgentMemoryItem` | L697-L806 | 可信 Grade、消息序列范围、事实 source | 聚合分数、版本化摘要、active/superseded/deleted 长期项 | Validate / Plan / conversation |
+| 偏好候选 | `backend/app/modules/agent/models.py` | `AgentPreferenceCandidate` | L807-L884 | user/source/key 与治理决定 | 同 source/key 唯一；拒绝和失效不能被重放复活 | preference selector 与用户治理 |
 
 ## 故障定位顺序
 
-1. 先检查 `alembic_version` 是否等于当前 head `20260727_memory_outbox_error`，禁止用 `alembic stamp head` 掩盖缺失迁移。
+1. 先检查 `alembic_version` 是否等于当前 head `20260727_memory_trace`，禁止用 `alembic stamp head` 掩盖缺失迁移。
 2. 若应用层已有字段但数据库报列不存在，执行 `alembic upgrade head`，再走 `verify_database_schema` 同时确认真列。
 3. Memory Outbox 没有失败详情时，检查 `last_error_message` 真列以及 `MemoryOutboxStore.fail` 是否收到异常摘要。
 4. 工具活动无法恢复时，确认 `workflow.activity.updated` 已进入数据库 ENUM。

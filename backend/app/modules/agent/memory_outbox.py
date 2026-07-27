@@ -19,6 +19,7 @@ from .conversation_summary import (
 )
 from .admin_memory import safe_error_summary
 from .memory_item_projection import project_trusted_memory_event
+from .memory_observability import capture_memory_state, record_memory_trace
 from .memory_vector import (
     MemoryVectorLifecycle,
     is_memory_vector_task,
@@ -244,6 +245,29 @@ class MemoryOutboxConsumer:
         if outbox is None:
             return False
 
+        trace_run = None
+        trace_before = None
+        if outbox.run_id:
+            trace_run = await db.scalar(
+                select(AgentRun).where(
+                    AgentRun.id == outbox.run_id,
+                    AgentRun.thread_id == outbox.thread_id,
+                    AgentRun.user_id == outbox.user_id,
+                )
+            )
+            if trace_run is not None:
+                try:
+                    trace_before = await capture_memory_state(
+                        db,
+                        run_id=trace_run.id,
+                    )
+                except Exception as error:
+                    logger.debug(
+                        "Memory Outbox 前状态暂不可读取",
+                        outbox_id=outbox_id,
+                        error=str(error),
+                    )
+
         try:
             async with db.begin_nested():
                 if outbox.event_type == THREAD_MEMORY_DELETE_TASK:
@@ -306,9 +330,40 @@ class MemoryOutboxConsumer:
                 retry_delay_seconds=self.retry_delay_seconds,
                 max_retries=self.max_retries,
             )
+            if trace_run is not None and trace_before is not None:
+                try:
+                    await record_memory_trace(
+                        db,
+                        run=trace_run,
+                        event_type=f"memory.outbox.{outbox.event_type}.failed",
+                        before=trace_before,
+                        after=await capture_memory_state(db, run_id=trace_run.id),
+                    )
+                except Exception as trace_error:
+                    logger.debug(
+                        "Memory Outbox 失败状态记录失败",
+                        outbox_id=outbox_id,
+                        error=str(trace_error),
+                    )
             return False
 
-        return await self.store.complete(db, outbox_id, worker_id)
+        completed = await self.store.complete(db, outbox_id, worker_id)
+        if completed and trace_run is not None and trace_before is not None:
+            try:
+                await record_memory_trace(
+                    db,
+                    run=trace_run,
+                    event_type=f"memory.outbox.{outbox.event_type}.completed",
+                    before=trace_before,
+                    after=await capture_memory_state(db, run_id=trace_run.id),
+                )
+            except Exception as trace_error:
+                logger.debug(
+                    "Memory Outbox 完成状态记录失败",
+                    outbox_id=outbox_id,
+                    error=str(trace_error),
+                )
+        return completed
 
     async def scan_and_process(
         self,

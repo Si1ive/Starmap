@@ -17,13 +17,20 @@ import {
   Typography,
   message,
 } from 'antd'
-import { EyeOutlined, ReloadOutlined, RetweetOutlined, SearchOutlined } from '@ant-design/icons'
+import {
+  DatabaseOutlined,
+  EyeOutlined,
+  ReloadOutlined,
+  RetweetOutlined,
+  SearchOutlined,
+} from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 
 import * as agentRunsApi from '@/api/agentRuns'
 import type { AdminMemoryOutbox, MemoryOutboxParams } from '@/api/agentRuns'
 import PlainDataBlock from './PlainDataBlock'
+import RunMemoryDrawer from './RunMemoryDrawer'
 
 const { RangePicker } = DatePicker
 const { Text } = Typography
@@ -40,6 +47,7 @@ const MemoryOutboxPanel = () => {
   const [loading, setLoading] = useState(false)
   const [replayingId, setReplayingId] = useState<number | null>(null)
   const [detail, setDetail] = useState<AdminMemoryOutbox | null>(null)
+  const [memoryRunId, setMemoryRunId] = useState<string | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [filters, setFilters] = useState<MemoryOutboxParams>({})
   const [draft, setDraft] = useState<MemoryOutboxParams>({})
@@ -185,6 +193,17 @@ const MemoryOutboxPanel = () => {
       width: 156,
       render: (_, row) => (
         <Space size={2}>
+          {row.run_id ? (
+            <Button
+              icon={<DatabaseOutlined />}
+              onClick={() => setMemoryRunId(row.run_id)}
+              size="small"
+              title="查看该 Run 的上下文与记忆前后变化"
+              type="link"
+            >
+              记忆
+            </Button>
+          ) : null}
           <Button
             icon={<EyeOutlined />}
             onClick={() => void inspect(row.id)}
@@ -224,7 +243,7 @@ const MemoryOutboxPanel = () => {
           <p className="admin-eyebrow">Derived memory queue</p>
           <Typography.Title level={4}>Memory Outbox</Typography.Title>
           <Typography.Paragraph type="secondary">
-            查看派生记忆的真实处理状态、最后安全错误，并沿用原幂等身份重新排队。
+            这里记录的是“对话事实已经产生，等待 Worker 把它投影成长期记忆”的可靠任务；查看具体 Run 可继续追踪上下文选择、记忆前后变化和投影结果。
           </Typography.Paragraph>
         </div>
         <div className="memory-outbox-intro__rule">
@@ -391,6 +410,12 @@ const MemoryOutboxPanel = () => {
           </Space>
         ) : null}
       </Drawer>
+
+      <RunMemoryDrawer
+        onClose={() => setMemoryRunId(null)}
+        open={Boolean(memoryRunId)}
+        runId={memoryRunId}
+      />
     </div>
   )
 }

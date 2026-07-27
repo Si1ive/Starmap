@@ -16,6 +16,7 @@ from .models import (
     AgentMemoryItem,
     AgentMemorySnapshot,
     AgentMemorySnapshotItem,
+    AgentMemoryTrace,
     AgentMemoryUpdateOutbox,
     AgentMessage,
     AgentPreferenceCandidate,
@@ -181,6 +182,15 @@ async def get_run_memory_observability(
             )
         ).scalars()
     )
+    memory_traces = list(
+        (
+            await db.execute(
+                select(AgentMemoryTrace)
+                .where(AgentMemoryTrace.run_id == run.id)
+                .order_by(AgentMemoryTrace.id)
+            )
+        ).scalars()
+    )
     context_audit = metadata.get("context_audit")
     model_calls = metadata.get("model_calls")
     safe_model_calls = redact_admin_value(model_calls) if isinstance(model_calls, list) else []
@@ -254,6 +264,19 @@ async def get_run_memory_observability(
                 "created_at": utc_isoformat(row.created_at),
             }
             for row in outbox_rows
+        ],
+        "memory_trace": [
+            {
+                "id": trace.id,
+                "event_id": trace.event_id,
+                "event_sequence": trace.event_sequence,
+                "event_type": trace.event_type,
+                "changed": bool(trace.changed),
+                "before": redact_admin_value(trace.before_json or {}),
+                "after": redact_admin_value(trace.after_json or {}),
+                "created_at": utc_isoformat(trace.created_at),
+            }
+            for trace in memory_traces
         ],
     }
 

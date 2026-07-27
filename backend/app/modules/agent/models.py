@@ -609,6 +609,44 @@ class AgentMemorySnapshotItem(Base):
     )
 
 
+class AgentMemoryTrace(Base):
+    """Run 关键事件前后的记忆状态快照，用于管理员定位上下文变化。"""
+
+    __tablename__ = "agent_memory_traces"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("agent_runs.id", ondelete="CASCADE"),
+        nullable=False, comment="所属运行ID"
+    )
+    thread_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("agent_threads.id", ondelete="CASCADE"),
+        nullable=False, comment="所属线程ID"
+    )
+    user_id: Mapped[str] = mapped_column(String(32), nullable=False, comment="用户ID")
+    event_id: Mapped[Optional[int]] = mapped_column(
+        Integer, comment="对应 AgentEvent ID；Outbox 边界为空"
+    )
+    event_sequence: Mapped[Optional[int]] = mapped_column(
+        Integer, comment="对应 Run 内事件序号"
+    )
+    event_type: Mapped[str] = mapped_column(
+        String(80), nullable=False, comment="观测边界类型"
+    )
+    changed: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, comment="前后记忆是否变化"
+    )
+    before_json: Mapped[dict] = mapped_column(JSON, nullable=False, comment="事件前记忆状态")
+    after_json: Mapped[dict] = mapped_column(JSON, nullable=False, comment="事件后记忆状态")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+    __table_args__ = (
+        Index("idx_agent_memory_trace_run", "run_id", "id"),
+        Index("idx_agent_memory_trace_thread", "thread_id", "created_at"),
+        {"comment": "Agent 记忆前后状态观测表"}
+    )
+
+
 class AgentMemoryUpdateOutbox(Base):
     """记忆投影 Outbox：在 Run 完成后可靠异步回写长期记忆。"""
 

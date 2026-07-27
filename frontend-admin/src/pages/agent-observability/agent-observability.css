@@ -200,6 +200,34 @@
   white-space: nowrap;
 }
 
+.memory-trace-list {
+  display: grid;
+  gap: 8px;
+}
+
+.memory-trace-entry {
+  border-color: var(--admin-border);
+  background: var(--admin-surface);
+}
+
+.memory-trace-entry.is-changed {
+  border-left: 3px solid var(--admin-blue);
+}
+
+.memory-trace-entry.is-unchanged {
+  border-left: 3px solid #b6c0ba;
+}
+
+.memory-trace-entry .ant-collapse-header {
+  align-items: center !important;
+  padding: 9px 11px !important;
+}
+
+.memory-trace-entry .ant-collapse-content-box {
+  border-top: 1px solid var(--admin-border);
+  padding: 11px !important;
+}
+
 .memory-mono {
   font-family: var(--admin-mono);
   font-size: 11px;
