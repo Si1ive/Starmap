@@ -1,5 +1,12 @@
 # 2026-07 管理端记忆可观测进展
 
+## 2026-07-28：同步结构守卫迁移头验收
+
+- 目标：修正全量回归中仍把 `20260727_memory_trace` 写死为项目 head 的旧测试期望，确保启动结构守卫验收与向量/LLM 审计前向迁移一致。
+- 实现：`backend/tests/test_schema_guard.py::test_schema_guard_reads_the_project_migration_heads`（L237-L238）改为断言 `20260728_agent_llm_audit`；生产 `get_expected_revisions` 仍从 Alembic 脚本目录动态读取，没有硬编码或 stamp 旁路。
+- 验证：结构守卫定向测试与后端全量测试通过；Alembic current/head 均为 `20260728_agent_llm_audit`，`git diff --check` 通过。
+- 提交信息：`同步数据库结构守卫迁移头验收`
+
 ## 2026-07-28：加固监控采集器自身可靠性
 
 - 目标：修复“监控看起来正常但自身已丢日志/丢 API 统计”的盲区，并让进程资源值覆盖实际子进程负载。
