@@ -440,7 +440,7 @@ async def ensure_turn_memory_snapshot(
     else:
         state.version += 1
     if understanding.topic_entities:
-        state.active_topic_json = understanding.topic_entities[0].model_dump(mode="json")
+        state.active_topic_json = _topic_state_payload(state, understanding.topic_entities[0])
     state.latest_understanding_run_id = run.id
     await db.flush()
 
@@ -534,3 +534,21 @@ def requests_question_repeat(raw_input: str) -> bool:
     return any(hint in normalized for hint in repeat_hints) and any(
         hint in normalized for hint in reference_hints
     )
+
+
+def _topic_state_payload(
+    state: AgentThreadMemoryState,
+    topic: TopicEntity,
+) -> dict[str, Any]:
+    """显式主题重置确认版本；继承主题保留原版本以支持按轮次过期。"""
+    payload = topic.model_dump(mode="json")
+    if topic.source != "thread_memory":
+        payload["confirmed_state_version"] = state.version
+        return payload
+    previous_marker = (state.active_topic_json or {}).get("confirmed_state_version")
+    if isinstance(previous_marker, int) and not isinstance(previous_marker, bool):
+        confirmed_version = previous_marker
+    else:
+        confirmed_version = max(1, state.version - 1)
+    payload["confirmed_state_version"] = confirmed_version
+    return payload

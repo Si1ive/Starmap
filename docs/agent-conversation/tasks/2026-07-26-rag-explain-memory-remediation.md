@@ -246,14 +246,14 @@ load_scope completed
 
 ### MEM-007 压缩、冲突、失效与删除
 
-- 状态：进行中（已完成增量摘要消费和显式重复题覆盖；其余冲突、衰减、Embedding 和删除仍待实现）。
+- 状态：进行中（已完成增量摘要消费、显式重复题覆盖和线程主题轮次失效；其余冲突、学习画像衰减、Embedding 和删除仍待实现）。
 - 已由 `backend/app/modules/agent/conversation_summary.py::ConversationSummaryMaintainer`（L72-L318）固定保留最近 12 个用户轮次，只从上个活跃摘要 `end_sequence` 之后选择最多 24 条同用户/线程的 visible completed user/assistant 消息；不足 13 轮不调用模型，也不在每次 Run 重读整线程。模型返回后短暂锁定线程并复核活跃版本，避免多 Worker 产生双活摘要，冲突交给 Outbox 基于新版本重试。
 - `backend/app/modules/agent/model_runtime/conversation_summary.py::ConversationSummaryRuntime.summarize`（L65-L117）把旧摘要和新增消息当作不可信数据，使用触发 Run 绑定模型生成结构化非空摘要；`maintain` 新建递增版本、保留起止 sequence 和来源消息 ID，再用 `superseded_by_id` 标记旧摘要。原 `AgentMessage` 不覆盖，摘要正文不进入公开 SSE。
 - 成功 Run 只在 `AgentWorker.process_run`（L185-L227）当前事务写摘要维护 Outbox；`MemoryOutboxConsumer.process_claimed`（L202-L276）在独立消费事务复核 Run/thread/user/type，模型或存储失败只重试任务，不把 completed Run 改成失败。`backend/tests/test_agent_conversation_summary.py`（L169-L436）覆盖近期窗口、隐藏/失败/system 排除、重放幂等、新区间合并、并发版本复核、跨作用域隔离和失败隔离。
 - `backend/app/modules/agent/context_builder.py::ThreadContextBuilder._load_conversation_summary`（L533-L569）只在近期原始轮次选完后用剩余 Token 预算选择同用户/线程、范围不重叠的唯一 active 摘要；`ensure_turn_memory_snapshot`（L405-L515）冻结内容副本和来源版本。`RouterDeps` / `DirectAnswerDeps` 将摘要作为不可信动态上下文消费，child metadata 和公开 SSE 均不含正文。`backend/tests/test_agent_context_builder.py::test_context_selects_only_active_summary_that_fits_remaining_budget`（L319-L384）覆盖预算选择与 snapshot item。
 - `backend/app/modules/agent/memory_selector.py::load_conversation_bundle`（L832-L1001）让 Explain 复现唯一 snapshot 摘要副本，并复核源摘要 user/thread/version；版本不符或重复条目均安全降级。`ExplanationDeps`（L19-L75）把同一副本交给规划和正文模型，摘要不进入 message history、child metadata 或 SSE。
 - 用户明确陈述和真实业务事件优先于模型抽取；低置信度候选不能覆盖高置信度活跃记忆。
-- 线程主题按轮次衰减；临时约束随 Turn/Practice 结束；学习画像长期保存并按时间衰减。
+- 线程主题轮次失效已落地：`backend/app/modules/agent/turn_understanding.py::_topic_state_payload`（L539-L554）让显式主题写确认版本、继承主题保留原版本；`backend/app/modules/agent/context_builder.py::_active_topic_from_state`（L752-L772）只暴露版本差不超过 6 的主题，第 7 个后续轮次失效，旧版 JSON 首次兼容且非法标记安全失效。临时约束单轮失效与学习画像时间衰减仍待收口。
 - 排除集覆盖已按读取策略落地：`backend/app/modules/agent/turn_understanding.py::requests_question_repeat`（L518-L536）排除“不要/别/不想/无需”等否定表达，`backend/app/modules/agent/memory_selector.py::_apply_explicit_question_repeat`（L1004-L1024）只允许唯一结构化 question 引用覆盖本轮排除视图；事实事件不变。时间衰减仍待实现。
 - 删除线程时失效线程记忆并通过 Outbox 删除向量；用户级学习画像单独控制。
 

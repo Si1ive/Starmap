@@ -250,9 +250,9 @@ class ThreadContextBuilder:
             context_refs=context_refs,
             pending_interactions=pending_interactions,
             active_topic=(
-                dict(memory_state.active_topic_json)
-                if memory_state and memory_state.active_topic_json
-                else None
+                _active_topic_from_state(
+                    memory_state
+                )
             ),
             memory_state_version=memory_state.version if memory_state else None,
             permission_scope=PermissionScope(
@@ -744,3 +744,29 @@ class ThreadContextBuilder:
                 }
             )
         return references
+
+
+_ACTIVE_TOPIC_MAX_AGE_TURNS = 6
+
+
+def _active_topic_from_state(
+    state: AgentThreadMemoryState | None,
+) -> dict[str, Any] | None:
+    """只暴露仍在轮次 TTL 内的主题；旧版无标记 JSON 首次保持兼容。"""
+    if state is None or not state.active_topic_json:
+        return None
+    topic = dict(state.active_topic_json)
+    confirmed_version = topic.pop("confirmed_state_version", None)
+    if confirmed_version is None:
+        return topic
+    if isinstance(confirmed_version, bool):
+        return None
+    try:
+        normalized_version = int(confirmed_version)
+    except (TypeError, ValueError):
+        return None
+    if normalized_version < 1 or normalized_version > state.version:
+        return None
+    if state.version - normalized_version > _ACTIVE_TOPIC_MAX_AGE_TURNS:
+        return None
+    return topic

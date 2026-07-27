@@ -690,3 +690,89 @@ async def test_context_loads_active_topic_from_thread_memory_state(db_session):
         "title": "二分查找",
     }
     assert context.memory_state_version == 5
+
+
+@pytest.mark.asyncio
+async def test_context_expires_active_topic_after_six_follow_up_turns(db_session):
+    await _add_thread(db_session, thread_id="thread_topic_decay", user_id="user_001")
+    _, run = await _add_current_turn(
+        db_session,
+        thread_id="thread_topic_decay",
+        message_id="msg_topic_decay",
+        run_id="run_topic_decay",
+        content="换个话题",
+    )
+    state = AgentThreadMemoryState(
+        thread_id="thread_topic_decay",
+        user_id="user_001",
+        version=7,
+        active_topic_json={
+            "entity_type": "knowledge_point",
+            "entity_id": "kp_binary_search",
+            "title": "二分查找",
+            "source": "context_ref",
+            "confirmed_state_version": 1,
+        },
+    )
+    db_session.add(state)
+    await db_session.flush()
+
+    context = await ThreadContextBuilder(db_session).build(
+        user_id="user_001",
+        thread_id="thread_topic_decay",
+        turn_id=run.id,
+    )
+
+    assert context.active_topic is not None
+    assert context.active_topic["title"] == "二分查找"
+    assert context.memory_state_version == 7
+
+    state.version = 8
+    await db_session.flush()
+    expired_context = await ThreadContextBuilder(db_session).build(
+        user_id="user_001",
+        thread_id="thread_topic_decay",
+        turn_id=run.id,
+    )
+
+    assert expired_context.active_topic is None
+    assert expired_context.memory_state_version == 8
+
+
+def test_topic_state_payload_preserves_inherited_age_and_resets_explicit_topic():
+    from app.modules.agent.turn_understanding import TopicEntity, _topic_state_payload
+
+    state = AgentThreadMemoryState(
+        thread_id="thread_topic_payload",
+        user_id="user_001",
+        version=4,
+        active_topic_json={
+            "entity_type": "knowledge_point",
+            "entity_id": "kp_binary_search",
+            "title": "二分查找",
+            "source": "thread_memory",
+            "confirmed_state_version": 2,
+        },
+    )
+
+    inherited = _topic_state_payload(
+        state,
+        TopicEntity(
+            entity_type="knowledge_point",
+            entity_id="kp_binary_search",
+            title="二分查找",
+            source="thread_memory",
+        ),
+    )
+    explicit = _topic_state_payload(
+        state,
+        TopicEntity(
+            entity_type="knowledge_point",
+            entity_id="kp_red_black_tree",
+            title="红黑树",
+            source="context_ref",
+        ),
+    )
+
+    assert inherited["confirmed_state_version"] == 2
+    assert explicit["confirmed_state_version"] == 4
