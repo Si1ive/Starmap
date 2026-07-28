@@ -10,10 +10,10 @@
 | --- | --- | --- | --- | --- |
 | 模拟考会话 | `backend/app/modules/practice/models.py` | `PracticeSession` | L23-L51 | `user_id` 是唯一所有者；记录模式、服务器开始/交卷时间、总分和成绩。来源文档删除时只清空引用，历史会话保留 |
 | 冻结题目 | `backend/app/modules/practice/models.py` | `PracticeSessionQuestion` | L54-L75 | 会话内题目唯一且顺序唯一；`snapshot_json` 固化题干、选项、答案、解析、来源和章节，题库后续修改不改变历史批改语义 |
-| 用户答案 | `backend/app/modules/practice/models.py` | `PracticeAnswer` | L78-L102 | 会话/题目唯一；保存答案、乐观版本号、用时、批改结果与得分，随用户会话级联删除 |
-| 专注计时 | `backend/app/modules/practice/models.py` | `StudyTimerRecord` | L105-L122 | 每次刷题或休息绑定用户，保存计划时长、实际时长和完成状态；后续学习进度只消费真实计时事实 |
+| 用户答案 | `backend/app/modules/practice/models.py` | `PracticeAnswer` | L78-L103 | 会话/题目唯一；保存答案、乐观版本号、已用提示层级、用时、批改结果与得分，随用户会话级联删除 |
+| 专注计时 | `backend/app/modules/practice/models.py` | `StudyTimerRecord` | L106-L123 | 每次刷题或休息绑定用户，保存计划时长、实际时长和完成状态；后续学习进度只消费真实计时事实 |
 
-三次前向迁移分别创建事实表、冻结快照和并发版本：`backend/alembic/versions/20260728_practice_sessions.py::upgrade`（L19-L98）创建会话、题目、答案和计时表；`backend/alembic/versions/20260728_practice_snapshot.py::upgrade`（L18-L45）为可能已存在的会话题回填快照后再收紧为非空；`backend/alembic/versions/20260728_practice_answer_version.py::upgrade`（L18-L22）为旧答案回填版本 1。迁移失败会中断升级，禁止用 stamp 跳过。
+四次前向迁移分别创建事实表、冻结快照、并发版本和提示证据：`backend/alembic/versions/20260728_practice_sessions.py::upgrade`（L19-L98）创建会话、题目、答案和计时表；`backend/alembic/versions/20260728_practice_snapshot.py::upgrade`（L18-L45）回填冻结题面；`backend/alembic/versions/20260728_practice_answer_version.py::upgrade`（L18-L22）为旧答案回填版本 1；`backend/alembic/versions/20260728_practice_hints.py::upgrade`（L18-L24）增加提示层级证据。迁移失败会中断升级，禁止用 stamp 跳过。
 
 ## 模拟考执行主链
 
@@ -21,22 +21,32 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `frontend/src/pages/PracticeLibraryPage.tsx` | `PracticeLibraryPage` | L39-L309 | 当前登录用户打开练习页 | 并行加载可见真题、用户历史和覆盖统计；只展示后端真实返回 | 真实真题列表、累计题数、覆盖率和恢复入口 | 用户选择模拟考或 25 分钟练习 |
 | 2 | `frontend/src/api/practice.ts` | `createPracticeSession` | L106-L121 | 文档 ID、模式、题数、时限 | 读取当前认证会话并附带 CSRF，发送创建命令 | 用户 API 请求；认证或 CSRF 错误直接显示 | `create_practice_session` |
-| 3 | `backend/app/modules/practice/router.py` | `create_practice_session` | L240-L308 | 认证用户、文档、题数和时限 | 用 owner、未删除和检索授权验证平台/本人文档，再读取真实题目；为每题写不可变快照，包含曲线使用的主题词和标签 | `practice_sessions` 与 `practice_session_questions` 同事务提交；无权访问返回 404，未抽题返回 409 | 前端进入会话 URL |
-| 4 | `backend/app/modules/practice/router.py` | `_session_payload`、`get_practice_session` | L134-L196、L312-L325 | 用户 ID 与会话 ID | `_owned_session` 强制会话所有者；以服务器开始时间计算剩余秒数，到期先自动交卷；未提交时隐藏快照答案，同时返回每题作答版本 | 当前题面、已存答案、版本和服务器剩余时间 | `PracticePage` |
-| 5 | `frontend/src/pages/PracticePage.tsx` | `PracticePage`、`save`、`resolveConflict` | L38-L219 | 会话 DTO | 渲染题面和服务器倒计时；保存携带当前版本。409 时重新读取服务器答案并以项目样式对照两个版本，用户明确选择保留服务器值或用本机值再次覆盖 | 当前作答状态；冲突不会静默覆盖或自动切题/交卷 | `save_practice_answer` 或继续答题 |
+| 3 | `backend/app/modules/practice/router.py` | `create_practice_session` | L320-L388 | 认证用户、文档、题数和时限 | 用 owner、未删除和检索授权验证平台/本人文档，再读取真实题目；为每题写不可变快照，包含曲线使用的主题词和标签 | `practice_sessions` 与 `practice_session_questions` 同事务提交；无权访问返回 404，未抽题返回 409 | 前端进入会话 URL |
+| 4 | `backend/app/modules/practice/router.py` | `_session_payload`、`get_practice_session` | L157-L219、L392-L405 | 用户 ID 与会话 ID | `_owned_session` 强制会话所有者；以服务器开始时间计算剩余秒数，到期先自动交卷；未提交时隐藏快照答案，同时返回每题作答版本与提示证据 | 当前题面、已存答案、版本和服务器剩余时间 | `PracticePage` |
+| 5 | `frontend/src/pages/PracticePage.tsx` | `PracticePage`、`save`、`resolveConflict` | L40-L201 | 会话 DTO | 渲染题面和服务器倒计时；保存携带当前版本。409 时重新读取服务器答案并以项目样式对照两个版本，用户明确选择保留服务器值或用本机值再次覆盖 | 当前作答状态；冲突不会静默覆盖或自动切题/交卷 | `save_practice_answer` 或继续答题 |
 | 5.1 | `frontend/src/index.css` | `.practice-answer-conflict` | L3042-L3112 | 两份冲突答案和两个选择动作 | 使用项目纸张、墨色与琥珀边线；桌面双栏、移动端单栏，不调用浏览器原生确认框 | 可键盘操作的冲突面板 | 用户选择后进入 `resolveConflict` |
-| 6 | `backend/app/modules/practice/router.py` | `_assert_answer_version`、`save_practice_answer` | L70-L78、L329-L376 | 会话、题目、答案、累计用时和 `expected_version` | 锁定用户会话并核对状态、截止时间和题目归属；仅当期望版本等于数据库版本时保存并递增，首次保存要求版本 0 | `practice_answers`；旧版本返回可识别 409，超时自动交卷 | 前端冲突选择或继续答题 |
-| 7 | `backend/app/modules/practice/router.py` | `_submit`、`submit_practice_session` | L95-L131、L380-L388 | 当前用户会话 | 幂等交卷；客观答案归一化后与会话快照答案确定性比对，未作答补空答案并计零分 | 固化每题对错/得分和会话总成绩、交卷时间 | 反馈与复盘页 |
-| 8 | `frontend/src/pages/PracticePage.tsx` | `PracticePage` | L236-L456 | 已交卷会话 DTO | 显示总分、逐题对错、用户答案、冻结标准答案与解析 | 用户可逐题复盘；不修改历史事实 | 返回练习历史 |
+| 6 | `backend/app/modules/practice/router.py` | `_assert_answer_version`、`save_practice_answer` | L75-L83、L409-L456 | 会话、题目、答案、累计用时和 `expected_version` | 锁定用户会话并核对状态、截止时间和题目归属；仅当期望版本等于数据库版本时保存并递增，首次保存要求版本 0 | `practice_answers`；旧版本返回可识别 409，超时自动交卷 | 前端冲突选择或继续答题 |
+| 7 | `backend/app/modules/practice/router.py` | `_submit`、`submit_practice_session` | L118-L154、L460-L468 | 当前用户会话 | 幂等交卷；客观答案归一化后与会话快照答案确定性比对，未作答补空答案并计零分 | 固化每题对错/得分和会话总成绩、交卷时间 | 反馈与复盘页 |
+| 8 | `frontend/src/pages/PracticePage.tsx` | `PracticePage` | L275-L495 | 已交卷会话 DTO | 显示总分、逐题对错、用户答案、冻结标准答案与解析 | 用户可逐题复盘；不修改历史事实 | 返回练习历史 |
+
+## 分层提示与模拟考边界
+
+| 执行阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 最终消费 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 安全提示文本 | `backend/app/modules/practice/router.py` | `_practice_hint` | L86-L115 | 冻结题面和 direction/concept/method 层级 | 只读取题型与 `topic_terms` 生成方向、概念或方法提示；不读取 `answer` 与 `explanation`，避免未交卷答案泄漏 | 确定性提示文本 | 提示接口 |
+| 提示证据写入 | `backend/app/modules/practice/router.py` | `request_practice_hint` | L267-L316 | 用户会话、题目、层级和期望答案版本 | 仅允许 `mode=practice` 且活动中的本人会话；按乐观版本写入去重后的提示层级，模拟考返回 409 | `PracticeAnswer.hint_levels_used_json` 与新版本；不改变答案和得分 | 作答 DTO、后续学习证据 |
+| 提示客户端 | `frontend/src/api/practice.ts` | `requestPracticeHint` | L162-L183 | Session/Question/层级/版本 | 带 CSRF 请求提示并接收新版本与已用层级 | 类型化提示响应 | `PracticePage.showHint` |
+| 练习提示交互 | `frontend/src/pages/PracticePage.tsx` | `showHint`、`PracticePage` | L203-L236、L389-L418 | 普通练习当前题 | 只在普通练习显示方向、概念、方法三个紧凑动作；成功后同步答案版本，模拟考不渲染入口 | 当前提示与持久化使用证据 | 用户继续独立作答 |
+| 提示视觉 | `frontend/src/index.css` | `.practice-hints` | L13336-L13369 | 提示动作和正文 | 使用项目纸张、墨色和玉色边线，保持提示弱于题干 | 简洁可换行提示块 | 用户端练习页 |
 
 ## 历史、统计与番茄钟
 
 | 入口 | 文件 | 符号 | 代码范围 | 输入与处理 | 副作用 / 最终消费 |
 | --- | --- | --- | --- | --- | --- |
-| 练习历史 | `backend/app/modules/practice/router.py` | `list_practice_history` | L392-L436 | 只查询当前用户；列表加载时也把服务器时间已到的活动会话自动交卷 | 前端“交卷与复盘”列表恢复未完成会话或打开成绩 |
-| 覆盖统计 | `backend/app/modules/practice/router.py` | `get_practice_stats` | L440-L477 | 只聚合当前用户已交卷答案；统计总答题、答对、命中过的题目主章节以及 active 大纲章节总数 | `PracticeLibraryPage` 展示真实做题量与大纲覆盖率；空数据返回零而非 mock |
-| 开始计时 | `backend/app/modules/practice/router.py` | `start_study_timer` | L481-L502 | 校验 focus/rest 和 1–120 分钟范围，绑定认证用户 | 新增 running `study_timer_records`，前端开始本地逐秒显示 |
-| 完成计时 | `backend/app/modules/practice/router.py` | `complete_study_timer` | L506-L533 | 用户 ID 与 timer ID 加锁；重复完成保持幂等 | 保存实际秒数和完成时间，供后续真实学习进度聚合 |
+| 练习历史 | `backend/app/modules/practice/router.py` | `list_practice_history` | L472-L516 | 只查询当前用户；列表加载时也把服务器时间已到的活动会话自动交卷 | 前端“交卷与复盘”列表恢复未完成会话或打开成绩 |
+| 覆盖统计 | `backend/app/modules/practice/router.py` | `get_practice_stats` | L520-L557 | 只聚合当前用户已交卷答案；统计总答题、答对、命中过的题目主章节以及 active 大纲章节总数 | `PracticeLibraryPage` 展示真实做题量与大纲覆盖率；空数据返回零而非 mock |
+| 开始计时 | `backend/app/modules/practice/router.py` | `start_study_timer` | L561-L582 | 校验 focus/rest 和 1–120 分钟范围，绑定认证用户 | 新增 running `study_timer_records`，前端开始本地逐秒显示 |
+| 完成计时 | `backend/app/modules/practice/router.py` | `complete_study_timer` | L586-L613 | 用户 ID 与 timer ID 加锁；重复完成保持幂等 | 保存实际秒数和完成时间，供后续真实学习进度聚合 |
 
 ## 当前批改边界
 
@@ -48,4 +58,5 @@
 - `backend/tests/test_practice_router.py::test_submit_grades_against_frozen_snapshot_not_changed_question`：题库答案改变后仍以会话快照批改。
 - `backend/tests/test_practice_router.py::test_normalize_answer_supports_objective_question_formats`：选择/判断/填空常见格式归一化。
 - `backend/tests/test_practice_router.py::test_answer_version_rejects_stale_multi_device_save`：旧版本保存必须得到 409，不能覆盖较新的答案。
+- `backend/tests/test_practice_router.py::test_layered_practice_hints_do_not_expose_frozen_answer`：提示只使用题型与主题词，不能拼入冻结答案或解析。
 - 前端执行 `npm run build` 和针对 `api/practice.ts`、两个练习页面的 ESLint；后端执行迁移图、schema guard 与练习定向测试。

@@ -13333,6 +13333,40 @@ summary:focus-visible {
   white-space: pre-wrap;
 }
 
+.practice-hints {
+  border-left: 2px solid var(--jade);
+  display: grid;
+  gap: 8px;
+  margin: -10px 0 24px;
+  padding: 9px 12px;
+}
+
+.practice-hints > span {
+  color: var(--ink-faint);
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.practice-hints > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.practice-hints .button {
+  min-height: 30px;
+  padding: 0 10px;
+}
+
+.practice-hints > p {
+  background: var(--paper-soft);
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1.7;
+  margin: 0;
+  padding: 9px 10px;
+}
+
 .real-option-list {
   display: grid;
   gap: 10px;

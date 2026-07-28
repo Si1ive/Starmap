@@ -8,6 +8,7 @@ from app.modules.practice.router import (
     _assert_answer_version,
     _normalize_answer,
     _owned_session,
+    _practice_hint,
     _submit,
 )
 
@@ -37,6 +38,22 @@ def test_answer_version_rejects_stale_multi_device_save():
 
     assert error.value.status_code == 409
     assert "其他设备" in error.value.detail
+
+
+def test_layered_practice_hints_do_not_expose_frozen_answer():
+    snapshot = {
+        "type": "single_choice",
+        "answer": "B",
+        "explanation": "正确答案是 B",
+        "topic_terms": ["进程调度", "时间片"],
+    }
+
+    hints = [
+        _practice_hint(snapshot, level) for level in ("direction", "concept", "method")
+    ]
+
+    assert "进程调度" in hints[1]
+    assert all("正确答案" not in hint and " B" not in hint for hint in hints)
 
 
 @pytest.mark.asyncio

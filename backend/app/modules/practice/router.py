@@ -41,6 +41,11 @@ class SavePracticeAnswerRequest(BaseModel):
     expected_version: int = Field(0, ge=0)
 
 
+class RequestPracticeHintRequest(BaseModel):
+    level: Literal["direction", "concept", "method"]
+    expected_version: int = Field(0, ge=0)
+
+
 class StartTimerRequest(BaseModel):
     phase: Literal["focus", "rest"]
     planned_seconds: int = Field(..., ge=60, le=7200)
@@ -76,6 +81,24 @@ def _assert_answer_version(
             status_code=409,
             detail="答案已在其他设备更新，请选择使用服务器答案或覆盖保存",
         )
+
+
+def _practice_hint(snapshot: dict, level: str) -> str:
+    if level == "direction":
+        return "先标出题目的已知条件、求解目标和容易忽略的限制，再决定使用哪类方法。"
+    if level == "concept":
+        terms = [
+            str(item).strip()
+            for item in snapshot.get("topic_terms") or []
+            if str(item).strip()
+        ]
+        if terms:
+            return f"优先回忆这些核心概念：{'、'.join(terms[:4])}。"
+        return "回忆这道题所属章节的核心定义、适用条件和常见反例。"
+    question_type = str(snapshot.get("type") or "")
+    if question_type in {"single_choice", "multiple_choice", "choice", "judge"}:
+        return "逐项检验选项是否满足全部条件；先排除违反定义或边界条件的项。"
+    return "先写出解题步骤和每一步依据，再代入条件检查结论是否完整。"
 
 
 async def _owned_session(
@@ -181,6 +204,7 @@ async def _session_payload(db: AsyncSession, session: PracticeSession) -> dict:
                 "chapter_id": (link.snapshot_json or {}).get("chapter_id"),
                 "user_answer": answer.user_answer if answer else "",
                 "version": answer.version if answer else 0,
+                "hint_levels_used": answer.hint_levels_used_json if answer else [],
                 "time_spent_seconds": answer.time_spent_seconds if answer else 0,
                 "is_correct": answer.is_correct if submitted and answer else None,
                 "awarded_score": answer.awarded_score if submitted and answer else None,
@@ -232,6 +256,62 @@ async def list_practice_papers(
                 }
                 for document, corpus_file, count in rows
             ]
+        }
+    )
+
+
+@router.post(
+    "/sessions/{session_id}/answers/{question_id}/hints",
+    response_model=ApiResponse,
+)
+async def request_practice_hint(
+    session_id: str,
+    question_id: str,
+    payload: RequestPracticeHintRequest,
+    current: AuthenticatedSession = Depends(require_csrf_session),
+    db: AsyncSession = Depends(get_db),
+):
+    session = await _owned_session(db, session_id, current.user.id, lock=True)
+    if session.status != "active":
+        raise HTTPException(status_code=409, detail="试卷已经交卷")
+    if session.mode != "practice":
+        raise HTTPException(status_code=409, detail="模拟考不提供提示")
+    link = await db.scalar(
+        select(PracticeSessionQuestion).where(
+            PracticeSessionQuestion.session_id == session.id,
+            PracticeSessionQuestion.question_id == question_id,
+        )
+    )
+    if link is None:
+        raise HTTPException(status_code=404, detail="题目不属于当前试卷")
+    answer = await db.scalar(
+        select(PracticeAnswer).where(
+            PracticeAnswer.session_id == session.id,
+            PracticeAnswer.question_id == question_id,
+        )
+    )
+    _assert_answer_version(answer, payload.expected_version)
+    if answer is None:
+        answer = PracticeAnswer(
+            session_id=session.id,
+            question_id=question_id,
+            version=1,
+            hint_levels_used_json=[payload.level],
+        )
+        db.add(answer)
+    else:
+        used = list(answer.hint_levels_used_json or [])
+        if payload.level not in used:
+            used.append(payload.level)
+        answer.hint_levels_used_json = used
+        answer.version += 1
+    await db.commit()
+    return ApiResponse(
+        data={
+            "level": payload.level,
+            "hint": _practice_hint(link.snapshot_json or {}, payload.level),
+            "version": answer.version,
+            "hint_levels_used": answer.hint_levels_used_json or [],
         }
     )
 

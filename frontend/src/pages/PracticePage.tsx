@@ -14,6 +14,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import {
   getPracticeSession,
   PracticeApiError,
+  requestPracticeHint,
   savePracticeAnswer,
   submitPracticeSession,
 } from "../api/practice";
@@ -46,6 +47,8 @@ export default function PracticePage() {
   const [saving, setSaving] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [conflict, setConflict] = useState<AnswerConflict | null>(null);
+  const [hint, setHint] = useState<string | null>(null);
+  const [hintLoading, setHintLoading] = useState(false);
   const questionStartedAt = useRef(Date.now());
 
   const load = useCallback(async () => {
@@ -81,6 +84,7 @@ export default function PracticePage() {
   useEffect(() => {
     if (conflict?.questionId === question?.id) return;
     setAnswer(question?.user_answer ?? "");
+    setHint(null);
     questionStartedAt.current = Date.now();
   }, [conflict?.questionId, question?.id, question?.user_answer]);
 
@@ -193,6 +197,41 @@ export default function PracticePage() {
       );
     } finally {
       setSaving(false);
+    }
+  };
+
+  const showHint = async (level: "direction" | "concept" | "method") => {
+    if (!session || !question || conflict || hintLoading) return;
+    setHintLoading(true);
+    try {
+      const result = await requestPracticeHint(
+        session.id,
+        question.id,
+        level,
+        question.version,
+      );
+      setHint(result.hint);
+      setSession((current) =>
+        current
+          ? {
+              ...current,
+              questions: current.questions.map((item) =>
+                item.id === question.id
+                  ? {
+                      ...item,
+                      version: result.version,
+                      hint_levels_used: result.hint_levels_used,
+                    }
+                  : item,
+              ),
+            }
+          : current,
+      );
+      setError(null);
+    } catch (hintError) {
+      setError(hintError instanceof Error ? hintError.message : "提示读取失败");
+    } finally {
+      setHintLoading(false);
     }
   };
 
@@ -346,6 +385,23 @@ export default function PracticePage() {
               <span>{question.max_score} 分</span>
             </div>
             <h1>{question.content}</h1>
+            {session.mode === "practice" ? (
+              <div className="practice-hints">
+                <span>分层提示 · 使用情况会计入练习证据</span>
+                <div>
+                  <Button disabled={hintLoading} onClick={() => void showHint("direction")} tone="quiet">
+                    方向
+                  </Button>
+                  <Button disabled={hintLoading} onClick={() => void showHint("concept")} tone="quiet">
+                    概念
+                  </Button>
+                  <Button disabled={hintLoading} onClick={() => void showHint("method")} tone="quiet">
+                    方法
+                  </Button>
+                </div>
+                {hint ? <p>{hint}</p> : null}
+              </div>
+            ) : null}
             {question.options.length ? (
               <div className="real-option-list">
                 {question.options.map((option, index) => {

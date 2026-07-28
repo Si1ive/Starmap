@@ -91,6 +91,7 @@ class PracticeAnswer(Base):
     is_correct: Mapped[Optional[bool]] = mapped_column(Boolean)
     awarded_score: Mapped[Optional[int]] = mapped_column(Integer)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    hint_levels_used_json: Mapped[Optional[list]] = mapped_column(JSON)
     time_spent_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     saved_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow

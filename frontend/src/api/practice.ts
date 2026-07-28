@@ -39,6 +39,7 @@ export interface PracticeQuestion {
   chapter_id: string | null;
   user_answer: string;
   version: number;
+  hint_levels_used: Array<"direction" | "concept" | "method">;
   time_spent_seconds: number;
   is_correct: boolean | null;
   awarded_score: number | null;
@@ -154,6 +155,26 @@ export function savePracticeAnswer(
         time_spent_seconds: timeSpentSeconds,
         expected_version: expectedVersion,
       }),
+    },
+  );
+}
+
+export function requestPracticeHint(
+  sessionId: string,
+  questionId: string,
+  level: "direction" | "concept" | "method",
+  expectedVersion: number,
+) {
+  return request<{
+    level: "direction" | "concept" | "method";
+    hint: string;
+    version: number;
+    hint_levels_used: Array<"direction" | "concept" | "method">;
+  }>(
+    `/sessions/${encodeURIComponent(sessionId)}/answers/${encodeURIComponent(questionId)}/hints`,
+    {
+      method: "POST",
+      body: JSON.stringify({ level, expected_version: expectedVersion }),
     },
   );
 }
