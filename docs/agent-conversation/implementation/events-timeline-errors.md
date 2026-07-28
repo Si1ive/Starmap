@@ -11,6 +11,7 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | 练习评分投影 | `backend/app/modules/practice/router.py`、`backend/app/modules/learning/events.py` | `_submit`（L118-L158）、`record_practice_submission`（L28-L83） | Session 行锁、冻结题目、PracticeAnswer | 先确定性判分，再以 `session:item` 查询/写唯一事件；任何数据库错误阻止同事务交卷，重试不会重复写 | `learning_activity_events`；学习进度与薄弱点消费 |
 | Agent 讲解投影 | `backend/app/modules/agent/memory_projection.py`、`backend/app/modules/learning/events.py` | `_record_explanation_artifact_created`（L143-L185）、`record_explanation_activity`（L86-L130） | completed Explain Artifact、Run context snapshot | 只接受冻结 active topic；缺主题安全跳过；事件与 Agent Memory fact 同事务，错误沿 Worker 失败链传播 | 无 verdict 的 exposure；学习记录和 Agent Runs 消费 |
+| Agent Grade 投影 | `backend/app/modules/agent/memory_projection.py`、`backend/app/modules/learning/events.py` | `_record_grade_result_confirmed`（L308-L424）、`record_agent_grade_activity`（L145-L210） | 已通过 rubric 的 grading、Feedback Artifact、冻结 topic | 先更新掌握度，再按 evidence ID 写统一评价事件；topic 缺失时从知识点水合，仍缺失则不虚构薄弱点 | `agent_grade_confirmed`；学习进度与薄弱点消费 |
 
 `learning_activity_events` 是用户学习记录的可信事实层，不替代 `AgentEvent` 时间线。前者跨普通练习和 Agent 对话，
 后者描述单次 Run 的执行过程；管理端在 Thread 详情中并排展示两者，便于判断 workflow 完成是否真正形成学习事实。

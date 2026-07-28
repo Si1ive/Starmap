@@ -52,6 +52,7 @@
 | Artifact 分型与练习动作 | `frontend/src/features/agent/InlineWorkflow.tsx` | `artifactTypeLabel`（L153-L163）、`artifactMarkdown`（L165-L173）、`ArtifactCard`（L175-L218） | `workflow.artifacts[]` | 讲解默认展开 Markdown；练习 Artifact 只识别服务端 `open_practice + target_id` 并拼站内路由，不执行任意 href | 工作流结果卡片与练习页 |
 | 本会话练习轨道 | `frontend/src/features/agent/ConversationPracticeRail.tsx`、`frontend/src/pages/AgentPage.tsx` | `ConversationPracticeRail`（L11-L50）、`AgentPage`（L26-L125、L275-L300） | 当前 Thread 的用户归属练习 | SSE cursor 变化后刷新练习列表；桌面显示左侧连续轨道，窄屏折叠为顶部横轨；draft/active/submitted 使用一致动作词 | 练习页或反馈页 |
 | 最近学习记录 | `frontend/src/pages/TodayPage.tsx`、`frontend/src/api/learning.ts` | `TodayPage`（L280-L318）、`LearningActivity` / `LearningProgress`（L18-L45） | `recent_activities`、关键词轨迹来源 | Agent 讲解显示为活动，正确/错误练习显示评价结果；Session 回练习结果、Thread 回原对话；不把 exposure 文案写成掌握 | 学习进度页 |
+| 跨入口薄弱点回溯 | `frontend/src/pages/MistakesPage.tsx`、`frontend/src/api/learning.ts` | `MistakesPage.openEvidence`（L58-L65）、`WeaknessEvidence`（L47-L62） | 普通/Agent 练习或 Agent Grade evidence | Session 证据回练习反馈，Thread 证据回原对话；文案只称“错误事实”和“待验证”，不作能力人格判断 | 错题与薄弱点页 |
 | Markdown 主题样式 | `frontend/src/features/agent/agent-chat.css` | `.agent-markdown`（L155-L281）、`.inline-workflow__artifact` 分型样式（L798-L895） | Markdown DOM 与 Artifact 类型 class | 统一标题、列表、引用、代码块、GFM 表格、链接和分型色彩；代码块可横向滚动，长文本换行，不撑破对话框 | 用户端响应式 UI |
 
 ## 下一步阅读

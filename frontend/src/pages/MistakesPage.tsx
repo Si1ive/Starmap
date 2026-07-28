@@ -55,6 +55,13 @@ export default function MistakesPage() {
   }, [load]);
 
   const lead = data?.clusters[0];
+  const openEvidence = (evidence: WeaknessCluster["representative"]) => {
+    if (evidence.session_id) {
+      navigate(`/practice/${evidence.session_id}/feedback`);
+    } else if (evidence.thread_id) {
+      navigate(`/agent/${evidence.thread_id}`);
+    }
+  };
   return (
     <div className="page page--wide mistakes-page">
       <PageHeading
@@ -63,7 +70,7 @@ export default function MistakesPage() {
             去练习
           </Button>
         }
-        description="这里只汇总当前账号已交卷题目的错误事实，并按相同关键词形成待验证队列；不会把一次错误直接写成性格或能力判断。"
+        description="这里只汇总当前账号的练习与 Agent 批改错误事实，并按相同关键词形成待验证队列；不会把一次错误直接写成性格或能力判断。"
         eyebrow="知识诊断"
         title="用真实错误证据安排下一次验证"
       />
@@ -77,8 +84,8 @@ export default function MistakesPage() {
       {!loading && !lead ? (
         <section className="source-empty">
           <ListChecks size={20} />
-          <strong>当前账号还没有已交卷错题</strong>
-          <span>完成一次真实模拟考或练习后，错误会按题目关键词进入这里。</span>
+          <strong>当前账号还没有可验证的错误证据</strong>
+          <span>完成一次练习或让 Agent 确定性批改后，错误会按题目关键词进入这里。</span>
           <Button onClick={() => navigate("/practice")}>开始练习</Button>
         </section>
       ) : null}
@@ -100,7 +107,7 @@ export default function MistakesPage() {
             <span><History size={15} /> {statusCopy[lead.status]}</span>
             <Button
               icon={<ArrowRight size={16} />}
-              onClick={() => navigate(`/practice/${lead.representative.session_id}/feedback`)}
+              onClick={() => openEvidence(lead.representative)}
             >
               复盘原题
             </Button>
@@ -119,7 +126,7 @@ export default function MistakesPage() {
               <button
                 className={index === 0 ? "is-active" : ""}
                 key={cluster.keyword}
-                onClick={() => navigate(`/practice/${cluster.representative.session_id}/feedback`)}
+                onClick={() => openEvidence(cluster.representative)}
                 type="button"
               >
                 <span className="mistake-cluster-list__count">{cluster.wrong_count}</span>
@@ -150,7 +157,7 @@ export default function MistakesPage() {
           <SectionHeading meta="按真实交卷时间倒序" title="近期错误轨迹" />
           <div className="history-line">
             {data.timeline.slice(0, 8).map((item, index) => (
-              <div key={`${item.session_id}-${item.question_id}-${item.occurred_at}`}>
+              <div key={`${item.source_type}-${item.source_id}-${item.occurred_at}`}>
                 <span>{index === 0 ? <CalendarCheck2 size={16} /> : <ListChecks size={16} />}</span>
                 <strong>{shortDate(item.occurred_at)}</strong>
                 <p>{item.session_title} · {item.question_no ? `第 ${item.question_no} 题 · ` : ""}{item.content}</p>

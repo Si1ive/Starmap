@@ -11,7 +11,7 @@
 | --- | --- | --- | --- |
 | 1 | 出题后创建练习草稿、跳转练习页，并在对话与管理端保留练习轨道 | 已完成 | Validate Worker 产生 `PracticeSession(status=draft)`；用户端与 Agent Runs 可见 |
 | 2 | 普通练习与 Agent 练习产生统一学习活动/评分证据 | 已完成 | 提交后学习记录可回链到 Session、Thread 与 Run；讲解只形成活动事实 |
-| 3 | 统一普通错题与 Agent 评分的薄弱点投影 | 待开始 | 同一知识点按可信证据聚合且可解释 |
+| 3 | 统一普通错题与 Agent 评分的薄弱点投影 | 已完成 | 同一知识点按可信证据跨入口聚合且可回溯 |
 | 4 | 建立受控 Capability/Tool Harness | 待开始 | 模型只见获授权能力；写能力幂等、可审计，不含 MCP |
 
 ## 阶段一最终执行链
@@ -53,3 +53,16 @@
 
 讲解完成只能证明用户接触了主题，因此会进入学习记录和保持率轨迹，但 `is_correct=None`，不会成为掌握度 verdict。
 练习完成使用冻结标准答案产生确定性评价事件；重复提交与自动交卷通过 Session 状态和事件唯一键保持幂等。
+
+## 阶段三最终执行链
+
+| 执行阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Agent Grade 事件 | `backend/app/modules/agent/memory_projection.py`、`backend/app/modules/learning/events.py` | `_record_grade_result_confirmed`（L308-L424）、`record_agent_grade_activity`（L145-L210） | 可信 Feedback grading、冻结 topic / knowledge point | 掌握度写入后，以 evidence ID 幂等写统一评价事件；主题优先读 snapshot，缺失时水合知识点；无主题安全跳过 | `agent_grade_confirmed`、mastery | WeaknessService |
+| 统一证据转换 | `backend/app/modules/learning/weaknesses.py` | `project_weakness_rows`、`project_weakness_events`、`project_weakness_evidence` | L38-L180 | 新活动事件与历史 Session 行 | 转成同一 evidence 契约，按 keyword 合并正确/错误；后续正确只能进入待间隔验证，不立即删除错误历史 | clusters、timeline | 用户/管理端 |
+| 用户级读取 | `backend/app/modules/learning/weaknesses.py` | `WeaknessService.get` | L183-L241 | 当前用户 | 新事件优先；排除已有同源事件的历史行；跨 Agent Grade、Agent 练习和普通练习重新投影 | 用户薄弱点 | MistakesPage |
+| 来源回跳 | `frontend/src/pages/MistakesPage.tsx` | `MistakesPage.openEvidence` | L58-L65 | representative evidence | 有 Session 回练习反馈，无 Session 但有 Thread 回 Agent 对话 | 原始证据页面 | 用户复盘 |
+| 管理监控 | `backend/app/modules/agent/admin_router.py` | `get_run_detail` | L486-L608 | Thread 学习事件 | 对当前会话事件运行同一 projector，不另造管理统计规则 | `weaknesses` | AgentRunDetailPage |
+
+薄弱点仍是评价证据的派生视图，不新增“设置薄弱点”写接口。Agent 讲解事件没有 verdict，天然不会进入该投影；
+Agent Grade 只有通过既有评分门禁、携带 question/knowledge point 和确定 verdict 后才产生评价事件。

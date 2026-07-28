@@ -555,6 +555,9 @@ async def get_run_detail(run_id: str, db: AsyncSession = Depends(get_db)):
             )
         ).all()
     )
+    from app.modules.learning.weaknesses import project_weakness_events
+
+    weakness_projection = project_weakness_events(learning_activities, datetime.utcnow())
     latest_status = turns[-1]["status"] if turns else "queued"
     return {
         "data": {
@@ -599,6 +602,7 @@ async def get_run_detail(run_id: str, db: AsyncSession = Depends(get_db)):
                 }
                 for item in learning_activities
             ],
+            "weaknesses": weakness_projection,
             "turns": turns,
         }
     }

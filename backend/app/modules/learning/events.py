@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Iterable
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.mysql_models import KnowledgePoint
 from app.modules.agent.models import AgentArtifact, AgentRun
 from app.modules.practice.models import PracticeAnswer, PracticeSession, PracticeSessionQuestion
 
@@ -23,6 +25,14 @@ def _keywords(values: Iterable[object]) -> list[str]:
         if len(result) >= 6:
             break
     return result
+
+
+def _valid_user_id(value: object) -> bool:
+    try:
+        uuid.UUID(str(value))
+    except (TypeError, ValueError, AttributeError):
+        return False
+    return True
 
 
 async def record_practice_submission(
@@ -90,6 +100,8 @@ async def record_explanation_activity(
     artifact: AgentArtifact,
 ) -> LearningActivityEvent | None:
     """Record topic exposure without turning discussion into mastery evidence."""
+    if not _valid_user_id(run.user_id):
+        return None
     existing = await db.scalar(
         select(LearningActivityEvent).where(
             LearningActivityEvent.user_id == run.user_id,
@@ -124,6 +136,74 @@ async def record_explanation_activity(
         is_correct=None,
         occurred_at=artifact.created_at,
         payload_json={"artifact_id": artifact.id, "title": artifact.content_json.get("title")},
+    )
+    db.add(event)
+    await db.flush()
+    return event
+
+
+async def record_agent_grade_activity(
+    db: AsyncSession,
+    *,
+    run: AgentRun,
+    artifact: AgentArtifact,
+    grading: dict,
+) -> LearningActivityEvent | None:
+    """Project a confirmed Agent Grade into the same assessment event stream."""
+    if not _valid_user_id(run.user_id):
+        return None
+    verdict = str(grading.get("verdict") or "").strip().lower()
+    if verdict not in {"correct", "incorrect"}:
+        return None
+    source_id = str(grading.get("evidence_id") or artifact.id)
+    existing = await db.scalar(
+        select(LearningActivityEvent).where(
+            LearningActivityEvent.user_id == run.user_id,
+            LearningActivityEvent.event_type == "agent_grade_confirmed",
+            LearningActivityEvent.source_id == source_id,
+        )
+    )
+    if existing is not None:
+        return existing
+    metadata = run.metadata_json if isinstance(run.metadata_json, dict) else {}
+    snapshot = metadata.get("context_snapshot") if isinstance(metadata.get("context_snapshot"), dict) else {}
+    active_topic = snapshot.get("active_topic") if isinstance(snapshot.get("active_topic"), dict) else {}
+    keywords = _keywords([active_topic.get("title"), *((active_topic.get("aliases") or []))])
+    knowledge_point_ids = list(grading.get("knowledge_point_ids") or [])
+    if not keywords and knowledge_point_ids:
+        points = list(
+            (
+                await db.scalars(
+                    select(KnowledgePoint).where(KnowledgePoint.id.in_(knowledge_point_ids))
+                )
+            ).all()
+        )
+        keywords = _keywords(
+            [value for point in points for value in [point.canonical_title or point.title, *(point.aliases or [])]]
+        )
+    if not keywords:
+        return None
+    artifact_content = artifact.content_json or {}
+    feedback = artifact_content.get("content") if isinstance(artifact_content.get("content"), dict) else {}
+    event = LearningActivityEvent(
+        user_id=run.user_id,
+        event_type="agent_grade_confirmed",
+        source_type="agent_grade",
+        source_id=source_id,
+        thread_id=run.thread_id,
+        run_id=run.id,
+        topic_keywords_json=keywords,
+        knowledge_point_ids_json=knowledge_point_ids,
+        quality=1.0 if verdict == "correct" else 0.25,
+        is_correct=verdict == "correct",
+        occurred_at=artifact.created_at,
+        payload_json={
+            "artifact_id": artifact.id,
+            "question_id": grading.get("question_id"),
+            "content": "；".join(feedback.get("weaknesses") or []) or feedback.get("overall"),
+            "source": "Agent 对话内批改",
+            "error_types": list(grading.get("error_types") or []),
+        },
     )
     db.add(event)
     await db.flush()

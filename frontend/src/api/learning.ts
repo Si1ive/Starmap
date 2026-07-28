@@ -46,15 +46,19 @@ export interface LearningProgress {
 }
 
 export interface WeaknessEvidence {
-  session_id: string;
+  source_type: string;
+  source_id: string;
+  session_id: string | null;
   session_title: string;
-  question_id: string;
+  question_id: string | null;
   question_no: string | null;
   content: string;
   source: string | null;
   is_correct: boolean;
   occurred_at?: string;
   hint_levels_used: string[];
+  thread_id: string | null;
+  run_id: string | null;
 }
 
 export interface WeaknessCluster {

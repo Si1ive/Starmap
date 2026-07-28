@@ -75,6 +75,7 @@ Outbox 的调度状态。Worker 后续仍走 `MemoryOutboxConsumer.process_claim
 4. 事件、Artifact 和错误摘要在既有会话详情序列化时也经过同一脱敏函数，API key、Authorization、DSN 凭证和 traceback 不进入响应。
 5. `backend/app/modules/agent/admin_router.py::get_run_detail`（L486-L604）额外按 Thread 查询 Agent 来源练习，返回来源 Run、状态、题数和成绩；`frontend-admin/src/pages/AgentRunDetailPage.tsx::AgentRunDetailPage` 在会话元数据下展示“会话练习”，管理员可区分 workflow 已完成但练习仍为 draft、正在作答或已经交卷。
 6. 同一详情现在由 `backend/app/modules/agent/admin_router.py::get_run_detail`（L486-L604）读取 `LearningActivityEvent`，返回主题、source、quality 与可空 verdict；管理 UI 把无 verdict 标为“学习活动”，避免把 Explain 完成误报成正确证据，并能直接识别交卷后事件缺失。
+7. `backend/app/modules/agent/admin_router.py::get_run_detail`（L486-L608）把当前 Thread 的学习事件交给 `project_weakness_events`，管理端“本会话薄弱点”与用户端使用相同聚合规则；只展示带错误 verdict 的主题及错误/尝试次数，无错误时显示明确空态。
 5. Outbox 重放沿用数据库唯一幂等身份；重复点击只更新同一行，但每次管理员动作都写独立审计记录。
 
 ## 监控采集器自身健康

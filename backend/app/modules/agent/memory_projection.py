@@ -406,6 +406,14 @@ async def _record_grade_result_confirmed(
         mastery.last_graded_at = utc_now()
 
     await db.flush()
+    from app.modules.learning.events import record_agent_grade_activity
+
+    await record_agent_grade_activity(
+        db,
+        run=run,
+        artifact=artifact,
+        grading=grading,
+    )
     await _ensure_memory_update_outbox(db, run, memory_event)
     logger.info(
         "评分事实事件写入并更新掌握度",

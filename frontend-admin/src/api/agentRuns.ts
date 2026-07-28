@@ -135,6 +135,16 @@ export interface AdminAgentSessionDetail extends Omit<
     quality: number
     occurred_at: string
   }>
+  weaknesses: {
+    summary: { cluster_count: number; wrong_answer_count: number; due_count: number }
+    clusters: Array<{
+      keyword: string
+      wrong_count: number
+      attempt_count: number
+      status: string
+      representative: Record<string, unknown>
+    }>
+  }
   turns: AdminAgentTurn[]
 }
 

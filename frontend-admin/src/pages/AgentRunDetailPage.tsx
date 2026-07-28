@@ -525,6 +525,22 @@ const AgentRunDetailPage = () => {
         ) : <Empty description="该会话尚未产生学习事件" image={Empty.PRESENTED_IMAGE_SIMPLE} />}
       </Card>
 
+      <Card
+        className="agent-run-weaknesses"
+        size="small"
+        title={`本会话薄弱点（${session.weaknesses.summary.cluster_count}）`}
+      >
+        {session.weaknesses.clusters.length ? (
+          <Space wrap>
+            {session.weaknesses.clusters.map((cluster) => (
+              <Tag color={cluster.status === 'due' ? 'red' : 'gold'} key={cluster.keyword}>
+                {cluster.keyword} · 错误 {cluster.wrong_count}/{cluster.attempt_count}
+              </Tag>
+            ))}
+          </Space>
+        ) : <Empty description="当前会话没有错误评价证据" image={Empty.PRESENTED_IMAGE_SIMPLE} />}
+      </Card>
+
       {session.turns.length === 0 ? (
         <Empty description="该会话暂无问答运行" />
       ) : (

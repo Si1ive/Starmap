@@ -16,3 +16,12 @@
 - 管理端：Agent Runs 会话详情新增学习事件区，显示主题、事件类型、来源 Run 与“活动/正确/错误”证据层级。
 - 验证：学习事件、Validate→Session→交卷整链、记忆投影、迁移图与 Schema Guard 测试通过；双前端生产构建通过；真实 MySQL 升至 `20260728_learning_activity`。
 - 中文提交信息：`统一 Agent 学习活动与练习证据`。
+
+## 2026-07-28：阶段三——统一 Agent 与练习薄弱点
+
+- 目标：让对话内确定性批改和练习页交卷进入同一个薄弱点证据模型，并保留原始入口回链。
+- 实现：Agent Grade 在掌握度门禁通过后写 `agent_grade_confirmed`；WeaknessService 新事件优先、历史 Session 兼容，将 Agent Grade、Agent 练习和普通练习按关键词重新投影；后续答对只标记待间隔验证。
+- 用户端：错题页可从 Session 证据回练习结果，也可从对话评分证据回原 Thread，空态与说明覆盖两种来源。
+- 管理端：Agent Runs 使用同一 projector 展示本会话薄弱点，不维护第二套统计口径。
+- 验证：覆盖 Agent Grade 事件、Agent 错误→练习答对的跨入口验证、历史错题兼容和双前端生产构建。
+- 中文提交信息：`统一 Agent 与练习薄弱点投影`。
