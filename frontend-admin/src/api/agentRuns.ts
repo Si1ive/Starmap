@@ -225,10 +225,26 @@ export interface AdminConversationMemoryTurn {
   status: AgentRunStatus
   changed: boolean
   changed_sections: string[]
+  sections: AdminConversationMemorySection[]
   before: Record<string, unknown>
   after: Record<string, unknown>
+  token_totals: {
+    before: number
+    after: number
+    delta: number
+  }
   trace_count: number
   observed_at: string
+}
+
+export interface AdminConversationMemorySection {
+  key: string
+  changed: boolean
+  before: unknown
+  after: unknown
+  token_before: number
+  token_after: number
+  token_delta: number
 }
 
 export interface AdminConversationMemory {

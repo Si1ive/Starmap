@@ -1,5 +1,14 @@
 # 2026-07 管理端记忆可观测进展
 
+## 2026-07-28：完善上下文记忆全量对比与索引解析
+
+- 目标：修正记忆抽屉只展示变化域的误导性表达；每轮固定展示六个域，变化时高亮、未变化时低对比，并展示真实 Snapshot Token 总量变化和 source 索引所指向的数据库内容。
+- 后端：`backend/app/modules/agent/admin_memory.py::_section_token_total`、`_conversation_section_states`（L381-L414）只累计 `selected=true` Snapshot Item 的持久化 `token_estimate` 并生成固定六域状态；`get_conversation_memory_observability`（L417-L518）返回每域和全轮 before/after/delta。没有可靠 Token 数据的非 Snapshot 域保持 0，不以 JSON 长度伪造估算。
+- 索引隔离：`backend/app/modules/agent/admin_memory.py::get_snapshot_item_source`、`_load_current_source`（L542-L593、L596-L742）沿用 Run/Snapshot/Item 与 user/thread 绑定，按白名单 source kind 回查真实表；删除、跨作用域和版本漂移继续统一返回 404。`frontend-admin/src/pages/agent-observability/RunMemoryDrawer.tsx::MemoryIndexResolver`（L76-L145）在 Snapshot 内并列展示本轮冻结值与当前数据库值。
+- 界面：`frontend-admin/src/pages/agent-observability/RunMemoryDrawer.tsx::MemorySection`、`TurnMemoryChange`、`RunMemoryDrawer`（L147-L293）固定渲染六域并显示分域/总 Token；`frontend-admin/src/pages/agent-observability/agent-observability.css`（L701-L955）用项目墨色、玉色与琥珀色表达沿用、数据和变化，不再使用蓝白按钮标签表达状态。
+- 验证：`cd backend && PYTHONPATH=. venv/bin/pytest -q tests/test_agent_admin_memory.py` 通过（8 passed）；`cd frontend-admin && npm run build` 与目标文件 ESLint 通过（仅保留既有 chunk size 提示）；`git diff --check` 通过。
+- 提交信息：`完善上下文记忆全量对比与索引解析`
+
 ## 2026-07-28：合并 Agent Runs 记忆入口并修复无变化时间线
 
 - 目标：保留“会话与 Run”的整体结构，移除“记忆派生任务”子页和全部页面回放入口；把根/子 Run 的多个记忆入口收敛为会话唯一入口，并按轮次只展示上下文记忆变化。

@@ -24,17 +24,22 @@
 | 执行阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 会话记忆 API | `backend/app/modules/agent/admin_router.py` | `get_conversation_memory_admin` | L455-L462 | 管理员认证后的 Thread ID | 把请求交给会话记忆聚合服务 | `data` 或安全 404；只读数据库，不运行 workflow | `getConversationMemory` |
-| 记忆域过滤 | `backend/app/modules/agent/admin_memory.py` | `_conversation_memory_state`、`_changed_memory_sections` | L341-L358 | 任意事件采样状态 | 只保留线程热状态、Snapshot、可信事实、长期记忆项、掌握度和摘要，并按顶层记忆域计算差异；Outbox 状态、步骤参数和模型输出不算记忆变化 | 稳定记忆状态与变化域列表 | 会话轮次聚合 |
-| 按轮连续比较 | `backend/app/modules/agent/admin_memory.py` | `get_conversation_memory_observability` | L361-L453 | Thread ID | 校验 Thread 后按 root Run 建立轮次，把 root/child 的 Trace 归入同一轮；第一轮从空记忆基线建立状态，后续轮次以前一轮最终状态比较当前轮最终状态。因此能捕获发生在相邻事件采样之间的变化，不依赖单条 Trace 的 `changed` 标记 | 每轮 `before/after/changed_sections`、总变化轮数；无写库、模型或工具副作用 | 会话记忆抽屉 |
+| 记忆域过滤 | `backend/app/modules/agent/admin_memory.py` | `_conversation_memory_state`、`_changed_memory_sections` | L351-L378 | 任意事件采样状态 | 固定投影线程热状态、Snapshot、可信事实、长期记忆项、掌握度和摘要，并按顶层记忆域计算差异；Outbox 状态、步骤参数和模型输出不算记忆变化 | 六域稳定状态与变化域列表 | Token 统计与会话轮次聚合 |
+| 分域与总 Token | `backend/app/modules/agent/admin_memory.py` | `_section_token_total`、`_conversation_section_states` | L381-L414 | 一轮开始前与结束后的六域状态 | 对每个域都生成 `changed/before/after`；Token 只累计 Snapshot 内 `selected=true` Item 已持久化的 `token_estimate`，不以 JSON 字符数猜测其他域 | 固定六条 `sections` 与每域 before/after/delta | 按轮连续比较 |
+| 按轮连续比较 | `backend/app/modules/agent/admin_memory.py` | `get_conversation_memory_observability` | L417-L518 | Thread ID | 校验 Thread 后按 root Run 建立轮次，把 root/child 的 Trace 归入同一轮；第一轮从空记忆基线建立状态，后续轮次以前一轮最终状态比较当前轮最终状态，并汇总所选 Snapshot Token | 每轮固定六域、`token_totals.before/after/delta`、总变化轮数；无写库、模型或工具副作用 | 会话记忆抽屉 |
 | 事件前后记忆记录 | `backend/app/modules/agent/events.py`、`backend/app/modules/agent/memory_observability.py` | `EventStore.append`、`capture_memory_state`、`record_memory_trace` | L29-L112；L130-L331 | 可诊断 Agent 事件；跳过 `message.delta` | 事件写入前后读取当前分层记忆，按同一 `event_id/event_sequence` 保存 before/after；快照记录失败只记 debug，不阻断对话事件 | `agent_memory_traces`，`changed` 表示前后状态是否不同 | `RunMemoryDrawer` 的记忆变化时间线 |
 | 响应脱敏 | `backend/app/modules/agent/admin_memory.py` | `redact_admin_value`、`safe_error_summary` | L44-L71 | 任意嵌套管理 DTO 或错误摘要 | 递归移除凭证字段并遮蔽 Bearer、带密码 URL、OpenAI 风格 Key 和 traceback | 脱敏副本；不修改数据库原值 | 所有 Agent 管理响应 |
 | 模型调用标识与实际请求 | `backend/app/modules/agent/model_runtime/config.py`、`backend/app/modules/monitoring/llm_calls.py` | `AgentModelSession`、`AuditedOpenAIChatModel`、`open_agent_model`（L59-L144、L251-L327）、`LLMCallRecorder.record_pydantic_response`（L205-L224） | Run ID、调用用途、最终模型配置和每次 Pydantic AI request | 模型会话生成 `model_call_*` Trace 并写无密钥 Run metadata；非流式、流式和结构化重试分别记录真实请求/完整响应/单次 Token/耗时/错误，日志独立事务失败不阻断 Agent | 可按 Run/Trace 关联的 `llm_call_logs` 和模型会话序列 | Run 记忆观测模型区、管理端 LLM 调用页 |
-| 前端管理契约 | `frontend-admin/src/api/agentRuns.ts` | `AdminConversationMemoryTurn`、`AdminConversationMemory`、`getConversationMemory` | L221-L244、L328-L332 | 会话记忆 API JSON 与 Thread ID | 约束按轮 before/after、变化域和总变化轮数并发送管理员认证请求 | 类型化 DTO；不执行正文 | `RunMemoryDrawer` |
-| 会话记忆抽屉 | `frontend-admin/src/pages/agent-observability/RunMemoryDrawer.tsx` | `TurnMemoryChange`、`RunMemoryDrawer` | L39-L93、L95-L179 | Thread ID 与会话记忆响应 | 以纵向轮次轨道展示每轮是否变化；变化轮展开为“本轮开始前/结束后”纯文本对照。明确不重复运行详情已有的步骤入参/出参，不展示运行上下文轨迹，不提供 Run、Snapshot 或派生任务回放 | 无模型、工具或写库副作用；只展示脱敏 JSON | 管理员定位哪一轮改变了哪类记忆 |
+| source 受控回查 | `backend/app/modules/agent/admin_router.py`、`backend/app/modules/agent/admin_memory.py` | `get_run_memory_source_admin`、`get_snapshot_item_source`、`_load_current_source` | L470-L483；L542-L593、L596-L742 | 当前轮 root Run ID 与该 Snapshot Item ID | 先以 Run/Snapshot/Item 联合绑定 user/thread，再按受支持的 `source_kind` 查询对应业务表并脱敏；缺失、越权、版本漂移统一 404 | 本轮冻结副本与当前数据库值；只读数据库 | `MemoryIndexResolver` |
+| 前端管理契约 | `frontend-admin/src/api/agentRuns.ts` | `AdminConversationMemoryTurn`、`AdminConversationMemorySection`、`AdminConversationMemory`、`AdminMemorySourceComparison`、`getConversationMemory`、`getAgentRunMemorySource` | L221-L283、L344-L359 | 会话记忆 JSON、Thread ID、Run ID 与 Item ID | 约束固定分域、Token 总量和 source 对比 DTO，并发送管理员认证请求 | 类型化 DTO；不执行正文 | `RunMemoryDrawer` |
+| source 索引解析 | `frontend-admin/src/pages/agent-observability/RunMemoryDrawer.tsx` | `snapshotItems`、`MemoryIndexResolver` | L66-L145 | Snapshot `after.items`、root Run ID | 只从快照枚举有 source 绑定且类型受支持的 Item；按钮按 Item 调用受控回查，分别展示冻结值和数据库当前值，404 只显示统一不可用提示 | 纯文本 source 对照；无写库副作用 | 管理员判断索引实际指向内容 |
+| 六域记忆抽屉 | `frontend-admin/src/pages/agent-observability/RunMemoryDrawer.tsx` | `MemorySection`、`TurnMemoryChange`、`RunMemoryDrawer` | L147-L293 | Thread ID 与会话记忆响应 | 每轮无条件渲染全部六域，变化域默认展开且琥珀高亮，未变化域保持墨灰低对比；轮标题和分域同时显示 Token before/after/delta，不重复步骤上下文 | 无模型、工具或写库副作用；只展示脱敏 JSON | 管理员定位变化并核对总上下文预算 |
+| 记忆视觉语义 | `frontend-admin/src/pages/agent-observability/agent-observability.css` | `.conversation-memory-turn`、`.conversation-memory-section`、`.memory-index-list` | L701-L955 | 变化状态、六域和 source 对照 DOM | 使用项目墨色、玉色和琥珀色；变化由边线/信号点表达，未变化用暗色底表达，并提供双栏 source 对照 | 桌面端分层视图；窄屏由同文件媒体查询收敛为单栏 | 管理员视觉核对 |
 | 不可信纯文本 | `frontend-admin/src/pages/agent-observability/PlainDataBlock.tsx` | `PlainDataBlock` | L7-L15 | 任意脱敏 JSON | 只经 `JSON.stringify` 写入 React 文本节点，不解析 Markdown/HTML | 可滚动、可聚焦的纯文本块 | Snapshot/source/Outbox 审计视图 |
 
 底层单 Run/Snapshot 观测接口仍可用于自动化诊断，但 Agent Runs 页面不再暴露 Run、Snapshot 或
-Memory Outbox 回放入口；面向管理员的默认阅读路径只有“会话详情 → 查看上下文记忆变化”。
+Memory Outbox 回放入口；面向管理员的默认阅读路径只有“会话详情 → 查看上下文记忆变化”。这里的
+Token 代表真正被选入 Snapshot 的预算，不代表六个数据库域各自序列化后的估算值；没有可信估算的域显示 0。
 
 ## Memory Outbox 列表、失败详情与幂等重放
 

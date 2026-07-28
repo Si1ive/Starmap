@@ -31,7 +31,6 @@ from app.modules.agent.models import (
 )
 from app.modules.agent.time_utils import utc_now
 
-
 ADMIN_MEMORY_TABLES = [
     AgentThread.__table__,
     AgentMessage.__table__,
@@ -189,36 +188,38 @@ async def _seed_snapshot(db_session):
             ),
         ]
     )
-    db_session.add_all([
-        AgentStep(
-            id="step_scope",
-            run_id=run.id,
-            node_name="load_scope",
-            node_type="action",
-            status="completed",
-            input_data={"variables": {"input_message": "继续讲二分查找"}},
-            output_data={"scope": {"mode": "snapshot"}},
-            started_at=now,
-            completed_at=now,
-        ),
-        AgentStep(
-            id="step_evidence",
-            run_id=run.id,
-            node_name="evidence_loop",
-            node_type="action",
-            status="completed",
-            input_data={
-                "variables": {
-                    "input_message": "继续讲二分查找",
-                    "conversation_bundle": {"retrieval_query": "二分查找"},
-                    "evidence": [{"title": "二分查找知识点"}],
-                }
-            },
-            output_data={"evidence_count": 1},
-            started_at=now + timedelta(seconds=1),
-            completed_at=now + timedelta(seconds=1),
-        ),
-    ])
+    db_session.add_all(
+        [
+            AgentStep(
+                id="step_scope",
+                run_id=run.id,
+                node_name="load_scope",
+                node_type="action",
+                status="completed",
+                input_data={"variables": {"input_message": "继续讲二分查找"}},
+                output_data={"scope": {"mode": "snapshot"}},
+                started_at=now,
+                completed_at=now,
+            ),
+            AgentStep(
+                id="step_evidence",
+                run_id=run.id,
+                node_name="evidence_loop",
+                node_type="action",
+                status="completed",
+                input_data={
+                    "variables": {
+                        "input_message": "继续讲二分查找",
+                        "conversation_bundle": {"retrieval_query": "二分查找"},
+                        "evidence": [{"title": "二分查找知识点"}],
+                    }
+                },
+                output_data={"evidence_count": 1},
+                started_at=now + timedelta(seconds=1),
+                completed_at=now + timedelta(seconds=1),
+            ),
+        ]
+    )
     db_session.add(
         AgentMemoryTrace(
             run_id=run.id,
@@ -327,7 +328,9 @@ async def test_child_run_observability_uses_its_bound_parent_snapshot(db_session
 
 
 @pytest.mark.asyncio
-async def test_conversation_memory_compares_turns_instead_of_event_local_flags(db_session):
+async def test_conversation_memory_compares_turns_instead_of_event_local_flags(
+    db_session,
+):
     first_run, _snapshot, _item, _summary = await _seed_snapshot(db_session)
     first_trace = await db_session.scalar(
         select(AgentMemoryTrace).where(AgentMemoryTrace.run_id == first_run.id)
@@ -375,7 +378,61 @@ async def test_conversation_memory_compares_turns_instead_of_event_local_flags(d
     assert payload["turns"][1]["changed_sections"] == ["thread_state"]
     assert payload["turns"][1]["before"]["thread_state"]["version"] == 7
     assert payload["turns"][1]["after"]["thread_state"]["version"] == 8
+    assert [section["key"] for section in payload["turns"][1]["sections"]] == [
+        "thread_state",
+        "snapshot",
+        "memory_events",
+        "memory_items",
+        "mastery",
+        "summaries",
+    ]
+    assert payload["turns"][1]["sections"][0]["changed"] is True
+    assert all(
+        section["changed"] is False for section in payload["turns"][1]["sections"][1:]
+    )
+    assert payload["turns"][1]["token_totals"] == {
+        "before": 0,
+        "after": 0,
+        "delta": 0,
+    }
     assert payload["changed_turn_count"] == 2
+
+
+def test_conversation_section_states_include_selected_snapshot_token_delta():
+    from app.modules.agent.admin_memory import _conversation_section_states
+
+    before = _conversation_memory_state_for_test(
+        [
+            {"selected": True, "token_estimate": 12},
+            {"selected": False, "token_estimate": 99},
+        ]
+    )
+    after = _conversation_memory_state_for_test(
+        [
+            {"selected": True, "token_estimate": 20},
+            {"selected": True, "token_estimate": 5},
+        ]
+    )
+
+    snapshot = next(
+        section
+        for section in _conversation_section_states(before, after)
+        if section["key"] == "snapshot"
+    )
+    assert snapshot["token_before"] == 12
+    assert snapshot["token_after"] == 25
+    assert snapshot["token_delta"] == 13
+
+
+def _conversation_memory_state_for_test(items):
+    return {
+        "thread_state": None,
+        "snapshot": {"items": items},
+        "memory_events": [],
+        "memory_items": [],
+        "mastery": [],
+        "summaries": [],
+    }
 
 
 @pytest.mark.asyncio
@@ -398,7 +455,9 @@ async def test_source_lookup_separates_frozen_copy_and_superseded_current_source
 
 
 @pytest.mark.asyncio
-async def test_source_lookup_hides_cross_run_and_version_mismatch_as_same_404(db_session):
+async def test_source_lookup_hides_cross_run_and_version_mismatch_as_same_404(
+    db_session,
+):
     run, _snapshot, item, summary = await _seed_snapshot(db_session)
 
     with pytest.raises(HTTPException) as cross_run:

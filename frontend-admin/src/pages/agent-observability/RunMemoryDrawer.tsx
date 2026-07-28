@@ -1,22 +1,25 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   Alert,
+  Button,
   Collapse,
   Drawer,
   Empty,
-  Row,
-  Col,
   Space,
   Spin,
-  Tag,
   Typography,
   message,
 } from 'antd'
-import { HistoryOutlined } from '@ant-design/icons'
+import { DatabaseOutlined, HistoryOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 
 import * as agentRunsApi from '@/api/agentRuns'
-import type { AdminConversationMemory, AdminConversationMemoryTurn } from '@/api/agentRuns'
+import type {
+  AdminConversationMemory,
+  AdminConversationMemorySection,
+  AdminConversationMemoryTurn,
+  AdminMemorySourceComparison,
+} from '@/api/agentRuns'
 import PlainDataBlock from './PlainDataBlock'
 
 const { Text, Title } = Typography
@@ -27,6 +30,15 @@ interface RunMemoryDrawerProps {
   onClose: () => void
 }
 
+interface SnapshotIndexItem {
+  id: number
+  source_kind?: string
+  source_id?: string | null
+  token_estimate?: number
+  selected?: boolean
+  payload?: unknown
+}
+
 const sectionLabels: Record<string, string> = {
   thread_state: '线程热状态',
   snapshot: '本轮上下文快照',
@@ -34,6 +46,128 @@ const sectionLabels: Record<string, string> = {
   memory_items: '长期记忆项',
   mastery: '学习掌握度',
   summaries: '会话摘要',
+}
+
+const lookupKinds = new Set([
+  'message',
+  'current_turn',
+  'artifact',
+  'conversation_summary',
+  'user_learning_mastery',
+  'memory_item',
+  'preference_candidate',
+])
+
+function tokenDelta(value: number) {
+  if (!value) return '0'
+  return value > 0 ? `+${value}` : String(value)
+}
+
+function snapshotItems(value: unknown): SnapshotIndexItem[] {
+  if (!value || typeof value !== 'object') return []
+  const items = (value as { items?: unknown }).items
+  if (!Array.isArray(items)) return []
+  return items.filter(
+    (item): item is SnapshotIndexItem =>
+      Boolean(item) && typeof item === 'object' && typeof (item as SnapshotIndexItem).id === 'number'
+  )
+}
+
+function MemoryIndexResolver({ runId, value }: { runId: string; value: unknown }) {
+  const items = snapshotItems(value).filter(
+    (item) => item.source_id && item.source_kind && lookupKinds.has(item.source_kind)
+  )
+  const [loadingId, setLoadingId] = useState<number | null>(null)
+  const [resolved, setResolved] = useState<Record<number, AdminMemorySourceComparison>>({})
+  const [errors, setErrors] = useState<Record<number, string>>({})
+
+  if (!items.length) return null
+
+  const resolve = (item: SnapshotIndexItem) => {
+    setLoadingId(item.id)
+    setErrors((current) => ({ ...current, [item.id]: '' }))
+    void agentRunsApi
+      .getAgentRunMemorySource(runId, item.id)
+      .then((response) => {
+        if (response.data) {
+          setResolved((current) => ({ ...current, [item.id]: response.data as AdminMemorySourceComparison }))
+        }
+      })
+      .catch(() => {
+        setErrors((current) => ({
+          ...current,
+          [item.id]: '当前数据库记录已删除、版本已变化或不在本 Run 的授权范围内',
+        }))
+      })
+      .finally(() => setLoadingId(null))
+  }
+
+  return (
+    <div className="memory-index-list">
+      <div className="memory-index-list__heading">
+        <DatabaseOutlined />
+        <strong>索引对应的数据库内容</strong>
+        <span>通过 Run + Snapshot Item 绑定回查，不接受任意表名或任意 ID。</span>
+      </div>
+      {items.map((item) => {
+        const comparison = resolved[item.id]
+        return (
+          <div className="memory-index-item" key={item.id}>
+            <div className="memory-index-item__meta">
+              <span>{item.source_kind}</span>
+              <code>{item.source_id}</code>
+              <em>{item.token_estimate || 0} tokens</em>
+              <Button loading={loadingId === item.id} onClick={() => resolve(item)} size="small" type="text">
+                {comparison ? '重新读取' : '查看真实内容'}
+              </Button>
+            </div>
+            {errors[item.id] ? <p className="memory-index-item__error">{errors[item.id]}</p> : null}
+            {comparison ? (
+              <div className="memory-index-comparison">
+                <div>
+                  <span>本轮冻结值 · v{comparison.frozen_version ?? '—'}</span>
+                  <PlainDataBlock value={comparison.frozen_copy} maxHeight={240} />
+                </div>
+                <div>
+                  <span>
+                    当前数据库值 · v{comparison.current_version ?? '—'}
+                    {comparison.superseded ? ' · 已被替代' : ''}
+                  </span>
+                  <PlainDataBlock value={comparison.current_source} maxHeight={240} />
+                </div>
+              </div>
+            ) : null}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function MemorySection({ section, runId }: { section: AdminConversationMemorySection; runId: string }) {
+  return (
+    <details className={`conversation-memory-section ${section.changed ? 'is-changed' : 'is-unchanged'}`} open={section.changed}>
+      <summary>
+        <span className="conversation-memory-section__signal" />
+        <strong>{sectionLabels[section.key] || section.key}</strong>
+        <small>{section.changed ? '本轮发生变化' : '本轮未变化'}</small>
+        <em>
+          {section.token_before} → {section.token_after} tokens ({tokenDelta(section.token_delta)})
+        </em>
+      </summary>
+      <div className="conversation-memory-section__body">
+        <div>
+          <Text strong>本轮开始前</Text>
+          <PlainDataBlock value={section.before} maxHeight={360} />
+        </div>
+        <div>
+          <Text strong>本轮结束后</Text>
+          <PlainDataBlock value={section.after} maxHeight={360} />
+        </div>
+      </div>
+      {section.key === 'snapshot' ? <MemoryIndexResolver runId={runId} value={section.after} /> : null}
+    </details>
+  )
 }
 
 function TurnMemoryChange({ turn }: { turn: AdminConversationMemoryTurn }) {
@@ -46,44 +180,30 @@ function TurnMemoryChange({ turn }: { turn: AdminConversationMemoryTurn }) {
           label: (
             <div className="conversation-memory-turn__label">
               <span className="conversation-memory-turn__number">第 {turn.turn_number} 轮</span>
-              <Tag color={turn.changed ? 'processing' : 'default'}>
-                {turn.changed ? `${turn.changed_sections.length} 类记忆变化` : '未观测到记忆变化'}
-              </Tag>
+              <span className={`conversation-memory-turn__state ${turn.changed ? 'is-changed' : ''}`}>
+                {turn.changed ? `${turn.changed_sections.length} 类变化` : '全部未变化'}
+              </span>
               <strong>{turn.input_message || '（无文本输入）'}</strong>
+              <span className="conversation-memory-turn__tokens">
+                {turn.token_totals.before} → {turn.token_totals.after} tokens · {tokenDelta(turn.token_totals.delta)}
+              </span>
               <time>{dayjs(turn.observed_at).format('MM-DD HH:mm:ss')}</time>
             </div>
           ),
-          children: turn.changed ? (
-            <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-              <div className="conversation-memory-sections" aria-label="发生变化的记忆域">
-                {turn.changed_sections.map((section) => (
-                  <Tag color="blue" key={section}>
-                    {sectionLabels[section] || section}
-                  </Tag>
-                ))}
-              </div>
-              <Row gutter={[12, 12]}>
-                <Col xs={24} lg={12}>
-                  <Text strong>本轮开始前</Text>
-                  <PlainDataBlock value={turn.before} maxHeight={420} />
-                </Col>
-                <Col xs={24} lg={12}>
-                  <Text strong>本轮结束后</Text>
-                  <PlainDataBlock value={turn.after} maxHeight={420} />
-                </Col>
-              </Row>
-            </Space>
-          ) : (
-            <Alert
-              message={
-                turn.trace_count
-                  ? '本轮有观测记录，但记忆状态与上一轮一致'
-                  : '本轮没有可用的记忆观测记录'
-              }
-              description="这里不把步骤入参、模型输出或派生任务状态算作上下文记忆变化。"
-              showIcon
-              type="info"
-            />
+          children: (
+            <div className="conversation-memory-section-list" aria-label="全部上下文记忆域">
+              {turn.sections.map((section) => (
+                <MemorySection key={section.key} runId={turn.root_run_id} section={section} />
+              ))}
+              {!turn.trace_count ? (
+                <Alert
+                  description="六个记忆域仍完整展示为沿用状态；这里不把步骤入参、模型输出或派生任务状态算作记忆。"
+                  message="本轮没有可用的记忆观测记录"
+                  showIcon
+                  type="warning"
+                />
+              ) : null}
+            </div>
           ),
         },
       ]}
@@ -122,12 +242,10 @@ const RunMemoryDrawer = ({ open, threadId, onClose }: RunMemoryDrawerProps) => {
       onClose={onClose}
       open={open}
       title="会话上下文记忆变化"
-      width="min(1040px, 96vw)"
+      width="min(1120px, 96vw)"
     >
       {loading ? (
-        <div className="admin-page-loading">
-          <Spin size="large" />
-        </div>
+        <div className="admin-page-loading"><Spin size="large" /></div>
       ) : !data ? (
         <Empty description="无法读取该会话的记忆变化" />
       ) : (
@@ -136,7 +254,7 @@ const RunMemoryDrawer = ({ open, threadId, onClose }: RunMemoryDrawerProps) => {
             <div>
               <Text type="secondary">{data.thread.id}</Text>
               <Title level={4}>{data.thread.title}</Title>
-              <Text>按对话轮次连续比较上下文记忆，只呈现持久记忆域的前后变化。</Text>
+              <Text>每一轮固定展示全部六个记忆域：高亮表示变化，低对比表示沿用。</Text>
             </div>
             <div className="conversation-memory-hero__count" aria-label="记忆变化轮次">
               <HistoryOutlined />
@@ -146,17 +264,15 @@ const RunMemoryDrawer = ({ open, threadId, onClose }: RunMemoryDrawerProps) => {
           </header>
 
           <Alert
-            message="这里专门回答：会话记忆在每一轮之后变成了什么"
-            description="运行步骤的入参、出参和工具证据仍在会话详情流程图中查看；这里不展示运行上下文轨迹，也不提供 Run、Snapshot 或派生任务回放。"
+            description="每轮同时显示总 token 的 before、after 与增减量。Snapshot 中的 source 索引可受控回查数据库真实内容。"
+            message="变化是一种高亮信号，不再决定某个记忆域是否展示"
             showIcon
-            type="info"
+            type="warning"
           />
 
           {data.turns.length ? (
             <div className="conversation-memory-timeline">
-              {data.turns.map((turn) => (
-                <TurnMemoryChange key={turn.root_run_id} turn={turn} />
-              ))}
+              {data.turns.map((turn) => <TurnMemoryChange key={turn.root_run_id} turn={turn} />)}
             </div>
           ) : (
             <Empty description="该会话还没有可比较的对话轮次" />
@@ -164,8 +280,8 @@ const RunMemoryDrawer = ({ open, threadId, onClose }: RunMemoryDrawerProps) => {
 
           {data.turns.length > 0 && changedTurns.length === 0 ? (
             <Alert
+              description="可能是会话早于记忆观测功能创建；每轮仍会显示全部域的沿用状态。"
               message="现有历史记录中没有可比较出的变化"
-              description="可能是会话早于记忆观测功能创建；后续新轮次会继续在同一时间线上比较。"
               showIcon
               type="warning"
             />

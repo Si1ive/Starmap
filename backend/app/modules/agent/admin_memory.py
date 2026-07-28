@@ -27,7 +27,6 @@ from .models import (
 )
 from .time_utils import utc_isoformat
 
-
 _SENSITIVE_KEYS = {
     "api_key",
     "apikey",
@@ -120,9 +119,11 @@ def _actual_tool_calls(events: list[AgentEvent]) -> list[dict[str, Any]]:
                 "tool": actual.get("tool"),
                 "query": actual.get("query"),
                 "entity_type": actual.get("entity_type"),
-                "difficulty": (actual.get("filters") or {}).get("difficulty")
-                if isinstance(actual.get("filters"), dict)
-                else None,
+                "difficulty": (
+                    (actual.get("filters") or {}).get("difficulty")
+                    if isinstance(actual.get("filters"), dict)
+                    else None
+                ),
                 "chapter_ids": actual.get("chapter_ids") or [],
                 "knowledge_point_ids": actual.get("knowledge_point_ids") or [],
                 "exclude_entity_ids": actual.get("exclude_entity_ids") or [],
@@ -140,33 +141,50 @@ def _runtime_context_trace(steps: list[AgentStep]) -> list[dict[str, Any]]:
     traces: list[dict[str, Any]] = []
     for index, step in enumerate(steps):
         input_data = step.input_data if isinstance(step.input_data, dict) else {}
-        before = input_data.get("variables") if isinstance(input_data.get("variables"), dict) else {}
+        before = (
+            input_data.get("variables")
+            if isinstance(input_data.get("variables"), dict)
+            else {}
+        )
         next_input = (
             steps[index + 1].input_data
             if index + 1 < len(steps) and isinstance(steps[index + 1].input_data, dict)
             else {}
         )
-        after = next_input.get("variables") if isinstance(next_input.get("variables"), dict) else None
+        after = (
+            next_input.get("variables")
+            if isinstance(next_input.get("variables"), dict)
+            else None
+        )
         before_keys = set(before)
         after_keys = set(after or {})
-        changed_keys = sorted(
-            key for key in before_keys | after_keys
-            if before.get(key) != (after or {}).get(key)
-        ) if after is not None else []
-        traces.append({
-            "step_id": step.id,
-            "node_name": step.node_name,
-            "node_type": step.node_type,
-            "status": step.status,
-            "before": redact_admin_value(before),
-            "output": redact_admin_value(step.output_data or {}),
-            "next_step_before": redact_admin_value(after) if after is not None else None,
-            "added_keys": sorted(after_keys - before_keys),
-            "removed_keys": sorted(before_keys - after_keys),
-            "changed_keys": changed_keys,
-            "started_at": utc_isoformat(step.started_at),
-            "completed_at": utc_isoformat(step.completed_at),
-        })
+        changed_keys = (
+            sorted(
+                key
+                for key in before_keys | after_keys
+                if before.get(key) != (after or {}).get(key)
+            )
+            if after is not None
+            else []
+        )
+        traces.append(
+            {
+                "step_id": step.id,
+                "node_name": step.node_name,
+                "node_type": step.node_type,
+                "status": step.status,
+                "before": redact_admin_value(before),
+                "output": redact_admin_value(step.output_data or {}),
+                "next_step_before": (
+                    redact_admin_value(after) if after is not None else None
+                ),
+                "added_keys": sorted(after_keys - before_keys),
+                "removed_keys": sorted(before_keys - after_keys),
+                "changed_keys": changed_keys,
+                "started_at": utc_isoformat(step.started_at),
+                "completed_at": utc_isoformat(step.completed_at),
+            }
+        )
     return traces
 
 
@@ -239,7 +257,9 @@ async def get_run_memory_observability(
     )
     context_audit = metadata.get("context_audit")
     model_calls = metadata.get("model_calls")
-    safe_model_calls = redact_admin_value(model_calls) if isinstance(model_calls, list) else []
+    safe_model_calls = (
+        redact_admin_value(model_calls) if isinstance(model_calls, list) else []
+    )
     selected_tokens = sum(item.token_estimate for item in items if item.selected)
     dropped_tokens = sum(item.token_estimate for item in items if not item.selected)
     return {
@@ -358,6 +378,42 @@ def _changed_memory_sections(
     ]
 
 
+def _section_token_total(section: str, value: Any) -> int:
+    """Count selected frozen Snapshot tokens without guessing tokens for other domains."""
+    if section != "snapshot" or not isinstance(value, dict):
+        return 0
+    items = value.get("items")
+    if not isinstance(items, list):
+        return 0
+    return sum(
+        int(item.get("token_estimate") or 0)
+        for item in items
+        if isinstance(item, dict) and item.get("selected") is True
+    )
+
+
+def _conversation_section_states(
+    before: dict[str, Any],
+    after: dict[str, Any],
+) -> list[dict[str, Any]]:
+    states = []
+    for section in _CONVERSATION_MEMORY_SECTIONS:
+        before_tokens = _section_token_total(section, before.get(section))
+        after_tokens = _section_token_total(section, after.get(section))
+        states.append(
+            {
+                "key": section,
+                "changed": before.get(section) != after.get(section),
+                "before": before.get(section),
+                "after": after.get(section),
+                "token_before": before_tokens,
+                "token_after": after_tokens,
+                "token_delta": after_tokens - before_tokens,
+            }
+        )
+    return states
+
+
 async def get_conversation_memory_observability(
     db: AsyncSession,
     thread_id: str,
@@ -381,8 +437,7 @@ async def get_conversation_memory_observability(
     )
     root_runs = [run for run in runs if run.parent_run_id is None]
     run_to_root = {
-        run.id: (run.root_run_id or run.parent_run_id or run.id)
-        for run in runs
+        run.id: (run.root_run_id or run.parent_run_id or run.id) for run in runs
     }
     traces = list(
         (
@@ -426,11 +481,28 @@ async def get_conversation_memory_observability(
                 "status": root_run.status,
                 "changed": bool(changed_sections),
                 "changed_sections": changed_sections,
+                "sections": _conversation_section_states(
+                    previous_state,
+                    final_state,
+                ),
                 "before": previous_state,
                 "after": final_state,
+                "token_totals": {
+                    "before": sum(
+                        _section_token_total(section, previous_state.get(section))
+                        for section in _CONVERSATION_MEMORY_SECTIONS
+                    ),
+                    "after": sum(
+                        _section_token_total(section, final_state.get(section))
+                        for section in _CONVERSATION_MEMORY_SECTIONS
+                    ),
+                },
                 "trace_count": len(turn_traces),
                 "observed_at": observed_at,
             }
+        )
+        turns[-1]["token_totals"]["delta"] = (
+            turns[-1]["token_totals"]["after"] - turns[-1]["token_totals"]["before"]
         )
         previous_state = final_state
 
@@ -501,7 +573,11 @@ async def get_snapshot_item_source(
     )
     if current is None:
         raise HTTPException(status_code=404, detail="记忆来源不存在")
-    if item.version is not None and current_version is not None and item.version != current_version:
+    if (
+        item.version is not None
+        and current_version is not None
+        and item.version != current_version
+    ):
         raise HTTPException(status_code=404, detail="记忆来源不存在")
     return {
         "run_id": run.id,
@@ -537,12 +613,16 @@ async def _load_current_source(
         )
         if source is None:
             return None, None, False
-        return {
-            "role": source.role,
-            "status": source.status,
-            "content_text": source.content_text,
-            "content_blocks": source.content_blocks_json or [],
-        }, None, False
+        return (
+            {
+                "role": source.role,
+                "status": source.status,
+                "content_text": source.content_text,
+                "content_blocks": source.content_blocks_json or [],
+            },
+            None,
+            False,
+        )
     if item.source_kind == "artifact":
         source = await db.scalar(
             select(AgentArtifact)
@@ -555,11 +635,15 @@ async def _load_current_source(
         )
         if source is None:
             return None, None, False
-        return {
-            "artifact_type": source.artifact_type,
-            "content": source.content_json,
-            "metadata": source.metadata_json or {},
-        }, None, False
+        return (
+            {
+                "artifact_type": source.artifact_type,
+                "content": source.content_json,
+                "metadata": source.metadata_json or {},
+            },
+            None,
+            False,
+        )
     if item.source_kind == "conversation_summary":
         source = await db.scalar(
             select(AgentConversationSummary).where(
@@ -570,13 +654,17 @@ async def _load_current_source(
         )
         if source is None:
             return None, None, False
-        return {
-            "summary_text": source.summary_text,
-            "start_sequence": source.start_sequence,
-            "end_sequence": source.end_sequence,
-            "source_message_ids": source.source_message_ids_json or [],
-            "superseded_by_id": source.superseded_by_id,
-        }, source.version, source.superseded_by_id is not None
+        return (
+            {
+                "summary_text": source.summary_text,
+                "start_sequence": source.start_sequence,
+                "end_sequence": source.end_sequence,
+                "source_message_ids": source.source_message_ids_json or [],
+                "superseded_by_id": source.superseded_by_id,
+            },
+            source.version,
+            source.superseded_by_id is not None,
+        )
     if item.source_kind == "user_learning_mastery":
         try:
             mastery_id = int(source_id)
@@ -590,15 +678,19 @@ async def _load_current_source(
         )
         if source is None:
             return None, None, False
-        return {
-            "knowledge_point_id": source.knowledge_point_id,
-            "mastery_score": source.mastery_score,
-            "evidence_count": source.evidence_count,
-            "correct_count": source.correct_count,
-            "incorrect_count": source.incorrect_count,
-            "last_evidence_id": source.last_evidence_id,
-            "last_graded_at": utc_isoformat(source.last_graded_at),
-        }, source.evidence_count, False
+        return (
+            {
+                "knowledge_point_id": source.knowledge_point_id,
+                "mastery_score": source.mastery_score,
+                "evidence_count": source.evidence_count,
+                "correct_count": source.correct_count,
+                "incorrect_count": source.incorrect_count,
+                "last_evidence_id": source.last_evidence_id,
+                "last_graded_at": utc_isoformat(source.last_graded_at),
+            },
+            source.evidence_count,
+            False,
+        )
     if item.source_kind == "memory_item":
         source = await db.scalar(
             select(AgentMemoryItem).where(
@@ -606,17 +698,23 @@ async def _load_current_source(
                 AgentMemoryItem.user_id == user_id,
             )
         )
-        if source is None or (source.scope == "thread" and source.thread_id != thread_id):
+        if source is None or (
+            source.scope == "thread" and source.thread_id != thread_id
+        ):
             return None, None, False
         version = int((source.metadata_json or {}).get("source_memory_event_id") or 0)
-        return {
-            "scope": source.scope,
-            "item_type": source.item_type,
-            "item_key": source.item_key,
-            "status": source.status,
-            "content_text": source.content_text,
-            "metadata": source.metadata_json or {},
-        }, version, source.status != "active"
+        return (
+            {
+                "scope": source.scope,
+                "item_type": source.item_type,
+                "item_key": source.item_key,
+                "status": source.status,
+                "content_text": source.content_text,
+                "metadata": source.metadata_json or {},
+            },
+            version,
+            source.status != "active",
+        )
     if item.source_kind == "preference_candidate":
         source = await db.scalar(
             select(AgentPreferenceCandidate).where(
@@ -624,15 +722,21 @@ async def _load_current_source(
                 AgentPreferenceCandidate.user_id == user_id,
             )
         )
-        if source is None or (source.scope == "thread" and source.thread_id != thread_id):
+        if source is None or (
+            source.scope == "thread" and source.thread_id != thread_id
+        ):
             return None, None, False
-        return {
-            "scope": source.scope,
-            "preference_key": source.preference_key,
-            "preference_value": source.preference_value_json,
-            "confidence": source.confidence,
-            "status": source.status,
-            "source_kind": source.source_kind,
-            "source_id": source.source_id,
-        }, 1, source.status in {"invalidated", "rejected"}
+        return (
+            {
+                "scope": source.scope,
+                "preference_key": source.preference_key,
+                "preference_value": source.preference_value_json,
+                "confidence": source.confidence,
+                "status": source.status,
+                "source_kind": source.source_kind,
+                "source_id": source.source_id,
+            },
+            1,
+            source.status in {"invalidated", "rejected"},
+        )
     return None, None, False
