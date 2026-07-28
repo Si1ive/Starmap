@@ -144,17 +144,19 @@ function MemoryIndexResolver({ runId, value }: { runId: string; value: unknown }
   )
 }
 
-function MemorySection({ section, runId }: { section: AdminConversationMemorySection; runId: string }) {
+function MemorySectionPanel({ section, runId }: { section: AdminConversationMemorySection; runId: string }) {
   return (
-    <details className={`conversation-memory-section ${section.changed ? 'is-changed' : 'is-unchanged'}`} open={section.changed}>
-      <summary>
-        <span className="conversation-memory-section__signal" />
-        <strong>{sectionLabels[section.key] || section.key}</strong>
-        <small>{section.changed ? '本轮发生变化' : '本轮未变化'}</small>
+    <section className={`conversation-memory-panel ${section.changed ? 'is-changed' : 'is-unchanged'}`}>
+      <header className="conversation-memory-panel__heading">
+        <div>
+          <span className="conversation-memory-section__signal" />
+          <strong>{sectionLabels[section.key] || section.key}</strong>
+          <small>{section.changed ? '本轮内容发生变化' : '本轮内容未变化'}</small>
+        </div>
         <em>
-          {section.token_before} → {section.token_after} tokens ({tokenDelta(section.token_delta)})
+          估算 {section.token_before} → {section.token_after} tokens · {tokenDelta(section.token_delta)}
         </em>
-      </summary>
+      </header>
       <div className="conversation-memory-section__body">
         <div>
           <Text strong>本轮开始前</Text>
@@ -166,11 +168,14 @@ function MemorySection({ section, runId }: { section: AdminConversationMemorySec
         </div>
       </div>
       {section.key === 'snapshot' ? <MemoryIndexResolver runId={runId} value={section.after} /> : null}
-    </details>
+    </section>
   )
 }
 
 function TurnMemoryChange({ turn }: { turn: AdminConversationMemoryTurn }) {
+  const [selectedSectionKey, setSelectedSectionKey] = useState<string | null>(null)
+  const selectedSection = turn.sections.find((section) => section.key === selectedSectionKey) || null
+
   return (
     <Collapse
       className={`conversation-memory-turn ${turn.changed ? 'is-changed' : 'is-unchanged'}`}
@@ -191,10 +196,58 @@ function TurnMemoryChange({ turn }: { turn: AdminConversationMemoryTurn }) {
             </div>
           ),
           children: (
-            <div className="conversation-memory-section-list" aria-label="全部上下文记忆域">
-              {turn.sections.map((section) => (
-                <MemorySection key={section.key} runId={turn.root_run_id} section={section} />
-              ))}
+            <div className="conversation-memory-workbench">
+              <div className="conversation-memory-total" aria-label="本轮总上下文">
+                <div>
+                  <span>总上下文</span>
+                  <strong>
+                    {turn.token_totals.before} → {turn.token_totals.after}
+                  </strong>
+                  <em>估算 tokens</em>
+                </div>
+                <div className="conversation-memory-total__delta">
+                  <span>{tokenDelta(turn.token_totals.delta)}</span>
+                  <small>
+                    {turn.changed
+                      ? turn.token_totals.delta === 0
+                        ? '内容变化 · token 持平'
+                        : `${turn.changed_sections.length} 个模块变化`
+                      : '内容与 token 均未变化'}
+                  </small>
+                </div>
+              </div>
+
+              <div className="conversation-memory-module-rail" aria-label="上下文记忆模块">
+                {turn.sections.map((section) => {
+                  const selected = selectedSectionKey === section.key
+                  return (
+                    <button
+                      aria-expanded={selected}
+                      className={`conversation-memory-module ${section.changed ? 'is-changed' : 'is-unchanged'} ${selected ? 'is-selected' : ''}`}
+                      key={section.key}
+                      onClick={() => setSelectedSectionKey(selected ? null : section.key)}
+                      type="button"
+                    >
+                      <span>
+                        <i className="conversation-memory-section__signal" />
+                        {sectionLabels[section.key] || section.key}
+                      </span>
+                      <strong>{tokenDelta(section.token_delta)}</strong>
+                      <small>
+                        {section.token_before} → {section.token_after} tokens
+                      </small>
+                    </button>
+                  )
+                })}
+              </div>
+
+              {selectedSection ? (
+                <MemorySectionPanel runId={turn.root_run_id} section={selectedSection} />
+              ) : (
+                <div className="conversation-memory-panel-placeholder">
+                  选择上方一个记忆模块，查看本轮开始前与结束后的具体上下文。
+                </div>
+              )}
               {!turn.trace_count ? (
                 <Alert
                   description="六个记忆域仍完整展示为沿用状态；这里不把步骤入参、模型输出或派生任务状态算作记忆。"
@@ -254,7 +307,7 @@ const RunMemoryDrawer = ({ open, threadId, onClose }: RunMemoryDrawerProps) => {
             <div>
               <Text type="secondary">{data.thread.id}</Text>
               <Title level={4}>{data.thread.title}</Title>
-              <Text>每一轮固定展示全部六个记忆域：高亮表示变化，低对比表示沿用。</Text>
+              <Text>展开一轮后，先核对总上下文，再从横向模块轨道选择要查看的变化。</Text>
             </div>
             <div className="conversation-memory-hero__count" aria-label="记忆变化轮次">
               <HistoryOutlined />
@@ -264,8 +317,8 @@ const RunMemoryDrawer = ({ open, threadId, onClose }: RunMemoryDrawerProps) => {
           </header>
 
           <Alert
-            description="每轮同时显示总 token 的 before、after 与增减量。Snapshot 中的 source 索引可受控回查数据库真实内容。"
-            message="变化是一种高亮信号，不再决定某个记忆域是否展示"
+            description="Snapshot 使用已选入上下文的持久化 token；其余记忆模块使用与 Context Builder 一致的确定性估算。内容变化但 token 总量相同时会明确标记为持平。"
+            message="模块内容变化与 token 净增减是两个独立信号"
             showIcon
             type="warning"
           />

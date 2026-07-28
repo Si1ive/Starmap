@@ -391,8 +391,8 @@ async def test_conversation_memory_compares_turns_instead_of_event_local_flags(
         section["changed"] is False for section in payload["turns"][1]["sections"][1:]
     )
     assert payload["turns"][1]["token_totals"] == {
-        "before": 0,
-        "after": 0,
+        "before": 4,
+        "after": 4,
         "delta": 0,
     }
     assert payload["changed_turn_count"] == 2
@@ -422,6 +422,48 @@ def test_conversation_section_states_include_selected_snapshot_token_delta():
     assert snapshot["token_before"] == 12
     assert snapshot["token_after"] == 25
     assert snapshot["token_delta"] == 13
+
+
+def test_conversation_section_states_estimate_changed_non_snapshot_content():
+    from app.modules.agent.admin_memory import _conversation_section_states
+
+    before = _conversation_memory_state_for_test([])
+    before["summaries"] = [
+        {"summary_text": "二分查找需要保持有序区间。"},
+    ]
+    after = _conversation_memory_state_for_test([])
+    after["summaries"] = [
+        {
+            "summary_text": (
+                "二分查找每轮比较中点，并根据比较结果缩小为左半区间或右半区间。"
+                "循环结束后还要检查边界条件、空数组以及目标值不存在的情况。"
+            )
+        },
+    ]
+
+    summaries = next(
+        section
+        for section in _conversation_section_states(before, after)
+        if section["key"] == "summaries"
+    )
+
+    assert summaries["changed"] is True
+    assert summaries["token_before"] > 0
+    assert summaries["token_after"] > summaries["token_before"]
+    assert summaries["token_delta"] == (
+        summaries["token_after"] - summaries["token_before"]
+    )
+
+
+def test_conversation_section_states_keep_empty_domains_at_zero_tokens():
+    from app.modules.agent.admin_memory import _conversation_section_states
+
+    empty = _conversation_memory_state_for_test([])
+
+    assert all(
+        section["token_before"] == section["token_after"] == 0
+        for section in _conversation_section_states(empty, empty)
+    )
 
 
 def _conversation_memory_state_for_test(items):

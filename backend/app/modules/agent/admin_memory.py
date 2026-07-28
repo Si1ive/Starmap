@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -9,6 +10,7 @@ from fastapi import HTTPException
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .context_builder import ThreadContextBuilder
 from .models import (
     AgentArtifact,
     AgentConversationSummary,
@@ -379,17 +381,25 @@ def _changed_memory_sections(
 
 
 def _section_token_total(section: str, value: Any) -> int:
-    """Count selected frozen Snapshot tokens without guessing tokens for other domains."""
-    if section != "snapshot" or not isinstance(value, dict):
+    """Estimate one displayed memory domain, preserving frozen Snapshot budget tokens."""
+    if value is None or value == {} or value == []:
         return 0
-    items = value.get("items")
-    if not isinstance(items, list):
-        return 0
-    return sum(
-        int(item.get("token_estimate") or 0)
-        for item in items
-        if isinstance(item, dict) and item.get("selected") is True
+    if section == "snapshot" and isinstance(value, dict):
+        items = value.get("items")
+        if isinstance(items, list):
+            return sum(
+                int(item.get("token_estimate") or 0)
+                for item in items
+                if isinstance(item, dict) and item.get("selected") is True
+            )
+    serialized = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
     )
+    return ThreadContextBuilder.estimate_tokens(serialized)
 
 
 def _conversation_section_states(
