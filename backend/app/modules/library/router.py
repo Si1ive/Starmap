@@ -1,10 +1,12 @@
-"""Private learner library upload, listing, and original PDF reading."""
+"""Private learner library ingestion, reading, retrieval control, and deletion."""
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,12 +15,17 @@ from app.db import get_db
 from app.models.mysql_models import CorpusFile, Document
 from app.modules.corpus.service import CorpusApplicationService
 from app.modules.identity.dependencies import (
+    require_csrf_session,
     require_csrf_upload_session,
     require_current_session,
 )
 from app.modules.identity.session import AuthenticatedSession
 
 router = APIRouter(prefix="/app/library", tags=["用户资料库"])
+
+
+class UpdateSourceRetrievalRequest(BaseModel):
+    enabled: bool
 
 
 def _visible_to(user_id: object):
@@ -37,7 +44,7 @@ async def list_library_sources(
     current: AuthenticatedSession = Depends(require_current_session),
     db: AsyncSession = Depends(get_db),
 ):
-    conditions = [_visible_to(current.user.id)]
+    conditions = [_visible_to(current.user.id), CorpusFile.deleted_at.is_(None)]
     if origin == "platform":
         conditions.append(CorpusFile.owner_user_id.is_(None))
     elif origin == "personal":
@@ -50,9 +57,12 @@ async def list_library_sources(
         .outerjoin(Document, Document.corpus_file_id == CorpusFile.id)
         .where(and_(*conditions))
     )
-    total = await db.scalar(
-        select(func.count()).select_from(CorpusFile).where(and_(*conditions))
-    ) or 0
+    total = (
+        await db.scalar(
+            select(func.count()).select_from(CorpusFile).where(and_(*conditions))
+        )
+        or 0
+    )
     rows = (
         await db.execute(
             query.order_by(CorpusFile.created_at.desc())
@@ -66,6 +76,7 @@ async def list_library_sources(
             "name": corpus_file.file_name,
             "origin": "personal" if corpus_file.owner_user_id else "platform",
             "status": corpus_file.status,
+            "retrieval_enabled": corpus_file.retrieval_enabled,
             "error_detail": corpus_file.error_detail,
             "file_size": corpus_file.file_size,
             "file_type": corpus_file.file_ext,
@@ -121,6 +132,56 @@ async def upload_library_sources(
     return ApiResponse(message="资料已提交入库", data=result)
 
 
+async def _owned_personal_source(
+    db: AsyncSession,
+    source_id: str,
+    user_id: object,
+) -> CorpusFile:
+    source = await db.scalar(
+        select(CorpusFile).where(
+            CorpusFile.id == source_id,
+            CorpusFile.owner_user_id == user_id,
+            CorpusFile.deleted_at.is_(None),
+        )
+    )
+    if source is None:
+        raise HTTPException(status_code=404, detail="个人资料不存在")
+    return source
+
+
+@router.patch("/sources/{source_id}/retrieval", response_model=ApiResponse)
+async def update_source_retrieval(
+    source_id: str,
+    payload: UpdateSourceRetrievalRequest,
+    current: AuthenticatedSession = Depends(require_csrf_session),
+    db: AsyncSession = Depends(get_db),
+):
+    source = await _owned_personal_source(db, source_id, current.user.id)
+    source.retrieval_enabled = payload.enabled
+    await db.flush()
+    return ApiResponse(
+        message="已允许 Agent 使用" if payload.enabled else "已暂停 Agent 使用",
+        data={"id": source.id, "retrieval_enabled": source.retrieval_enabled},
+    )
+
+
+@router.delete("/sources/{source_id}", response_model=ApiResponse)
+async def delete_library_source(
+    source_id: str,
+    current: AuthenticatedSession = Depends(require_csrf_session),
+    db: AsyncSession = Depends(get_db),
+):
+    source = await _owned_personal_source(db, source_id, current.user.id)
+    source.retrieval_enabled = False
+    source.deleted_at = datetime.now(UTC).replace(tzinfo=None)
+    source.status = "archived"
+    await db.flush()
+    return ApiResponse(
+        message="资料已删除并立即退出检索",
+        data={"id": source.id, "deletion_status": "completed"},
+    )
+
+
 @router.get("/documents/{document_id}/content")
 async def read_original_pdf(
     document_id: str,
@@ -134,6 +195,7 @@ async def read_original_pdf(
             .where(
                 Document.id == document_id,
                 _visible_to(current.user.id),
+                CorpusFile.deleted_at.is_(None),
                 CorpusFile.file_ext == "pdf",
             )
         )

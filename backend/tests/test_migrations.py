@@ -31,13 +31,17 @@ def test_migration_graph_has_single_head():
     config.set_main_option("script_location", str(backend_dir / "alembic"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_heads() == ["20260728_practice_snapshot"]
+    assert scripts.get_heads() == ["20260728_user_source_controls"]
 
 
 def test_vector_recall_trace_migration_adds_correlation_fields():
     backend_dir = Path(__file__).resolve().parents[1]
-    migration_path = backend_dir / "alembic" / "versions" / "20260728_vector_recall_trace.py"
-    spec = importlib.util.spec_from_file_location("vector_recall_trace_migration", migration_path)
+    migration_path = (
+        backend_dir / "alembic" / "versions" / "20260728_vector_recall_trace.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "vector_recall_trace_migration", migration_path
+    )
     assert spec is not None and spec.loader is not None
     migration = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(migration)
@@ -219,7 +223,9 @@ def test_agent_unlimited_tokens_migration_makes_limit_nullable():
 def test_agent_activity_migration_adds_public_event_type():
     backend_dir = Path(__file__).resolve().parents[1]
     migration_path = backend_dir / "alembic" / "versions" / "20260725_agent_activity.py"
-    spec = importlib.util.spec_from_file_location("agent_activity_migration", migration_path)
+    spec = importlib.util.spec_from_file_location(
+        "agent_activity_migration", migration_path
+    )
     assert spec is not None
     assert spec.loader is not None
     migration = importlib.util.module_from_spec(spec)
@@ -387,7 +393,9 @@ def test_memory_outbox_error_migration_adds_safe_failure_summary():
 def test_memory_trace_migration_creates_before_after_state_table():
     backend_dir = Path(__file__).resolve().parents[1]
     migration_path = backend_dir / "alembic" / "versions" / "20260727_memory_trace.py"
-    spec = importlib.util.spec_from_file_location("memory_trace_migration", migration_path)
+    spec = importlib.util.spec_from_file_location(
+        "memory_trace_migration", migration_path
+    )
     assert spec is not None
     assert spec.loader is not None
     migration = importlib.util.module_from_spec(spec)

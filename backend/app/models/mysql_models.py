@@ -707,6 +707,12 @@ class CorpusFile(Base):
         Enum("pending", "parsing", "parsed", "extracting", "indexed", "failed", "archived"),
         default="pending", comment="处理状态"
     )
+    retrieval_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, nullable=False, comment="是否允许进入 Agent 检索"
+    )
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True, comment="用户资料逻辑删除时间"
+    )
     error_detail: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="失败原因")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -716,6 +722,12 @@ class CorpusFile(Base):
     __table_args__ = (
         Index("idx_corpus_files_sha256", "sha256"),
         Index("idx_corpus_files_owner", "owner_user_id", "created_at"),
+        Index(
+            "idx_corpus_files_availability",
+            "owner_user_id",
+            "deleted_at",
+            "retrieval_enabled",
+        ),
         Index("idx_corpus_files_status", "status"),
         Index("idx_corpus_files_source_type", "source_type"),
         Index("idx_corpus_files_doc_type", "doc_type"),

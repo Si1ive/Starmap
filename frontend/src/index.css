@@ -4287,7 +4287,7 @@ summary:focus-visible {
   align-items: center;
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(280px, 1fr) 140px minmax(220px, 0.7fr) 32px;
+  grid-template-columns: minmax(280px, 1fr) 140px minmax(220px, 0.7fr) minmax(40px, auto);
 }
 
 .source-table__header {
@@ -4346,7 +4346,13 @@ summary:focus-visible {
   width: 100px;
 }
 
-.source-row > button {
+.source-row__actions {
+  display: flex;
+  gap: 2px;
+  justify-content: flex-end;
+}
+
+.source-row__actions .icon-button {
   align-items: center;
   background: transparent;
   border-radius: 5px;
@@ -4357,7 +4363,7 @@ summary:focus-visible {
   width: 32px;
 }
 
-.source-row > button:disabled {
+.source-row__actions .icon-button:disabled {
   color: var(--line-strong);
 }
 
@@ -4831,7 +4837,7 @@ summary:focus-visible {
   }
 
   .source-row {
-    grid-template-columns: minmax(220px, 1fr) 120px 32px;
+    grid-template-columns: minmax(220px, 1fr) 120px minmax(96px, auto);
   }
 
   .source-row__detail {
@@ -5507,7 +5513,7 @@ summary:focus-visible {
   .source-row {
     align-items: start;
     gap: 8px;
-    grid-template-columns: minmax(0, 1fr) 32px;
+    grid-template-columns: minmax(0, 1fr) auto;
     min-height: 92px;
     padding: 12px 4px;
   }
@@ -12506,7 +12512,7 @@ summary:focus-visible {
 
   .source-table__header,
   .source-row {
-    grid-template-columns: minmax(220px, 1fr) 120px 32px;
+    grid-template-columns: minmax(220px, 1fr) 120px minmax(96px, auto);
   }
 }
 
@@ -12589,7 +12595,7 @@ summary:focus-visible {
   }
 
   .source-row {
-    grid-template-columns: minmax(0, 1fr) 32px;
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .source-row__origin {

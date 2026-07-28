@@ -51,7 +51,11 @@ class CompleteTimerRequest(BaseModel):
 
 
 def _visible_document(user_id: object):
-    return or_(CorpusFile.owner_user_id.is_(None), CorpusFile.owner_user_id == user_id)
+    return and_(
+        or_(CorpusFile.owner_user_id.is_(None), CorpusFile.owner_user_id == user_id),
+        CorpusFile.deleted_at.is_(None),
+        CorpusFile.retrieval_enabled.is_(True),
+    )
 
 
 def _normalize_answer(value: str) -> str:

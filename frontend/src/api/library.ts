@@ -22,6 +22,7 @@ export interface LibrarySource {
   name: string;
   origin: "platform" | "personal";
   status: LibrarySourceStatus;
+  retrieval_enabled: boolean;
   error_detail: string | null;
   file_size: number | null;
   file_type: string;
@@ -67,4 +68,48 @@ export async function uploadLibrarySources(files: File[]): Promise<void> {
   if (!response.ok) {
     throw new Error(payload.detail || payload.message || "资料入库失败");
   }
+}
+
+async function mutateLibrarySource(
+  path: string,
+  method: "PATCH" | "DELETE",
+  body: Record<string, unknown>,
+): Promise<void> {
+  const current = await fetchCurrentSession();
+  if (!current) throw new Error("请先登录后再管理资料");
+  const response = await fetch(`${LIBRARY_BASE}${path}`, {
+    method,
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "X-CSRF-Token": current.csrf_token,
+    },
+    body: JSON.stringify(body),
+  });
+  const payload = (await response
+    .json()
+    .catch(() => ({}))) as ApiEnvelope<unknown>;
+  if (!response.ok) {
+    throw new Error(payload.detail || payload.message || "资料操作失败");
+  }
+}
+
+export function setLibrarySourceRetrieval(
+  sourceId: string,
+  enabled: boolean,
+): Promise<void> {
+  return mutateLibrarySource(
+    `/sources/${encodeURIComponent(sourceId)}/retrieval`,
+    "PATCH",
+    { enabled },
+  );
+}
+
+export function deleteLibrarySource(sourceId: string): Promise<void> {
+  return mutateLibrarySource(
+    `/sources/${encodeURIComponent(sourceId)}`,
+    "DELETE",
+    {},
+  );
 }

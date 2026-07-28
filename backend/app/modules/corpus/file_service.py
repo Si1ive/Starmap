@@ -203,6 +203,7 @@ class CorpusFileService:
             select(CorpusFile).where(
                 CorpusFile.sha256 == sha256,
                 owner_condition,
+                CorpusFile.deleted_at.is_(None),
             )
         )
         existing_file = existing.scalar_one_or_none()

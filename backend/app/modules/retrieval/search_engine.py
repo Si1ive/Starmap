@@ -302,7 +302,16 @@ class RetrievalSearchEngine:
             select(RetrievalSegment)
             .outerjoin(Document, Document.id == RetrievalSegment.document_id)
             .outerjoin(CorpusFile, CorpusFile.id == Document.corpus_file_id)
-            .where(RetrievalSegment.id.in_(segment_ids))
+            .where(
+                RetrievalSegment.id.in_(segment_ids),
+                or_(
+                    RetrievalSegment.document_id.is_(None),
+                    and_(
+                        CorpusFile.deleted_at.is_(None),
+                        CorpusFile.retrieval_enabled.is_(True),
+                    ),
+                ),
+            )
         )
         if user_id is not None:
             segment_query = segment_query.where(

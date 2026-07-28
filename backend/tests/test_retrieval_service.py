@@ -92,9 +92,7 @@ async def test_outline_expansion_keeps_explicit_chapter_scope_strict(monkeypatch
         entity_type="question",
     )
 
-    assert service.search.await_args.kwargs["chapter_ids"] == [
-        "cchap_explicit_03"
-    ]
+    assert service.search.await_args.kwargs["chapter_ids"] == ["cchap_explicit_03"]
     assert service.search.await_args.kwargs["subject_id"] is None
 
 
@@ -163,7 +161,12 @@ async def test_hydrate_results_preserves_hit_order_and_adds_source_display_name(
     )
     db = SimpleNamespace(
         execute=AsyncMock(
-            side_effect=[segment_result, document_result, chapter_result, question_result]
+            side_effect=[
+                segment_result,
+                document_result,
+                chapter_result,
+                question_result,
+            ]
         ),
     )
 
@@ -286,7 +289,12 @@ async def test_hydrate_results_falls_back_to_title_and_handles_missing_source():
     )
     db = SimpleNamespace(
         execute=AsyncMock(
-            side_effect=[segment_result, document_result, chapter_result, knowledge_result]
+            side_effect=[
+                segment_result,
+                document_result,
+                chapter_result,
+                knowledge_result,
+            ]
         ),
     )
 
@@ -362,6 +370,8 @@ async def test_hydrate_results_filters_private_documents_by_current_user():
     statement = str(db.execute.await_args.args[0])
     assert "corpus_files.owner_user_id IS NULL" in statement
     assert "corpus_files.owner_user_id =" in statement
+    assert "corpus_files.deleted_at IS NULL" in statement
+    assert "corpus_files.retrieval_enabled IS true" in statement
 
 
 @pytest.mark.asyncio

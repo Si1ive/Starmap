@@ -6,7 +6,12 @@ from uuid import UUID
 import pytest
 from fastapi import HTTPException, UploadFile
 
-from app.modules.library.router import upload_library_sources
+from app.modules.library.router import (
+    UpdateSourceRetrievalRequest,
+    delete_library_source,
+    update_source_retrieval,
+    upload_library_sources,
+)
 
 
 @pytest.mark.asyncio
@@ -60,3 +65,62 @@ async def test_user_library_upload_binds_owner_and_starts_full_ingestion(monkeyp
     assert response.data["parse_runs"] == [
         {"run_id": "run-1", "status": "running"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_personal_source_can_leave_retrieval_without_being_deleted():
+    source = SimpleNamespace(id="source-1", retrieval_enabled=True)
+    db = AsyncMock()
+    db.scalar.return_value = source
+
+    response = await update_source_retrieval(
+        source_id=source.id,
+        payload=UpdateSourceRetrievalRequest(enabled=False),
+        current=SimpleNamespace(user=SimpleNamespace(id=UUID(int=1))),
+        db=db,
+    )
+
+    assert source.retrieval_enabled is False
+    assert response.data == {"id": source.id, "retrieval_enabled": False}
+    db.flush.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_personal_source_delete_immediately_disables_retrieval():
+    source = SimpleNamespace(
+        id="source-1",
+        retrieval_enabled=True,
+        deleted_at=None,
+        status="indexed",
+    )
+    db = AsyncMock()
+    db.scalar.return_value = source
+
+    response = await delete_library_source(
+        source_id=source.id,
+        current=SimpleNamespace(user=SimpleNamespace(id=UUID(int=1))),
+        db=db,
+    )
+
+    assert source.retrieval_enabled is False
+    assert source.deleted_at is not None
+    assert source.status == "archived"
+    assert response.data == {"id": source.id, "deletion_status": "completed"}
+    db.flush.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_personal_source_mutation_uses_same_404_for_unowned_or_deleted_source():
+    db = AsyncMock()
+    db.scalar.return_value = None
+
+    with pytest.raises(HTTPException) as error:
+        await update_source_retrieval(
+            source_id="another-users-source",
+            payload=UpdateSourceRetrievalRequest(enabled=False),
+            current=SimpleNamespace(user=SimpleNamespace(id=UUID(int=1))),
+            db=db,
+        )
+
+    assert error.value.status_code == 404
+    assert error.value.detail == "个人资料不存在"

@@ -9,12 +9,20 @@ import {
   Filter,
   FolderOpen,
   Loader2,
+  Pause,
+  Play,
   RefreshCw,
   Search,
+  Trash2,
   Upload,
   X,
 } from "lucide-react";
-import { listLibrarySources, uploadLibrarySources } from "../api/library";
+import {
+  deleteLibrarySource,
+  listLibrarySources,
+  setLibrarySourceRetrieval,
+  uploadLibrarySources,
+} from "../api/library";
 import type { LibrarySource } from "../api/library";
 import {
   Button,
@@ -51,6 +59,7 @@ export default function SourcesPage() {
   const [sources, setSources] = useState<LibrarySource[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [mutatingId, setMutatingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [readerSource, setReaderSource] = useState<LibrarySource | null>(null);
 
@@ -130,6 +139,37 @@ export default function SourcesPage() {
     setUploadOpen(false);
   };
 
+  const toggleRetrieval = async (source: LibrarySource) => {
+    if (mutatingId) return;
+    setMutatingId(source.id);
+    try {
+      await setLibrarySourceRetrieval(source.id, !source.retrieval_enabled);
+      await loadSources(true);
+    } catch (mutationError) {
+      setError(
+        mutationError instanceof Error ? mutationError.message : "资料授权修改失败",
+      );
+    } finally {
+      setMutatingId(null);
+    }
+  };
+
+  const removeSource = async (source: LibrarySource) => {
+    if (mutatingId || !window.confirm(`确认删除“${source.name}”？删除后会立即退出 Agent 检索。`)) return;
+    setMutatingId(source.id);
+    try {
+      await deleteLibrarySource(source.id);
+      if (readerSource?.id === source.id) setReaderSource(null);
+      await loadSources(true);
+    } catch (mutationError) {
+      setError(
+        mutationError instanceof Error ? mutationError.message : "资料删除失败",
+      );
+    } finally {
+      setMutatingId(null);
+    }
+  };
+
   return (
     <div className="page page--wide sources-page">
       <PageHeading
@@ -191,7 +231,7 @@ export default function SourcesPage() {
           <span>资料</span>
           <span>来源</span>
           <span>入库状态</span>
-          <span />
+          <span>操作</span>
         </div>
         {!loading &&
           filteredSources.map((source) => (
@@ -221,31 +261,56 @@ export default function SourcesPage() {
                   className={`source-status source-status--${source.status}`}
                 />
                 {source.error_detail || statusCopy[source.status]}
+                {source.origin === "personal" && !source.retrieval_enabled
+                  ? " · 已暂停 Agent 使用"
+                  : ""}
               </span>
-              <button
-                aria-label={`打开 ${source.name}`}
-                disabled={!source.read_url}
-                onClick={() => setReaderSource(source)}
-                title={
-                  source.read_url ? "阅读原始 PDF" : "原始 PDF 尚未完成入库"
-                }
-                type="button"
-              >
-                {source.read_url ? (
-                  <BookOpen size={18} />
-                ) : (
-                  <Loader2
-                    className={
-                      ["pending", "parsing", "parsed", "extracting"].includes(
-                        source.status,
-                      )
-                        ? "spin"
-                        : ""
-                    }
-                    size={17}
-                  />
-                )}
-              </button>
+              <span className="source-row__actions">
+                <IconButton
+                  disabled={!source.read_url}
+                  label={source.read_url ? `阅读 ${source.name}` : "原始 PDF 尚未完成入库"}
+                  onClick={() => setReaderSource(source)}
+                >
+                  {source.read_url ? (
+                    <BookOpen size={18} />
+                  ) : (
+                    <Loader2
+                      className={
+                        ["pending", "parsing", "parsed", "extracting"].includes(
+                          source.status,
+                        )
+                          ? "spin"
+                          : ""
+                      }
+                      size={17}
+                    />
+                  )}
+                </IconButton>
+                {source.origin === "personal" ? (
+                  <>
+                    <IconButton
+                      disabled={mutatingId === source.id}
+                      label={source.retrieval_enabled ? "暂停 Agent 使用" : "允许 Agent 使用"}
+                      onClick={() => void toggleRetrieval(source)}
+                    >
+                      {mutatingId === source.id ? (
+                        <Loader2 className="spin" size={17} />
+                      ) : source.retrieval_enabled ? (
+                        <Pause size={17} />
+                      ) : (
+                        <Play size={17} />
+                      )}
+                    </IconButton>
+                    <IconButton
+                      disabled={mutatingId === source.id}
+                      label={`删除 ${source.name}`}
+                      onClick={() => void removeSource(source)}
+                    >
+                      <Trash2 size={17} />
+                    </IconButton>
+                  </>
+                ) : null}
+              </span>
             </div>
           ))}
         {!loading && !filteredSources.length ? (
