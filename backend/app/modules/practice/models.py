@@ -90,6 +90,7 @@ class PracticeAnswer(Base):
     user_answer: Mapped[str] = mapped_column(Text, nullable=False, default="")
     is_correct: Mapped[Optional[bool]] = mapped_column(Boolean)
     awarded_score: Mapped[Optional[int]] = mapped_column(Integer)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     time_spent_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     saved_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow

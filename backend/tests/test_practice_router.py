@@ -4,7 +4,12 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from fastapi import HTTPException
 
-from app.modules.practice.router import _normalize_answer, _owned_session, _submit
+from app.modules.practice.router import (
+    _assert_answer_version,
+    _normalize_answer,
+    _owned_session,
+    _submit,
+)
 
 
 @pytest.mark.parametrize(
@@ -19,6 +24,19 @@ from app.modules.practice.router import _normalize_answer, _owned_session, _subm
 )
 def test_normalize_answer_supports_objective_question_formats(raw, expected):
     assert _normalize_answer(raw) == expected
+
+
+def test_answer_version_accepts_exact_version_and_zero_for_first_save():
+    _assert_answer_version(None, 0)
+    _assert_answer_version(SimpleNamespace(version=3), 3)
+
+
+def test_answer_version_rejects_stale_multi_device_save():
+    with pytest.raises(HTTPException) as error:
+        _assert_answer_version(SimpleNamespace(version=3), 2)
+
+    assert error.value.status_code == 409
+    assert "其他设备" in error.value.detail
 
 
 @pytest.mark.asyncio

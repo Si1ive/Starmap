@@ -3039,6 +3039,78 @@ summary:focus-visible {
   padding-top: 14px;
 }
 
+.practice-answer-conflict {
+  background: var(--paper);
+  border: 1px solid var(--amber);
+  border-left: 3px solid var(--amber);
+  bottom: 78px;
+  box-shadow: 0 14px 36px rgb(34 40 37 / 14%);
+  display: grid;
+  gap: 12px;
+  left: 50%;
+  max-width: min(720px, calc(100vw - 32px));
+  padding: 16px;
+  position: fixed;
+  transform: translateX(-50%);
+  width: 100%;
+  z-index: 30;
+}
+
+.practice-answer-conflict p {
+  color: var(--ink-soft);
+  font-size: 11px;
+  margin: 4px 0 0;
+}
+
+.practice-answer-conflict dl {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+}
+
+.practice-answer-conflict dl > div {
+  background: var(--paper-soft);
+  border: 1px solid var(--line);
+  min-width: 0;
+  padding: 10px;
+}
+
+.practice-answer-conflict dt {
+  color: var(--ink-faint);
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.practice-answer-conflict dd {
+  color: var(--ink);
+  margin: 5px 0 0;
+  max-height: 80px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+
+.practice-answer-conflict > div:last-child {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+@media (max-width: 640px) {
+  .practice-answer-conflict {
+    bottom: 70px;
+  }
+
+  .practice-answer-conflict dl {
+    grid-template-columns: 1fr;
+  }
+
+  .practice-answer-conflict > div:last-child {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
 .practice-footer {
   align-items: center;
   background: rgba(255, 255, 255, 0.96);

@@ -8,6 +8,16 @@ interface Envelope<T> {
   message?: string;
 }
 
+export class PracticeApiError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "PracticeApiError";
+    this.status = status;
+  }
+}
+
 export interface PracticePaper {
   document_id: string;
   title: string;
@@ -28,6 +38,7 @@ export interface PracticeQuestion {
   question_no: string | null;
   chapter_id: string | null;
   user_answer: string;
+  version: number;
   time_spent_seconds: number;
   is_correct: boolean | null;
   awarded_score: number | null;
@@ -86,7 +97,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   const envelope = (await response.json().catch(() => ({}))) as Envelope<T>;
   if (!response.ok || envelope.data === undefined) {
-    throw new Error(envelope.detail || envelope.message || "练习服务请求失败");
+    throw new PracticeApiError(
+      envelope.detail || envelope.message || "练习服务请求失败",
+      response.status,
+    );
   }
   return envelope.data;
 }
@@ -129,12 +143,17 @@ export function savePracticeAnswer(
   questionId: string,
   answer: string,
   timeSpentSeconds: number,
+  expectedVersion: number,
 ) {
-  return request<{ saved_at: string }>(
+  return request<{ saved_at: string; version: number }>(
     `/sessions/${encodeURIComponent(sessionId)}/answers/${encodeURIComponent(questionId)}`,
     {
       method: "PUT",
-      body: JSON.stringify({ answer, time_spent_seconds: timeSpentSeconds }),
+      body: JSON.stringify({
+        answer,
+        time_spent_seconds: timeSpentSeconds,
+        expected_version: expectedVersion,
+      }),
     },
   );
 }

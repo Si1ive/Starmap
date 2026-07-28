@@ -38,6 +38,7 @@ class CreatePracticeSessionRequest(BaseModel):
 class SavePracticeAnswerRequest(BaseModel):
     answer: str = Field("", max_length=20000)
     time_spent_seconds: int = Field(0, ge=0, le=21600)
+    expected_version: int = Field(0, ge=0)
 
 
 class StartTimerRequest(BaseModel):
@@ -64,6 +65,17 @@ def _normalize_answer(value: str) -> str:
         return compact[:1]
     aliases = {"正确": "TRUE", "对": "TRUE", "错误": "FALSE", "错": "FALSE"}
     return aliases.get(compact, compact)
+
+
+def _assert_answer_version(
+    answer: PracticeAnswer | None, expected_version: int
+) -> None:
+    current_version = answer.version if answer is not None else 0
+    if current_version != expected_version:
+        raise HTTPException(
+            status_code=409,
+            detail="答案已在其他设备更新，请选择使用服务器答案或覆盖保存",
+        )
 
 
 async def _owned_session(
@@ -168,6 +180,7 @@ async def _session_payload(db: AsyncSession, session: PracticeSession) -> dict:
                 "question_no": (link.snapshot_json or {}).get("question_no"),
                 "chapter_id": (link.snapshot_json or {}).get("chapter_id"),
                 "user_answer": answer.user_answer if answer else "",
+                "version": answer.version if answer else 0,
                 "time_spent_seconds": answer.time_spent_seconds if answer else 0,
                 "is_correct": answer.is_correct if submitted and answer else None,
                 "awarded_score": answer.awarded_score if submitted and answer else None,
@@ -343,15 +356,23 @@ async def save_practice_answer(
             PracticeAnswer.question_id == question_id,
         )
     )
+    _assert_answer_version(answer, payload.expected_version)
     if answer is None:
-        answer = PracticeAnswer(session_id=session.id, question_id=question_id)
+        answer = PracticeAnswer(
+            session_id=session.id,
+            question_id=question_id,
+            version=1,
+        )
         db.add(answer)
+    else:
+        answer.version += 1
     answer.user_answer = payload.answer
     answer.time_spent_seconds = payload.time_spent_seconds
     answer.saved_at = datetime.utcnow()
     await db.commit()
     return ApiResponse(
-        message="答案已保存", data={"saved_at": answer.saved_at.isoformat()}
+        message="答案已保存",
+        data={"saved_at": answer.saved_at.isoformat(), "version": answer.version},
     )
 
 

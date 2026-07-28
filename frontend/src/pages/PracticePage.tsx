@@ -13,6 +13,7 @@ import {
 import { useNavigate, useParams } from "react-router-dom";
 import {
   getPracticeSession,
+  PracticeApiError,
   savePracticeAnswer,
   submitPracticeSession,
 } from "../api/practice";
@@ -26,6 +27,14 @@ function clock(seconds: number) {
   return `${hours ? `${String(hours).padStart(2, "0")}:` : ""}${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
 }
 
+interface AnswerConflict {
+  questionId: string;
+  localAnswer: string;
+  serverAnswer: string;
+  serverVersion: number;
+  timeSpentSeconds: number;
+}
+
 export default function PracticePage() {
   const navigate = useNavigate();
   const { sessionId, view } = useParams();
@@ -36,6 +45,7 @@ export default function PracticePage() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [conflict, setConflict] = useState<AnswerConflict | null>(null);
   const questionStartedAt = useRef(Date.now());
 
   const load = useCallback(async () => {
@@ -69,9 +79,10 @@ export default function PracticePage() {
 
   const question = session?.questions[position];
   useEffect(() => {
+    if (conflict?.questionId === question?.id) return;
     setAnswer(question?.user_answer ?? "");
     questionStartedAt.current = Date.now();
-  }, [question?.id, question?.user_answer]);
+  }, [conflict?.questionId, question?.id, question?.user_answer]);
 
   const answeredCount = useMemo(
     () =>
@@ -80,15 +91,16 @@ export default function PracticePage() {
   );
 
   const save = async () => {
-    if (!session || !question || session.status !== "active") return;
+    if (!session || !question || session.status !== "active" || conflict) return false;
     setSaving(true);
     try {
-      await savePracticeAnswer(
+      const saved = await savePracticeAnswer(
         session.id,
         question.id,
         answer,
         question.time_spent_seconds +
           Math.floor((Date.now() - questionStartedAt.current) / 1000),
+        question.version,
       );
       setSession((current) =>
         current
@@ -96,22 +108,96 @@ export default function PracticePage() {
               ...current,
               questions: current.questions.map((item) =>
                 item.id === question.id
-                  ? { ...item, user_answer: answer }
+                  ? { ...item, user_answer: answer, version: saved.version }
                   : item,
               ),
             }
           : current,
       );
       questionStartedAt.current = Date.now();
+      setError(null);
+      return true;
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "答案保存失败");
+      if (saveError instanceof PracticeApiError && saveError.status === 409) {
+        try {
+          const latest = await getPracticeSession(session.id);
+          const serverQuestion = latest.questions.find((item) => item.id === question.id);
+          if (serverQuestion) {
+            setSession(latest);
+            setConflict({
+              questionId: question.id,
+              localAnswer: answer,
+              serverAnswer: serverQuestion.user_answer,
+              serverVersion: serverQuestion.version,
+              timeSpentSeconds:
+                question.time_spent_seconds +
+                Math.floor((Date.now() - questionStartedAt.current) / 1000),
+            });
+            setAnswer(answer);
+            setError(null);
+          }
+        } catch (reloadError) {
+          setError(
+            reloadError instanceof Error ? reloadError.message : "冲突版本读取失败",
+          );
+        }
+      } else {
+        setError(saveError instanceof Error ? saveError.message : "答案保存失败");
+      }
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const resolveConflict = async (keepLocal: boolean) => {
+    if (!session || !conflict) return;
+    if (!keepLocal) {
+      setAnswer(conflict.serverAnswer);
+      setConflict(null);
+      setError("已保留服务器上的较新答案");
+      return;
+    }
+    setSaving(true);
+    try {
+      const saved = await savePracticeAnswer(
+        session.id,
+        conflict.questionId,
+        conflict.localAnswer,
+        conflict.timeSpentSeconds,
+        conflict.serverVersion,
+      );
+      setSession((current) =>
+        current
+          ? {
+              ...current,
+              questions: current.questions.map((item) =>
+                item.id === conflict.questionId
+                  ? {
+                      ...item,
+                      user_answer: conflict.localAnswer,
+                      version: saved.version,
+                    }
+                  : item,
+              ),
+            }
+          : current,
+      );
+      setAnswer(conflict.localAnswer);
+      setConflict(null);
+      setError("已按你的选择用本机答案覆盖服务器版本");
+      questionStartedAt.current = Date.now();
+    } catch (conflictError) {
+      setError(
+        conflictError instanceof Error ? conflictError.message : "冲突处理失败，请重新加载",
+      );
     } finally {
       setSaving(false);
     }
   };
 
   const move = async (next: number) => {
-    await save();
+    if (!(await save())) return;
     setPosition(
       Math.max(0, Math.min((session?.question_count ?? 1) - 1, next)),
     );
@@ -121,7 +207,7 @@ export default function PracticePage() {
     if (!session || submitting || session.status !== "active") return;
     setSubmitting(true);
     try {
-      await save();
+      if (!(await save())) return;
       const result = await submitPracticeSession(session.id);
       setSession(result);
       navigate(`/practice/${session.id}/feedback`, { replace: true });
@@ -294,6 +380,33 @@ export default function PracticePage() {
           </section>
         </main>
       )}
+
+      {conflict ? (
+        <section aria-live="assertive" className="practice-answer-conflict" role="alertdialog">
+          <div>
+            <strong>检测到其他设备保存了这道题</strong>
+            <p>请选择保留哪个版本，系统不会静默覆盖较新的作答。</p>
+          </div>
+          <dl>
+            <div>
+              <dt>服务器答案</dt>
+              <dd>{conflict.serverAnswer || "未作答"}</dd>
+            </div>
+            <div>
+              <dt>本机答案</dt>
+              <dd>{conflict.localAnswer || "未作答"}</dd>
+            </div>
+          </dl>
+          <div>
+            <Button onClick={() => void resolveConflict(false)} tone="quiet">
+              使用服务器答案
+            </Button>
+            <Button disabled={saving} onClick={() => void resolveConflict(true)}>
+              用本机答案覆盖
+            </Button>
+          </div>
+        </section>
+      ) : null}
 
       <footer className="practice-footer">
         <Button
