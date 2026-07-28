@@ -1,0 +1,1 @@
+"""Authenticated exam practice domain."""
