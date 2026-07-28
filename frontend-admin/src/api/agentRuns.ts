@@ -218,6 +218,30 @@ export interface AdminMemoryTrace {
   created_at: string
 }
 
+export interface AdminConversationMemoryTurn {
+  turn_number: number
+  root_run_id: string
+  input_message: string | null
+  status: AgentRunStatus
+  changed: boolean
+  changed_sections: string[]
+  before: Record<string, unknown>
+  after: Record<string, unknown>
+  trace_count: number
+  observed_at: string
+}
+
+export interface AdminConversationMemory {
+  thread: {
+    id: string
+    user_id: string
+    title: string
+    status: string
+  }
+  turns: AdminConversationMemoryTurn[]
+  changed_turn_count: number
+}
+
 export interface AdminRunMemoryReplay {
   mode: 'frozen_snapshot_read_only'
   run: AdminRunMemoryObservability['run']
@@ -299,6 +323,12 @@ export const getAgentRunMemory = (
   runId: string
 ): Promise<ApiResponse<AdminRunMemoryObservability>> => {
   return adminClient.get(`/agent-runs/${runId}/memory`)
+}
+
+export const getConversationMemory = (
+  threadId: string
+): Promise<ApiResponse<AdminConversationMemory>> => {
+  return adminClient.get(`/agent-runs/threads/${threadId}/memory`)
 }
 
 export const replayAgentRunMemory = (runId: string): Promise<ApiResponse<AdminRunMemoryReplay>> => {

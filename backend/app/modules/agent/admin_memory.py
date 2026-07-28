@@ -22,6 +22,7 @@ from .models import (
     AgentPreferenceCandidate,
     AgentRun,
     AgentStep,
+    AgentThread,
     UserLearningMastery,
 )
 from .time_utils import utc_isoformat
@@ -324,6 +325,124 @@ async def get_run_memory_observability(
             }
             for trace in memory_traces
         ],
+    }
+
+
+_CONVERSATION_MEMORY_SECTIONS = (
+    "thread_state",
+    "snapshot",
+    "memory_events",
+    "memory_items",
+    "mastery",
+    "summaries",
+)
+
+
+def _conversation_memory_state(value: Any) -> dict[str, Any]:
+    """只保留管理员要比较的记忆域，排除 Outbox 等运维状态。"""
+    source = value if isinstance(value, dict) else {}
+    return {
+        section: redact_admin_value(source.get(section))
+        for section in _CONVERSATION_MEMORY_SECTIONS
+    }
+
+
+def _changed_memory_sections(
+    before: dict[str, Any],
+    after: dict[str, Any],
+) -> list[str]:
+    return [
+        section
+        for section in _CONVERSATION_MEMORY_SECTIONS
+        if before.get(section) != after.get(section)
+    ]
+
+
+async def get_conversation_memory_observability(
+    db: AsyncSession,
+    thread_id: str,
+) -> dict[str, Any]:
+    """按会话轮次投影连续记忆状态，避免把事件采样误判为“无变化”。"""
+    thread = await db.scalar(select(AgentThread).where(AgentThread.id == thread_id))
+    if thread is None:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    runs = list(
+        (
+            await db.execute(
+                select(AgentRun)
+                .where(
+                    AgentRun.thread_id == thread.id,
+                    AgentRun.user_id == thread.user_id,
+                )
+                .order_by(AgentRun.created_at, AgentRun.id)
+            )
+        ).scalars()
+    )
+    root_runs = [run for run in runs if run.parent_run_id is None]
+    run_to_root = {
+        run.id: (run.root_run_id or run.parent_run_id or run.id)
+        for run in runs
+    }
+    traces = list(
+        (
+            await db.execute(
+                select(AgentMemoryTrace)
+                .where(
+                    AgentMemoryTrace.thread_id == thread.id,
+                    AgentMemoryTrace.user_id == thread.user_id,
+                )
+                .order_by(AgentMemoryTrace.created_at, AgentMemoryTrace.id)
+            )
+        ).scalars()
+    )
+    traces_by_root: dict[str, list[AgentMemoryTrace]] = {
+        run.id: [] for run in root_runs
+    }
+    for trace in traces:
+        root_id = run_to_root.get(trace.run_id)
+        if root_id in traces_by_root:
+            traces_by_root[root_id].append(trace)
+
+    turns: list[dict[str, Any]] = []
+    previous_state = _conversation_memory_state({})
+    for turn_number, root_run in enumerate(root_runs, start=1):
+        turn_traces = traces_by_root.get(root_run.id, [])
+        if turn_traces:
+            # 第一轮从空状态开始，确保首次建立 Snapshot/线程状态可见；后续轮次
+            # 以前一轮最终状态为基线，捕获发生在相邻事件采样之间的真实变化。
+            final_state = _conversation_memory_state(turn_traces[-1].after_json)
+            changed_sections = _changed_memory_sections(previous_state, final_state)
+            observed_at = utc_isoformat(turn_traces[-1].created_at)
+        else:
+            final_state = previous_state
+            changed_sections = []
+            observed_at = utc_isoformat(root_run.completed_at or root_run.updated_at)
+        turns.append(
+            {
+                "turn_number": turn_number,
+                "root_run_id": root_run.id,
+                "input_message": root_run.input_message,
+                "status": root_run.status,
+                "changed": bool(changed_sections),
+                "changed_sections": changed_sections,
+                "before": previous_state,
+                "after": final_state,
+                "trace_count": len(turn_traces),
+                "observed_at": observed_at,
+            }
+        )
+        previous_state = final_state
+
+    return {
+        "thread": {
+            "id": thread.id,
+            "user_id": thread.user_id,
+            "title": thread.title,
+            "status": thread.status,
+        },
+        "turns": turns,
+        "changed_turn_count": sum(1 for turn in turns if turn["changed"]),
     }
 
 

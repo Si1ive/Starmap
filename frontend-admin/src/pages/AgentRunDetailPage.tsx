@@ -11,14 +11,12 @@ import {
   Spin,
   Tag,
   Typography,
-  message,
 } from 'antd'
 import {
   ArrowDownOutlined,
   ArrowLeftOutlined,
   BranchesOutlined,
   DatabaseOutlined,
-  PlayCircleOutlined,
   ReloadOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
@@ -205,7 +203,10 @@ function StepNode({ step, index }: { step: FlowStep; index: number }) {
           </div>
           <div>
             <Text strong>步骤输出与分支依据</Text>
-            <PlainDataBlock value={step.error ? { error: step.error } : step.output} maxHeight={320} />
+            <PlainDataBlock
+              value={step.error ? { error: step.error } : step.output}
+              maxHeight={320}
+            />
           </div>
           {step.relatedEvents.length ? (
             <div className="run-flow-evidence">
@@ -256,17 +257,7 @@ function StepNode({ step, index }: { step: FlowStep; index: number }) {
   )
 }
 
-function RunLane({
-  run,
-  events,
-  onInspectMemory,
-  onReplay,
-}: {
-  run: AdminAgentRun
-  events: AdminAgentRunEvent[]
-  onInspectMemory: (runId: string) => void
-  onReplay: (runId: string) => void
-}) {
+function RunLane({ run, events }: { run: AdminAgentRun; events: AdminAgentRunEvent[] }) {
   const steps = useMemo(() => buildFlowSteps(events), [events])
   return (
     <section className={`run-flow-lane is-${run.status}`}>
@@ -285,20 +276,6 @@ function RunLane({
             {run.workflow_key}@{run.workflow_version} · {run.id}
           </Text>
         </div>
-        <Space wrap>
-          <Button
-            icon={<DatabaseOutlined />}
-            onClick={() => onInspectMemory(run.id)}
-            size="small"
-          >
-            查看上下文与记忆
-          </Button>
-          {!run.parent_run_id ? (
-            <Button icon={<PlayCircleOutlined />} onClick={() => onReplay(run.id)} size="small">
-              重放本轮
-            </Button>
-          ) : null}
-        </Space>
       </div>
 
       <div className="run-flow-entry">
@@ -326,15 +303,7 @@ function RunLane({
   )
 }
 
-function TurnFlow({
-  turn,
-  onInspectMemory,
-  onReplay,
-}: {
-  turn: AdminAgentTurn
-  onInspectMemory: (runId: string) => void
-  onReplay: (runId: string) => void
-}) {
+function TurnFlow({ turn }: { turn: AdminAgentTurn }) {
   const orderedRuns = [...turn.runs].sort((a, b) => {
     if (a.id === turn.root_run_id) return -1
     if (b.id === turn.root_run_id) return 1
@@ -381,12 +350,7 @@ function TurnFlow({
                 <span>父运行把冻结上下文与独立请求交给业务工作流</span>
               </div>
             ) : null}
-            <RunLane
-              events={turn.events.filter((event) => event.run_id === run.id)}
-              onInspectMemory={onInspectMemory}
-              onReplay={onReplay}
-              run={run}
-            />
+            <RunLane events={turn.events.filter((event) => event.run_id === run.id)} run={run} />
           </div>
         ))}
       </div>
@@ -424,7 +388,7 @@ const AgentRunDetailPage = () => {
   const { id } = useParams() as { id: string }
   const [session, setSession] = useState<AdminAgentSessionDetail | null>(null)
   const [loading, setLoading] = useState(false)
-  const [memoryRunId, setMemoryRunId] = useState<string | null>(null)
+  const [memoryOpen, setMemoryOpen] = useState(false)
 
   const fetchSession = useCallback(async () => {
     if (!id) return
@@ -443,17 +407,12 @@ const AgentRunDetailPage = () => {
     void fetchSession()
   }, [fetchSession])
 
-  const handleReplay = async (runId: string) => {
-    try {
-      const response = await agentRunsApi.replayAgentRun(runId)
-      message.success(response.data?.message || `重放已启动：${response.data?.eval_run_id}`)
-    } catch {
-      message.error('重放请求失败')
-    }
-  }
-
   if (loading) {
-    return <div className="admin-page-loading"><Spin size="large" /></div>
+    return (
+      <div className="admin-page-loading">
+        <Spin size="large" />
+      </div>
+    )
   }
 
   if (!session) {
@@ -476,6 +435,9 @@ const AgentRunDetailPage = () => {
         <Button icon={<ReloadOutlined />} onClick={() => void fetchSession()}>
           刷新
         </Button>
+        <Button icon={<DatabaseOutlined />} onClick={() => setMemoryOpen(true)} type="primary">
+          查看上下文记忆变化
+        </Button>
       </div>
 
       <header className="agent-run-detail-hero">
@@ -487,10 +449,22 @@ const AgentRunDetailPage = () => {
           </Paragraph>
         </div>
         <div className="agent-run-detail-hero__stats">
-          <div><span>对话轮次</span><strong>{session.turn_count}</strong></div>
-          <div><span>Run</span><strong>{session.total_run_count}</strong></div>
-          <div><span>事件</span><strong>{session.event_count}</strong></div>
-          <div><span>最新状态</span><strong>{statusLabels[session.latest_status]}</strong></div>
+          <div>
+            <span>对话轮次</span>
+            <strong>{session.turn_count}</strong>
+          </div>
+          <div>
+            <span>Run</span>
+            <strong>{session.total_run_count}</strong>
+          </div>
+          <div>
+            <span>事件</span>
+            <strong>{session.event_count}</strong>
+          </div>
+          <div>
+            <span>最新状态</span>
+            <strong>{statusLabels[session.latest_status]}</strong>
+          </div>
         </div>
       </header>
 
@@ -517,25 +491,21 @@ const AgentRunDetailPage = () => {
                 <Tag color={statusColors[turn.status] || 'default'}>
                   {statusLabels[turn.status] || turn.status}
                 </Tag>
-                <strong>{(turn.user_message?.content || turn.input_message || '无输入').slice(0, 90)}</strong>
+                <strong>
+                  {(turn.user_message?.content || turn.input_message || '无输入').slice(0, 90)}
+                </strong>
                 <time>{dayjs(turn.created_at).format('MM-DD HH:mm:ss')}</time>
               </div>
             ),
-            children: (
-              <TurnFlow
-                onInspectMemory={setMemoryRunId}
-                onReplay={handleReplay}
-                turn={turn}
-              />
-            ),
+            children: <TurnFlow turn={turn} />,
           }))}
         />
       )}
 
       <RunMemoryDrawer
-        onClose={() => setMemoryRunId(null)}
-        open={Boolean(memoryRunId)}
-        runId={memoryRunId}
+        onClose={() => setMemoryOpen(false)}
+        open={memoryOpen}
+        threadId={session.thread_id}
       />
     </div>
   )

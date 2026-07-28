@@ -2,9 +2,9 @@
 
 ## 适用场景
 
-本分卷描述管理员如何从 Thread 级列表进入多轮问答详情，并查看某一 Run 的事件、审批、产物、
-冻结 Snapshot、source 当前状态、实际工具参数和模型调用。所有入口继承 `/api/v1/admin` 的管理员认证；
-冻结正文只在管理端按不可信纯文本展示，不能进入公共 SSE。
+本分卷描述管理员如何从 Thread 级列表进入多轮问答详情，并查看 Run 的事件、审批、产物，以及
+整个会话按轮次连续变化的上下文记忆。所有入口继承 `/api/v1/admin` 的管理员认证；记忆正文只在
+管理端按不可信纯文本展示，不能进入公共 SSE。
 
 ## 会话列表与单轮归并
 
@@ -16,28 +16,25 @@
 | 旧链接兼容 | `backend/app/modules/agent/admin_router.py` | `_resolve_thread` | L234-L247 | Thread ID 或旧 Run ID | 统一解析为 Thread | Thread；不存在返回 `None` | `get_run_detail` |
 | 按轮归并 | `backend/app/modules/agent/admin_router.py` | `_build_turns` | L141-L231 | messages、runs、events、approvals、artifacts | 以 root Run 为边界把 child Run 和事实归入同一轮 | `turns[]`；只读 | `get_run_detail` |
 | 会话详情 | `backend/app/modules/agent/admin_router.py` | `get_run_detail` | L477-L542 | 已解析 Thread | 一次读取五类事实并调用 `_build_turns` | 完整会话详情；不存在传播安全 404 | `AgentRunDetailPage` |
-| 前端列表 | `frontend-admin/src/pages/AgentRunsPage.tsx` | `AgentRunsPage` | L58-L340 | 分页会话、统计和 Outbox 标签页 | 筛选、分页并进入 Thread 详情，同时挂载 Outbox 运维面板 | 会话监控表或 Outbox 面板 | 管理员操作 |
-| 前端执行流程图 | `frontend-admin/src/pages/AgentRunDetailPage.tsx` | `buildFlowSteps`、`StepNode`、`RunLane`、`TurnFlow`、`AgentRunDetailPage` | L118-L178、L194-L256、L259-L326、L329-L419、L422-L542 | `session.turns` 中的 Run、按 Run 排序的事件、审批与产物 | 用 `step_id` 配对 started/completed/failed，把步骤期间的工具/交互/落库事件挂到节点；根 Run 与 child Run 用交接线串联。节点内折叠展示执行前 `input`、完成 `output` 和调用证据；`fallback/notice/gate_passed=false` 显示“已降级继续”，只有真实 failed 显示红色 | 可直接定位停点和分支原因的纵向流程图；无 API 或数据库副作用 | 管理员展开证据、重放根 Run 或打开记忆抽屉 |
+| 前端列表 | `frontend-admin/src/pages/AgentRunsPage.tsx` | `AgentRunsPage` | L56-L306 | 分页会话与统计 | 保留原“会话与 Run”统计、筛选、分页和 Thread 详情入口，不再建立记忆派生任务子页 | 单一会话监控表 | 管理员进入会话详情 |
+| 前端执行流程图 | `frontend-admin/src/pages/AgentRunDetailPage.tsx` | `buildFlowSteps`、`StepNode`、`RunLane`、`TurnFlow`、`AgentRunDetailPage` | L116-L176、L192-L257、L260-L304、L306-L384、L386-L514 | `session.turns` 中的 Run、按 Run 排序的事件、审批与产物 | 用 `step_id` 配对 started/completed/failed，把步骤期间的工具/交互/落库事件挂到节点；根 Run 与 child Run 用交接线串联。节点内折叠展示执行前 `input`、完成 `output` 和调用证据；会话工具栏提供唯一记忆入口，Run 卡片不再各自提供入口或回放 | 可直接定位停点和分支原因的纵向流程图；无 API 或数据库副作用 | 管理员展开执行证据，或打开会话记忆抽屉 |
 
-## Run/Snapshot 观测与只读复现
+## 会话级上下文记忆变化
 
 | 执行阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 管理 API 入口 | `backend/app/modules/agent/admin_router.py` | `get_run_memory_admin`、`replay_run_memory_admin`、`get_run_memory_source_admin` | L449-L473 | 管理员认证后的 Run ID、可选 Item ID | 把 HTTP 请求交给只读记忆观测服务 | `data` 或安全 404；不运行 workflow | 管理端记忆面板 |
-| Run 观测聚合 | `backend/app/modules/agent/admin_memory.py` | `_runtime_context_trace`、`get_run_memory_observability` | L137-L169、L172-L327 | Run ID | 复核 Run/绑定 Snapshot 的 user/thread 归属，读取冻结项、工具事件、步骤和派生 Outbox。相邻 `AgentStep.input_data.variables` 还原临时运行上下文及 added/removed/changed keys；`AgentMemoryTrace` 只表示持久化线程状态、Snapshot、长期项、掌握度、摘要和 Outbox 的前后变化。所有正文经递归脱敏 | `runtime_context_trace` 与 `memory_trace` 两条互不混淆的只读轨迹，以及理解、Snapshot、Token、模型、工具、Outbox | `RunMemoryDrawer` 或复现服务 |
+| 会话记忆 API | `backend/app/modules/agent/admin_router.py` | `get_conversation_memory_admin` | L455-L462 | 管理员认证后的 Thread ID | 把请求交给会话记忆聚合服务 | `data` 或安全 404；只读数据库，不运行 workflow | `getConversationMemory` |
+| 记忆域过滤 | `backend/app/modules/agent/admin_memory.py` | `_conversation_memory_state`、`_changed_memory_sections` | L341-L358 | 任意事件采样状态 | 只保留线程热状态、Snapshot、可信事实、长期记忆项、掌握度和摘要，并按顶层记忆域计算差异；Outbox 状态、步骤参数和模型输出不算记忆变化 | 稳定记忆状态与变化域列表 | 会话轮次聚合 |
+| 按轮连续比较 | `backend/app/modules/agent/admin_memory.py` | `get_conversation_memory_observability` | L361-L453 | Thread ID | 校验 Thread 后按 root Run 建立轮次，把 root/child 的 Trace 归入同一轮；第一轮从空记忆基线建立状态，后续轮次以前一轮最终状态比较当前轮最终状态。因此能捕获发生在相邻事件采样之间的变化，不依赖单条 Trace 的 `changed` 标记 | 每轮 `before/after/changed_sections`、总变化轮数；无写库、模型或工具副作用 | 会话记忆抽屉 |
 | 事件前后记忆记录 | `backend/app/modules/agent/events.py`、`backend/app/modules/agent/memory_observability.py` | `EventStore.append`、`capture_memory_state`、`record_memory_trace` | L29-L112；L130-L331 | 可诊断 Agent 事件；跳过 `message.delta` | 事件写入前后读取当前分层记忆，按同一 `event_id/event_sequence` 保存 before/after；快照记录失败只记 debug，不阻断对话事件 | `agent_memory_traces`，`changed` 表示前后状态是否不同 | `RunMemoryDrawer` 的记忆变化时间线 |
-| Snapshot 复现 | `backend/app/modules/agent/admin_memory.py` | `replay_run_memory_snapshot` | L284-L302 | Run ID | 重用观测结果，按原 Item 顺序组合冻结正文、丢弃原因、Token 预算与实际工具调用 | `frozen_snapshot_read_only`；无模型、工具或写库副作用 | 管理端复现抽屉 |
-| source 绑定门 | `backend/app/modules/agent/admin_memory.py` | `get_snapshot_item_source` | L305-L352 | Run ID + Snapshot Item ID | 先要求 Item→Snapshot→Run 同链且 user/thread 一致，再回查 source 并校验版本 | 冻结副本、当前 source、superseded 标记；缺失/越权/版本漂移统一 404 | 管理端 source 对比 |
-| source 类型回查 | `backend/app/modules/agent/admin_memory.py` | `_load_current_source` | L355-L473 | Item 的 source kind/ID 与 Run 作用域 | 分类型读取 message、artifact、summary、mastery、memory item 或 preference candidate；用户级 source 校验 user，线程级 source 同时校验 thread | 当前 source DTO；不支持或不匹配返回空 | `get_snapshot_item_source` |
 | 响应脱敏 | `backend/app/modules/agent/admin_memory.py` | `redact_admin_value`、`safe_error_summary` | L44-L71 | 任意嵌套管理 DTO 或错误摘要 | 递归移除凭证字段并遮蔽 Bearer、带密码 URL、OpenAI 风格 Key 和 traceback | 脱敏副本；不修改数据库原值 | 所有 Agent 管理响应 |
 | 模型调用标识与实际请求 | `backend/app/modules/agent/model_runtime/config.py`、`backend/app/modules/monitoring/llm_calls.py` | `AgentModelSession`、`AuditedOpenAIChatModel`、`open_agent_model`（L59-L144、L251-L327）、`LLMCallRecorder.record_pydantic_response`（L205-L224） | Run ID、调用用途、最终模型配置和每次 Pydantic AI request | 模型会话生成 `model_call_*` Trace 并写无密钥 Run metadata；非流式、流式和结构化重试分别记录真实请求/完整响应/单次 Token/耗时/错误，日志独立事务失败不阻断 Agent | 可按 Run/Trace 关联的 `llm_call_logs` 和模型会话序列 | Run 记忆观测模型区、管理端 LLM 调用页 |
-| 前端管理契约 | `frontend-admin/src/api/agentRuns.ts` | `AdminMemorySnapshotItem`、`AdminMemoryTrace`、`AdminMemoryOutbox`、`MemoryOutboxParams`、`getAgentRunMemory`、`getMemoryOutbox`、`replayMemoryOutbox` | L127-L260、L282-L313 | 管理 API JSON 与筛选条件 | 约束 Snapshot、source 对比、模型/工具、Outbox 安全摘要和记忆 Trace 请求 | 类型化 DTO 与管理员认证请求；不执行正文 | `RunMemoryDrawer`、`MemoryOutboxPanel` |
-| 上下文与记忆抽屉 | `frontend-admin/src/pages/agent-observability/RunMemoryDrawer.tsx` | `SnapshotItemCard`、`MemoryTraceCard`、`RuntimeContextCard`、`RunMemoryDrawer` | L70-L187、L189-L578 | Run ID 与观测、复现、source API | 用纯中文关系说明区分四层：本轮记忆选择回答“读取什么”，运行上下文回答“步骤间如何传递”，长期记忆时间线回答“可信事实改变什么”，记忆派生任务回答“谁异步写入”。每步仍可对照执行前变量、节点输出和下一步输入 | 无模型或工具副作用；纯文本展示脱敏 JSON；派生失败明确不反向修改 completed Run | 管理员分别判断工作流处理、长期状态变化和派生结果 |
+| 前端管理契约 | `frontend-admin/src/api/agentRuns.ts` | `AdminConversationMemoryTurn`、`AdminConversationMemory`、`getConversationMemory` | L221-L244、L328-L332 | 会话记忆 API JSON 与 Thread ID | 约束按轮 before/after、变化域和总变化轮数并发送管理员认证请求 | 类型化 DTO；不执行正文 | `RunMemoryDrawer` |
+| 会话记忆抽屉 | `frontend-admin/src/pages/agent-observability/RunMemoryDrawer.tsx` | `TurnMemoryChange`、`RunMemoryDrawer` | L39-L93、L95-L179 | Thread ID 与会话记忆响应 | 以纵向轮次轨道展示每轮是否变化；变化轮展开为“本轮开始前/结束后”纯文本对照。明确不重复运行详情已有的步骤入参/出参，不展示运行上下文轨迹，不提供 Run、Snapshot 或派生任务回放 | 无模型、工具或写库副作用；只展示脱敏 JSON | 管理员定位哪一轮改变了哪类记忆 |
 | 不可信纯文本 | `frontend-admin/src/pages/agent-observability/PlainDataBlock.tsx` | `PlainDataBlock` | L7-L15 | 任意脱敏 JSON | 只经 `JSON.stringify` 写入 React 文本节点，不解析 Markdown/HTML | 可滚动、可聚焦的纯文本块 | Snapshot/source/Outbox 审计视图 |
 
-复现坚持“冻结事实优先”：即使当前摘要已被 supersede，复现仍展示 Snapshot Item 的 `frozen_payload`；
-source 回查只用于对比当前状态，绝不替代旧 Run 当时消费的正文。若合规删除使 source 不再存在，回查返回
-404，但 Snapshot 保留策略允许时仍可展示冻结副本。
+底层单 Run/Snapshot 观测接口仍可用于自动化诊断，但 Agent Runs 页面不再暴露 Run、Snapshot 或
+Memory Outbox 回放入口；面向管理员的默认阅读路径只有“会话详情 → 查看上下文记忆变化”。
 
 ## Memory Outbox 列表、失败详情与幂等重放
 
@@ -49,7 +46,6 @@ source 回查只用于对比当前状态，绝不替代旧 Run 当时消费的�
 | 重放状态门 | `backend/app/modules/agent/admin_memory_outbox.py` | `_replay_state` | L19-L26 | 当前状态、租约到期时间与 now | 禁止 completed 和有效 processing 租约；允许 failed/pending/过期 processing | allowed + block reason | `replay_memory_outbox` |
 | 原记录重放 | `backend/app/modules/agent/admin_memory_outbox.py` | `replay_memory_outbox` | L149-L204 | Outbox ID、管理员、IP、User-Agent | `FOR UPDATE` 锁原行，保留 Run/type 或 task key，重置为立即 pending，并追加 `audit_logs` | 不克隆任务；冲突 409；同事务审计 | Worker 再次认领 |
 | 运维 HTTP 入口 | `backend/app/modules/agent/admin_router.py` | `list_memory_outbox_admin`、`get_memory_outbox_detail_admin`、`replay_memory_outbox_admin` | L391-L445 | 管理员认证与查询/路径参数 | 转换时间过滤；重放显式解析当前管理员 | 列表、详情、重放 DTO | 管理端页面 |
-| 前端记忆派生运维 | `frontend-admin/src/pages/agent-observability/MemoryOutboxPanel.tsx` | `MemoryOutboxPanel` | L45-L422 | event/status/run/thread/source/time 草稿筛选与分页 | UI 统一命名为“记忆派生任务”，解释它位于可信事实与长期记忆之间；应用组合筛选、显示安全错误/重试/租约资格，可进入 Run 或重放原记录 | GET 无副作用；POST 只触发后端状态门，409/失败转提示，不强制成功 | 管理员继续观察 Worker 结果 |
 
 重放不是“强制成功”：接口不会调用 projector、修改 derived memory 或绕过 source version 校验；它只恢复原
 Outbox 的调度状态。Worker 后续仍走 `MemoryOutboxConsumer.process_claimed` 的 user/thread/run/source 复核。
@@ -85,7 +81,7 @@ Outbox 的调度状态。Worker 后续仍走 `MemoryOutboxConsumer.process_claim
 1. “模型没按选择运行”：先看观测响应的 `model.calls` 和 `final_model_call_id`，再按 config ID 查看模型配置。
 2. “检索范围不对”：只看 `tool_calls` 中来自 `tool.called` 的 query、chapter、difficulty、entity type 和 excludes，不用 Router 计划值代替。
 3. “历史回答无法复现”：先看 Snapshot 是否存在，再检查 ordered items 的 frozen copy；source 404 只说明当前来源不可回查，不等于旧冻结副本未被消费。
-4. “上下文为什么变了”：直接在流程图展开目标节点，对照“传入参数与步骤前上下文”“步骤输出与分支依据”；再进入“查看上下文与记忆”，用本轮记忆选择确认来源、运行上下文轨迹确认临时变化、长期记忆时间线确认持久化副作用。无变化事件只是时间定位点，不代表重新选择了记忆。
+4. “上下文记忆为什么变了”：从会话详情唯一入口打开记忆时间线，先看变化轮次和变化域，再展开该轮对照 before/after。若要解释一次 Run 内部的参数如何传递，返回流程图展开对应节点的输入、输出和调用证据；两种数据不在记忆抽屉重复展示。
 
 ## 下一步阅读
 

@@ -63,10 +63,9 @@ Item，当前 source 只作对照；缺失、越权或版本漂移统一返回 4
 4. 公共 SSE 契约回归证明 Snapshot Item body、摘要正文、候选正文和 Outbox error 均不会泄露。
 5. API、服务、前端和端到端测试覆盖 Run 详情、source 404、Snapshot 复现、Outbox 失败筛选与幂等重放。
 
-管理端由 `frontend-admin/src/pages/AgentRunDetailPage.tsx::TurnDetail`（L98-L278）从每个 Run 卡进入
-`frontend-admin/src/pages/agent-observability/RunMemoryDrawer.tsx::RunMemoryDrawer`（L85-L420）；选择账本默认只展示
-source 标识、版本、原因和 Token，冻结正文仅在管理员显式 source 对比或只读复现后进入
+管理端由 `frontend-admin/src/pages/AgentRunDetailPage.tsx::AgentRunDetailPage`（L386-L514）从会话工具栏唯一入口进入
+`frontend-admin/src/pages/agent-observability/RunMemoryDrawer.tsx::RunMemoryDrawer`（L95-L179）；
+`TurnMemoryChange`（L39-L93）只把按轮连续比较后的记忆 before/after 交给
 `frontend-admin/src/pages/agent-observability/PlainDataBlock.tsx::PlainDataBlock`（L7-L15）纯文本节点。
-`frontend-admin/src/pages/AgentRunsPage.tsx::AgentRunsPage`（L58-L340）通过标签页挂载
-`frontend-admin/src/pages/agent-observability/MemoryOutboxPanel.tsx::MemoryOutboxPanel`（L38-L396），完整支持组合筛选、
-脱敏详情、状态门提示和原记录重放；页面没有强制成功、跳过版本或直接写派生记忆的入口。
+`frontend-admin/src/pages/AgentRunsPage.tsx::AgentRunsPage`（L56-L306）不再挂载 Memory Outbox 标签页，Run 卡也不再提供
+上下文记忆或回放按钮；步骤入参、输出与工具证据仍在详情流程图中按需展开。

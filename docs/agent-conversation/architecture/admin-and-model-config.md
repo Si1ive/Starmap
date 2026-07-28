@@ -30,36 +30,34 @@
 
 | 执行阶段 | 文件 | 符号 | 代码范围 | 职责 |
 | --- | --- | --- | --- | --- |
-| 会话级列表 | `frontend-admin/src/pages/AgentRunsPage.tsx` | `AgentRunsPage` | L58-L340 | 加载 Thread 级会话列表，一行代表一个 Thread，并通过并列标签页挂载 Memory Outbox 运维入口 |
+| 会话级列表 | `frontend-admin/src/pages/AgentRunsPage.tsx` | `AgentRunsPage` | L56-L306 | 加载 Thread 级会话列表，一行代表一个 Thread；保留原统计、筛选和分页结构，不再建立 Memory Outbox 子页 |
 | 管理端列表 API | `frontend-admin/src/api/agentRuns.ts` | `getAgentRuns`、`getAgentRunDetail` | L248-L257 | 请求 `/api/v1/admin/agent-runs` 及详情接口 |
 | 后端分页聚合 | `backend/app/modules/agent/admin_router.py` | `list_all_runs` | L291-L387 | 先分页 `AgentThread`，再批量补 Run 数、turn 数和事件数 |
 | 旧链接兼容 | `backend/app/modules/agent/admin_router.py` | `_resolve_thread` | L234-L247 | 把详情路径中的历史 Run ID 转换为所属 Thread ID |
 | 会话详情聚合 | `backend/app/modules/agent/admin_router.py` | `get_run_detail` | L477-L542 | 一次读取 Thread 下 messages、runs、events、approvals、artifacts，并构造成 `turns[]` |
 | 多轮归并 | `backend/app/modules/agent/admin_router.py` | `_build_turns` | L141-L231 | 以 root Run 为边界，把用户消息、assistant 消息、child runs 和审批/产物归到同一轮 |
-| 前端多轮详情 | `frontend-admin/src/pages/AgentRunDetailPage.tsx` | `buildFlowSteps`、`StepNode`、`RunLane`、`TurnFlow`、`AgentRunDetailPage` | L118-L178、L194-L256、L259-L326、L329-L419、L422-L542 | 一轮一个一级 Collapse；内部从用户输入开始，用纵向流程图串联根 Run、child Run 和全部步骤。每个节点就地展示状态、降级原因，并可展开输入、输出和工具事件；仍可重放根 Run 或进入记忆抽屉 |
+| 前端多轮详情 | `frontend-admin/src/pages/AgentRunDetailPage.tsx` | `buildFlowSteps`、`StepNode`、`RunLane`、`TurnFlow`、`AgentRunDetailPage` | L116-L176、L192-L257、L260-L304、L306-L384、L386-L514 | 一轮一个一级 Collapse；内部从用户输入开始，用纵向流程图串联根 Run、child Run 和全部步骤。每个节点就地展示状态、降级原因，并可展开输入、输出和工具事件；Run 卡不再提供记忆或回放按钮，会话工具栏提供唯一记忆入口 |
 
-## 管理员只读复现冻结记忆
-
-| 执行序号 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `backend/app/modules/agent/admin_router.py` | `get_run_memory_admin`、`replay_run_memory_admin` | L449-L458 | 通过管理员认证的 Run ID | 分别进入观测聚合或只读复现服务 | 管理 JSON；错误向 HTTP 传播 | 管理端 Run 详情 |
-| 2 | `backend/app/modules/agent/admin_memory.py` | `get_run_memory_observability` | L135-L257 | Run ID | 校验 Run 直接或 child metadata 绑定的 Snapshot 归属，读取 Item、实际工具事件、模型 metadata 与派生 Outbox | 冻结记忆观测 DTO；数据库只读 | 直接响应或步骤 3 |
-| 3 | `backend/app/modules/agent/admin_memory.py` | `replay_run_memory_snapshot` | L260-L278 | 步骤 2 的冻结 DTO | 保持 Snapshot Item 原始顺序，组合理解、正文、丢弃原因、Token 和工具参数 | `frozen_snapshot_read_only`；不调用模型/工具 | 前端复现视图 |
-| 4 | `backend/app/modules/agent/admin_router.py` | `get_run_memory_source_admin` | L461-L473 | Run ID + Item ID | 禁止直接使用裸 source ID，把回查交给绑定门 | source 对比或统一 404 | 步骤 5 |
-| 5 | `backend/app/modules/agent/admin_memory.py` | `get_snapshot_item_source`、`_load_current_source` | L281-L449 | Item→Snapshot→Run 链、user/thread/version | 重验作用域和版本，分类型读取当前 source；冻结副本始终来自 Item | frozen/current/superseded；只读数据库 | 前端 source 对比 |
-| 6 | `frontend-admin/src/api/agentRuns.ts` | `getAgentRunMemory`、`replayAgentRunMemory`、`getAgentRunMemorySource` | L270-L285 | Run ID 或 Run ID + Item ID | 经管理员客户端请求三个受约束入口，不提供裸 source ID 请求 | 类型化只读响应或 HTTP 错误 | 步骤 7 |
-| 7 | `frontend-admin/src/pages/agent-observability/RunMemoryDrawer.tsx` | `RunMemoryDrawer` | L189-L578 | 步骤 6 DTO | 以纯中文解释本轮记忆选择、运行临时上下文、长期记忆变化和记忆派生任务的先后关系；管理员显式操作后才加载 source 正文或只读复现，所有正文按纯文本消费 | 无工作流、模型、工具或写库副作用 | 管理员审计结论 |
-
-## 管理员重放 Memory Outbox
+## 管理员查看会话上下文记忆变化
 
 | 执行序号 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `backend/app/modules/agent/admin_router.py` | `list_memory_outbox_admin`、`get_memory_outbox_detail_admin` | L391-L426 | 管理员过滤条件或 Outbox ID | 调用分页筛选或详情服务 | 脱敏列表/详情；错误向 HTTP 传播 | 管理端 Outbox 页面 |
-| 2 | `backend/app/modules/agent/admin_router.py` | `replay_memory_outbox_admin` | L430-L445 | Outbox ID 与当前管理员 | 提取管理员、IP、User-Agent 后进入事务服务 | 重放结果或 404/409 | 步骤 3 |
+| 1 | `frontend-admin/src/pages/AgentRunDetailPage.tsx` | `AgentRunDetailPage` | L386-L514 | 已加载的 Thread 会话详情 | 会话工具栏以 Thread ID 打开唯一上下文记忆入口；根 Run 和 child Run 不再分别触发抽屉，也不提供回放 | `threadId` 与抽屉打开状态；无后端副作用 | 步骤 2 |
+| 2 | `frontend-admin/src/pages/agent-observability/RunMemoryDrawer.tsx` | `RunMemoryDrawer` | L95-L179 | Thread ID | 调用 `getConversationMemory`；加载失败显示安全提示，成功后按轮次建立纵向时间线 | 会话记忆请求或空态 | 步骤 3 |
+| 3 | `frontend-admin/src/api/agentRuns.ts` | `getConversationMemory` | L328-L332 | Thread ID | 经管理员客户端请求 `/agent-runs/threads/{thread_id}/memory` | 类型化只读响应或 HTTP 错误 | 步骤 4 |
+| 4 | `backend/app/modules/agent/admin_router.py` | `get_conversation_memory_admin` | L455-L462 | 通过管理员认证的 Thread ID | 把请求交给会话记忆聚合服务 | `data` 或 404；不运行 workflow | 步骤 5 |
+| 5 | `backend/app/modules/agent/admin_memory.py` | `get_conversation_memory_observability` | L361-L446 | Thread、同线程 root/child Run 与全部 `AgentMemoryTrace` | 按 root Run 建轮次并归并 child Trace；第一轮从空基线建立状态，后续轮次以前一轮最终状态连续比较当前轮最终状态 | 每轮 before/after、变化域和变化轮数；只读数据库 | 步骤 6 |
+| 6 | `frontend-admin/src/pages/agent-observability/RunMemoryDrawer.tsx` | `TurnMemoryChange` | L39-L93 | 步骤 5 DTO | 只展示线程热状态、Snapshot、可信事实、长期项、掌握度和摘要的轮次前后对照；步骤参数仍在详情流程图消费 | 脱敏纯文本差异；无模型、工具、回放或写库副作用 | 管理员定位变化轮次和记忆域 |
+
+## Memory Outbox 后端运维能力
+
+| 执行序号 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | `backend/app/modules/agent/admin_router.py` | `list_memory_outbox_admin`、`get_memory_outbox_detail_admin` | L392-L427 | 管理员过滤条件或 Outbox ID | 调用分页筛选或详情服务 | 脱敏列表/详情；错误向 HTTP 传播 | 受权运维客户端 |
+| 2 | `backend/app/modules/agent/admin_router.py` | `replay_memory_outbox_admin` | L431-L447 | Outbox ID 与当前管理员 | 提取管理员、IP、User-Agent 后进入事务服务 | 重放结果或 404/409 | 步骤 3 |
 | 3 | `backend/app/modules/agent/admin_memory_outbox.py` | `replay_memory_outbox` | L149-L204 | 原 Outbox 与审计身份 | 锁原行、复核状态/租约、重置调度字段并写审计 | 同一个 Outbox 变 pending；唯一幂等键不变 | Agent Worker |
 | 4 | `backend/app/modules/agent/memory_outbox.py` | `MemoryOutboxConsumer.process_claimed` | L230-L310 | Worker 再次认领的原 Outbox | 在 SAVEPOINT 内重新执行 source 归属/版本复核和 projector | complete 或带安全错误的 retry/failed | 管理列表刷新 |
-| 5 | `frontend-admin/src/api/agentRuns.ts` | `getMemoryOutbox`、`getMemoryOutboxDetail`、`replayMemoryOutbox` | L287-L301 | 组合筛选、Outbox ID | 请求列表/详情；只有确认操作发送重放 POST | 脱敏 DTO 或错误 | 步骤 6 |
-| 6 | `frontend-admin/src/pages/agent-observability/MemoryOutboxPanel.tsx` | `MemoryOutboxPanel` | L45-L422 | 步骤 5 DTO | 以“记忆派生任务”呈现可信事实等待异步写入长期记忆的状态、失败摘要、重试次数和重放阻断原因；成功重放后刷新当前分页 | 页面状态更新；不提供强制成功、跳过版本或直接写记忆入口 | 等待步骤 4 再消费 |
+| 5 | `frontend-admin/src/api/agentRuns.ts` | `getMemoryOutbox`、`getMemoryOutboxDetail`、`replayMemoryOutbox` | L345-L359 | 组合筛选、Outbox ID | 保留受约束管理 API 封装，但 Agent Runs 页面不再挂载任务列表或重放控件 | 脱敏 DTO 或错误 | 专用运维工具按需调用；不进入默认页面主链 |
 
 ## 导航与栏目归类
 

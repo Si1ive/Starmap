@@ -11,6 +11,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.db.mysql import Base
 from app.modules.agent.admin_memory import (
+    get_conversation_memory_observability,
     get_run_memory_observability,
     get_snapshot_item_source,
     redact_admin_value,
@@ -323,6 +324,58 @@ async def test_child_run_observability_uses_its_bound_parent_snapshot(db_session
     assert payload["run"]["id"] == child.id
     assert payload["snapshot"]["id"] == snapshot.id
     assert payload["items"][0]["frozen_payload"]["summary_text"] == "冻结摘要正文"
+
+
+@pytest.mark.asyncio
+async def test_conversation_memory_compares_turns_instead_of_event_local_flags(db_session):
+    first_run, _snapshot, _item, _summary = await _seed_snapshot(db_session)
+    first_trace = await db_session.scalar(
+        select(AgentMemoryTrace).where(AgentMemoryTrace.run_id == first_run.id)
+    )
+    first_trace.changed = False
+    first_trace.before_json = {"thread_state": {"version": 7}}
+    first_trace.after_json = {"thread_state": {"version": 7}}
+
+    second_run = AgentRun(
+        id="run_admin_memory_002",
+        thread_id=first_run.thread_id,
+        user_id=first_run.user_id,
+        workflow_name="conversation",
+        workflow_key="conversation",
+        workflow_version="v1",
+        status="completed",
+        input_message="再讲讲时间复杂度",
+    )
+    db_session.add(second_run)
+    await db_session.flush()
+    db_session.add(
+        AgentMemoryTrace(
+            run_id=second_run.id,
+            thread_id=second_run.thread_id,
+            user_id=second_run.user_id,
+            event_type="step.completed",
+            changed=False,
+            before_json={"thread_state": {"version": 8}},
+            after_json={"thread_state": {"version": 8}},
+        )
+    )
+    await db_session.flush()
+
+    payload = await get_conversation_memory_observability(
+        db_session,
+        first_run.thread_id,
+    )
+
+    assert [turn["root_run_id"] for turn in payload["turns"]] == [
+        first_run.id,
+        second_run.id,
+    ]
+    assert payload["turns"][0]["changed"] is True
+    assert payload["turns"][1]["changed"] is True
+    assert payload["turns"][1]["changed_sections"] == ["thread_state"]
+    assert payload["turns"][1]["before"]["thread_state"]["version"] == 7
+    assert payload["turns"][1]["after"]["thread_state"]["version"] == 8
+    assert payload["changed_turn_count"] == 2
 
 
 @pytest.mark.asyncio

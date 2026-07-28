@@ -1,10 +1,19 @@
 # 2026-07 管理端记忆可观测进展
 
+## 2026-07-28：合并 Agent Runs 记忆入口并修复无变化时间线
+
+- 目标：保留“会话与 Run”的整体结构，移除“记忆派生任务”子页和全部页面回放入口；把根/子 Run 的多个记忆入口收敛为会话唯一入口，并按轮次只展示上下文记忆变化。
+- 根因：`backend/app/modules/agent/events.py::EventStore.append`（L29-L112）采样的是单个事件写入前后状态，而事件写入本身通常不修改记忆，所以底层 Trace 的 `changed=false` 是正确采样结果；旧页面错误地把它解释为整轮“长期记忆无变化”，同时按 Run 切碎了同一轮的 root/child 数据。
+- 修复：`backend/app/modules/agent/admin_memory.py::_conversation_memory_state`、`_changed_memory_sections`（L341-L358）排除步骤上下文和 Outbox 状态；`get_conversation_memory_observability`（L361-L453）按 Thread、root Run 和轮次归并 root/child Trace，并以前一轮最终状态连续比较当前轮最终状态。即使每条事件 Trace 自身均为无变化，相邻轮状态 v7→v8 仍会正确报告线程热状态变化。
+- 界面：`frontend-admin/src/pages/AgentRunsPage.tsx::AgentRunsPage`（L56-L306）移除双标签页；`frontend-admin/src/pages/AgentRunDetailPage.tsx::RunLane`、`TurnFlow`、`AgentRunDetailPage`（L260-L304、L306-L384、L386-L514）移除 Run 级记忆/回放按钮，只在会话工具栏保留一个入口；`frontend-admin/src/pages/agent-observability/RunMemoryDrawer.tsx::TurnMemoryChange`、`RunMemoryDrawer`（L39-L93、L95-L179）只显示每轮 before/after 与变化域，不再展示运行上下文轨迹、工具/模型审计或派生任务。
+- 验证：`cd backend && PYTHONPATH=. venv/bin/pytest -q tests/test_agent_admin_memory.py` 通过（7 passed）；`cd frontend-admin && npm run build` 通过（TypeScript + Vite，仅保留既有 chunk size 提示）；`git diff --check` 通过。
+- 提交信息：`合并会话记忆监控并修复变化时间线`
+
 ## 2026-07-28：把 Agent Runs 重构为执行流程图
 
 - 目标：让管理员一眼看出用户输入经过哪些根/子 Run、当前卡在哪个步骤、为什么降级或失败，并就地查看每步传入参数、输出、工具调用和记忆入口。
 - 流程图：`frontend-admin/src/pages/AgentRunDetailPage.tsx::buildFlowSteps`（L118-L178）按 `step_id` 配对事件并把步骤内事件归组；`StepNode`（L194-L256）区分完成、执行中、等待、降级和真实失败；`RunLane`、`TurnFlow`（L259-L419）用纵向信号轨道串联用户输入、根 Run、child Run 和最终回复。RAG 空命中使用“已降级继续”的琥珀提示，只有 failed 使用红色。
-- 记忆语义：`frontend-admin/src/pages/agent-observability/RunMemoryDrawer.tsx::RunMemoryDrawer`（L189-L578）明确“本轮记忆选择→运行上下文→可信事实→长期记忆变化/记忆派生任务”的关系；`MemoryOutboxPanel`（L45-L422）统一改称“记忆派生任务”，移除每块重复英文眉题。
+- 记忆语义：当时的界面曾区分“本轮记忆选择→运行上下文→可信事实→长期记忆变化/记忆派生任务”；该 Run 级抽屉与任务子页已由本卷顶部“合并 Agent Runs 记忆入口”提交移除，当前权威入口为 `frontend-admin/src/pages/agent-observability/RunMemoryDrawer.tsx::RunMemoryDrawer`（L95-L179）。
 - 设计与适配：`frontend-admin/src/pages/agent-observability/agent-observability.css`（L14-L420、L727-L817）定义流程轨道、状态颜色、证据双栏和移动端收敛；真实失败与可恢复降级使用不同语义色，保留键盘可展开和纯文本 JSON。
 - 验证：管理端 TypeScript/Vite 构建与 ESLint 通过；无头 Chrome 在 1440×1000 和 390×844 下完成流程图、抽屉和派生任务视觉回归，均无横向溢出、页面异常或未受信任 HTML 执行。
 - 提交信息：`将 Agent Runs 重构为执行流程图`
@@ -30,7 +39,7 @@
 
 - 目标：修复 Memory 抽屉把 `changed=false` 误解成“整个工作流上下文没变化”的问题，同时避免为了可见性把关键词、大纲候选和 RAG 证据错误写入长期记忆。
 - 后端：`backend/app/modules/agent/admin_memory.py::_runtime_context_trace`（L137-L169）按执行顺序比较相邻 `AgentStep.input_data.variables`，返回每步执行前上下文、节点输出、下一步输入以及 added/removed/changed keys；`get_run_memory_observability`（L172-L327）把它作为独立 `runtime_context_trace` 返回，仍对所有嵌套正文脱敏。数据库只读，无模型、工具或记忆写入副作用。
-- 前端：`frontend-admin/src/pages/agent-observability/RunMemoryDrawer.tsx::RuntimeContextCard`（L156-L187）并排展示步骤前、输出和下一步输入；`RunMemoryDrawer`（L189-L598）改名为“Run 上下文与记忆观测”，增加临时运行上下文专区，并把旧时间线明确命名为“持久化记忆变化时间线”。
+- 前端：该提交当时曾在 Run 抽屉并排展示步骤前、输出和下一步输入；这部分重复信息已由本卷顶部“合并 Agent Runs 记忆入口”提交移除，当前步骤参数只在 `frontend-admin/src/pages/AgentRunDetailPage.tsx::StepNode`（L192-L257）消费，记忆抽屉只显示轮次差异。
 - 语义：检索焦点、候选章节、RAG 证据和节点中间结果留在 Run/Step 审计；只有线程热状态、Snapshot、长期项、掌握度、摘要或 Outbox 前后不同，持久化 Memory 才标记变化。
 - 验证：后端管理观测、路由和工作流引擎 11 项通过；Python 编译、管理端 lint/build 与 `git diff --check` 通过。
 - 提交信息：`拆分 Agent 运行上下文与记忆观测`
@@ -79,11 +88,7 @@
 
 - 目标：完成 `MEM-008` 最后一阶段，让管理员在既有 Agent Runs 监控中使用冻结记忆飞行记录器和
   Memory Outbox 运维面，同时保留原有评测重放入口。
-- 实现：`frontend-admin/src/pages/AgentRunDetailPage.tsx::TurnDetail`（L98-L278）在每个 Run 卡增加记忆观测入口；
-  `frontend-admin/src/pages/agent-observability/RunMemoryDrawer.tsx::RunMemoryDrawer`（L85-L420）展示
-  Run→Snapshot→Outbox 轨迹、理解/预算、选择账本、模型/工具/派生事实，并只在显式操作后以纯文本显示冻结
-  正文或当前 source。`frontend-admin/src/pages/agent-observability/MemoryOutboxPanel.tsx::MemoryOutboxPanel`
-  （L38-L396）提供 event/status/run/thread/source/time 组合筛选、失败详情、重放资格和原任务确认重放。
+- 实现：该提交当时在每个 Run 卡增加记忆观测入口，并提供 Run→Snapshot→Outbox 轨迹、选择账本、source 对比与任务筛选；这些历史 UI 已由本卷顶部“合并 Agent Runs 记忆入口”提交删除，当前实现只保留 `frontend-admin/src/pages/AgentRunDetailPage.tsx::AgentRunDetailPage`（L386-L514）的会话唯一入口和 `frontend-admin/src/pages/agent-observability/RunMemoryDrawer.tsx::RunMemoryDrawer`（L95-L179）的轮次变化视图。
 - 安全补全：`backend/app/modules/agent/admin_memory.py::get_run_memory_observability`（L135-L258）把 Outbox
   最后错误经 `safe_error_summary` 后加入 Run 摘要；前端没有 HTML/Markdown 执行器，也不提供强制成功、
   跳过版本校验或直接写派生记忆入口。
@@ -103,7 +108,7 @@
 - 目标：回答“这一事件发生前后，Agent 的上下文和长期记忆到底变了什么”，并让 Memory Outbox 页面能回到产生任务的 Run。
 - 迁移：`backend/alembic/versions/20260727_memory_trace.py::upgrade`（L20-L45）新增 `agent_memory_traces`，以 Run、事件序号和 before/after JSON 保存不可变观测边界；`backend/app/modules/operations/schema_guard.py::AGENT_REQUIRED_TABLES`（L13-L26）与 `verify_database_schema`（L46-L223）将新表纳入启动结构门禁。
 - 实现：`backend/app/modules/agent/memory_observability.py::capture_memory_state`（L130-L304）只读汇总线程热状态、Snapshot、事实事件、长期记忆项、掌握度、摘要和 Outbox；`record_memory_trace`（L307-L331）写前后副本。`backend/app/modules/agent/events.py::EventStore.append`（L29-L112）记录关键事件前后，`backend/app/modules/agent/memory_outbox.py::MemoryOutboxConsumer.process_claimed`（L231-L366）记录投影成功/失败边界；`backend/app/modules/agent/admin_memory.py::get_run_memory_observability`（L136-L281）返回脱敏 `memory_trace`。
-- 管理端：`frontend-admin/src/pages/agent-observability/RunMemoryDrawer.tsx::MemoryTraceCard`（L108-L153）展示事件前/后 JSON 与 `changed`；`RunMemoryDrawer`（L155-L520）组织时间线；`frontend-admin/src/pages/agent-observability/MemoryOutboxPanel.tsx::MemoryOutboxPanel`（L45-L423）的带 Run 任务可直接打开该抽屉，并在页首说明“事实→Outbox→Worker→长期记忆”的关系。
+- 管理端：该提交最初以事件级卡片展示前/后 JSON，并允许从任务列表返回 Run；这些历史组件现已移除。底层 Trace 仍由上述后端锚点保存，当前由 `backend/app/modules/agent/admin_memory.py::get_conversation_memory_observability`（L361-L446）按会话轮次连续比较后交给前端消费。
 - 验证：事件序列/记忆 trace、管理观测、迁移 DDL、schema guard 和相关 Outbox/工作流回归通过（56 passed）；前端 `npm run lint && npm run build`、Python 编译检查与 `git diff --check` 均通过。
 - 提交信息：`建立 Agent 记忆前后状态观测链`
 

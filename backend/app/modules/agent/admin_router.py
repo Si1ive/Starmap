@@ -19,6 +19,7 @@ from app.modules.operations.security import require_current_admin
 
 from .events import event_store
 from .admin_memory import (
+    get_conversation_memory_observability,
     get_run_memory_observability,
     get_snapshot_item_source,
     redact_admin_value,
@@ -449,6 +450,15 @@ async def replay_memory_outbox_admin(
 async def get_run_memory_admin(run_id: str, db: AsyncSession = Depends(get_db)):
     """读取单个 Run 的记忆观测面。"""
     return {"data": await get_run_memory_observability(db, run_id)}
+
+
+@router.get("/threads/{thread_id}/memory")
+async def get_conversation_memory_admin(
+    thread_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """读取整个会话按轮次连续比较的记忆变化。"""
+    return {"data": await get_conversation_memory_observability(db, thread_id)}
 
 
 @router.get("/{run_id}/memory-replay")
