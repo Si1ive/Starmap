@@ -280,6 +280,15 @@ async def _generate_explanation_node(context: ExecutionContext, db: AsyncSession
         data = response.model_dump()
         if not evidence_items:
             data["citations"] = []
+        else:
+            data["citations"] = [
+                {
+                    "title": item["title"],
+                    "entity_type": item.get("entity_type"),
+                    "source": item.get("source") or {},
+                }
+                for item in evidence_items
+            ]
         context.set("explanation", data)
         logger.info("讲解生成完成", run_id=context.run_id)
         return NodeResult.success(data, next_node="citation_gate")
@@ -308,11 +317,24 @@ async def _render_artifact_node(context: ExecutionContext, db: AsyncSession) -> 
     """渲染最终产物"""
     explanation = context.get("explanation", {})
     
+    citations = explanation.get("citations", [])
+    source_section = ""
+    if citations:
+        source_lines = [
+            f"- {item.get('title') or '未命名资料'}"
+            for item in citations
+        ]
+        source_section = (
+            "## 本次知识库检索来源\n\n"
+            "以下资料由系统从 408 知识库检索，并作为本次讲解依据：\n"
+            + "\n".join(source_lines)
+            + "\n\n"
+        )
     artifact = {
         "type": "explanation",
         "title": f"知识点讲解：{context.get('input_message', '未知话题')[:50]}",
-        "content": explanation.get("body", ""),
-        "citations": explanation.get("citations", []),
+        "content": source_section + explanation.get("body", ""),
+        "citations": citations,
         "outline": explanation.get("outline", []),
         "summary": explanation.get("summary", ""),
     }

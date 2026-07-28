@@ -294,3 +294,25 @@
 ### 提交信息
 
 `支持 Agent Markdown 分类型渲染`
+
+## 2026-07-28：修复 RAG 可读性、来源呈现与结构化响应审计
+
+### 目标
+
+修复部分 RAG 命中字面显示 Unicode 编码、讲解未明确标识知识库依据、人工补充输入 ID 不兼容，以及 GLM 结构化响应在调用审计中显示为空的问题。
+
+### 实现
+
+- `backend/app/modules/agent/tools/retrieve_knowledge.py::_decode_text`（L25-L34）只反转义字面量 `\\uXXXX`，归一化正文与上下文。
+- `backend/app/modules/agent/workflows/explain.py::_generate_explanation_node`（L236-L298）从真实 evidence 重建 citations；`_render_artifact_node`（L316-L344）在正文前公开知识库来源。
+- `backend/app/modules/agent/service.py::AgentService.get_input`（L315-L327）兼容按 `input_key` 或 `input_id` 提交，后续状态和过期校验保持不变。
+- `backend/app/modules/agent/model_runtime/config.py::_audit_model_response`（L75-L89）在无 `TextPart` 时记录结构化 tool-call 参数。
+
+### 验证
+
+- `cd backend && venv/bin/pytest -q tests/test_agent_rag_presentation.py` 通过。
+- `git diff --check` 通过。
+
+### 提交信息
+
+`修复 Agent RAG 来源呈现与结构化响应审计`

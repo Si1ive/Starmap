@@ -6,6 +6,7 @@ retrieve_knowledge 工具适配器
 
 import hashlib
 import json
+import re
 import uuid
 from typing import Any, Dict, Optional, List
 
@@ -21,12 +22,24 @@ from .registry import ToolRegistry, ToolSpec
 logger = get_logger(__name__)
 
 
+def _decode_text(value: Any) -> str:
+    """统一处理数据库/向量服务中可能残留的 JSON Unicode 转义。"""
+    text = str(value or "")
+    if "\\u" not in text:
+        return text
+    return re.sub(
+        r"\\u([0-9a-fA-F]{4})",
+        lambda match: chr(int(match.group(1), 16)),
+        text,
+    )
+
+
 def _agent_result_title(item: Dict[str, Any]) -> str:
     entity = item.get("entity") or {}
     title = item.get("title") or entity.get("title")
     if isinstance(title, str) and title.strip():
         return title.strip()
-    content_text = str(item.get("content_text") or "").strip()
+    content_text = _decode_text(item.get("content_text")).strip()
     if content_text:
         return content_text[:80]
     return "未命名资料"
@@ -47,8 +60,8 @@ def _normalize_agent_result(item: Dict[str, Any]) -> Dict[str, Any]:
         },
         "segment_id": item.get("segment_id"),
         "segment_type": item.get("segment_type"),
-        "content_text": str(item.get("content_text") or "")[:500],
-        "context_text": str(item.get("context_text") or "")[:800],
+        "content_text": _decode_text(item.get("content_text"))[:500],
+        "context_text": _decode_text(item.get("context_text"))[:800],
         "score": item.get("score"),
         "subject_id": item.get("subject_id"),
         "chapter_ids": item.get("chapter_ids") or [],

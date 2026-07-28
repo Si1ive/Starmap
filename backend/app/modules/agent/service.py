@@ -8,7 +8,7 @@ import uuid
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
@@ -313,11 +313,16 @@ class AgentService:
         return agent_input
 
     async def get_input(self, run_id: str, input_key: str) -> Optional["AgentInput"]:
-        """获取输入项"""
+        """按稳定业务 key 获取输入项，并兼容旧前端误传 input id。"""
         result = await self.db.execute(
             select(AgentInput)
             .where(AgentInput.run_id == run_id)
-            .where(AgentInput.input_key == input_key)
+            .where(
+                or_(
+                    AgentInput.input_key == input_key,
+                    AgentInput.id == input_key,
+                )
+            )
         )
         return result.scalar_one_or_none()
 

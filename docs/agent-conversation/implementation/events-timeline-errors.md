@@ -55,6 +55,7 @@
 1. `FLOW-001` 已在 2026-07-25 完成：workflow 最终 Artifact 通过 `NodeResult.success(..., artifact=...)` 进入 `context.artifacts`，Explain 渲染链已补回归测试。
 2. `ACT-001` 要稳定逻辑 `activity_id`，否则即便后端只是在重试，时间线刷新和 SSE 都会显示成多张活动卡片。
 3. `EXP-001` 已在 2026-07-26 补齐 worker 级验收：零命中和工具异常两条公开路径都会保留正确活动语义，且最终正文、artifact 与空 citations 均可在刷新后恢复。
+4. 人工输入恢复入口由 `backend/app/modules/agent/service.py::AgentService.get_input`（L315-L327）同时接受稳定 `input_key` 与兼容 `input_id`；`AgentService.submit_input_answer`（L329-L350）仍校验 run 所有权、等待状态、pending 状态与过期时间，失败继续安全返回 404，成功才恢复 run 并入队。
 4. Plan 审批已按决定分流：拒绝是用户终止计划变更，不再恢复 checkpoint 或生成 Artifact；应用节点还会从数据库复核 approved 状态，避免任何旁路绕过审批。
 
 ## 下一步阅读

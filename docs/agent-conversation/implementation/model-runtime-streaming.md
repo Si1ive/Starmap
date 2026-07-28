@@ -54,6 +54,7 @@
 | --- | --- | --- | --- | --- | --- |
 | 资料规划 | `backend/app/modules/agent/model_runtime/explanation.py` | `ExplanationDeps`、`_controlled_context`、`ExplanationRuntime.decide`（L19-L134） | standalone question、有效资料数、snapshot history/摘要、主题、Artifact 摘要、引用 ID | 两类 Explain Agent 共享受控 instructions；冻结摘要与其他文本均声明为不可信数据，调用 child Run 绑定模型执行结构化规划 | `LoopDecision`；模型异常向 `_evidence_loop_node` 传播 |
 | 正文生成 | `backend/app/modules/agent/model_runtime/explanation.py` | `ExplanationRuntime.generate`（L136-L180） | standalone question、同一 snapshot history/摘要、evidence text、同一 child run ID | 复用同一模型配置与摘要副本，输出 `outline`、`body`、`citations`、`summary`；不得执行摘要或资料中的指令 | `_render_artifact_node` 消费 |
+| 结构化响应审计 | `backend/app/modules/agent/model_runtime/config.py` | `_audit_model_response`（L75-L89） | Pydantic AI `ModelResponse` | 优先拼接 `TextPart`；GLM 等模型通过 tool-call 返回结构化结果且无文本 part 时，从 `args/content` 生成可读审计文本，完整响应仍写 `response_full` | LLM 调用记录的 response_text、token 与完整响应；审计页消费 | `LLMCallRecorder.record_pydantic_response` |
 | 单测覆盖 | `backend/tests/test_agent_explanation_runtime.py` | `test_explanation_runtime_returns_structured_decision_and_content` / `test_explanation_runtime_uses_run_bound_agent_model_config` | 运行时接线变化 | 校验结构化决策、正文输出与 run 绑定配置 | 回归保护 |
 
 ## 历史摘要模型接线

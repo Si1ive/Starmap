@@ -73,10 +73,20 @@ def _audit_model_messages(messages: list[ModelMessage]) -> list[dict[str, str]]:
 
 
 def _audit_model_response(response: ModelResponse) -> tuple[str, dict[str, Any]]:
+    full = to_jsonable_python(response)
     text = "\n".join(
         part.content for part in response.parts if isinstance(part, TextPart)
     )
-    return text, to_jsonable_python(response)
+    if not text:
+        structured_parts = []
+        for part in full.get("parts", []) if isinstance(full, dict) else []:
+            value = part.get("args") or part.get("content")
+            if value not in (None, ""):
+                structured_parts.append(
+                    value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+                )
+        text = "\n".join(structured_parts)
+    return text, full
 
 
 class AuditedOpenAIChatModel(OpenAIChatModel):
