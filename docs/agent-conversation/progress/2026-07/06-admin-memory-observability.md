@@ -97,3 +97,10 @@
 - 管理端：`frontend-admin/src/pages/agent-observability/RunMemoryDrawer.tsx::MemoryTraceCard`（L108-L153）展示事件前/后 JSON 与 `changed`；`RunMemoryDrawer`（L155-L520）组织时间线；`frontend-admin/src/pages/agent-observability/MemoryOutboxPanel.tsx::MemoryOutboxPanel`（L45-L423）的带 Run 任务可直接打开该抽屉，并在页首说明“事实→Outbox→Worker→长期记忆”的关系。
 - 验证：事件序列/记忆 trace、管理观测、迁移 DDL、schema guard 和相关 Outbox/工作流回归通过（56 passed）；前端 `npm run lint && npm run build`、Python 编译检查与 `git diff --check` 均通过。
 - 提交信息：`建立 Agent 记忆前后状态观测链`
+
+## 2026-07-28：补齐管理工作台功能页图标
+
+- 目标：让管理侧栏每个功能切换入口都有可辨识图标，重点补齐系统监控“概览”。
+- 实现：`frontend-admin/src/components/Sider/index.tsx::menuItems`（L40-L95）为数据采集的任务、数据源、定时任务、日志，以及系统监控概览和基础配置补齐语义图标；路由、权限与选中逻辑不变。
+- 验证：`cd frontend-admin && npm run lint && npm run build` 通过；`git diff --check` 通过。
+- 提交信息：`补齐管理工作台功能页图标`

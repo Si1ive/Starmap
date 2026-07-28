@@ -24,6 +24,12 @@ import {
   ShareAltOutlined,
   AimOutlined,
   RobotOutlined,
+  UnorderedListOutlined,
+  CloudServerOutlined,
+  ClockCircleOutlined,
+  ProfileOutlined,
+  ControlOutlined,
+  FundProjectionScreenOutlined,
 } from '@ant-design/icons'
 import { useAdminStore } from '@/store'
 import { usePermission } from '@/hooks/usePermission'
@@ -54,10 +60,10 @@ const menuItems = [
     icon: <BugOutlined />,
     label: '数据采集',
     children: [
-      { key: '/admin/crawler', label: '任务列表' },
-      { key: '/admin/crawler/sources', label: '数据源' },
-      { key: '/admin/crawler/schedules', label: '定时任务' },
-      { key: '/admin/crawler/logs', label: '日志查看' },
+      { key: '/admin/crawler', icon: <UnorderedListOutlined />, label: '任务列表' },
+      { key: '/admin/crawler/sources', icon: <CloudServerOutlined />, label: '数据源' },
+      { key: '/admin/crawler/schedules', icon: <ClockCircleOutlined />, label: '定时任务' },
+      { key: '/admin/crawler/logs', icon: <ProfileOutlined />, label: '日志查看' },
       { key: '/admin/crawler/stats', icon: <BarChartOutlined />, label: '爬取统计' },
       { key: '/admin/crawler/config', icon: <ToolOutlined />, label: '爬虫配置' },
     ],
@@ -67,7 +73,7 @@ const menuItems = [
     icon: <MonitorOutlined />,
     label: '系统监控',
     children: [
-      { key: '/admin/monitor', label: '概览' },
+      { key: '/admin/monitor', icon: <FundProjectionScreenOutlined />, label: '概览' },
       { key: '/admin/agent-runs', icon: <ThunderboltOutlined />, label: 'Agent Runs 监控' },
       { key: '/admin/monitor/llm', icon: <ThunderboltOutlined />, label: 'LLM 调用' },
       { key: '/admin/monitor/api', icon: <ApiOutlined />, label: 'API性能' },
@@ -81,7 +87,7 @@ const menuItems = [
     icon: <SettingOutlined />,
     label: '系统配置',
     children: [
-      { key: '/admin/settings', label: '基础配置' },
+      { key: '/admin/settings', icon: <ControlOutlined />, label: '基础配置' },
       { key: '/admin/agent-models', icon: <RobotOutlined />, label: 'Agent 模型配置' },
       { key: '/admin/settings/users', icon: <TeamOutlined />, label: '用户管理' },
     ],

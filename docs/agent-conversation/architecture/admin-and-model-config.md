@@ -65,7 +65,7 @@
 
 | 执行阶段 | 文件 | 符号 | 代码范围 | 职责 |
 | --- | --- | --- | --- | --- |
-| 侧栏分组 | `frontend-admin/src/components/Sider/index.tsx` | `menuItems`、`selectableMenuKeys`、`menuGroups`、`AppSider` | L34-L162 | 把 Agent Runs 归入系统监控，把 Agent 模型配置归入系统配置，并保持原 URL |
+| 侧栏分组 | `frontend-admin/src/components/Sider/index.tsx` | `menuItems` | L40-L95 | 每个可切换功能页均提供语义图标；系统监控概览使用运行投影视图图标，Agent Runs/LLM/向量召回等保留各自图标，并保持原 URL |
 | 路由入口 | `frontend-admin/src/router/index.tsx` | `AppRoutes` | L75-L217 | 为 `/admin/agent-runs`、详情页和 `/admin/agent-models` 提供路由 |
 | Header 栏目标题 | `frontend-admin/src/components/Header/index.tsx` | `routeContexts`、`AppHeader` | L14-L70 | 根据当前路径显示系统监控或系统配置标题 |
 
