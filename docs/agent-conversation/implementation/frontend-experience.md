@@ -13,6 +13,8 @@
 | 全局状态容器 | `frontend/src/store/agent-context.tsx` | `AgentProvider` | thread、timeline、SSE 事件 | 统一处理 turn 请求、EventSource、工作流输入/审批和错误恢复 | React context |
 | 消息归并 | `frontend/src/features/agent/timeline-state.ts` | `applyMessageEvent` | `message.delta`、`message.completed`、`message.failed` | 对 delta 有序追加，对 completed/failed 收敛状态和错误信息 | `messagesById` |
 | 工作流归并 | `frontend/src/features/agent/timeline-state.ts` | `applyWorkflowEvent` | `workflow.activity.updated` 等工作流事件 | 以 activity ID 为键维护活动、步骤、审批和产物状态 | `workflowByRunId` |
+| 顶部真实任务中心 | `frontend/src/components/AppShell.tsx` | `AppShell` | L33-L105、L168-L239 | 从当前已打开 Thread 的 `timeline.workflowsByRootRunId` 筛选 queued/running/waiting_input/waiting_approval，按真实更新时间排序；红点只在确有运行时出现，空状态明确范围只限当前对话 | 工作流标题、当前步骤、真实进度和等待状态；点击返回当前 Thread，不读取 fixture |
+| 任务中心视觉 | `frontend/src/index.css` | `.task-center`、`.task-center__item`、`.task-center__empty` | L853-L940 | 真实工作流或空状态 DOM | 沿用纸张、墨色和玉色；空状态与列表共享同一紧凑浮层，不使用虚假占位任务 | 用户端全局顶栏 |
 | 消息与工作流渲染 | `frontend/src/features/agent/ConversationStream.tsx` | `AssistantPending`（L19-L38）、`TimelineItemView`（L40-L114） | timeline items | 无正文时显示等待动画和本地累计思考秒数；完成回答后展示练习、理解检查、学习计划三类继续提问示例，引导进入对应 workflow；正文仍由 `MarkdownContent` 渲染 | 对话滚动区 |
 | 继续提问样式 | `frontend/src/features/agent/agent-chat.css` | `.agent-message__next-prompts`（L155-L176） | 完成态助手消息 | 用轻量标签区分引导语与示例，不伪装成已自动提交的按钮 | 助手消息尾部 |
 | 内嵌工作流卡片 | `frontend/src/features/agent/InlineWorkflow.tsx` | `HitSummary`（L130-L148）、`ActivityCard`（L204-L268）、`InlineWorkflow`（L270-L460） | `workflow.activities[]` 与步骤链 | 展示检索状态、查询和命中数量；把知识点、题目和其他命中分组，每条只显示标题、章节、段落类型和来源页，最多显示 6 条，不展示内部数据通道 | 工作流消息块 |

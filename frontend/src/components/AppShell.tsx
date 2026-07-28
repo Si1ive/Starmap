@@ -5,7 +5,6 @@ import {
   BotMessageSquare,
   BrainCircuit,
   ChevronDown,
-  FileUp,
   History,
   Library,
   ListTodo,
@@ -20,7 +19,6 @@ import {
 import { IconButton, StatusMark } from './Primitives'
 import PlatformBrand from './PlatformBrand'
 import useAuth from '../useAuth'
-import { activeTasks } from '../data/fixtures'
 import { useAgent } from '../store/agent-context'
 
 const navItems = [
@@ -32,12 +30,6 @@ const navItems = [
 ]
 
 const mobileNav = navItems
-const activeTaskIcons = {
-  agent: BotMessageSquare,
-  source: FileUp,
-  practice: BookOpenCheck,
-}
-
 export default function AppShell() {
   const { logout, user } = useAuth()
   const { state: agentState, loadThreads } = useAgent()
@@ -53,6 +45,15 @@ export default function AppShell() {
   const isPractice = location.pathname.startsWith('/practice/')
   const displayName = user?.display_name || user?.email || '学习用户'
   const avatarLabel = Array.from(displayName.trim())[0] || '学'
+  const activeWorkflows = useMemo(
+    () =>
+      Object.values(agentState.timeline.workflowsByRootRunId)
+        .filter((workflow) =>
+          ['queued', 'running', 'waiting_input', 'waiting_approval'].includes(workflow.status),
+        )
+        .sort((left, right) => right.updated_at.localeCompare(left.updated_at)),
+    [agentState.timeline.workflowsByRootRunId],
+  )
 
   const currentLabel = useMemo(() => {
     if (location.pathname.startsWith('/account')) return '账户'
@@ -181,45 +182,58 @@ export default function AppShell() {
                   onClick={() => setTaskCenterOpen((value) => !value)}
                 >
                   <ListTodo size={19} />
-                  <span className="task-dot" />
+                  {activeWorkflows.length ? <span className="task-dot" /> : null}
                 </IconButton>
                 {taskCenterOpen ? (
                   <div className="task-center">
                     <div className="task-center__header">
                       <div>
-                        <p className="eyebrow">当前任务</p>
-                        <h2>正在执行中的任务</h2>
+                        <p className="eyebrow">当前对话</p>
+                        <h2>正在执行中的工作流</h2>
                       </div>
                       <IconButton label="关闭任务中心" onClick={() => setTaskCenterOpen(false)}>
                         <X size={18} />
                       </IconButton>
                     </div>
-                    {activeTasks.map((task) => {
-                      const Icon = activeTaskIcons[task.kind]
-                      return (
+                    {activeWorkflows.length ? (
+                      activeWorkflows.map((workflow) => (
                         <button
                           className="task-center__item"
-                          key={task.id}
+                          key={workflow.root_run_id}
                           onClick={() => {
-                            navigate(task.route)
+                            if (agentState.currentThreadId) navigate(`/agent/${agentState.currentThreadId}`)
                             setTaskCenterOpen(false)
                           }}
                           type="button"
                         >
-                          <span className={`task-center__icon task-center__icon--${task.kind}`}>
-                            <Icon size={17} />
+                          <span className="task-center__icon task-center__icon--agent">
+                            <BotMessageSquare size={17} />
                           </span>
                           <span>
-                            <strong>{task.title}</strong>
-                            <small>{task.detail}</small>
+                            <strong>{workflow.title}</strong>
+                            <small>
+                              {workflow.current_step || workflow.summary || '等待下一条运行事件'}
+                              {workflow.progress.total
+                                ? ` · ${workflow.progress.completed}/${workflow.progress.total}`
+                                : ''}
+                            </small>
                           </span>
-                          <StatusMark tone={task.kind === 'source' ? 'warning' : 'running'}>
-                            {task.status}
+                          <StatusMark tone="running">
+                            {workflow.status === 'waiting_input'
+                              ? '等待输入'
+                              : workflow.status === 'waiting_approval'
+                                ? '等待确认'
+                                : '运行中'}
                           </StatusMark>
                         </button>
-                      )
-                    })}
-                    <p className="task-center__note">历史记录从左侧进入。</p>
+                      ))
+                    ) : (
+                      <div className="task-center__empty">
+                        <strong>当前对话没有进行中的工作流</strong>
+                        <span>打开一个历史对话后，这里只展示该对话的真实运行状态。</span>
+                      </div>
+                    )}
+                    <p className="task-center__note">其他会话从左侧历史记录进入。</p>
                   </div>
                 ) : null}
               </div>

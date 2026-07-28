@@ -900,18 +900,25 @@ summary:focus-visible {
 }
 
 .task-center__icon--agent {
-  background: var(--blue-soft);
-  color: var(--blue);
-}
-
-.task-center__icon--source {
-  background: var(--amber-soft);
-  color: var(--amber);
-}
-
-.task-center__icon--practice {
   background: var(--jade-soft);
   color: var(--jade);
+}
+
+.task-center__empty {
+  display: grid;
+  gap: 5px;
+  padding: 20px 18px;
+}
+
+.task-center__empty strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.task-center__empty span {
+  color: var(--ink-faint);
+  font-size: 10px;
+  line-height: 1.6;
 }
 
 .task-center__item > span:nth-child(2) {
