@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { TimelineItem } from '../../api/agent'
 import InlineWorkflow from './InlineWorkflow'
 import MarkdownContent from './MarkdownContent'
@@ -17,6 +17,14 @@ interface ConversationStreamProps {
 }
 
 function AssistantPending() {
+  const [elapsedSeconds, setElapsedSeconds] = useState(0)
+  useEffect(() => {
+    const startedAt = Date.now()
+    const timer = window.setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000))
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [])
   return (
     <span className="agent-message__pending" role="status">
       <span className="agent-message__pending-dots" aria-hidden="true">
@@ -24,7 +32,7 @@ function AssistantPending() {
         <i />
         <i />
       </span>
-      <span>正在组织回答</span>
+      <span>正在组织回答 · 已思考 {elapsedSeconds} 秒</span>
     </span>
   )
 }
@@ -77,6 +85,14 @@ function TimelineItemView({
               <>
                 <MarkdownContent content={item.message.content} />
                 {isStreaming ? <span className="agent-message__cursor" /> : null}
+                {!isStreaming && hasContent ? (
+                  <aside className="agent-message__next-prompts" aria-label="继续提问建议">
+                    <strong>你还可以继续问</strong>
+                    <span>“针对这个知识点给我出一道题”</span>
+                    <span>“检查一下我对它的理解”</span>
+                    <span>“把它加入我的复习计划”</span>
+                  </aside>
+                ) : null}
               </>
             )}
           </div>

@@ -152,6 +152,29 @@ button.agent-chat-connection:hover {
   overflow-wrap: anywhere;
 }
 
+.agent-message__next-prompts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 18px;
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+
+.agent-message__next-prompts strong {
+  flex-basis: 100%;
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.agent-message__next-prompts span {
+  padding: 6px 9px;
+  border-radius: 999px;
+  background: var(--surface-soft);
+}
+
 .agent-markdown {
   color: var(--chat-ink);
   line-height: 1.75;

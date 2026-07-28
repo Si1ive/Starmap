@@ -316,3 +316,24 @@
 ### 提交信息
 
 `修复 Agent RAG 来源呈现与结构化响应审计`
+
+## 2026-07-28：增加生成计时与后续 workflow 引导
+
+### 目标
+
+让用户在等待首段正文时明确知道 Agent 仍在工作，并在每次回答后知道如何继续进入练习、理解检查和学习计划。
+
+### 实现
+
+- `frontend/src/features/agent/ConversationStream.tsx::AssistantPending`（L19-L38）在等待动画旁每秒更新本次前端等待耗时。
+- `frontend/src/features/agent/ConversationStream.tsx::TimelineItemView`（L40-L114）在完成态助手回答后追加三类自然语言追问示例。
+- `frontend/src/features/agent/agent-chat.css::.agent-message__next-prompts`（L155-L176）提供轻量标签布局。
+
+### 验证
+
+- `cd frontend && npm run build` 与本次文件 ESLint 检查通过。
+- `git diff --check` 通过。
+
+### 提交信息
+
+`增加 Agent 生成计时与追问引导`

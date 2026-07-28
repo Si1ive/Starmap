@@ -13,7 +13,8 @@
 | 全局状态容器 | `frontend/src/store/agent-context.tsx` | `AgentProvider` | thread、timeline、SSE 事件 | 统一处理 turn 请求、EventSource、工作流输入/审批和错误恢复 | React context |
 | 消息归并 | `frontend/src/features/agent/timeline-state.ts` | `applyMessageEvent` | `message.delta`、`message.completed`、`message.failed` | 对 delta 有序追加，对 completed/failed 收敛状态和错误信息 | `messagesById` |
 | 工作流归并 | `frontend/src/features/agent/timeline-state.ts` | `applyWorkflowEvent` | `workflow.activity.updated` 等工作流事件 | 以 activity ID 为键维护活动、步骤、审批和产物状态 | `workflowByRunId` |
-| 消息与工作流渲染 | `frontend/src/features/agent/ConversationStream.tsx` | `AssistantPending`（L19-L29）、`TimelineItemView`（L32-L106）、`ConversationStream`（L108-L173） | timeline items | 无正文时显示等待三点；助手正文和失败时保留的 partial 正文交给 `MarkdownContent` 渲染；工作流项展示内嵌卡片 | 对话滚动区 |
+| 消息与工作流渲染 | `frontend/src/features/agent/ConversationStream.tsx` | `AssistantPending`（L19-L38）、`TimelineItemView`（L40-L114） | timeline items | 无正文时显示等待动画和本地累计思考秒数；完成回答后展示练习、理解检查、学习计划三类继续提问示例，引导进入对应 workflow；正文仍由 `MarkdownContent` 渲染 | 对话滚动区 |
+| 继续提问样式 | `frontend/src/features/agent/agent-chat.css` | `.agent-message__next-prompts`（L155-L176） | 完成态助手消息 | 用轻量标签区分引导语与示例，不伪装成已自动提交的按钮 | 助手消息尾部 |
 | 内嵌工作流卡片 | `frontend/src/features/agent/InlineWorkflow.tsx` | `HitSummary`（L130-L148）、`ActivityCard`（L204-L268）、`InlineWorkflow`（L270-L460） | `workflow.activities[]` 与步骤链 | 展示检索状态、查询和命中数量；把知识点、题目和其他命中分组，每条只显示标题、章节、段落类型和来源页，最多显示 6 条，不展示内部数据通道 | 工作流消息块 |
 
 ## 检索命中摘要
