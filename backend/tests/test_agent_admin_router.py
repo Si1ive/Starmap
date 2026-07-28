@@ -48,7 +48,16 @@ def _run(run_id: str, created_at: datetime, **overrides):
         "public_title": None,
         "public_summary": None,
         "current_public_step": "answer",
-        "metadata_json": {"model_config_id": "model-1"},
+        "metadata_json": {
+            "model_config_id": "model-1",
+            "capability_snapshot": {
+                "policy_version": "agent-capabilities-v1",
+                "selected": "practice.prepare",
+                "available": [
+                    {"key": "practice.prepare", "tools": ["retrieve_knowledge"]}
+                ],
+            },
+        },
         "error_message": None,
         "started_at": created_at,
         "completed_at": created_at + timedelta(seconds=2),
@@ -83,6 +92,10 @@ def test_serialize_run_uses_current_agent_run_fields():
     assert payload["current_step_key"] == "answer"
     assert payload["event_count"] == 7
     assert payload["model_config_id"] == "model-1"
+    assert payload["capability_snapshot"]["selected"] == "practice.prepare"
+    assert payload["capability_snapshot"]["available"][0]["tools"] == [
+        "retrieve_knowledge"
+    ]
     assert payload["started_at"] == "2026-07-23T08:00:00Z"
     assert payload["completed_at"] == "2026-07-23T08:00:02Z"
 

@@ -42,6 +42,19 @@ export interface AdminAgentRun {
   current_step_key: string | null
   event_count: number
   model_config_id: string | null
+  capability_snapshot?: {
+    policy_version?: string
+    selected?: string
+    available?: Array<{
+      key: string
+      action: string
+      title: string
+      description: string
+      mode: string
+      side_effect: string
+      tools: string[]
+    }>
+  }
   error_code: string | null
   safe_error_summary: string | null
   started_at: string | null

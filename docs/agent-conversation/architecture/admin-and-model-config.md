@@ -34,9 +34,9 @@
 | 管理端列表 API | `frontend-admin/src/api/agentRuns.ts` | `getAgentRuns`、`getAgentRunDetail` | L248-L257 | 请求 `/api/v1/admin/agent-runs` 及详情接口 |
 | 后端分页聚合 | `backend/app/modules/agent/admin_router.py` | `list_all_runs` | L291-L387 | 先分页 `AgentThread`，再批量补 Run 数、turn 数和事件数 |
 | 旧链接兼容 | `backend/app/modules/agent/admin_router.py` | `_resolve_thread` | L234-L247 | 把详情路径中的历史 Run ID 转换为所属 Thread ID |
-| 会话详情聚合 | `backend/app/modules/agent/admin_router.py` | `get_run_detail` | L486-L608 | 一次读取 Thread 下 messages、runs、events、approvals、artifacts、Agent 来源练习与学习活动，并构造成 `turns[]`、`practices[]`、`learning_activities[]` 及同口径 `weaknesses` |
+| 会话详情聚合 | `backend/app/modules/agent/admin_router.py` | `_serialize_run`、`get_run_detail` | L60-L88、L489-L611 | 一次读取 Thread 下 messages、runs、events、approvals、artifacts、Agent 来源练习与学习活动；Run 额外脱敏返回 capability snapshot，详情构造成 `turns[]`、`practices[]`、`learning_activities[]` 及同口径 `weaknesses` |
 | 多轮归并 | `backend/app/modules/agent/admin_router.py` | `_build_turns` | L141-L231 | 以 root Run 为边界，把用户消息、assistant 消息、child runs 和审批/产物归到同一轮 |
-| 前端多轮详情 | `frontend-admin/src/pages/AgentRunDetailPage.tsx` | `buildFlowSteps`、`StepNode`、`RunLane`、`TurnFlow`、`AgentRunDetailPage` | L116-L176、L192-L257、L260-L304、L306-L384、L386-L514 | 一轮一个一级 Collapse；内部从用户输入开始，用纵向流程图串联根 Run、child Run 和全部步骤。每个节点就地展示状态、降级原因，并可展开输入、输出和工具事件；Run 卡不再提供记忆或回放按钮，会话工具栏提供唯一记忆入口 |
+| 前端多轮详情 | `frontend-admin/src/pages/AgentRunDetailPage.tsx` | `buildFlowSteps`、`StepNode`、`RunLane`、`TurnFlow`、`AgentRunDetailPage` | L116-L176、L192-L257、L260-L297、L306-L384、L386-L514 | 一轮一个一级 Collapse；内部串联根 Run、child Run 和步骤；Run 入口显示选中 capability 和授权工具，节点就地展示状态、降级原因、输入、输出与调用证据；会话工具栏提供唯一记忆入口 |
 
 ## 管理员查看会话上下文记忆变化
 

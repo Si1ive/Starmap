@@ -402,6 +402,10 @@ _TOOL_PARAMETERS = {
             "items": {"type": "string"},
             "description": "限定章节ID列表（可选）",
         },
+        "strict_chapter_scope": {
+            "type": "boolean",
+            "description": "是否禁止检索扩展到指定章节之外",
+        },
         "knowledge_point_ids": {
             "type": "array",
             "items": {"type": "string"},
@@ -440,5 +444,7 @@ def register_retrieve_knowledge(registry: ToolRegistry):
             parameters=_TOOL_PARAMETERS,
             execute=retrieve_knowledge,
             read_only=True,
+            allowed_workflows=("explain", "validate"),
+            injected_parameters=("run_id",),
         )
     )

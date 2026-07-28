@@ -21,6 +21,7 @@ from ..memory_selector import (
 from ..model_runtime.practice import PracticeGenerationDeps, practice_generation_runtime
 from app.modules.practice.service import PracticeService
 from ..time_utils import utc_isoformat, utc_now
+from ..tools import tool_registry
 
 logger = get_logger(__name__)
 
@@ -140,19 +141,24 @@ async def _question_discovery_node(context: ExecutionContext, db: AsyncSession) 
                 },
             )
 
-    result = await retrieve_knowledge(
-        db,
-        query=query,
-        knowledge_point_ids=(practice_bundle or {}).get("knowledge_point_ids"),
-        chapter_ids=(practice_bundle or {}).get("chapter_ids"),
-        strict_chapter_scope=(
-            (practice_bundle or {}).get("chapter_scope_source") == "explicit"
-        ),
-        filters=build_practice_filters(practice_bundle),
-        exclude_entity_ids=(practice_bundle or {}).get("excluded_question_ids"),
-        entity_type="question",
-        limit=10,
-        run_id=context.run_id,
+    result = await tool_registry.execute(
+        "retrieve_knowledge",
+        workflow="validate",
+        db=db,
+        arguments={
+            "query": query,
+            "knowledge_point_ids": (practice_bundle or {}).get("knowledge_point_ids"),
+            "chapter_ids": (practice_bundle or {}).get("chapter_ids"),
+            "strict_chapter_scope": (
+                (practice_bundle or {}).get("chapter_scope_source") == "explicit"
+            ),
+            "filters": build_practice_filters(practice_bundle),
+            "exclude_entity_ids": (practice_bundle or {}).get("excluded_question_ids"),
+            "entity_type": "question",
+            "limit": 10,
+            "run_id": context.run_id,
+        },
+        implementation=retrieve_knowledge,
     )
     
     candidates = result.get("results", [])

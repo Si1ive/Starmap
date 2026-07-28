@@ -76,6 +76,9 @@ def _serialize_run(run: Any, *, event_count: int = 0) -> dict[str, Any]:
         "current_step_key": run.current_public_step,
         "event_count": event_count,
         "model_config_id": _metadata_value(run, "model_config_id"),
+        "capability_snapshot": redact_admin_value(
+            _metadata_value(run, "capability_snapshot") or {}
+        ),
         "error_code": _metadata_value(run, "error_code"),
         "safe_error_summary": safe_error_summary(run.error_message),
         "started_at": utc_isoformat(run.started_at),

@@ -20,6 +20,7 @@ from ..model_runtime.explanation import ExplanationDeps, explanation_runtime
 from ..model_runtime.policy_gate import policy_gate
 from ..model_runtime.schema import ActionType
 from ..tools.retrieve_knowledge import retrieve_knowledge
+from ..tools import tool_registry
 
 logger = get_logger(__name__)
 
@@ -132,13 +133,18 @@ async def _evidence_loop_node(context: ExecutionContext, db: AsyncSession) -> No
             if action == ActionType.RETRIEVE_KNOWLEDGE.value:
                 retrieval_attempted = True
                 params = data.get("parameters", {})
-                result = await retrieve_knowledge(
-                    db,
-                    query=params.get("query", input_msg),
-                    subject_id=params.get("subject_id"),
-                    chapter_ids=params.get("chapter_ids"),
-                    limit=params.get("limit", 5),
-                    run_id=context.run_id,
+                result = await tool_registry.execute(
+                    "retrieve_knowledge",
+                    workflow="explain",
+                    db=db,
+                    arguments={
+                        "query": params.get("query", input_msg),
+                        "subject_id": params.get("subject_id"),
+                        "chapter_ids": params.get("chapter_ids"),
+                        "limit": params.get("limit", 5),
+                        "run_id": context.run_id,
+                    },
+                    implementation=retrieve_knowledge,
                 )
                 status = str(result.get("status") or "error")
                 retrieval_statuses.append(status)

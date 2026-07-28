@@ -15,7 +15,7 @@
 | 管理端契约 | `frontend-admin/src/api/agentRuns.ts` | `AdminAgentSession`、`AdminAgentTurn`、`AdminAgentSessionDetail` | L12-L113 | 后端 Thread/turn JSON | 约束会话摘要、多轮问答和单轮内嵌事实结构 | TypeScript 类型 | 管理端列表与详情页 |
 | 旧链接兼容 | `backend/app/modules/agent/admin_router.py` | `_resolve_thread` | L234-L247 | Thread ID 或旧 Run ID | 统一解析为 Thread | Thread；不存在返回 `None` | `get_run_detail` |
 | 按轮归并 | `backend/app/modules/agent/admin_router.py` | `_build_turns` | L141-L231 | messages、runs、events、approvals、artifacts | 以 root Run 为边界把 child Run 和事实归入同一轮 | `turns[]`；只读 | `get_run_detail` |
-| 会话详情 | `backend/app/modules/agent/admin_router.py` | `get_run_detail` | L486-L579 | 已解析 Thread | 读取五类 Agent 事实、关联 PracticeSession 并调用 `_build_turns` | 完整会话详情与 `practices[]`；不存在传播安全 404 | `AgentRunDetailPage` |
+| 会话详情 | `backend/app/modules/agent/admin_router.py` | `get_run_detail` | L489-L611 | 已解析 Thread | 读取五类 Agent 事实、关联 PracticeSession/学习事件并调用 `_build_turns` 与统一薄弱点投影 | 完整会话详情、`practices[]`、`learning_activities[]`、`weaknesses`；不存在传播安全 404 | `AgentRunDetailPage` |
 | 前端列表 | `frontend-admin/src/pages/AgentRunsPage.tsx` | `AgentRunsPage` | L56-L306 | 分页会话与统计 | 保留原“会话与 Run”统计、筛选、分页和 Thread 详情入口，不再建立记忆派生任务子页 | 单一会话监控表 | 管理员进入会话详情 |
 | 前端执行流程图 | `frontend-admin/src/pages/AgentRunDetailPage.tsx` | `buildFlowSteps`、`StepNode`、`RunLane`、`TurnFlow`、`AgentRunDetailPage` | L116-L176、L192-L257、L260-L304、L306-L384、L386-L514 | `session.turns` 中的 Run、按 Run 排序的事件、审批与产物 | 用 `step_id` 配对 started/completed/failed，把步骤期间的工具/交互/落库事件挂到节点；根 Run 与 child Run 用交接线串联。节点内折叠展示执行前 `input`、完成 `output` 和调用证据；会话工具栏提供唯一记忆入口，Run 卡片不再各自提供入口或回放 | 可直接定位停点和分支原因的纵向流程图；无 API 或数据库副作用 | 管理员展开执行证据，或打开会话记忆抽屉 |
 
@@ -62,6 +62,7 @@ Outbox 的调度状态。Worker 后续仍走 `MemoryOutboxConsumer.process_claim
 | 执行阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 最终消费 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Run 执行链 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | L104-L275 | 已认领 Run | 统一迁移 running/completed/failed，执行 workflow 并写事件 | Run 状态、事件、模型调用计数 | 会话详情与记忆观测 |
+| Capability 审计 | `backend/app/modules/agent/admin_router.py`、`frontend-admin/src/pages/AgentRunDetailPage.tsx` | `_serialize_run`（L60-L88）、`RunLane`（L260-L297） | root/child Run 的 `capability_snapshot` | 后端沿用统一脱敏后返回策略版本、选中能力和授权工具；运行入口显示能力 key 与去重后的工具标签。旧 Run 无快照时保持空态 | 只读 Agent Runs 详情；无模型或数据库写副作用 | 管理员核对 Router 授权与 child 工具范围 |
 | 工作流步骤链 | `backend/app/modules/agent/workflows/engine.py` | `WorkflowEngine.execute` | L56-L174 | WorkflowDefinition 与 RunContext | 逐节点写 step started/completed/failed，并把节点开始前的 `input_message/context_keys/variables` 快照同时写入 `AgentStep.input_data` 与 `step.started.input` | agent_steps、agent_events 与可配对的节点输出 | 管理端事件时间线 |
 | Memory Outbox 投影边界 | `backend/app/modules/agent/memory_outbox.py` | `MemoryOutboxConsumer.process_claimed` | L231-L366 | 已认领且带 Run 的记忆任务 | 投影/失败状态前后复用记忆状态采集器；成功或失败都追加 `memory.outbox.*` trace，投影失败仍只回写 Outbox 状态 | `agent_memory_traces` 与原 Outbox 状态；不反向修改已完成 Run | Run 记忆变化时间线 |
 | 检索实际参数 | `backend/app/modules/agent/tools/retrieve_knowledge.py` | `retrieve_knowledge` | L132-L345 | query、实体类型、章节、难度过滤、排除 ID 与 Run ID | 在真实检索前写 `tool.called.public_metadata`，完成后写结果事件；异常转失败活动 | 可复盘的实际 query/filter/attempt；检索服务副作用 | `get_run_memory_observability` |
@@ -73,10 +74,11 @@ Outbox 的调度状态。Worker 后续仍走 `MemoryOutboxConsumer.process_claim
 2. source 缺失、已删除、版本不符或作用域不匹配都由 `get_snapshot_item_source` 传播相同 404，调用者不能据此枚举其他用户数据。
 3. Snapshot 正文、摘要和候选值只作为 JSON/纯文本数据返回；前端不得用 `dangerouslySetInnerHTML` 或 Markdown 执行器渲染。`memory_trace` 的 before/after 也必须先经过脱敏后再展示。
 4. 事件、Artifact 和错误摘要在既有会话详情序列化时也经过同一脱敏函数，API key、Authorization、DSN 凭证和 traceback 不进入响应。
-5. `backend/app/modules/agent/admin_router.py::get_run_detail`（L486-L604）额外按 Thread 查询 Agent 来源练习，返回来源 Run、状态、题数和成绩；`frontend-admin/src/pages/AgentRunDetailPage.tsx::AgentRunDetailPage` 在会话元数据下展示“会话练习”，管理员可区分 workflow 已完成但练习仍为 draft、正在作答或已经交卷。
-6. 同一详情现在由 `backend/app/modules/agent/admin_router.py::get_run_detail`（L486-L604）读取 `LearningActivityEvent`，返回主题、source、quality 与可空 verdict；管理 UI 把无 verdict 标为“学习活动”，避免把 Explain 完成误报成正确证据，并能直接识别交卷后事件缺失。
-7. `backend/app/modules/agent/admin_router.py::get_run_detail`（L486-L608）把当前 Thread 的学习事件交给 `project_weakness_events`，管理端“本会话薄弱点”与用户端使用相同聚合规则；只展示带错误 verdict 的主题及错误/尝试次数，无错误时显示明确空态。
-5. Outbox 重放沿用数据库唯一幂等身份；重复点击只更新同一行，但每次管理员动作都写独立审计记录。
+5. `backend/app/modules/agent/admin_router.py::get_run_detail`（L489-L593）额外按 Thread 查询 Agent 来源练习，返回来源 Run、状态、题数和成绩；`frontend-admin/src/pages/AgentRunDetailPage.tsx::AgentRunDetailPage` 在会话元数据下展示“会话练习”，管理员可区分 workflow 已完成但练习仍为 draft、正在作答或已经交卷。
+6. 同一详情由 `backend/app/modules/agent/admin_router.py::get_run_detail`（L489-L607）读取 `LearningActivityEvent`，返回主题、source、quality 与可空 verdict；管理 UI 把无 verdict 标为“学习活动”，避免把 Explain 完成误报成正确证据，并能直接识别交卷后事件缺失。
+7. `backend/app/modules/agent/admin_router.py::get_run_detail`（L489-L611）把当前 Thread 的学习事件交给 `project_weakness_events`，管理端“本会话薄弱点”与用户端使用相同聚合规则；只展示带错误 verdict 的主题及错误/尝试次数，无错误时显示明确空态。
+8. root Run 展示本轮完整能力 allowlist 和选中项，child Run 只展示实际选中的能力及其工具；若业务 Run 出现未授权工具，优先检查 `capability_snapshot` 与 `tool.called` 是否一致。
+9. Outbox 重放沿用数据库唯一幂等身份；重复点击只更新同一行，但每次管理员动作都写独立审计记录。
 
 ## 监控采集器自身健康
 

@@ -25,3 +25,12 @@
 - 管理端：Agent Runs 使用同一 projector 展示本会话薄弱点，不维护第二套统计口径。
 - 验证：覆盖 Agent Grade 事件、Agent 错误→练习答对的跨入口验证、历史错题兼容和双前端生产构建。
 - 中文提交信息：`统一 Agent 与练习薄弱点投影`。
+
+## 2026-07-28：阶段四——受控 Capability/Tool Harness
+
+- 目标：让 Router 明确看到服务端授权能力，让内部工具具备真实注册、工作流和参数门禁，同时不引入 MCP 或模型任意写库接口。
+- 实现：新增版本化 Capability 目录；Router 注入最小能力 manifest，root/child Run 冻结审计快照；Explain/Validate 检索统一经过只读 Tool Registry，Run ID 只能由服务端注入。
+- 事实边界：练习由领域服务幂等创建；学习活动由完成/评价事实投影；薄弱点只读聚合。三者均不暴露为模型写工具。
+- 管理端：Agent Runs 每个运行入口显示选中 capability 与授权工具；完整响应沿用脱敏规则，旧 Run 保持空态。
+- 验证：Capability 视图隔离、越权 workflow/未知参数拒绝、Router/child 快照、Explain/Validate 等聚焦回归 78 项及用户端/管理端生产构建通过；全量后端 890 项中 889 项通过，唯一失败是 `test_agent_workflow_engine.py::test_explain_workflow_keeps_artifact_through_render_and_completion` 仍按旧契约期待裸正文/字符串引用，而当前既有 Explain 契约会写知识库来源区块和结构化 citation，本阶段未回退正确产物。
+- 中文提交信息：`建立受控 Agent 能力与工具层`。

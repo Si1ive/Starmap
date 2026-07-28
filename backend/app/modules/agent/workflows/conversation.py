@@ -7,11 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 
+from ..capabilities import CapabilitySpec, capability_registry
 from ..context_builder import AgentRunContext, ThreadContextBuilder
 from ..events import event_store
 from ..model_runtime.answer import DirectAnswerDeps, direct_answer_runtime
 from ..model_runtime.referent import ReferentDeps, referent_runtime
-from ..model_runtime.router import ROUTER_ACTIONS, RouterDeps, router_runtime
+from ..model_runtime.router import RouterDeps, router_runtime
 from ..models import AgentRun
 from ..service import AgentService
 from ..timeline import AgentTimelineService
@@ -33,13 +34,7 @@ from .registry import workflow_registry
 
 logger = get_logger(__name__)
 
-CONVERSATION_ACTIONS = ROUTER_ACTIONS
-WORKFLOW_ROUTES = {
-    "explain": {"title": "整理讲解"},
-    "validate": {"title": "生成专项练习"},
-    "grade": {"title": "分析作答"},
-    "plan": {"title": "调整学习计划"},
-}
+CONVERSATION_ACTIONS = capability_registry.actions()
 
 
 async def _load_run(context: ExecutionContext, db: AsyncSession) -> AgentRun | None:
@@ -110,6 +105,7 @@ async def _route_node(context: ExecutionContext, db: AsyncSession) -> NodeResult
             allowed_actions=CONVERSATION_ACTIONS,
             token_budget=agent_context.token_budget,
             conversation_summary=agent_context.conversation_summary,
+            capabilities=capability_registry.model_manifest(CONVERSATION_ACTIONS),
         ),
         message_history=agent_context.to_message_history(),
         db=db,
@@ -133,6 +129,12 @@ async def _route_node(context: ExecutionContext, db: AsyncSession) -> NodeResult
     metadata["memory_snapshot_id"] = snapshot.id
     metadata["turn_understanding"] = understanding.model_dump(mode="json")
     metadata["router_decision"] = decision.model_dump(exclude_none=True)
+    selected_capability = capability_registry.require(decision.action)
+    metadata["capability_snapshot"] = {
+        "policy_version": capability_registry.policy_version,
+        "selected": selected_capability.key,
+        "available": capability_registry.audit_manifest(CONVERSATION_ACTIONS),
+    }
     run.metadata_json = metadata
 
     next_node = {
@@ -218,6 +220,7 @@ def _child_context_metadata(
     agent_context: AgentRunContext,
     *,
     model_config_id: str | None,
+    capability: CapabilitySpec,
 ) -> dict[str, Any]:
     """只向 child run 传递经过上下文策略筛选后的引用和审计信息。"""
     metadata = {
@@ -240,6 +243,11 @@ def _child_context_metadata(
             ),
         },
         "memory_snapshot_id": agent_context.memory_snapshot_id,
+        "capability_snapshot": {
+            "policy_version": capability_registry.policy_version,
+            "selected": capability.key,
+            "available": [capability.audit_descriptor()],
+        },
     }
     if model_config_id:
         metadata["model_config_id"] = model_config_id
@@ -255,9 +263,9 @@ async def _dispatch_workflow_node(
     if not parent_run:
         return NodeResult.failure("父 run 不存在，无法调度子工作流")
     action = context.get("action")
-    route = WORKFLOW_ROUTES.get(action)
-    if not route:
+    if action not in {"explain", "validate", "grade", "plan"}:
         return NodeResult.failure(f"不支持的 workflow action: {action}")
+    capability = capability_registry.require(action)
     agent_context = context.get("agent_run_context")
     if not isinstance(agent_context, AgentRunContext):
         return NodeResult.failure("缺少受控 AgentRunContext")
@@ -278,10 +286,11 @@ async def _dispatch_workflow_node(
         parent_run_id=parent_run.id,
         root_run_id=parent_run.root_run_id or parent_run.id,
         presentation="compact",
-        public_title=route["title"],
+        public_title=capability.title,
         metadata_json=_child_context_metadata(
             agent_context,
             model_config_id=(parent_run.metadata_json or {}).get("model_config_id"),
+            capability=capability,
         ),
     )
     await AgentTimelineService(db).ensure_workflow_item(

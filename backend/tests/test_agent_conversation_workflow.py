@@ -451,6 +451,20 @@ async def test_business_action_creates_context_bound_inline_workflow(
     assert child.root_run_id == creation.run.id
     assert child.presentation == "compact"
     assert child.public_title == title
+    parent_capability = creation.run.metadata_json["capability_snapshot"]
+    assert parent_capability["policy_version"] == "agent-capabilities-v1"
+    assert parent_capability["selected"].endswith(
+        {
+            "explain": "explain",
+            "validate": "prepare",
+            "grade": "grade",
+            "plan": "plan",
+        }[action]
+    )
+    assert (
+        child.metadata_json["capability_snapshot"]["selected"]
+        == parent_capability["selected"]
+    )
     assert child.metadata_json["model_config_id"] == "model_selected"
     assert child.metadata_json["context_policy_version"] == "thread-context-v1"
     snapshot = child.metadata_json["context_snapshot"]

@@ -285,6 +285,12 @@ function RunLane({ run, events }: { run: AdminAgentRun; events: AdminAgentRunEve
           <Paragraph>{run.input_message || '没有单独的文本输入'}</Paragraph>
           <Space wrap size={6}>
             <Tag>模型配置：{run.model_config_id || '继承系统配置'}</Tag>
+            {run.capability_snapshot?.selected ? (
+              <Tag color="cyan">受控能力：{run.capability_snapshot.selected}</Tag>
+            ) : null}
+            {Array.from(new Set((run.capability_snapshot?.available || []).flatMap((item) => item.tools))).map((tool) => (
+              <Tag color="blue" key={`${run.id}:${tool}`}>授权工具：{tool}</Tag>
+            ))}
             {run.parent_run_id ? <Tag>父 Run：{run.parent_run_id}</Tag> : null}
           </Space>
         </div>
