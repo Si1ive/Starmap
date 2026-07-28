@@ -350,14 +350,14 @@ async def _render_artifact_node(context: ExecutionContext, db: AsyncSession) -> 
             "question_count": len(draft.get("questions", [])),
             "question_ids": question_ids,
             "composition": composition,
-            "generated_questions": generated_questions,
         },
         "summary": f"共 {len(draft.get('questions', []))} 道题，覆盖 {len(composition.get('subjects', {}))} 个考点",
+        "_private_metadata": {"generated_questions": generated_questions},
     }
     
     logger.info("产物渲染完成", run_id=context.run_id)
     return NodeResult.success(
-        {"artifact": artifact},
+        {"artifact_ready": True, "question_count": len(question_ids)},
         next_node="completed",
         artifact=artifact,
     )

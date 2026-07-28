@@ -42,7 +42,7 @@
 | 题目资格门 | `backend/app/modules/agent/workflows/validate.py` | `_question_is_eligible`、`_question_gate_node`（L29-L42、L175-L197） | 非空候选题列表 | 校验实体类型、审核/状态、题型、难度和真实来源字段；全部不合格时记为可恢复的题库不足，不把 Run 标成失败 | `valid_questions`，或中性降级原因 | `_composition_gate_node` / `_generate_question_node` |
 | 模型兜底出题 | `backend/app/modules/agent/workflows/validate.py`、`backend/app/modules/agent/model_runtime/practice.py` | `_generate_question_node`（L200-L258）、`PracticeGenerationRuntime.generate`（L41-L65） | 冻结主题、难度、Run 模型配置和剩余模型预算 | 生成结构化单选题；答案必须属于唯一选项集合；标记为“Agent 模型即时生成”，不伪装真题 | `valid_questions` 中的瞬时生成题 | `_composition_gate_node` |
 | 组合校验 | `backend/app/modules/agent/workflows/validate.py` | `_composition_gate_node` | 有效题目 | 汇总 `question_meta.question_type`、`question_meta.difficulty` 和 `subject_id`，供后续产物使用 | `composition` | `_create_draft_node` |
-| 练习草稿与 Artifact | `backend/app/modules/agent/workflows/validate.py` | `_create_draft_node`、`_render_artifact_node`（L286-L363） | 有效题目与组合信息 | 生成 practice draft 和用户可展开的题面 Markdown；模型题额外在 Artifact 内冻结题面、选项、答案与解析，不写入全局题库 | `agent_artifacts` 与 completed run | `_completed_node` |
+| 练习草稿与 Artifact | `backend/app/modules/agent/workflows/validate.py`、`backend/app/modules/agent/worker.py` | `_create_draft_node`、`_render_artifact_node`（L286-L363）、`AgentWorker.process_run`（L185-L210） | 有效题目与组合信息 | 生成 practice draft 和用户可展开的题面 Markdown；模型题答案/解析通过 `_private_metadata` 交给 Worker 写入 `AgentArtifact.metadata_json`，不进入公开 content，也不写入全局题库 | 公开题面、私有批改元数据与 completed run | `_completed_node` / 后续 Grade |
 
 ## Grade：作答快照到反馈产物
 

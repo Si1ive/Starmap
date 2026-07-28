@@ -32,6 +32,7 @@ from app.modules.agent.tools import retrieve_knowledge as retrieve_module
 from app.modules.agent.worker import AgentWorker
 from app.modules.agent.workflows import validate
 from app.modules.agent.memory_selector import PracticeBundle, TopicBundle
+from app.modules.agent.model_runtime.schema import GeneratedPracticeQuestion
 
 WORKER_TABLES = [
     AgentThread.__table__,
@@ -258,3 +259,54 @@ async def test_validate_completion_writes_practice_fact_event_for_exclusion(
         ).scalars()
     )
     assert len(replayed) == 1
+
+
+@pytest.mark.asyncio
+async def test_validate_worker_keeps_generated_answer_out_of_public_artifact(
+    db_session,
+    monkeypatch,
+):
+    run = await _create_validate_run(db_session, run_id="run_validate_generated_001")
+    monkeypatch.setattr(
+        validate,
+        "load_practice_bundle",
+        AsyncMock(
+            return_value=PracticeBundle(
+                topic=TopicBundle(
+                    title="UDP",
+                    entity_type="topic",
+                    source="current_turn",
+                )
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        retrieve_module,
+        "retrieve_knowledge",
+        AsyncMock(return_value={"status": "success", "results": [], "total": 0}),
+    )
+    monkeypatch.setattr(
+        validate.practice_generation_runtime,
+        "generate",
+        AsyncMock(
+            return_value=GeneratedPracticeQuestion(
+                content="UDP 是否保证可靠交付？",
+                options=[
+                    {"key": "A", "text": "不保证"},
+                    {"key": "B", "text": "保证"},
+                ],
+                answer="A",
+                explanation="UDP 不提供可靠交付保证。",
+            )
+        ),
+    )
+
+    assert await AgentWorker().process_run(db_session, run) is True
+
+    artifact = await db_session.scalar(
+        select(AgentArtifact).where(AgentArtifact.run_id == run.id)
+    )
+    assert artifact is not None
+    assert "generated_questions" not in artifact.content_json["content"]
+    assert "standard_answer" not in str(artifact.content_json)
+    assert artifact.metadata_json["generated_questions"][0]["standard_answer"] == "A"

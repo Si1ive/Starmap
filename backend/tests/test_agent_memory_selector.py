@@ -316,7 +316,10 @@ async def test_load_evaluation_bundle_uses_generated_question_from_selected_arti
             content_json={
                 "content": {
                     "question_ids": ["generated_run_generated_practice"],
-                    "generated_questions": [
+                }
+            },
+            metadata_json={
+                "generated_questions": [
                         {
                             "id": "generated_run_generated_practice",
                             "question_type": "choice",
@@ -330,7 +333,6 @@ async def test_load_evaluation_bundle_uses_generated_question_from_selected_arti
                             "explanation": "UDP 不提供可靠交付保证。",
                         }
                     ],
-                }
             },
         )
     )

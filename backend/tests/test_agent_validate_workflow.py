@@ -300,7 +300,9 @@ async def test_validate_generates_structured_question_after_empty_rag(monkeypatc
     assert drafted.status == NodeStatus.COMPLETED
     assert rendered.artifact["content"]["question_ids"] == ["generated_run_validate_001"]
     assert "UDP 校验和的主要作用是什么" in rendered.artifact["content"]["content"]
-    stored = rendered.artifact["content"]["generated_questions"][0]
+    assert "generated_questions" not in rendered.artifact["content"]
+    assert "standard_answer" not in str(rendered.artifact["content"])
+    stored = rendered.artifact["_private_metadata"]["generated_questions"][0]
     assert stored["standard_answer"] == "A"
     assert stored["answer_source"] == "llm"
 

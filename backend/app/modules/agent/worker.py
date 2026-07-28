@@ -189,10 +189,17 @@ class AgentWorker:
                 artifact = None
                 if result.artifact:
                     service = AgentService(db)
+                    artifact_content = dict(result.artifact)
+                    private_metadata = artifact_content.pop("_private_metadata", None)
                     artifact = await service.create_artifact(
                         run_id=run.id,
                         artifact_type=result.artifact.get("type", "message"),
-                        content=result.artifact,
+                        content=artifact_content,
+                        metadata=(
+                            private_metadata
+                            if isinstance(private_metadata, dict)
+                            else None
+                        ),
                     )
                     run.result_artifact_id = artifact.id
                     await event_store.append(db, run.id, "artifact.rendered", {

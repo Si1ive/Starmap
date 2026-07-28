@@ -597,7 +597,7 @@ async def load_evaluation_bundle(
             )
         )
         generated_rows = (
-            ((artifact.content_json or {}).get("content") or {}).get("generated_questions")
+            (artifact.metadata_json or {}).get("generated_questions")
             if artifact is not None
             else []
         ) or []

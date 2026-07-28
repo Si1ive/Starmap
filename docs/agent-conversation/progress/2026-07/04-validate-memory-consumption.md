@@ -1,9 +1,17 @@
 # 2026-07 Validate 记忆消费闭环进展
 
+## 2026-07-28：隔离模型生成题的标准答案
+
+- 目标：防止模型兜底题虽然界面不展示答案，但标准答案仍可从公开 Artifact content 网络响应中读取。
+- 实现：`backend/app/modules/agent/workflows/validate.py::_render_artifact_node`（L305-L363）只公开题面 Markdown、题目 ID 与组合信息，把答案/解析放入临时 `_private_metadata`；`backend/app/modules/agent/worker.py::AgentWorker.process_run`（L185-L210）落库前移除该私有键并写入 `AgentArtifact.metadata_json`；`backend/app/modules/agent/memory_selector.py::load_evaluation_bundle`（L515-L701）仅从同线程、当前 Snapshot 已选 Artifact 的 metadata 读取答案供 Grade 使用。
+- 副作用与错误：普通时间线只序列化 `content_json`，因此用户无法提前读取答案；管理员详情仍可审计 metadata。缺失、跨线程或未被 Snapshot 选中的元数据继续返回 `question_not_eligible`。
+- 验证：Agent 回归 252 passed、1 deselected（同一既有 Explain 来源展示旧断言）、104 warnings；公开 content 明确断言不含 `generated_questions` 或 `standard_answer`；Python 编译与 `git diff --check` 通过。
+- 提交信息：`隔离模型生成题的标准答案`
+
 ## 2026-07-28：让题库零命中降级为模型出题
 
 - 目标：修复 UDP 检索零命中后仍进入题目质量门并红色终止、下一轮 TCP 继续查询 UDP，以及检索标题/来源残留 Unicode 转义的问题。
-- 实现：`backend/app/modules/agent/turn_understanding.py::_topic_from_explicit_practice`（L175-L197）和 `build_turn_understanding`（L421-L481）让当前轮显式主题优先；`backend/app/modules/agent/tools/retrieve_knowledge.py::_decode_json_text`、`_normalize_agent_result`（L37-L84）递归清理展示字段；`backend/app/modules/agent/workflows/validate.py::_question_discovery_node`、`_question_gate_node`、`_generate_question_node`（L79-L258）把空命中/无合格候选转入模型生成；`_render_artifact_node`（L305-L363）冻结可展示题面和结构化答案；`backend/app/modules/agent/memory_selector.py::load_evaluation_bundle`（L515-L701）仅从同线程选中 Artifact 安全读取模型题供后续批改。
+- 实现：`backend/app/modules/agent/turn_understanding.py::_topic_from_explicit_practice`（L175-L197）和 `build_turn_understanding`（L421-L481）让当前轮显式主题优先；`backend/app/modules/agent/tools/retrieve_knowledge.py::_decode_json_text`、`_normalize_agent_result`（L37-L84）递归清理展示字段；`backend/app/modules/agent/workflows/validate.py::_question_discovery_node`、`_question_gate_node`、`_generate_question_node`（L79-L258）把空命中/无合格候选转入模型生成；`_render_artifact_node`（L305-L363）冻结可展示题面和供后续私有落库的结构化答案；`backend/app/modules/agent/memory_selector.py::load_evaluation_bundle`（L515-L701）仅从同线程选中 Artifact 安全读取模型题供后续批改。
 - 副作用与错误：正常零命中只留下公开提示，不产生 failed Run；只有缺主题、模型配置/调用错误或结构化题目校验失败沿工作流错误链传播。模型题不写全局 `questions` 表，避免污染 RAG 语料。
 - 验证：Agent 回归 251 passed、1 deselected（排除一个与本改动无关、仍断言旧版 Explain 来源展示契约的既有用例）、104 warnings；Python 编译与 `git diff --check` 通过。
 - 提交信息：`让题库零命中降级为模型出题`
