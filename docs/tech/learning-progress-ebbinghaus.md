@@ -10,7 +10,7 @@
 
 | 执行阶段 | 文件 | 符号 | 代码范围 | 入口与参数 | 处理与副作用 | 错误传播 / 最终消费 |
 | --- | --- | --- | --- | --- | --- | --- |
-| HTTP 入口 | `backend/app/modules/learning/router.py` | `get_learning_progress` | L15-L20 | 已认证学习用户和数据库 Session | 只把认证对象的 UUID 传给投影服务；无写库副作用 | 未登录返回 401；服务错误沿统一 API 错误链返回用户端 |
+| HTTP 入口 | `backend/app/modules/learning/router.py` | `get_learning_progress` | L16-L21 | 已认证学习用户和数据库 Session | 只把认证对象的 UUID 传给投影服务；无写库副作用 | 未登录返回 401；服务错误沿统一 API 错误链返回用户端 |
 | 题目证据 | `backend/app/modules/learning/service.py` | `LearningProgressService._load_question_evidence` | L187-L227 | 当前用户 UUID | 只连接该用户已交卷会话和非空答案；优先读开考时冻结的 `topic_terms` / `tags`，再回退题库字段；正确质量为 1，错误质量为 0.25 | 返回 `LearningEvidence`；查询失败中止本次投影，不产生部分写入 |
 | 做题总量 | `backend/app/modules/learning/service.py` | `LearningProgressService._question_totals` | L229-L247 | 当前用户 UUID | 独立统计已交卷非空答案和正确数，避免一道题多个关键词导致重复计数 | 总题数、正确数与真实正确率由 `get` 汇总 |
 | 知识点证据 | `backend/app/modules/learning/service.py` | `LearningProgressService._load_mastery_evidence` | L249-L283 | 当前用户 UUID 转 Agent 领域 32 位 hex | 读取 `user_learning_mastery` 和真实知识点标题、主题词、别名；聚合证据数转为有上限的重复权重 | 与题目证据按关键词归并；没有评分时间的聚合不进入曲线 |
@@ -34,8 +34,23 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | 总投影 | `backend/app/modules/learning/service.py` | `LearningProgressService.get` | L99-L185 | 当前用户与可注入的计算时刻 | 合并题目/知识点证据，逐关键词算强度和曲线；汇总正确率、模拟考/计时实际秒数和本周节奏 | `summary`、`topics`、`week`；保持率低于 55% 标记 due |
 | 本周节奏 | `backend/app/modules/learning/service.py` | `LearningProgressService._weekly_rhythm` | L297-L326 | 当前用户已完成 timer / practice session | 以当前周一为边界按发生日期累计实际秒数；未来或无事实日期为零 | 用户端七日柱形节奏，不预填未来学习量 |
-| API 客户端 | `frontend/src/api/learning.ts` | `getLearningProgress` | L33-L48 | 登录 Cookie | 读取统一 envelope；非 2xx 或无 data 转为可显示错误 | `TodayPage` |
+| API 客户端 | `frontend/src/api/learning.ts` | `getLearningProgress` | L67-L81 | 登录 Cookie | 读取统一 envelope；非 2xx 或无 data 转为可显示错误 | `TodayPage` |
 | 学习进度页 | `frontend/src/pages/TodayPage.tsx` | `TodayPage` | L38-L303 | 真实进度 DTO | 展示总关键词、到期数、真实题量/正确率、记录时长；按选中关键词绘制后端曲线点，并展示证据来源、复习时间、全部轨迹与本周节奏 | 空数据引导真实练习；加载/错误/窄屏均使用同一项目视觉语言 |
+
+## 知识薄弱点与练习的边界
+
+知识薄弱点不是另一套模拟题列表，也不凭一次错误直接宣称“未掌握”。它只把当前用户已交卷的作答证据按与
+学习曲线相同的规范化关键词分簇，展示原题、错误次数、提示使用和下一次验证时间；真正刷题、计时、交卷和
+批改仍在练习工作区完成。
+
+| 执行阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出 / 最终消费 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 快照关键词 | `backend/app/modules/learning/weaknesses.py` | `_snapshot_keywords` | L18-L34 | 会话冻结题面和当前题库对象 | 优先取冻结 `topic_terms/tags`，规范化后最多四个；只有完全无有效词时才回退章节，避免一次错误重复进入“未标注”簇 | 解释性关键词；无写库副作用 |
+| 薄弱点投影 | `backend/app/modules/learning/weaknesses.py` | `project_weakness_rows` | L37-L128 | 当前用户作答行和服务器时刻 | 按关键词统计真实错误/作答次数，保留冻结题面、来源、提示层级和原会话；一次后续正确只进入“待间隔验证”，不能直接标记已解决 | summary、clusters 与错误时间线 |
+| 用户隔离查询 | `backend/app/modules/learning/weaknesses.py` | `WeaknessService.get` | L131-L161 | 当前用户 UUID | 只联接该用户已交卷会话和非空答案；草稿、其他用户和未批改答案不进入投影 | 只读投影；SQL 错误传播且不返回部分假数据 |
+| HTTP 入口 | `backend/app/modules/learning/router.py` | `get_learning_weaknesses` | L24-L29 | 已认证学习用户 | 只传认证对象 UUID 给 `WeaknessService` | `/api/v1/app/learning/weaknesses` |
+| 前端契约 | `frontend/src/api/learning.ts` | `WeaknessEvidence`、`WeaknessCluster`、`LearningWeaknesses`、`getLearningWeaknesses` | L33-L65、L83-L97 | 登录 Cookie | 约束错误证据、状态和汇总 DTO；失败转用户可见错误 | `MistakesPage` |
+| 薄弱点页面 | `frontend/src/pages/MistakesPage.tsx` | `MistakesPage` | L35-L164 | 当前用户真实薄弱点 DTO | 提供加载、重试、零错题空态、到期队列、关键词簇和时间线；点击证据进入原练习成绩复盘，不构造不存在的练习 ID | 用户核对错误事实或进入真实练习/复盘 |
 
 ## 验证
 
@@ -44,4 +59,7 @@
 - `backend/tests/test_learning_progress.py::test_spaced_correct_recall_extends_strength_more_than_an_error`：间隔正确回忆比错误证据产生更长强度和更高保持率。
 - `backend/tests/test_learning_progress.py::test_projection_rejects_empty_evidence`：没有证据时不生成伪曲线。
 - `backend/tests/test_learning_progress.py::test_question_totals_are_scoped_to_current_user_and_submitted_sessions`：汇总 SQL 必须同时限定当前用户和已交卷状态，不能串号或把草稿计入进度。
+- `backend/tests/test_learning_weaknesses.py::test_weakness_projection_groups_real_wrong_answers_and_preserves_evidence`：相同关键词错误正确归簇且保留冻结题面与提示证据。
+- `backend/tests/test_learning_weaknesses.py::test_weakness_projection_does_not_mark_one_later_correct_answer_resolved`：一次后续正确只能等待间隔验证，不能伪造“已解决”。
+- `backend/tests/test_learning_weaknesses.py::test_weakness_service_filters_submitted_answers_by_current_user`：SQL 必须同时限定当前用户和已交卷状态。
 - 前端通过生产构建和 `api/learning.ts`、`TodayPage.tsx` 定向 ESLint。
