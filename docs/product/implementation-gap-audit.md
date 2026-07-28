@@ -22,15 +22,14 @@
 | 做题量、大纲覆盖和复盘 | 已完成（当前统计口径） | `backend/app/modules/practice/router.py::get_practice_stats`（L520-L557）只聚合本人已交卷答案和 active 大纲章节；练习历史与成绩页使用冻结题面复盘 | 覆盖率当前按命中过的主章节计算，不是每个大纲考点的细粒度覆盖；专项复盘组卷尚未按薄弱关键词自动选题 |
 | 知识薄弱点 | 部分完成 | `backend/app/modules/learning/weaknesses.py::project_weakness_rows`（L37-L128）按冻结关键词聚合本人错误、提示和后续正确证据；`WeaknessService.get`（L131-L161）限定本人已交卷会话；`frontend/src/pages/MistakesPage.tsx::MistakesPage`（L35-L164）已移除 fixture | 当前只使用可验证的“答错”事实，不猜测条件遗漏/概念混淆等错因；用户确认、修改、拒绝错因候选和按簇生成专项练习仍未完成 |
 | 真实艾宾浩斯学习进度 | 已完成（曲线主链） | `backend/app/modules/learning/service.py::project_ebbinghaus`（L42-L92）执行 `R=exp(-t/S)`；`LearningProgressService.get`（L99-L185）按相同关键词合并本人题目与知识点证据；`frontend/src/pages/TodayPage.tsx::TodayPage`（L38-L303）绘制后端返回曲线和真实周节奏 | 曲线是可解释调度估计，不是心理测量或“掌握”结论；学习计划版本、目标考试日期、阶段计划审批和基于计划的推荐任务仍未实现 |
-| 生产页面 mock 清理 | 部分完成 | 资料、练习、薄弱点、进度和任务中心均已改为真实 API/时间线；`frontend/src/components/AppShell.tsx::AppShell`（L33-L239）不再读取固定任务 | `frontend/src/App.tsx`（L24、L138）仍把设计用 `StateGalleryPage` 暴露到认证后 `/states`；未挂载旧 `MapPage` 仍引用 fixtures。两者应在 UI 审计阶段移出生产代码 |
+| 生产页面 mock 清理 | 已完成 | 资料、练习、薄弱点、进度和任务中心均由真实 API/时间线驱动；`frontend/src/components/AppShell.tsx::AppShell`（L33-L239）不再读取固定任务；`frontend/src/App.tsx::App`（L96-L145）只注册真实用户工作区，旧状态画廊、未挂载 Map 页面和 `data/fixtures.ts` 已删除 | `mock_exam` 是模拟考试的真实业务枚举，不是 mock 数据；后续新增页面仍须通过源码扫描和生产路由核对 |
 
 ## 后续实施优先级
 
 ### P0：发布阻断和真实性
 
-1. 移除 `/states` 设计画廊和未挂载 fixture 页面/数据，确保生产包不含可误入的样例体验。
-2. 完成全项目桌面/移动 UI 回归，检查溢出、遮挡、空态、错误态和颜色漂移。
-3. 运行后端全量测试并修正与当前契约不一致的旧断言；不能带已知失败结束验收。
+1. 完成全项目桌面/移动 UI 回归，检查溢出、遮挡、空态、错误态和颜色漂移。
+2. 运行后端全量测试并修正与当前契约不一致的旧断言；不能带已知失败结束验收。
 
 ### P1：本轮需求的深度闭环
 

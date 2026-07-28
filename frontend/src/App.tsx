@@ -21,7 +21,6 @@ const PasswordRecoveryPage = lazy(() => import('./pages/PasswordRecoveryPage'))
 const PracticePage = lazy(() => import('./pages/PracticePage'))
 const PracticeLibraryPage = lazy(() => import('./pages/PracticeLibraryPage'))
 const SourcesPage = lazy(() => import('./pages/SourcesPage'))
-const StateGalleryPage = lazy(() => import('./pages/StateGalleryPage'))
 const TodayPage = lazy(() => import('./pages/TodayPage'))
 
 function RequireAuth({ children }: { children: ReactNode }) {
@@ -135,8 +134,6 @@ function App() {
           <Route path="/practice/:sessionId/:view" element={<PracticePage />} />
           <Route path="/mistakes" element={<MistakesPage />} />
           <Route path="/sources" element={<SourcesPage />} />
-          <Route path="/states" element={<StateGalleryPage />} />
-
           <Route path="/knowledge" element={<Navigate replace to="/progress" />} />
           <Route path="/knowledge/:id" element={<Navigate replace to="/progress?point=queue" />} />
           <Route path="/chat" element={<Navigate replace to="/agent" />} />
