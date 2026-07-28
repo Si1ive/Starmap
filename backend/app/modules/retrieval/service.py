@@ -69,6 +69,7 @@ class RetrievalService:
         recall_run_id: Optional[str] = None,
         recall_activity_id: Optional[str] = None,
         recall_attempt_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Phase 0 + Phase 1 检索：先用大纲扩展 query，再做内容检索。
@@ -138,6 +139,7 @@ class RetrievalService:
             recall_activity_id=recall_activity_id,
             recall_attempt_id=recall_attempt_id,
             raw_query=query,
+            user_id=user_id,
         )
 
         return {
@@ -263,6 +265,7 @@ class RetrievalService:
         recall_activity_id: Optional[str] = None,
         recall_attempt_id: Optional[str] = None,
         raw_query: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> List[RetrievalResult]:
         """
         统一检索入口
@@ -387,7 +390,13 @@ class RetrievalService:
                 hits = self.search_engine.merge_hits(dense_hits, sparse_hits)
 
             # 从 MySQL 补全完整信息
-            results = await self.search_engine.hydrate_results(hits)
+            if user_id is None:
+                results = await self.search_engine.hydrate_results(hits)
+            else:
+                results = await self.search_engine.hydrate_results(
+                    hits,
+                    user_id=user_id,
+                )
             all_results.extend(results)
 
         # 按 score 排序，截取 top-N

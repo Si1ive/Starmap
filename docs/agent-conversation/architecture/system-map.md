@@ -27,6 +27,7 @@
 | 模型运行时 | `backend/app/modules/agent/model_runtime/router.py`、`answer.py`、`explanation.py`、`preference_extractor.py` | `RouterRuntime.decide`、`DirectAnswerRuntime.answer`、`ExplanationRuntime.generate`、`PreferenceExtractionRuntime.extract` | 负责结构化路由、普通回答流式生成、explain 双阶段调用，以及只产出 pending 记录的偏好候选抽取 |
 | 上下文选择 | `backend/app/modules/agent/context_builder.py` | `ThreadContextBuilder.build` | 从消息、Artifact 和 root run 历史中选取本轮上下文，并记录丢弃审计 |
 | 检索与工具 | `backend/app/modules/agent/tools/retrieve_knowledge.py`、`backend/app/modules/retrieval/service.py` | `retrieve_knowledge`、`RetrievalService.search_with_outline_expansion` | explain/validate 的知识检索入口，负责公开工具活动和真实混合检索 |
+| 用户资料所有权边界 | `backend/app/modules/library/router.py`、`backend/app/models/mysql_models.py`、`backend/app/modules/retrieval/search_engine.py` | `list_library_sources`、`upload_library_sources`、`read_original_pdf`、`CorpusFile.owner_user_id`、`RetrievalSearchEngine.hydrate_results` | 平台语料以空 owner 共享；个人上传绑定认证用户。列表、原始 PDF 读取和 Agent 检索补全都在数据库查询中重复执行所有权过滤，前端字段和向量候选不构成授权依据 |
 | 领域持久化 | `backend/app/modules/agent/models.py` | `AgentThread`、`AgentRun`、`AgentEvent`、`AgentArtifact`、`AgentPreferenceCandidate` 等模型 | 定义对话、执行事实、审批、候选治理、输入和 outbox 的结构与约束 |
 | 管理员监控 | `backend/app/modules/agent/admin_router.py` | `list_all_runs`、`get_run_detail` | 以 Thread 为主实体聚合会话统计、详情和多轮运行事实 |
 | 管理员页面 | `frontend-admin/src/pages/AgentRunsPage.tsx`、`AgentRunDetailPage.tsx`、`AgentModelsPage.tsx` | `AgentRunsPage`、`AgentRunDetailPage`、`AgentModelsPage` | 负责会话监控、单轮审计和模型配置管理 |
@@ -37,7 +38,7 @@
 2. `agent_runs`、`agent_steps`、`agent_events` 描述执行链；`agent_thread_events` 是对用户端和管理端公开消费的投影。
 3. `agent_artifacts` 保存 explain / practice / feedback / plan 等结构化产物；时间线刷新时以数据库快照重建。
 4. `agent_outbox` 是执行可靠性的边界；HTTP 事务只负责创建事实，不直接调用 LLM。
-5. 检索正文、章节扩展和来源信息由 `retrieval_segments`、`documents` 与 Qdrant collection 共同提供。
+5. 检索正文、章节扩展和来源信息由 `retrieval_segments`、`documents` 与 Qdrant collection 共同提供；`corpus_files.owner_user_id` 是个人资料可见性的唯一事实，Qdrant 只负责候选召回，最终授权发生在 MySQL 补全阶段。
 
 ## 下一步阅读
 

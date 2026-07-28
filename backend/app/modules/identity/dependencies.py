@@ -64,6 +64,48 @@ async def require_csrf_session(
     return current
 
 
+async def require_csrf_upload_session(
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+) -> AuthenticatedSession:
+    """Require a trusted multipart upload with the session CSRF token."""
+
+    content_type = request.headers.get("content-type", "").lower()
+    if not content_type.startswith("multipart/form-data;"):
+        raise APIException(
+            message="文件上传只接受 multipart/form-data 请求",
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            code="UPLOAD_CONTENT_TYPE_INVALID",
+            headers=AUTH_NO_STORE_HEADERS,
+        )
+    presented_origin = _request_origin(request)
+    trusted_origins = {
+        normalized
+        for value in settings.ALLOWED_ORIGINS
+        if (normalized := _normalize_origin(value)) is not None
+    }
+    if presented_origin is None or presented_origin not in trusted_origins:
+        raise APIException(
+            message="请求来源校验失败",
+            status_code=status.HTTP_403_FORBIDDEN,
+            code="AUTH_ORIGIN_INVALID",
+            headers=AUTH_NO_STORE_HEADERS,
+        )
+    current = await _authenticate_or_raise(request, service)
+    presented_digest = _csrf_digest(request.headers.get("x-csrf-token"))
+    if presented_digest is None or not hmac.compare_digest(
+        presented_digest,
+        current.session.csrf_secret_hash,
+    ):
+        raise APIException(
+            message="请求安全校验失败",
+            status_code=status.HTTP_403_FORBIDDEN,
+            code="CSRF_INVALID",
+            headers=AUTH_NO_STORE_HEADERS,
+        )
+    return current
+
+
 async def _authenticate_or_raise(
     request: Request,
     service: SessionService,

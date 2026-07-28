@@ -346,6 +346,25 @@ async def test_retrieval_service_delegates_storage_steps_to_search_engine():
 
 
 @pytest.mark.asyncio
+async def test_hydrate_results_filters_private_documents_by_current_user():
+    db = AsyncMock()
+    execute_result = Mock()
+    execute_result.scalars.return_value.all.return_value = []
+    db.execute.return_value = execute_result
+    engine = RetrievalSearchEngine(db)
+
+    result = await engine.hydrate_results(
+        [{"id": "point-1", "score": 0.9, "payload": {"segment_id": "segment-1"}}],
+        user_id="01900000-0000-7000-8000-000000000001",
+    )
+
+    assert result == []
+    statement = str(db.execute.await_args.args[0])
+    assert "corpus_files.owner_user_id IS NULL" in statement
+    assert "corpus_files.owner_user_id =" in statement
+
+
+@pytest.mark.asyncio
 async def test_retrieval_service_records_agent_rag_dense_qdrant_recall(monkeypatch):
     class FakeVectorRecallRecorder:
         instances = []

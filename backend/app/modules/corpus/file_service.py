@@ -168,6 +168,7 @@ class CorpusFileService:
         file_path: str,
         batch_label: Optional[str] = None,
         file_name: Optional[str] = None,
+        owner_user_id: object | None = None,
     ) -> Dict[str, Any]:
         """
         注册单个文件到 corpus_files
@@ -193,8 +194,16 @@ class CorpusFileService:
         sha256 = compute_sha256(str(p))
 
         # 去重检查
+        owner_condition = (
+            CorpusFile.owner_user_id.is_(None)
+            if owner_user_id is None
+            else CorpusFile.owner_user_id == owner_user_id
+        )
         existing = await self.db.execute(
-            select(CorpusFile).where(CorpusFile.sha256 == sha256)
+            select(CorpusFile).where(
+                CorpusFile.sha256 == sha256,
+                owner_condition,
+            )
         )
         existing_file = existing.scalar_one_or_none()
         if existing_file:
@@ -209,6 +218,7 @@ class CorpusFileService:
         batch = batch_label or f"single-{generate_id()[:8]}"
         corpus_file = CorpusFile(
             id=generate_id(),
+            owner_user_id=owner_user_id,
             source_type="upload",
             source_ref=batch,
             file_name=file_name or p.name,
@@ -293,6 +303,7 @@ class CorpusFileService:
     def _to_dict(self, f: CorpusFile, document_id: Optional[str] = None) -> Dict[str, Any]:
         return {
             "id": f.id,
+            "owner_user_id": str(f.owner_user_id) if f.owner_user_id else None,
             "source_type": f.source_type,
             "source_ref": f.source_ref,
             "batch_label": f.source_ref,

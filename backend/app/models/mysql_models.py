@@ -14,6 +14,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.mysql import Base
+from app.db.types import UUIDBinary
 
 
 class CrawlTask(Base):
@@ -678,6 +679,12 @@ class CorpusFile(Base):
     __tablename__ = "corpus_files"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="语料文件ID")
+    owner_user_id: Mapped[Optional[object]] = mapped_column(
+        UUIDBinary(),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+        comment="个人资料所属学习用户；为空表示平台资料",
+    )
     source_type: Mapped[str] = mapped_column(
         Enum("crawler", "manual", "upload", "import"),
         nullable=False, comment="来源类型"
@@ -707,7 +714,8 @@ class CorpusFile(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("sha256", name="uk_corpus_files_sha256"),
+        Index("idx_corpus_files_sha256", "sha256"),
+        Index("idx_corpus_files_owner", "owner_user_id", "created_at"),
         Index("idx_corpus_files_status", "status"),
         Index("idx_corpus_files_source_type", "source_type"),
         Index("idx_corpus_files_doc_type", "doc_type"),

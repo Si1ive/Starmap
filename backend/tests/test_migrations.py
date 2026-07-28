@@ -31,7 +31,7 @@ def test_migration_graph_has_single_head():
     config.set_main_option("script_location", str(backend_dir / "alembic"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_heads() == ["20260728_agent_llm_audit"]
+    assert scripts.get_heads() == ["20260728_user_private_corpus"]
 
 
 def test_vector_recall_trace_migration_adds_correlation_fields():

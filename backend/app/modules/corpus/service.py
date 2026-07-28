@@ -101,6 +101,7 @@ class CorpusApplicationService:
         files: Sequence[UploadFile],
         *,
         batch_label: Optional[str],
+        owner_user_id: object | None = None,
     ) -> Dict[str, Any]:
         if not files:
             raise ValueError("请至少上传一个文件")
@@ -130,11 +131,14 @@ class CorpusApplicationService:
                 stored_path = self.upload_dir / f"{uuid.uuid4().hex}_{original_name}"
                 await self._write_upload(upload, stored_path)
 
-                result = await corpus_service.register_single_file(
-                    file_path=str(stored_path),
-                    batch_label=batch,
-                    file_name=original_name,
-                )
+                register_kwargs = {
+                    "file_path": str(stored_path),
+                    "batch_label": batch,
+                    "file_name": original_name,
+                }
+                if owner_user_id is not None:
+                    register_kwargs["owner_user_id"] = owner_user_id
+                result = await corpus_service.register_single_file(**register_kwargs)
                 is_new = result["is_new"]
                 file_result.update(
                     {
@@ -217,6 +221,7 @@ class CorpusApplicationService:
         *,
         parser_name: Optional[str],
         parse_mode: str,
+        auto_extract: bool = False,
     ) -> Dict[str, Any]:
         corpus_file = await self.db.get(
             CorpusFile,
@@ -254,12 +259,11 @@ class CorpusApplicationService:
         await self.db.commit()
 
         try:
-            self._schedule_parse(
-                run_id,
-                file_id,
-                parser.name,
-                parse_mode,
-            )
+            schedule_args = (run_id, file_id, parser.name, parse_mode)
+            if auto_extract:
+                self._schedule_parse(*schedule_args, auto_extract=True)
+            else:
+                self._schedule_parse(*schedule_args)
         except Exception as exc:
             parse_run.status = "failed"
             parse_run.error_detail = f"解析任务派发失败: {str(exc)[:400]}"
@@ -371,6 +375,7 @@ class CorpusApplicationService:
         file_id: str,
         parser_name: str,
         parse_mode: str,
+        auto_extract: bool = False,
     ) -> None:
         task = asyncio.create_task(
             self._run_parse_in_background(
@@ -378,6 +383,7 @@ class CorpusApplicationService:
                 file_id,
                 parser_name,
                 parse_mode,
+                auto_extract,
             ),
             name=f"parse-run-{run_id}",
         )
@@ -390,15 +396,27 @@ class CorpusApplicationService:
         file_id: str,
         parser_name: str,
         parse_mode: str,
+        auto_extract: bool = False,
     ) -> None:
         try:
             async with mysql_client.session() as session:
-                await DocumentParseService(session).parse_document_with_run_id(
+                result = await DocumentParseService(session).parse_document_with_run_id(
                     run_id=run_id,
                     corpus_file_id=file_id,
                     parser_name=parser_name,
                     parse_mode=parse_mode,
                 )
+                if auto_extract and result.get("status") == "success":
+                    from app.modules.corpus.extraction_tasks import (
+                        EntityExtractionTaskService,
+                    )
+
+                    await EntityExtractionTaskService(session).start(
+                        result["document_id"],
+                        extract_knowledge=True,
+                        extract_questions=True,
+                        subject_id=None,
+                    )
         except Exception as exc:
             logger.error(
                 "后台解析任务失败",

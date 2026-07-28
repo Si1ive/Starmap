@@ -1,130 +1,149 @@
-import { useMemo, useRef, useState } from 'react'
-import type { ChangeEvent, DragEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ChangeEvent, DragEvent } from "react";
 import {
+  AlertCircle,
+  BookOpen,
   Check,
   Database,
   FileText,
   Filter,
   FolderOpen,
-  MoreHorizontal,
+  Loader2,
+  RefreshCw,
   Search,
   Upload,
   X,
-} from 'lucide-react'
-import { sourceFiles } from '../data/fixtures'
-import { Button, IconButton, PageHeading, SectionHeading, SourceBadge } from '../components/Primitives'
+} from "lucide-react";
+import { listLibrarySources, uploadLibrarySources } from "../api/library";
+import type { LibrarySource } from "../api/library";
+import {
+  Button,
+  IconButton,
+  PageHeading,
+  SectionHeading,
+  SourceBadge,
+} from "../components/Primitives";
 
-type SourceOrigin = 'platform' | 'personal'
+type SourceOrigin = "platform" | "personal";
 
-interface VisibleSource {
-  id: string
-  name: string
-  meta: string
-  detail: string
-  origin: SourceOrigin
-}
+const statusCopy: Record<LibrarySource["status"], string> = {
+  pending: "等待入库",
+  parsing: "正在解析",
+  parsed: "解析完成",
+  extracting: "正在建立索引",
+  indexed: "可检索",
+  failed: "入库失败",
+  archived: "已归档",
+};
 
-const PERSONAL_SOURCES_KEY = 'starmap-personal-sources'
-
-function readPersonalSources(): VisibleSource[] {
-  try {
-    const value = window.localStorage.getItem(PERSONAL_SOURCES_KEY)
-    if (!value) return []
-    const parsed = JSON.parse(value) as VisibleSource[]
-    return Array.isArray(parsed) ? parsed : []
-  } catch {
-    return []
-  }
-}
-
-function formatFileSize(bytes: number) {
-  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+function formatFileSize(bytes: number | null) {
+  if (!bytes) return "大小未知";
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 export default function SourcesPage() {
-  const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const [query, setQuery] = useState('')
-  const [scope, setScope] = useState<'all' | SourceOrigin>('all')
-  const [uploadOpen, setUploadOpen] = useState(false)
-  const [selectedFiles, setSelectedFiles] = useState<File[]>([])
-  const [personalSources, setPersonalSources] = useState<VisibleSource[]>(readPersonalSources)
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [query, setQuery] = useState("");
+  const [scope, setScope] = useState<"all" | SourceOrigin>("all");
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [sources, setSources] = useState<LibrarySource[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [readerSource, setReaderSource] = useState<LibrarySource | null>(null);
 
-  const availableSources = useMemo<VisibleSource[]>(() => {
-    const builtInSources = sourceFiles
-      .filter((file) => file.status === 'ready')
-      .map((file, index) => ({
-        id: `built-in-${index}`,
-        name: file.name,
-        meta: file.meta,
-        detail: file.detail,
-        origin: file.meta.startsWith('平台') ? 'platform' as const : 'personal' as const,
-      }))
+  const loadSources = useCallback(async (quiet = false) => {
+    if (!quiet) setLoading(true);
+    try {
+      setSources(await listLibrarySources());
+      setError(null);
+    } catch (loadError) {
+      setError(
+        loadError instanceof Error ? loadError.message : "资料列表加载失败",
+      );
+    } finally {
+      if (!quiet) setLoading(false);
+    }
+  }, []);
 
-    return [...personalSources, ...builtInSources]
-  }, [personalSources])
+  useEffect(() => {
+    void loadSources();
+  }, [loadSources]);
+  useEffect(() => {
+    const hasActiveIngestion = sources.some((source) =>
+      ["pending", "parsing", "parsed", "extracting"].includes(source.status),
+    );
+    if (!hasActiveIngestion) return;
+    const timer = window.setInterval(() => void loadSources(true), 4000);
+    return () => window.clearInterval(timer);
+  }, [loadSources, sources]);
 
   const filteredSources = useMemo(() => {
-    const keyword = query.trim().toLowerCase()
-    return availableSources.filter((source) => {
-      const matchesScope = scope === 'all' || source.origin === scope
-      const matchesQuery =
-        !keyword ||
-        source.name.toLowerCase().includes(keyword) ||
-        source.meta.toLowerCase().includes(keyword)
-      return matchesScope && matchesQuery
-    })
-  }, [availableSources, query, scope])
+    const keyword = query.trim().toLowerCase();
+    return sources.filter((source) => {
+      const matchesScope = scope === "all" || source.origin === scope;
+      return (
+        matchesScope &&
+        (!keyword || source.name.toLowerCase().includes(keyword))
+      );
+    });
+  }, [query, scope, sources]);
 
   const setFiles = (files: FileList | File[]) => {
-    const nextFiles = Array.from(files).filter((file) =>
-      /\.(pdf|md|txt|doc|docx)$/i.test(file.name),
-    )
-    setSelectedFiles(nextFiles)
-  }
+    setSelectedFiles(
+      Array.from(files).filter((file) => /\.pdf$/i.test(file.name)),
+    );
+  };
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
-    if (event.target.files) setFiles(event.target.files)
-  }
+    if (event.target.files) setFiles(event.target.files);
+  };
 
   const handleDrop = (event: DragEvent<HTMLLabelElement>) => {
-    event.preventDefault()
-    setFiles(event.dataTransfer.files)
-  }
+    event.preventDefault();
+    setFiles(event.dataTransfer.files);
+  };
 
-  const addToCorpus = () => {
-    if (!selectedFiles.length) return
-    const createdAt = Date.now()
-    const additions = selectedFiles.map((file, index) => ({
-      id: `personal-${createdAt}-${index}`,
-      name: file.name,
-      meta: `个人资料 · ${formatFileSize(file.size)}`,
-      detail: '刚刚加入 · 可供 Agent 检索',
-      origin: 'personal' as const,
-    }))
-    const nextSources = [...additions, ...personalSources]
-    setPersonalSources(nextSources)
-    window.localStorage.setItem(PERSONAL_SOURCES_KEY, JSON.stringify(nextSources))
-    setSelectedFiles([])
-    setUploadOpen(false)
-  }
+  const addToCorpus = async () => {
+    if (!selectedFiles.length || uploading) return;
+    setUploading(true);
+    setError(null);
+    try {
+      await uploadLibrarySources(selectedFiles);
+      setSelectedFiles([]);
+      setUploadOpen(false);
+      await loadSources();
+    } catch (uploadError) {
+      setError(
+        uploadError instanceof Error ? uploadError.message : "资料入库失败",
+      );
+    } finally {
+      setUploading(false);
+    }
+  };
 
   const closeUpload = () => {
-    setSelectedFiles([])
-    setUploadOpen(false)
-  }
+    if (uploading) return;
+    setSelectedFiles([]);
+    setUploadOpen(false);
+  };
 
   return (
     <div className="page page--wide sources-page">
       <PageHeading
         actions={
-          <Button icon={<Upload size={17} />} onClick={() => setUploadOpen(true)}>
+          <Button
+            icon={<Upload size={17} />}
+            onClick={() => setUploadOpen(true)}
+          >
             添加资料
           </Button>
         }
-        description="这里只展示 Agent 当前可以使用的资料。你也可以上传自己的文件，构建个人语料库。"
+        description="只展示已经进入平台语料库的资料。个人资料仅属于当前账号，并只参与当前账号的检索。"
         eyebrow="资料"
-        title="Agent 当前可以使用的学习材料"
+        title="你的真实学习资料库"
       />
 
       <div className="source-toolbar">
@@ -133,7 +152,7 @@ export default function SourcesPage() {
           <input
             aria-label="搜索资料"
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索文件名或最近引用"
+            placeholder="搜索已入库资料"
             value={query}
           />
         </label>
@@ -141,7 +160,9 @@ export default function SourcesPage() {
           <Filter size={16} />
           <select
             aria-label="筛选资料来源"
-            onChange={(event) => setScope(event.target.value as 'all' | SourceOrigin)}
+            onChange={(event) =>
+              setScope(event.target.value as "all" | SourceOrigin)
+            }
             value={scope}
           >
             <option value="all">全部来源</option>
@@ -149,85 +170,150 @@ export default function SourcesPage() {
             <option value="personal">个人资料</option>
           </select>
         </label>
+        <IconButton label="刷新资料状态" onClick={() => void loadSources()}>
+          <RefreshCw className={loading ? "spin" : ""} size={17} />
+        </IconButton>
       </div>
 
+      {error ? (
+        <div className="source-notice source-notice--error">
+          <AlertCircle size={17} />
+          <span>{error}</span>
+        </div>
+      ) : null}
+
       <section className="source-table">
-        <SectionHeading meta={`${filteredSources.length} 份资料`} title="资料列表" />
+        <SectionHeading
+          meta={loading ? "正在读取数据库" : `${filteredSources.length} 份资料`}
+          title="资料列表"
+        />
         <div className="source-table__header">
           <span>资料</span>
           <span>来源</span>
-          <span>最近使用</span>
+          <span>入库状态</span>
           <span />
         </div>
-        {filteredSources.map((source) => (
-            <div className="source-row" key={source.id}>
-              <span className="source-row__icon"><FileText size={20} /></span>
+        {!loading &&
+          filteredSources.map((source) => (
+            <div
+              className={`source-row source-row--${source.status}`}
+              key={source.id}
+            >
+              <span className="source-row__icon">
+                <FileText size={20} />
+              </span>
               <span className="source-row__name">
                 <strong>{source.name}</strong>
-                <small>{source.meta}</small>
+                <small>
+                  {formatFileSize(source.file_size)}
+                  {source.page_count ? ` · ${source.page_count} 页` : ""}
+                </small>
               </span>
               <span className="source-row__origin">
-                <SourceBadge type={source.origin === 'personal' ? 'personal' : 'knowledge'}>
-                  {source.origin === 'personal' ? '个人资料' : '平台资料'}
+                <SourceBadge
+                  type={source.origin === "personal" ? "personal" : "knowledge"}
+                >
+                  {source.origin === "personal" ? "仅当前账号" : "平台资料"}
                 </SourceBadge>
               </span>
-              <span className="source-row__detail">{source.detail}</span>
-              <button aria-label={`${source.name}更多操作`} title="更多操作" type="button"><MoreHorizontal size={18} /></button>
+              <span className="source-row__detail">
+                <i
+                  className={`source-status source-status--${source.status}`}
+                />
+                {source.error_detail || statusCopy[source.status]}
+              </span>
+              <button
+                aria-label={`打开 ${source.name}`}
+                disabled={!source.read_url}
+                onClick={() => setReaderSource(source)}
+                title={
+                  source.read_url ? "阅读原始 PDF" : "原始 PDF 尚未完成入库"
+                }
+                type="button"
+              >
+                {source.read_url ? (
+                  <BookOpen size={18} />
+                ) : (
+                  <Loader2
+                    className={
+                      ["pending", "parsing", "parsed", "extracting"].includes(
+                        source.status,
+                      )
+                        ? "spin"
+                        : ""
+                    }
+                    size={17}
+                  />
+                )}
+              </button>
             </div>
-        ))}
-        {!filteredSources.length ? (
+          ))}
+        {!loading && !filteredSources.length ? (
           <div className="source-empty">
             <Search size={20} />
-            <strong>没有找到匹配的资料</strong>
-            <span>调整关键词或资料来源后重试。</span>
+            <strong>没有已入库的匹配资料</strong>
+            <span>添加 PDF 后，解析和索引状态会在这里实时更新。</span>
           </div>
         ) : null}
       </section>
 
       <section className="source-corpus-builder">
-        <span><Database size={21} /></span>
+        <span>
+          <Database size={21} />
+        </span>
         <div>
-          <strong>构建你的个人语料库</strong>
-          <p>上传 PDF、Markdown、文本或 Word 资料，Agent 会将它们与平台资料一起用于回答和练习。只会使用你主动加入的文件。</p>
+          <strong>个人资料按账号隔离</strong>
+          <p>
+            上传会发起真实解析、题目与知识点抽取和向量索引。只有当前用户能阅读和检索这些内容。
+          </p>
         </div>
-        <Button icon={<FolderOpen size={17} />} onClick={() => setUploadOpen(true)} tone="secondary">
-          选择文件
+        <Button
+          icon={<FolderOpen size={17} />}
+          onClick={() => setUploadOpen(true)}
+          tone="secondary"
+        >
+          选择 PDF
         </Button>
       </section>
 
       {uploadOpen ? (
         <div className="source-upload-backdrop" role="presentation">
-          <section aria-labelledby="source-upload-title" aria-modal="true" className="source-upload-dialog" role="dialog">
+          <section
+            aria-labelledby="source-upload-title"
+            aria-modal="true"
+            className="source-upload-dialog"
+            role="dialog"
+          >
             <header>
               <div>
-                <p className="eyebrow">个人语料库</p>
-                <h2 id="source-upload-title">添加自己的学习资料</h2>
+                <p className="eyebrow">个人资料入库</p>
+                <h2 id="source-upload-title">添加原始 PDF</h2>
               </div>
               <IconButton label="关闭添加资料" onClick={closeUpload}>
                 <X size={19} />
               </IconButton>
             </header>
-
             <label
               className="source-dropzone"
               onDragOver={(event) => event.preventDefault()}
               onDrop={handleDrop}
             >
               <input
-                accept=".pdf,.md,.txt,.doc,.docx"
+                accept=".pdf,application/pdf"
                 multiple
                 onChange={handleFileChange}
                 ref={fileInputRef}
                 type="file"
               />
-              <span><Upload size={23} /></span>
-              <strong>选择文件或拖到这里</strong>
-              <small>支持 PDF、Markdown、TXT、DOC、DOCX，可一次选择多个文件。</small>
+              <span>
+                <Upload size={23} />
+              </span>
+              <strong>选择 PDF 或拖到这里</strong>
+              <small>文件会真实上传并进入解析、抽取和索引流程。</small>
             </label>
-
             {selectedFiles.length ? (
               <div className="source-upload-selection">
-                <span>{selectedFiles.length} 个文件</span>
+                <span>{selectedFiles.length} 个 PDF</span>
                 {selectedFiles.map((file) => (
                   <div key={`${file.name}-${file.size}`}>
                     <FileText size={17} />
@@ -238,20 +324,55 @@ export default function SourcesPage() {
                 ))}
               </div>
             ) : null}
-
             <footer>
-              <Button onClick={closeUpload} tone="quiet">取消</Button>
+              <Button disabled={uploading} onClick={closeUpload} tone="quiet">
+                取消
+              </Button>
               <Button
-                disabled={!selectedFiles.length}
-                icon={<Database size={17} />}
-                onClick={addToCorpus}
+                disabled={!selectedFiles.length || uploading}
+                icon={
+                  uploading ? (
+                    <Loader2 className="spin" size={17} />
+                  ) : (
+                    <Database size={17} />
+                  )
+                }
+                onClick={() => void addToCorpus()}
               >
-                加入个人语料库
+                {uploading ? "正在提交" : "发起入库"}
               </Button>
             </footer>
           </section>
         </div>
       ) : null}
+
+      {readerSource?.read_url ? (
+        <div
+          className="pdf-reader"
+          role="dialog"
+          aria-label={`${readerSource.name} PDF 阅读器`}
+          aria-modal="true"
+        >
+          <header>
+            <div>
+              <span className="eyebrow">原始入库文件</span>
+              <strong>{readerSource.name}</strong>
+              <small>
+                {readerSource.page_count
+                  ? `${readerSource.page_count} 页`
+                  : "PDF"}
+              </small>
+            </div>
+            <IconButton
+              label="关闭 PDF 阅读器"
+              onClick={() => setReaderSource(null)}
+            >
+              <X size={20} />
+            </IconButton>
+          </header>
+          <iframe src={readerSource.read_url} title={readerSource.name} />
+        </div>
+      ) : null}
     </div>
-  )
+  );
 }

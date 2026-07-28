@@ -11,6 +11,7 @@ from sqlalchemy.sql.elements import ColumnElement
 from app.db.qdrant import QdrantManager
 from app.models.mysql_models import (
     CanonicalChapter,
+    CorpusFile,
     Document,
     KnowledgePoint,
     Question,
@@ -283,6 +284,7 @@ class RetrievalSearchEngine:
     async def hydrate_results(
         self,
         hits: List[Dict[str, Any]],
+        user_id: Optional[str] = None,
     ) -> List[RetrievalResult]:
         """按命中顺序从 MySQL 补全 segment 与来源文档信息。"""
         if not hits:
@@ -296,9 +298,21 @@ class RetrievalSearchEngine:
         if not segment_ids:
             return []
 
-        result = await self.db.execute(
-            select(RetrievalSegment).where(RetrievalSegment.id.in_(segment_ids))
+        segment_query = (
+            select(RetrievalSegment)
+            .outerjoin(Document, Document.id == RetrievalSegment.document_id)
+            .outerjoin(CorpusFile, CorpusFile.id == Document.corpus_file_id)
+            .where(RetrievalSegment.id.in_(segment_ids))
         )
+        if user_id is not None:
+            segment_query = segment_query.where(
+                or_(
+                    RetrievalSegment.document_id.is_(None),
+                    CorpusFile.owner_user_id.is_(None),
+                    CorpusFile.owner_user_id == user_id,
+                )
+            )
+        result = await self.db.execute(segment_query)
         segments_by_id = {
             segment.id: segment
             for segment in result.scalars().all()

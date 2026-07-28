@@ -337,3 +337,28 @@
 ### 提交信息
 
 `增加 Agent 生成计时与追问引导`
+
+## 2026-07-28：接入用户私有资料并隔离 Agent 检索
+
+### 目标
+
+把用户端资料从浏览器 mock 改为真实语料入库，并保证个人 PDF 的列表、阅读和 Agent 检索都只对所有者可见。
+
+### 实现
+
+- `backend/app/modules/library/router.py::list_library_sources`（L31-L85）、`upload_library_sources`（L88-L121）和 `read_original_pdf`（L124-L152）以认证用户为边界查询、上传及返回原始 PDF；上传通过 `backend/app/modules/identity/dependencies.py::require_csrf_upload_session`（L67-L106）校验 multipart 来源、Cookie Session 和 CSRF，并在持久化前校验扩展名与 PDF 文件签名。
+- `backend/app/models/mysql_models.py::CorpusFile`（L677-L723）增加 nullable `owner_user_id`；`backend/alembic/versions/20260728_user_private_corpus.py::upgrade`（L19-L38）以前向迁移补外键和索引，并允许不同账号分别持有相同 SHA 文件。
+- `backend/app/modules/corpus/service.py::CorpusApplicationService.upload_files`（L99-L179）、`start_parse`（L218-L265）和 `_run_parse_in_background`（L394-L425）在个人上传后串起文件注册、PDF 解析、题目/知识点抽取与索引。
+- `backend/app/modules/agent/tools/retrieve_knowledge.py::retrieve_knowledge`（L158-L287）从 Run 读取真实用户；`backend/app/modules/retrieval/search_engine.py::RetrievalSearchEngine.hydrate_results`（L284-L320）只补全平台资料或当前用户资料，防止其他账号的向量候选进入 Agent 上下文。
+- `frontend/src/api/library.ts::listLibrarySources`、`uploadLibrarySources`（L36-L70）访问真实 API；`frontend/src/pages/SourcesPage.tsx::SourcesPage`（L45-L378）展示入库状态、轮询后台处理、处理错误和已入库原始 PDF 阅读器，不再读写 `localStorage` fixtures。
+
+### 验证
+
+- `cd backend && venv/bin/pytest -q tests/test_library_router.py tests/test_corpus_module.py tests/test_retrieval_service.py tests/test_agent_retrieve_activity.py`：22 passed；覆盖伪 PDF 拒绝、owner 绑定、自动抽取和检索补全隔离。
+- `cd backend && venv/bin/alembic upgrade head && venv/bin/alembic current`：真实 MySQL 已升级到 `20260728_user_private_corpus`。
+- `cd frontend && npm run build` 通过。
+- `git diff --check` 通过。
+
+### 提交信息
+
+`实现用户私有资料真实入库与阅读`

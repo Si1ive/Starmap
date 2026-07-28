@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional, List
 from sqlalchemy import select
 
 from app.core.logging import get_logger
-from app.modules.agent.models import AgentEvent
+from app.modules.agent.models import AgentEvent, AgentRun
 from app.modules.retrieval.service import RetrievalService
 from ..events import event_store
 from ..time_utils import utc_isoformat, utc_now
@@ -261,6 +261,11 @@ async def retrieve_knowledge(
         await db.commit()
 
     try:
+        run_user_id = None
+        if run_id:
+            run_user_id = await db.scalar(
+                select(AgentRun.user_id).where(AgentRun.id == run_id)
+            )
         result = await service.search_with_outline_expansion(
             query=query,
             subject_id=subject_id,
@@ -278,6 +283,7 @@ async def retrieve_knowledge(
             recall_run_id=run_id,
             recall_activity_id=activity_id,
             recall_attempt_id=attempt_id,
+            user_id=run_user_id,
         )
         
         normalized = [

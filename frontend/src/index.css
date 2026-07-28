@@ -4357,6 +4357,117 @@ summary:focus-visible {
   width: 32px;
 }
 
+.source-row > button:disabled {
+  color: var(--line-strong);
+}
+
+.source-row::before {
+  background: var(--line-strong);
+  content: "";
+  inset: 14px auto 14px 0;
+  position: absolute;
+  width: 2px;
+}
+
+.source-row--indexed::before {
+  background: var(--jade);
+}
+
+.source-row--failed::before {
+  background: var(--red);
+}
+
+.source-row__detail {
+  align-items: center;
+  display: flex;
+  gap: 7px;
+  min-width: 0;
+}
+
+.source-status {
+  background: var(--line-strong);
+  border-radius: 50%;
+  flex: 0 0 auto;
+  height: 6px;
+  width: 6px;
+}
+
+.source-status--indexed {
+  background: var(--jade);
+}
+
+.source-status--failed {
+  background: var(--red);
+}
+
+.source-status--parsing,
+.source-status--extracting {
+  background: var(--amber);
+}
+
+.source-notice {
+  align-items: center;
+  border: 1px solid var(--line);
+  display: flex;
+  font-size: 11px;
+  gap: 8px;
+  margin: -12px 0 22px;
+  padding: 10px 12px;
+}
+
+.source-notice--error {
+  background: var(--red-soft);
+  border-color: #e9c9c6;
+  color: var(--red);
+}
+
+.pdf-reader {
+  background: var(--canvas);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  inset: 0;
+  position: fixed;
+  z-index: 150;
+}
+
+.pdf-reader > header {
+  align-items: center;
+  background: var(--paper);
+  border-bottom: 1px solid var(--line-strong);
+  display: flex;
+  justify-content: space-between;
+  min-height: 68px;
+  padding: 10px 20px;
+}
+
+.pdf-reader > header > div:first-child {
+  align-items: baseline;
+  display: flex;
+  gap: 12px;
+  min-width: 0;
+}
+
+.pdf-reader > header strong {
+  font-family: var(--serif);
+  font-size: 17px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pdf-reader > header small {
+  color: var(--ink-faint);
+  flex: 0 0 auto;
+  font-size: 10px;
+}
+
+.pdf-reader iframe {
+  background: #353b38;
+  border: 0;
+  height: 100%;
+  width: 100%;
+}
+
 .source-issues {
   margin-top: 34px;
 }
@@ -12520,6 +12631,15 @@ summary:focus-visible {
 
   .source-upload-dialog > footer .button {
     flex: 1;
+  }
+
+  .pdf-reader > header {
+    padding: 9px 12px;
+  }
+
+  .pdf-reader > header .eyebrow,
+  .pdf-reader > header small {
+    display: none;
   }
 }
 
