@@ -533,6 +533,17 @@ async def get_run_detail(run_id: str, db: AsyncSession = Depends(get_db)):
         )
         artifacts = artifact_result.scalars().all()
     turns = _build_turns(runs, messages, events, approvals, artifacts)
+    from app.modules.practice.models import PracticeSession
+
+    practices = list(
+        (
+            await db.scalars(
+                sa_select(PracticeSession)
+                .where(PracticeSession.agent_thread_id == thread.id)
+                .order_by(PracticeSession.created_at)
+            )
+        ).all()
+    )
     latest_status = turns[-1]["status"] if turns else "queued"
     return {
         "data": {
@@ -547,6 +558,22 @@ async def get_run_detail(run_id: str, db: AsyncSession = Depends(get_db)):
             "event_count": len(events),
             "created_at": utc_isoformat(thread.created_at),
             "updated_at": utc_isoformat(thread.updated_at),
+            "practices": [
+                {
+                    "id": item.id,
+                    "agent_run_id": item.agent_run_id,
+                    "title": item.title,
+                    "source_type": item.source_type,
+                    "status": item.status,
+                    "question_count": item.question_count,
+                    "awarded_score": item.awarded_score,
+                    "total_score": item.total_score,
+                    "created_at": utc_isoformat(item.created_at),
+                    "started_at": utc_isoformat(item.started_at),
+                    "submitted_at": utc_isoformat(item.submitted_at),
+                }
+                for item in practices
+            ],
             "turns": turns,
         }
     }

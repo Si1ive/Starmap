@@ -15,7 +15,7 @@
 | 管理端契约 | `frontend-admin/src/api/agentRuns.ts` | `AdminAgentSession`、`AdminAgentTurn`、`AdminAgentSessionDetail` | L12-L113 | 后端 Thread/turn JSON | 约束会话摘要、多轮问答和单轮内嵌事实结构 | TypeScript 类型 | 管理端列表与详情页 |
 | 旧链接兼容 | `backend/app/modules/agent/admin_router.py` | `_resolve_thread` | L234-L247 | Thread ID 或旧 Run ID | 统一解析为 Thread | Thread；不存在返回 `None` | `get_run_detail` |
 | 按轮归并 | `backend/app/modules/agent/admin_router.py` | `_build_turns` | L141-L231 | messages、runs、events、approvals、artifacts | 以 root Run 为边界把 child Run 和事实归入同一轮 | `turns[]`；只读 | `get_run_detail` |
-| 会话详情 | `backend/app/modules/agent/admin_router.py` | `get_run_detail` | L477-L542 | 已解析 Thread | 一次读取五类事实并调用 `_build_turns` | 完整会话详情；不存在传播安全 404 | `AgentRunDetailPage` |
+| 会话详情 | `backend/app/modules/agent/admin_router.py` | `get_run_detail` | L486-L579 | 已解析 Thread | 读取五类 Agent 事实、关联 PracticeSession 并调用 `_build_turns` | 完整会话详情与 `practices[]`；不存在传播安全 404 | `AgentRunDetailPage` |
 | 前端列表 | `frontend-admin/src/pages/AgentRunsPage.tsx` | `AgentRunsPage` | L56-L306 | 分页会话与统计 | 保留原“会话与 Run”统计、筛选、分页和 Thread 详情入口，不再建立记忆派生任务子页 | 单一会话监控表 | 管理员进入会话详情 |
 | 前端执行流程图 | `frontend-admin/src/pages/AgentRunDetailPage.tsx` | `buildFlowSteps`、`StepNode`、`RunLane`、`TurnFlow`、`AgentRunDetailPage` | L116-L176、L192-L257、L260-L304、L306-L384、L386-L514 | `session.turns` 中的 Run、按 Run 排序的事件、审批与产物 | 用 `step_id` 配对 started/completed/failed，把步骤期间的工具/交互/落库事件挂到节点；根 Run 与 child Run 用交接线串联。节点内折叠展示执行前 `input`、完成 `output` 和调用证据；会话工具栏提供唯一记忆入口，Run 卡片不再各自提供入口或回放 | 可直接定位停点和分支原因的纵向流程图；无 API 或数据库副作用 | 管理员展开执行证据，或打开会话记忆抽屉 |
 
@@ -73,6 +73,7 @@ Outbox 的调度状态。Worker 后续仍走 `MemoryOutboxConsumer.process_claim
 2. source 缺失、已删除、版本不符或作用域不匹配都由 `get_snapshot_item_source` 传播相同 404，调用者不能据此枚举其他用户数据。
 3. Snapshot 正文、摘要和候选值只作为 JSON/纯文本数据返回；前端不得用 `dangerouslySetInnerHTML` 或 Markdown 执行器渲染。`memory_trace` 的 before/after 也必须先经过脱敏后再展示。
 4. 事件、Artifact 和错误摘要在既有会话详情序列化时也经过同一脱敏函数，API key、Authorization、DSN 凭证和 traceback 不进入响应。
+5. `backend/app/modules/agent/admin_router.py::get_run_detail`（L486-L579）额外按 Thread 查询 Agent 来源练习，返回来源 Run、状态、题数和成绩；`frontend-admin/src/pages/AgentRunDetailPage.tsx::AgentRunDetailPage` 在会话元数据下展示“会话练习”，管理员可区分 workflow 已完成但练习仍为 draft、正在作答或已经交卷。
 5. Outbox 重放沿用数据库唯一幂等身份；重复点击只更新同一行，但每次管理员动作都写独立审计记录。
 
 ## 监控采集器自身健康

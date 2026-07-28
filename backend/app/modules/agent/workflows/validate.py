@@ -19,6 +19,7 @@ from ..memory_selector import (
     load_practice_bundle,
 )
 from ..model_runtime.practice import PracticeGenerationDeps, practice_generation_runtime
+from app.modules.practice.service import PracticeService
 from ..time_utils import utc_isoformat, utc_now
 
 logger = get_logger(__name__)
@@ -244,6 +245,7 @@ async def _generate_question_node(context: ExecutionContext, db: AsyncSession) -
             "explanation": generated.explanation,
             "generated": True,
             "topic": str(topic),
+            "knowledge_point_ids": list(bundle.get("knowledge_point_ids") or []),
         },
     }
     context.set("valid_questions", [candidate])
@@ -286,17 +288,28 @@ async def _composition_gate_node(context: ExecutionContext, db: AsyncSession) ->
 
 
 async def _create_draft_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
-    """创建练习草稿（唯一副作用）"""
+    """创建可从练习页继续的用户练习草稿（唯一副作用）。"""
     valid_questions = context.get("valid_questions", [])
     composition = context.get("composition", {})
+    bundle = context.get("practice_bundle") or {}
+    topic = (bundle.get("topic") or {}).get("title")
+    if not topic:
+        weak_areas = (context.get("learning_evidence") or {}).get("weak_areas") or []
+        topic = weak_areas[0] if weak_areas else "专项"
     
     draft = {
-        "title": f"专项练习 · {context.user_id}",
+        "title": f"{topic}专项练习",
         "questions": valid_questions,
         "composition": composition,
         "created_at": utc_isoformat(utc_now()),
     }
-    
+    session = await PracticeService(db).create_agent_draft(
+        run_id=context.run_id,
+        user_id=context.user_id,
+        title=draft["title"],
+        questions=valid_questions,
+    )
+    draft["session_id"] = session.id
     context.set("practice_draft", draft)
     logger.info("练习草稿创建", run_id=context.run_id, question_count=len(valid_questions))
     return NodeResult.success({"draft_created": True}, next_node="render_artifact")
@@ -350,6 +363,15 @@ async def _render_artifact_node(context: ExecutionContext, db: AsyncSession) -> 
             "question_count": len(draft.get("questions", [])),
             "question_ids": question_ids,
             "composition": composition,
+            "practice_session_id": draft.get("session_id"),
+            "practice_status": "draft",
+            "actions": [
+                {
+                    "type": "open_practice",
+                    "target_id": draft.get("session_id"),
+                    "label": "开始练习",
+                }
+            ],
         },
         "summary": f"共 {len(draft.get('questions', []))} 道题，覆盖 {len(composition.get('subjects', {}))} 个考点",
         "_private_metadata": {"generated_questions": generated_questions},

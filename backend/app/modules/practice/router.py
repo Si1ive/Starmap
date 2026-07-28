@@ -121,12 +121,12 @@ async def _submit(db: AsyncSession, session: PracticeSession) -> None:
     rows = (
         await db.execute(
             select(PracticeSessionQuestion, Question, PracticeAnswer)
-            .join(Question, Question.id == PracticeSessionQuestion.question_id)
+            .outerjoin(Question, Question.id == PracticeSessionQuestion.question_id)
             .outerjoin(
                 PracticeAnswer,
                 and_(
                     PracticeAnswer.session_id == PracticeSessionQuestion.session_id,
-                    PracticeAnswer.question_id == PracticeSessionQuestion.question_id,
+                    PracticeAnswer.session_question_id == PracticeSessionQuestion.id,
                 ),
             )
             .where(PracticeSessionQuestion.session_id == session.id)
@@ -137,7 +137,8 @@ async def _submit(db: AsyncSession, session: PracticeSession) -> None:
         if answer is None:
             answer = PracticeAnswer(
                 session_id=session.id,
-                question_id=question.id,
+                session_question_id=link.id,
+                question_id=link.question_id,
                 user_answer="",
                 time_spent_seconds=0,
             )
@@ -158,12 +159,12 @@ async def _session_payload(db: AsyncSession, session: PracticeSession) -> dict:
     rows = (
         await db.execute(
             select(PracticeSessionQuestion, Question, PracticeAnswer)
-            .join(Question, Question.id == PracticeSessionQuestion.question_id)
+            .outerjoin(Question, Question.id == PracticeSessionQuestion.question_id)
             .outerjoin(
                 PracticeAnswer,
                 and_(
                     PracticeAnswer.session_id == PracticeSessionQuestion.session_id,
-                    PracticeAnswer.question_id == PracticeSessionQuestion.question_id,
+                    PracticeAnswer.session_question_id == PracticeSessionQuestion.id,
                 ),
             )
             .where(PracticeSessionQuestion.session_id == session.id)
@@ -172,7 +173,11 @@ async def _session_payload(db: AsyncSession, session: PracticeSession) -> dict:
     ).all()
     submitted = session.status == "submitted"
     now = datetime.utcnow()
-    elapsed = int(((session.submitted_at or now) - session.started_at).total_seconds())
+    elapsed = (
+        int(((session.submitted_at or now) - session.started_at).total_seconds())
+        if session.started_at
+        else 0
+    )
     return {
         "id": session.id,
         "title": session.title,
@@ -186,17 +191,18 @@ async def _session_payload(db: AsyncSession, session: PracticeSession) -> dict:
         "question_count": session.question_count,
         "total_score": session.total_score,
         "awarded_score": session.awarded_score,
-        "started_at": session.started_at.isoformat(),
+        "started_at": session.started_at.isoformat() if session.started_at else None,
         "submitted_at": (
             session.submitted_at.isoformat() if session.submitted_at else None
         ),
         "questions": [
             {
-                "id": question.id,
+                "id": link.item_id,
                 "order_no": link.order_no,
-                "type": (link.snapshot_json or {}).get("type") or question.type,
+                "type": (link.snapshot_json or {}).get("type")
+                or (question.type if question else "choice"),
                 "content": (link.snapshot_json or {}).get("content")
-                or question.content,
+                or (question.content if question else ""),
                 "options": (link.snapshot_json or {}).get("options") or [],
                 "max_score": link.max_score,
                 "source": (link.snapshot_json or {}).get("source"),
@@ -279,7 +285,7 @@ async def request_practice_hint(
     link = await db.scalar(
         select(PracticeSessionQuestion).where(
             PracticeSessionQuestion.session_id == session.id,
-            PracticeSessionQuestion.question_id == question_id,
+            PracticeSessionQuestion.item_id == question_id,
         )
     )
     if link is None:
@@ -287,14 +293,15 @@ async def request_practice_hint(
     answer = await db.scalar(
         select(PracticeAnswer).where(
             PracticeAnswer.session_id == session.id,
-            PracticeAnswer.question_id == question_id,
+            PracticeAnswer.session_question_id == link.id,
         )
     )
     _assert_answer_version(answer, payload.expected_version)
     if answer is None:
         answer = PracticeAnswer(
             session_id=session.id,
-            question_id=question_id,
+            session_question_id=link.id,
+            question_id=link.question_id,
             version=1,
             hint_levels_used_json=[payload.level],
         )
@@ -353,18 +360,22 @@ async def create_practice_session(
         id=uuid.uuid4().hex,
         user_id=current.user.id,
         source_document_id=document.id,
+        source_type="document",
         mode=payload.mode,
         title=document.paper_name or document.title or corpus_file.file_name,
         duration_seconds=payload.duration_seconds,
         question_count=len(questions),
         total_score=len(questions),
+        started_at=datetime.utcnow(),
     )
     db.add(session)
     for index, question in enumerate(questions, 1):
         db.add(
             PracticeSessionQuestion(
+                item_id=question.id,
                 session_id=session.id,
                 question_id=question.id,
+                source_type="question_bank",
                 order_no=index,
                 max_score=1,
                 snapshot_json={
@@ -395,6 +406,8 @@ async def get_practice_session(
     db: AsyncSession = Depends(get_db),
 ):
     session = await _owned_session(db, session_id, current.user.id, lock=True)
+    if session.status == "draft":
+        return ApiResponse(data=await _session_payload(db, session))
     if (
         session.status == "active"
         and (datetime.utcnow() - session.started_at).total_seconds()
@@ -422,25 +435,26 @@ async def save_practice_answer(
         await _submit(db, session)
         await db.commit()
         raise HTTPException(status_code=409, detail="考试时间已到，系统已经自动交卷")
-    allowed = await db.scalar(
-        select(PracticeSessionQuestion.id).where(
+    link = await db.scalar(
+        select(PracticeSessionQuestion).where(
             PracticeSessionQuestion.session_id == session.id,
-            PracticeSessionQuestion.question_id == question_id,
+            PracticeSessionQuestion.item_id == question_id,
         )
     )
-    if not allowed:
+    if not link:
         raise HTTPException(status_code=404, detail="题目不属于当前试卷")
     answer = await db.scalar(
         select(PracticeAnswer).where(
             PracticeAnswer.session_id == session.id,
-            PracticeAnswer.question_id == question_id,
+            PracticeAnswer.session_question_id == link.id,
         )
     )
     _assert_answer_version(answer, payload.expected_version)
     if answer is None:
         answer = PracticeAnswer(
             session_id=session.id,
-            question_id=question_id,
+            session_question_id=link.id,
+            question_id=link.question_id,
             version=1,
         )
         db.add(answer)
@@ -454,6 +468,23 @@ async def save_practice_answer(
         message="答案已保存",
         data={"saved_at": answer.saved_at.isoformat(), "version": answer.version},
     )
+
+
+@router.post("/sessions/{session_id}/start", response_model=ApiResponse)
+async def start_practice_session(
+    session_id: str,
+    current: AuthenticatedSession = Depends(require_csrf_session),
+    db: AsyncSession = Depends(get_db),
+):
+    """Idempotently start a prepared Agent practice draft."""
+    session = await _owned_session(db, session_id, current.user.id, lock=True)
+    if session.status == "submitted":
+        raise HTTPException(status_code=409, detail="练习已经完成")
+    if session.status == "draft":
+        session.status = "active"
+        session.started_at = datetime.utcnow()
+        await db.commit()
+    return ApiResponse(message="练习已开始", data=await _session_payload(db, session))
 
 
 @router.post("/sessions/{session_id}/submit", response_model=ApiResponse)
@@ -505,7 +536,7 @@ async def list_practice_history(
                     "question_count": item.question_count,
                     "total_score": item.total_score,
                     "awarded_score": item.awarded_score,
-                    "started_at": item.started_at.isoformat(),
+                    "started_at": item.started_at.isoformat() if item.started_at else None,
                     "submitted_at": (
                         item.submitted_at.isoformat() if item.submitted_at else None
                     ),

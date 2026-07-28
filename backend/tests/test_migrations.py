@@ -31,7 +31,21 @@ def test_migration_graph_has_single_head():
     config.set_main_option("script_location", str(backend_dir / "alembic"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_heads() == ["20260728_practice_hints"]
+    assert scripts.get_heads() == ["20260728_agent_practice_drafts"]
+
+
+def test_agent_practice_migration_replaces_fk_backing_indexes_before_drop():
+    migration = (
+        Path(__file__).parents[1]
+        / "alembic/versions/20260728_agent_practice_drafts.py"
+    ).read_text(encoding="utf-8")
+
+    assert migration.index('"uk_practice_session_item" not in item_indexes') < migration.index(
+        '"uk_practice_session_question" in item_indexes'
+    )
+    assert migration.index('"uk_practice_answer_item" not in answer_indexes') < migration.index(
+        '"uk_practice_answer" in answer_indexes'
+    )
 
 
 def test_vector_recall_trace_migration_adds_correlation_fields():

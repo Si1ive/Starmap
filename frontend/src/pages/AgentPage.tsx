@@ -3,11 +3,14 @@ import { AlertCircle, CheckCircle2, LoaderCircle, WifiOff } from 'lucide-react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   AgentApiError,
+  listThreadPractices,
   listSelectableAgentModels,
   type SelectableAgentModel,
+  type ThreadPractice,
 } from '../api/agent'
 import ChatComposer from '../features/agent/ChatComposer'
 import ConversationStream from '../features/agent/ConversationStream'
+import ConversationPracticeRail from '../features/agent/ConversationPracticeRail'
 import { selectTimelineItems } from '../features/agent/timeline-state'
 import { useAgent } from '../store/agent-context'
 import '../features/agent/agent-chat.css'
@@ -44,6 +47,7 @@ export default function AgentPage() {
   const [modelsLoading, setModelsLoading] = useState(true)
   const [modelError, setModelError] = useState<string | null>(null)
   const [selectedModelId, setSelectedModelId] = useState('')
+  const [threadPractices, setThreadPractices] = useState<ThreadPractice[]>([])
   const [pendingResponse, setPendingResponse] = useState<{
     threadId: string
     afterSequence: number | null
@@ -109,6 +113,16 @@ export default function AgentPage() {
     void openThread(threadId)
     return () => disconnectThreadStream()
   }, [disconnectThreadStream, dispatch, openThread, threadId])
+
+  useEffect(() => {
+    if (!threadId) {
+      setThreadPractices([])
+      return
+    }
+    void listThreadPractices(threadId)
+      .then((response) => setThreadPractices(response.items))
+      .catch(() => setThreadPractices([]))
+  }, [threadId, state.timeline.latestCursor])
 
   useEffect(() => {
     if (!state.error) return
@@ -259,6 +273,7 @@ export default function AgentPage() {
         </div>
       ) : (
         <div className="agent-chat-conversation">
+          <ConversationPracticeRail items={threadPractices} />
           {state.loading && timelineItems.length === 0 ? (
             <div className="agent-chat-loading" role="status">
               <LoaderCircle className="agent-chat-spin" size={18} />

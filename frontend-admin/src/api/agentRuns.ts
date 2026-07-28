@@ -111,6 +111,19 @@ export interface AdminAgentSessionDetail extends Omit<
   AdminAgentSession,
   'latest_workflow_key' | 'current_step_key'
 > {
+  practices: Array<{
+    id: string
+    agent_run_id: string | null
+    title: string
+    source_type: string
+    status: 'draft' | 'active' | 'submitted'
+    question_count: number
+    awarded_score: number | null
+    total_score: number
+    created_at: string
+    started_at: string | null
+    submitted_at: string | null
+  }>
   turns: AdminAgentTurn[]
 }
 

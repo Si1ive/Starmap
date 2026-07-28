@@ -288,6 +288,11 @@ async def test_validate_generates_structured_question_after_empty_rag(monkeypatc
         )
     )
     monkeypatch.setattr(validate.practice_generation_runtime, "generate", generate)
+    monkeypatch.setattr(
+        validate.PracticeService,
+        "create_agent_draft",
+        AsyncMock(return_value=type("Draft", (), {"id": "practice_draft_001"})()),
+    )
 
     generated = await validate._generate_question_node(context, AsyncMock())
     composed = await validate._composition_gate_node(context, AsyncMock())
@@ -299,6 +304,8 @@ async def test_validate_generates_structured_question_after_empty_rag(monkeypatc
     assert composed.status == NodeStatus.COMPLETED
     assert drafted.status == NodeStatus.COMPLETED
     assert rendered.artifact["content"]["question_ids"] == ["generated_run_validate_001"]
+    assert rendered.artifact["content"]["practice_session_id"] == "practice_draft_001"
+    assert rendered.artifact["content"]["actions"][0]["type"] == "open_practice"
     assert "UDP 校验和的主要作用是什么" in rendered.artifact["content"]["content"]
     assert "generated_questions" not in rendered.artifact["content"]
     assert "standard_answer" not in str(rendered.artifact["content"])

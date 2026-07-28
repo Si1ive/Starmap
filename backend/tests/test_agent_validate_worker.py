@@ -1,6 +1,7 @@
 """Validate workflow 在缺少主题时的澄清与恢复测试。"""
 
 from unittest.mock import AsyncMock
+from uuid import UUID
 
 import pytest
 import pytest_asyncio
@@ -33,6 +34,9 @@ from app.modules.agent.worker import AgentWorker
 from app.modules.agent.workflows import validate
 from app.modules.agent.memory_selector import PracticeBundle, TopicBundle
 from app.modules.agent.model_runtime.schema import GeneratedPracticeQuestion
+from app.models.mysql_models import Question
+from app.modules.practice.models import PracticeSession, PracticeSessionQuestion
+from app.modules.identity.models import User  # noqa: F401 - register identity FK metadata
 
 WORKER_TABLES = [
     AgentThread.__table__,
@@ -49,6 +53,9 @@ WORKER_TABLES = [
     AgentApproval.__table__,
     AgentMemoryEvent.__table__,
     AgentMemoryUpdateOutbox.__table__,
+    Question.__table__,
+    PracticeSession.__table__,
+    PracticeSessionQuestion.__table__,
 ]
 
 
@@ -57,14 +64,20 @@ async def db_session():
     engine = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool)
     async with engine.begin() as connection:
         await connection.exec_driver_sql("PRAGMA foreign_keys=ON")
-        await connection.run_sync(
-            lambda sync_connection: Base.metadata.create_all(
-                sync_connection,
-                tables=WORKER_TABLES,
-            )
-        )
+        # Validate now crosses the real Agent → Practice persistence boundary;
+        # create the complete metadata graph so all ownership/source FKs remain active.
+        await connection.run_sync(Base.metadata.create_all)
     session_maker = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
     async with session_maker() as session:
+        session.add(
+            User(
+                id=UUID("01900000-0000-7000-8000-000000000001"),
+                email_normalized="validate@example.com",
+                email_display="validate@example.com",
+                status="active",
+            )
+        )
+        await session.commit()
         yield session
     await engine.dispose()
 
@@ -72,14 +85,14 @@ async def db_session():
 async def _create_validate_run(db_session, *, run_id: str) -> AgentRun:
     thread = AgentThread(
         id=f"thread_{run_id}",
-        user_id="user_001",
+        user_id="01900000000070008000000000000001",
         title="Validate 澄清测试",
         status="active",
     )
     run = AgentRun(
         id=run_id,
         thread_id=thread.id,
-        user_id="user_001",
+        user_id="01900000000070008000000000000001",
         workflow_name="validate",
         workflow_key="validate",
         workflow_version="v1",
@@ -101,12 +114,35 @@ async def _create_validate_run(db_session, *, run_id: str) -> AgentRun:
     return run
 
 
+async def _create_question(db_session, question_id: str, topic: str) -> None:
+    db_session.add(
+        Question(
+            id=question_id,
+            type="choice",
+            content=f"{topic}测试题",
+            options=[{"key": "A", "text": "正确"}, {"key": "B", "text": "错误"}],
+            answer="A",
+            explanation=f"{topic}解析",
+            difficulty="medium",
+            source="测试题库",
+            topic_terms=[topic],
+            knowledge_point_ids=[],
+            answer_source="manual",
+            explanation_source="manual",
+            review_status="approved",
+            status="active",
+        )
+    )
+    await db_session.flush()
+
+
 @pytest.mark.asyncio
 async def test_validate_waits_for_topic_clarification_and_resumes_with_answer(
     db_session,
     monkeypatch,
 ):
     run = await _create_validate_run(db_session, run_id="run_validate_clarify_001")
+    await _create_question(db_session, "question_001", "红黑树")
     monkeypatch.setattr(
         validate,
         "load_practice_bundle",
@@ -149,7 +185,7 @@ async def test_validate_waits_for_topic_clarification_and_resumes_with_answer(
     retrieve.assert_not_awaited()
 
     page = await AgentTimelineService(db_session).get_timeline(
-        user_id="user_001",
+        user_id="01900000000070008000000000000001",
         thread_id=run.thread_id,
         before=None,
         limit=20,
@@ -161,7 +197,7 @@ async def test_validate_waits_for_topic_clarification_and_resumes_with_answer(
         run.id,
         "practice_topic",
         "红黑树",
-        "user_001",
+        "01900000000070008000000000000001",
     )
     assert answered is not None
     assert answered.status == "answered"
@@ -184,6 +220,7 @@ async def test_validate_completion_writes_practice_fact_event_for_exclusion(
     monkeypatch,
 ):
     run = await _create_validate_run(db_session, run_id="run_validate_fact_001")
+    await _create_question(db_session, "question_binary_001", "二分查找")
     monkeypatch.setattr(
         validate,
         "load_practice_bundle",
@@ -306,7 +343,18 @@ async def test_validate_worker_keeps_generated_answer_out_of_public_artifact(
     artifact = await db_session.scalar(
         select(AgentArtifact).where(AgentArtifact.run_id == run.id)
     )
+    practice = await db_session.scalar(
+        select(PracticeSession).where(PracticeSession.agent_run_id == run.id)
+    )
     assert artifact is not None
+    assert practice is not None
+    assert practice.status == "draft"
+    assert practice.started_at is None
+    assert practice.agent_thread_id == run.thread_id
+    assert artifact.content_json["content"]["practice_session_id"] == practice.id
+    assert artifact.content_json["content"]["actions"] == [
+        {"type": "open_practice", "target_id": practice.id, "label": "开始练习"}
+    ]
     assert "generated_questions" not in artifact.content_json["content"]
     assert "standard_answer" not in str(artifact.content_json)
     assert artifact.metadata_json["generated_questions"][0]["standard_answer"] == "A"

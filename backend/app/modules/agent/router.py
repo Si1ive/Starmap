@@ -119,6 +119,49 @@ async def list_thread_runs(
     }
 
 
+@router.get("/threads/{thread_id}/practices")
+async def list_thread_practices(
+    thread_id: str,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """List user-owned practice drafts and attempts created from this conversation."""
+    from app.modules.practice.models import PracticeSession
+
+    thread = await AgentService(db).get_thread(thread_id, user_id)
+    if thread is None:
+        raise HTTPException(status_code=404, detail="线程不存在")
+    sessions = list(
+        (
+            await db.scalars(
+                select(PracticeSession)
+                .where(
+                    PracticeSession.agent_thread_id == thread_id,
+                    PracticeSession.user_id == user_id,
+                )
+                .order_by(PracticeSession.created_at.desc())
+            )
+        ).all()
+    )
+    return {
+        "items": [
+            {
+                "id": item.id,
+                "agent_run_id": item.agent_run_id,
+                "title": item.title,
+                "status": item.status,
+                "question_count": item.question_count,
+                "awarded_score": item.awarded_score,
+                "total_score": item.total_score,
+                "created_at": utc_isoformat(item.created_at),
+                "started_at": utc_isoformat(item.started_at),
+                "submitted_at": utc_isoformat(item.submitted_at),
+            }
+            for item in sessions
+        ]
+    }
+
+
 @router.get("/threads")
 async def list_threads(
     limit: int = Query(20, ge=1, le=100),

@@ -51,14 +51,14 @@ export interface PracticeSession {
   id: string;
   title: string;
   mode: "mock_exam" | "practice";
-  status: "active" | "submitted";
+  status: "draft" | "active" | "submitted";
   duration_seconds: number;
   elapsed_seconds: number;
   remaining_seconds: number;
   question_count: number;
   total_score: number;
   awarded_score: number | null;
-  started_at: string;
+  started_at: string | null;
   submitted_at: string | null;
   questions: PracticeQuestion[];
 }
@@ -66,11 +66,11 @@ export interface PracticeSession {
 export interface PracticeHistoryItem {
   id: string;
   title: string;
-  status: "active" | "submitted";
+  status: "draft" | "active" | "submitted";
   question_count: number;
   total_score: number;
   awarded_score: number | null;
-  started_at: string;
+  started_at: string | null;
   submitted_at: string | null;
 }
 
@@ -137,6 +137,13 @@ export function createPracticeSession(
 
 export function getPracticeSession(sessionId: string) {
   return request<PracticeSession>(`/sessions/${encodeURIComponent(sessionId)}`);
+}
+
+export function startPracticeSession(sessionId: string) {
+  return request<PracticeSession>(
+    `/sessions/${encodeURIComponent(sessionId)}/start`,
+    { method: "POST", body: "{}" },
+  );
 }
 
 export function savePracticeAnswer(

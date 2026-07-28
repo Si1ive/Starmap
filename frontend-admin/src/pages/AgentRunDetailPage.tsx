@@ -477,6 +477,31 @@ const AgentRunDetailPage = () => {
         </Descriptions.Item>
       </Descriptions>
 
+      <Card
+        className="agent-run-practices"
+        size="small"
+        title={`会话练习（${session.practices.length}）`}
+      >
+        {session.practices.length ? (
+          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+            {session.practices.map((practice) => (
+              <Descriptions bordered column={{ xs: 1, md: 4 }} key={practice.id} size="small">
+                <Descriptions.Item label="练习">{practice.title}</Descriptions.Item>
+                <Descriptions.Item label="状态">
+                  <Tag color={practice.status === 'submitted' ? 'green' : practice.status === 'active' ? 'blue' : 'gold'}>
+                    {practice.status === 'submitted' ? '已完成' : practice.status === 'active' ? '进行中' : '草稿'}
+                  </Tag>
+                </Descriptions.Item>
+                <Descriptions.Item label="题目/得分">
+                  {practice.question_count} 题 · {practice.awarded_score ?? '-'}/{practice.total_score}
+                </Descriptions.Item>
+                <Descriptions.Item label="来源 Run">{practice.agent_run_id || '-'}</Descriptions.Item>
+              </Descriptions>
+            ))}
+          </Space>
+        ) : <Empty description="该会话尚未创建练习" image={Empty.PRESENTED_IMAGE_SIMPLE} />}
+      </Card>
+
       {session.turns.length === 0 ? (
         <Empty description="该会话暂无问答运行" />
       ) : (

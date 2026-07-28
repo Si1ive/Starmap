@@ -23,6 +23,7 @@
 | 用户私有语料所有权 | `backend/alembic/versions/20260728_user_private_corpus.py` | `upgrade`、`downgrade` | L19-L54 | 已完成 Agent LLM 关联审计迁移；既有语料均视作平台资料 | 给 `corpus_files` 增加 nullable UUID owner 外键和 owner/时间索引，把全局 SHA 唯一约束降为普通索引，使不同用户可各自上传相同文件；删除用户时级联删除个人语料 | `owner_user_id IS NULL` 表示平台资料，否则只属于一个学习用户；降级前若存在跨用户同 SHA 数据，恢复唯一约束会显式失败而不静默合并 | 用户资料 API / Agent 检索补全过滤 |
 | 用户模拟考事实 | `backend/alembic/versions/20260728_practice_sessions.py` | `upgrade`、`downgrade` | L19-L109 | 已完成用户私有语料迁移 | 创建用户会话、会话题、作答与学习计时表，所有入口以用户 UUID 建索引和外键 | 真实模拟考、成绩、复盘与番茄钟事实；来源资料删除只清空会话引用 | 用户练习 API / 后续学习进度聚合 |
 | 模拟考题目快照 | `backend/alembic/versions/20260728_practice_snapshot.py` | `upgrade`、`downgrade` | L18-L49 | 已存在模拟考事实表 | 先从当前题库为历史会话题回填 JSON 快照，再收紧非空 | 后续题库变化不改写历史题面和批改依据 | 交卷批改 / 历史复盘 |
+| Agent 练习草稿 | `backend/alembic/versions/20260728_agent_practice_drafts.py` | `upgrade`、`downgrade` | L42-L195 | Practice hints head | 为 Session 增加 Agent Thread/Run 来源和 draft 启动语义；为题目增加稳定 item ID 与来源，作答改关联 Session Item；先创建替代唯一索引再删除外键依赖的旧索引，并对非事务 DDL 中断提供可重入检查 | 即时题不依赖公共 Question 外键；Run 幂等唯一 | Validate / Practice / Agent Runs |
 | 启动期门禁 | `backend/app/main.py` | `lifespan` | L91-L107 | 已连接 MySQL | 在 Worker 和调度器前调用 schema guard | 漂移时关闭连接并中止启动 | Worker 启动 |
 | 版本与真结构校验 | `backend/app/modules/operations/schema_guard.py` | `AGENT_REQUIRED_TABLES`、`MEMORY_OUTBOX_REQUIRED_COLUMNS`、`verify_database_schema` | L13-L30、L45-L221 | Alembic revision 与 information_schema | 同时核对 head、Agent 表/列、Outbox 失败列和唯一索引、模型 nullable 约束 | 通过返回 revision；失败抛 `DatabaseSchemaError` | FastAPI lifespan |
 
@@ -42,7 +43,7 @@
 
 ## 故障定位顺序
 
-1. 先检查 `alembic_version` 是否等于当前 head `20260728_practice_snapshot`，禁止用 `alembic stamp head` 掩盖缺失迁移。
+1. 先检查 `alembic_version` 是否等于当前 head `20260728_agent_practice_drafts`，禁止用 `alembic stamp head` 掩盖缺失迁移。
 2. 若应用层已有字段但数据库报列不存在，执行 `alembic upgrade head`，再走 `verify_database_schema` 同时确认真列。
 3. Memory Outbox 没有失败详情时，检查 `last_error_message` 真列以及 `MemoryOutboxStore.fail` 是否收到异常摘要。
 4. 工具活动无法恢复时，确认 `workflow.activity.updated` 已进入数据库 ENUM。

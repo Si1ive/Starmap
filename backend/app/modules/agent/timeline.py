@@ -648,13 +648,19 @@ class AgentTimelineService:
     @staticmethod
     def _artifact_view(artifact: AgentArtifact) -> dict[str, Any]:
         content = artifact.content_json or {}
+        artifact_body = content.get("content")
+        actions = (
+            artifact_body.get("actions", [])
+            if isinstance(artifact_body, dict)
+            else []
+        )
         return {
             "id": artifact.id,
             "type": artifact.artifact_type,
             "title": content.get("title") or "执行结果",
             "summary": content.get("summary") or content.get("content"),
             "content": content,
-            "actions": [],
+            "actions": actions if isinstance(actions, list) else [],
             "created_at": artifact.created_at,
         }
 

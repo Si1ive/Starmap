@@ -7,7 +7,9 @@ import {
   Database,
   FileText,
   LoaderCircle,
+  Play,
 } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import type {
   WorkflowArtifactView,
   WorkflowActivityView,
@@ -171,11 +173,15 @@ function artifactMarkdown(content: unknown): string | null {
 }
 
 function ArtifactCard({ artifact }: { artifact: WorkflowArtifactView }) {
+  const navigate = useNavigate()
   const [open, setOpen] = useState(artifact.type === 'explanation')
   const typeLabel = artifactTypeLabel(artifact.type)
   const summary = publicText(artifact.summary) || '已生成一项结果'
   const detail = artifactMarkdown(artifact.content)
   const canExpand = Boolean(detail && detail !== summary)
+  const practiceAction = artifact.actions.find((action) => (
+    action.type === 'open_practice' && typeof action.target_id === 'string'
+  ))
 
   return (
     <article className={`inline-workflow__artifact is-${artifact.type}`}>
@@ -197,6 +203,16 @@ function ArtifactCard({ artifact }: { artifact: WorkflowArtifactView }) {
         ) : null}
       </div>
       {open && detail ? <MarkdownContent className="inline-workflow__artifact-content" content={detail} /> : null}
+      {practiceAction ? (
+        <button
+          className="inline-workflow__artifact-action"
+          onClick={() => navigate(`/practice/${encodeURIComponent(String(practiceAction.target_id))}`)}
+          type="button"
+        >
+          <Play aria-hidden="true" size={13} />
+          {typeof practiceAction.label === 'string' ? practiceAction.label : '开始练习'}
+        </button>
+      ) : null}
     </article>
   )
 }

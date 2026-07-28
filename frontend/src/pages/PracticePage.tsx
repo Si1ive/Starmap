@@ -16,6 +16,7 @@ import {
   PracticeApiError,
   requestPracticeHint,
   savePracticeAnswer,
+  startPracticeSession,
   submitPracticeSession,
 } from "../api/practice";
 import type { PracticeSession } from "../api/practice";
@@ -54,7 +55,10 @@ export default function PracticePage() {
   const load = useCallback(async () => {
     if (!sessionId) return;
     try {
-      const data = await getPracticeSession(sessionId);
+      const loaded = await getPracticeSession(sessionId);
+      const data = loaded.status === "draft"
+        ? await startPracticeSession(sessionId)
+        : loaded;
       setSession(data);
       setRemaining(data.remaining_seconds);
       setError(null);

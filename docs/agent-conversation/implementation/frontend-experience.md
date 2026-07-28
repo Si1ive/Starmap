@@ -49,7 +49,8 @@
 | --- | --- | --- | --- | --- | --- |
 | Markdown 安全渲染 | `frontend/src/features/agent/MarkdownContent.tsx` | `MarkdownContent`（L14-L23） | 助手消息或允许展示正文的 Artifact 字符串 | 使用 `react-markdown` + `remark-gfm` 渲染标题、列表、代码、表格、任务列表和引用；显式 `skipHtml`，不启用 raw HTML/HTML 注入 | 助手气泡与讲解 Artifact |
 | 助手消息归并 | `frontend/src/features/agent/ConversationStream.tsx` | `TimelineItemView`（L32-L106） | assistant `message.completed`、streaming 或 failed partial content | 正文和失败时保留的 partial 内容都进入同一 Markdown 组件；失败原因仍作为独立红色纯文本显示，避免覆盖正文 | 用户对话流 |
-| Artifact 分型 | `frontend/src/features/agent/InlineWorkflow.tsx` | `artifactTypeLabel`（L151-L161）、`artifactMarkdown`（L163-L171）、`ArtifactCard`（L173-L202） | `workflow.artifacts[]` | 讲解默认展开 Markdown；题目练习、批改、学习计划和普通回答显示类型眉标与不同边框/底色；结构化题目/计划内容不被强行当正文解析 | 工作流结果卡片 |
+| Artifact 分型与练习动作 | `frontend/src/features/agent/InlineWorkflow.tsx` | `artifactTypeLabel`（L153-L163）、`artifactMarkdown`（L165-L173）、`ArtifactCard`（L175-L218） | `workflow.artifacts[]` | 讲解默认展开 Markdown；练习 Artifact 只识别服务端 `open_practice + target_id` 并拼站内路由，不执行任意 href | 工作流结果卡片与练习页 |
+| 本会话练习轨道 | `frontend/src/features/agent/ConversationPracticeRail.tsx`、`frontend/src/pages/AgentPage.tsx` | `ConversationPracticeRail`（L11-L50）、`AgentPage`（L26-L125、L275-L300） | 当前 Thread 的用户归属练习 | SSE cursor 变化后刷新练习列表；桌面显示左侧连续轨道，窄屏折叠为顶部横轨；draft/active/submitted 使用一致动作词 | 练习页或反馈页 |
 | Markdown 主题样式 | `frontend/src/features/agent/agent-chat.css` | `.agent-markdown`（L155-L281）、`.inline-workflow__artifact` 分型样式（L798-L895） | Markdown DOM 与 Artifact 类型 class | 统一标题、列表、引用、代码块、GFM 表格、链接和分型色彩；代码块可横向滚动，长文本换行，不撑破对话框 | 用户端响应式 UI |
 
 ## 下一步阅读

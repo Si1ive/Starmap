@@ -8,6 +8,7 @@
 | 任务 | 状态入口 | 主题分卷 |
 | --- | --- | --- |
 | RAG、Explain 与分层记忆整改 | [总览](./2026-07-26-rag-explain-memory-remediation.md) | [已完成整改与基础](./2026-07-26-rag-explain-memory-remediation-completed.md) · [记忆生命周期](./2026-07-26-rag-explain-memory-remediation-memory-lifecycle.md) · [管理端可观测性](./2026-07-26-rag-explain-memory-remediation-observability.md) |
+| Agent 练习与学习闭环 | [四阶段任务单](./2026-07-28-agent-practice-learning-loop.md) | 出题持久化 · 学习证据 · 薄弱点统一 · Capability Harness |
 
 ## 更新规则
 

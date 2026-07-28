@@ -161,6 +161,19 @@ export interface WorkflowArtifactView {
   created_at: string
 }
 
+export interface ThreadPractice {
+  id: string
+  agent_run_id: string | null
+  title: string
+  status: 'draft' | 'active' | 'submitted'
+  question_count: number
+  awarded_score: number | null
+  total_score: number
+  created_at: string
+  started_at: string | null
+  submitted_at: string | null
+}
+
 export interface WorkflowActivityView {
   id: string
   activity_type: string
@@ -453,6 +466,14 @@ export async function listThreadRuns(
 ): Promise<{ items: Run[]; total: number }> {
   return apiRequest<{ items: Run[]; total: number }>(
     `/agent/threads/${threadId}/runs`,
+  )
+}
+
+export async function listThreadPractices(
+  threadId: string,
+): Promise<{ items: ThreadPractice[] }> {
+  return apiRequest<{ items: ThreadPractice[] }>(
+    `/agent/threads/${encodeURIComponent(threadId)}/practices`,
   )
 }
 

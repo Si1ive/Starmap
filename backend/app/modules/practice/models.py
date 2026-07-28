@@ -30,6 +30,15 @@ class PracticeSession(Base):
     source_document_id: Mapped[Optional[str]] = mapped_column(
         String(32), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True
     )
+    source_type: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="document"
+    )
+    agent_thread_id: Mapped[Optional[str]] = mapped_column(
+        String(32), ForeignKey("agent_threads.id", ondelete="SET NULL")
+    )
+    agent_run_id: Mapped[Optional[str]] = mapped_column(
+        String(32), ForeignKey("agent_runs.id", ondelete="SET NULL")
+    )
     mode: Mapped[str] = mapped_column(String(24), nullable=False, default="mock_exam")
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="active")
@@ -37,8 +46,8 @@ class PracticeSession(Base):
     question_count: Mapped[int] = mapped_column(Integer, nullable=False)
     total_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     awarded_score: Mapped[Optional[int]] = mapped_column(Integer)
-    started_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.utcnow
+    started_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True
     )
     submitted_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(
@@ -48,6 +57,8 @@ class PracticeSession(Base):
     __table_args__ = (
         Index("idx_practice_sessions_user_created", "user_id", "created_at"),
         Index("idx_practice_sessions_user_status", "user_id", "status"),
+        Index("idx_practice_sessions_agent_thread", "agent_thread_id", "created_at"),
+        UniqueConstraint("agent_run_id", name="uk_practice_sessions_agent_run"),
     )
 
 
@@ -55,22 +66,24 @@ class PracticeSessionQuestion(Base):
     __tablename__ = "practice_session_questions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    item_id: Mapped[str] = mapped_column(String(32), nullable=False)
     session_id: Mapped[str] = mapped_column(
         String(32),
         ForeignKey("practice_sessions.id", ondelete="CASCADE"),
         nullable=False,
     )
-    question_id: Mapped[str] = mapped_column(
-        String(32), ForeignKey("questions.id", ondelete="RESTRICT"), nullable=False
+    question_id: Mapped[Optional[str]] = mapped_column(
+        String(32), ForeignKey("questions.id", ondelete="RESTRICT"), nullable=True
+    )
+    source_type: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="question_bank"
     )
     order_no: Mapped[int] = mapped_column(Integer, nullable=False)
     max_score: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     snapshot_json: Mapped[dict] = mapped_column(JSON, nullable=False)
 
     __table_args__ = (
-        UniqueConstraint(
-            "session_id", "question_id", name="uk_practice_session_question"
-        ),
+        UniqueConstraint("session_id", "item_id", name="uk_practice_session_item"),
         UniqueConstraint("session_id", "order_no", name="uk_practice_session_order"),
     )
 
@@ -79,13 +92,18 @@ class PracticeAnswer(Base):
     __tablename__ = "practice_answers"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_question_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("practice_session_questions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
     session_id: Mapped[str] = mapped_column(
         String(32),
         ForeignKey("practice_sessions.id", ondelete="CASCADE"),
         nullable=False,
     )
-    question_id: Mapped[str] = mapped_column(
-        String(32), ForeignKey("questions.id", ondelete="RESTRICT"), nullable=False
+    question_id: Mapped[Optional[str]] = mapped_column(
+        String(32), ForeignKey("questions.id", ondelete="RESTRICT"), nullable=True
     )
     user_answer: Mapped[str] = mapped_column(Text, nullable=False, default="")
     is_correct: Mapped[Optional[bool]] = mapped_column(Boolean)
@@ -98,7 +116,9 @@ class PracticeAnswer(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("session_id", "question_id", name="uk_practice_answer"),
+        UniqueConstraint(
+            "session_id", "session_question_id", name="uk_practice_answer_item"
+        ),
         Index("idx_practice_answers_question", "question_id"),
     )
 

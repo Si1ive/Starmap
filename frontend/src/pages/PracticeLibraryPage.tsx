@@ -282,7 +282,7 @@ export default function PracticeLibraryPage() {
             <div>
               <strong>{item.title}</strong>
               <small>
-                {new Date(item.started_at).toLocaleString("zh-CN")} ·{" "}
+                {item.started_at ? new Date(item.started_at).toLocaleString("zh-CN") : "尚未开始"} ·{" "}
                 {item.question_count} 题
               </small>
             </div>
