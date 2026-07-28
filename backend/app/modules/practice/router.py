@@ -281,6 +281,9 @@ async def create_practice_session(
                     "chapter_id": question.primary_chapter_id or question.chapter_id,
                     "answer_source": question.answer_source,
                     "explanation_source": question.explanation_source,
+                    "topic_terms": question.topic_terms or [],
+                    "tags": question.tags or [],
+                    "knowledge_point_ids": question.knowledge_point_ids or [],
                 },
             )
         )

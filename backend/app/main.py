@@ -48,6 +48,7 @@ from app.modules.dashboard.router import router as dashboard_router
 from app.modules.identity.router import router as identity_router
 from app.modules.library.router import router as library_router
 from app.modules.practice.router import router as practice_router
+from app.modules.learning.router import router as learning_router
 from app.modules.identity.security import validate_user_auth_security_config
 from app.modules.monitoring.router import router as monitoring_router
 from app.modules.operations import router as operations_router
@@ -283,6 +284,7 @@ app.add_middleware(
 app.include_router(identity_router, prefix="/api/v1")
 app.include_router(library_router, prefix="/api/v1")
 app.include_router(practice_router, prefix="/api/v1")
+app.include_router(learning_router, prefix="/api/v1")
 app.include_router(chat_router, prefix="/api/v1")
 app.include_router(operations_router, prefix="/api/v1")
 admin_dependencies = [Depends(require_current_admin)]

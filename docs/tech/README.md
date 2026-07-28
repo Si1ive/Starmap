@@ -13,6 +13,7 @@
 - [408 Agent 对话界面实现逻辑与代码缺口](./408-agent-conversation-ui-implementation-gap.md) - thread 时间线、消息流、workflow 内嵌、SSE 恢复与分阶段代码改造
 - [用户认证技术方案与数据模型](./authentication-architecture-options.md) - 认证方案对比、关系表、API、安全基线与迁移路线
 - [用户端真实模拟考与练习实现](./user-practice-implementation.md) - 真题组卷、冻结快照、计时作答、交卷批改、复盘、覆盖统计与番茄钟
+- [真实学习进度与艾宾浩斯投影](./learning-progress-ebbinghaus.md) - 题目/知识点关键词归并、记忆强度更新、复习阈值、真实时长与用户端曲线
 - [多模态入库与检索设计](./multimodal-ingestion-retrieval-design.md) - 语料入库与检索方案
 - [MinerU 解析运行时设计](./pdf-parser-runtime-design.md) - 解析契约、模块边界和部署目标
 - [MinerU 解析服务部署](./pdf-parser-deployment.md) - Podman / 远程服务部署说明
