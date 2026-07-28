@@ -256,10 +256,7 @@ const RunMemoryDrawer = ({ open, runId, onClose }: RunMemoryDrawerProps) => {
         onClose={onClose}
         open={open}
         title={
-          <div>
-            <p className="admin-eyebrow">Run context &amp; persistent memory</p>
-            <span>Run 上下文与记忆观测</span>
-          </div>
+          <span>Run 上下文与记忆观测</span>
         }
         width="min(980px, 96vw)"
       >
@@ -274,22 +271,29 @@ const RunMemoryDrawer = ({ open, runId, onClose }: RunMemoryDrawerProps) => {
             <div className="memory-trace" aria-label="Run 到派生任务的记忆轨迹">
               <div className="memory-trace__node is-run">
                 <ApartmentOutlined />
-                <span>RUN</span>
+                <span>本次运行</span>
                 <code>{data.run.id}</code>
               </div>
               <span className="memory-trace__line" />
               <div className={`memory-trace__node ${data.snapshot ? 'is-snapshot' : 'is-muted'}`}>
                 <DatabaseOutlined />
-                <span>SNAPSHOT</span>
+                <span>冻结快照</span>
                 <code>{data.snapshot?.id || '未冻结'}</code>
               </div>
               <span className="memory-trace__line" />
               <div className="memory-trace__node is-outbox">
                 <HistoryOutlined />
-                <span>OUTBOX</span>
-                <code>{data.memory_outbox.length} tasks</code>
+                <span>记忆派生任务</span>
+                <code>{data.memory_outbox.length} 项</code>
               </div>
             </div>
+
+            <Alert
+              description="“记忆选择”说明本轮读取了什么；“运行上下文”说明这些数据如何在节点间传递；只有可信事实才会进入“长期记忆变化”，再由记忆派生任务异步写入。派生失败不会反向改变已经完成的回答。"
+              message="四类记录的关系"
+              showIcon
+              type="info"
+            />
 
             {!data.snapshot ? (
               <Alert
@@ -386,9 +390,8 @@ const RunMemoryDrawer = ({ open, runId, onClose }: RunMemoryDrawerProps) => {
             <section aria-labelledby="memory-selection-title">
               <div className="memory-section-heading">
                 <div>
-                  <p className="admin-eyebrow">Selection ledger</p>
                   <Title id="memory-selection-title" level={5}>
-                    记忆选择账本
+                    本轮记忆选择
                   </Title>
                 </div>
                 <Segmented
@@ -418,14 +421,13 @@ const RunMemoryDrawer = ({ open, runId, onClose }: RunMemoryDrawerProps) => {
             <section aria-labelledby="runtime-context-title">
               <div className="memory-section-heading">
                 <div>
-                  <p className="admin-eyebrow">Ephemeral execution state</p>
                   <Title id="runtime-context-title" level={5}>运行上下文轨迹</Title>
                 </div>
                 <Text type="secondary">{data.runtime_context_trace.length} 个工作流步骤</Text>
               </div>
               <Alert
-                message="运行上下文与持久化 Memory 分开观测"
-                description="关键词、大纲命中、RAG 证据和节点中间结果属于本次 Run 的临时上下文；下方持久化记忆无变化并不表示工作流上下文没有变化。"
+                message="这里是仅供本次执行使用的临时数据"
+                description="关键词、大纲命中、RAG 证据和节点中间结果会在步骤间传递，但不会自动变成长期记忆。"
                 showIcon
                 type="info"
                 style={{ marginBottom: 12 }}
@@ -442,9 +444,8 @@ const RunMemoryDrawer = ({ open, runId, onClose }: RunMemoryDrawerProps) => {
             <section aria-labelledby="memory-trace-title">
               <div className="memory-section-heading">
                 <div>
-                  <p className="admin-eyebrow">Before / after</p>
                   <Title id="memory-trace-title" level={5}>
-                    持久化记忆变化时间线
+                    长期记忆变化时间线
                   </Title>
                 </div>
                 <Text type="secondary">
@@ -460,7 +461,7 @@ const RunMemoryDrawer = ({ open, runId, onClose }: RunMemoryDrawerProps) => {
               ) : (
                 <Alert
                   message="该 Run 尚未产生持久化记忆前后观测"
-                  description="旧 Run 可能是在记忆观测上线前执行；新 Run 会在工作流关键事件和 Memory Outbox 投影边界记录前后状态。"
+                  description="旧 Run 可能是在记忆观测上线前执行；新 Run 会在工作流关键事件和记忆派生边界记录前后状态。"
                   showIcon
                   type="info"
                 />

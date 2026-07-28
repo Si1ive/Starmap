@@ -330,7 +330,7 @@ const AgentRunsPage = () => {
           },
           {
             key: 'memory-outbox',
-            label: 'Memory Outbox',
+            label: '记忆派生任务',
             children: <MemoryOutboxPanel />,
           },
         ]}

@@ -7,16 +7,16 @@ import {
   Collapse,
   Descriptions,
   Empty,
-  Select,
   Space,
   Spin,
   Tag,
-  Timeline,
   Typography,
   message,
 } from 'antd'
 import {
+  ArrowDownOutlined,
   ArrowLeftOutlined,
+  BranchesOutlined,
   DatabaseOutlined,
   PlayCircleOutlined,
   ReloadOutlined,
@@ -24,7 +24,13 @@ import {
 import dayjs from 'dayjs'
 
 import * as agentRunsApi from '@/api/agentRuns'
-import type { AdminAgentRunEvent, AdminAgentSessionDetail, AdminAgentTurn } from '@/api/agentRuns'
+import type {
+  AdminAgentRun,
+  AdminAgentRunEvent,
+  AdminAgentSessionDetail,
+  AdminAgentTurn,
+} from '@/api/agentRuns'
+import PlainDataBlock from './agent-observability/PlainDataBlock'
 import RunMemoryDrawer from './agent-observability/RunMemoryDrawer'
 import './agent-observability/agent-observability.css'
 
@@ -48,232 +54,368 @@ const statusLabels: Record<string, string> = {
   waiting_for_approval: '等待审批',
 }
 
-const eventTypeNames: Record<string, string> = {
-  'run.created': '运行已创建',
-  'run.status_changed': '运行状态变化',
-  'run.completed': '运行已完成',
-  'run.failed': '运行失败',
-  'step.started': '步骤开始',
-  'step.completed': '步骤完成',
-  'step.failed': '步骤失败',
-  'tool.called': '工具调用',
+const nodeLabels: Record<string, string> = {
+  route: '理解请求并选择工作流',
+  dispatch_workflow: '创建业务子运行',
+  direct_answer: '直接生成回答',
+  load_learning_evidence: '读取练习主题与约束',
+  question_discovery: '在题库中查找候选题',
+  question_gate: '检查候选题资格',
+  generate_question: '模型生成练习题',
+  composition_gate: '整理题型与难度',
+  create_draft: '生成练习草稿',
+  render_artifact: '渲染最终产物',
+  completed: '完成运行',
+  load_scope: '读取本轮上下文',
+  evidence_loop: '检索讲解资料',
+  evidence_gate: '检查资料是否可用',
+  generate_explanation: '生成讲解',
+  citation_gate: '检查引用',
+  load_attempt_snapshot: '读取题目与作答',
+  objective_grade: '确定性判分',
+  rubric_gate: '检查评分证据',
+  generate_feedback: '生成反馈',
+  feedback_gate: '检查反馈',
+  aggregate_learning_evidence: '汇总学习证据',
+  planning_precondition_gate: '检查计划条件',
+  propose_plan_delta: '生成计划草案',
+  plan_quality_gate: '检查计划质量',
+  create_approval: '创建审批',
+  wait_for_approval: '等待审批',
+  apply_plan_change: '应用已批准计划',
+  render_plan_result: '渲染计划结果',
+}
+
+const eventLabels: Record<string, string> = {
+  'tool.called': '工具调用参数',
   'tool.result': '工具返回结果',
-  'message.started': '消息生成开始',
-  'message.delta': '消息内容增量',
-  'message.completed': '消息生成完成',
-  'message.failed': '消息生成失败',
-  'artifact.rendered': '产物已生成',
-  'workflow.input.required': '等待用户输入',
+  'workflow.input.required': '等待用户补充信息',
   'workflow.approval.required': '等待人工审批',
-  error: '执行错误',
+  'artifact.rendered': '产物已保存',
+  'message.completed': '回复已保存',
+  'message.failed': '回复生成失败',
 }
 
-const getAgentEventTypeLabel = (eventType: string) =>
-  `${eventTypeNames[eventType] || '未知事件'}（${eventType}）`
-
-const eventColor = (event: AdminAgentRunEvent) => {
-  if (event.event_type === 'error' || event.event_type.includes('failed')) return 'red'
-  if (event.event_type.includes('completed') || event.event_type === 'tool.result') return 'green'
-  return 'blue'
+interface FlowStep {
+  stepId: string
+  nodeName: string
+  nodeType: string
+  startedAt: string
+  completedAt: string | null
+  input: unknown
+  output: unknown
+  error: string | null
+  waiting: boolean
+  degraded: boolean
+  relatedEvents: AdminAgentRunEvent[]
 }
 
-const renderJson = (value: unknown) => (
-  <pre
-    style={{
-      margin: 0,
-      fontSize: 12,
-      padding: 8,
-      borderRadius: 4,
-      background: '#f5f5f5',
-      overflow: 'auto',
-      maxHeight: 320,
-      whiteSpace: 'pre-wrap',
-      wordBreak: 'break-word',
-    }}
-  >
-    {JSON.stringify(value, null, 2)}
-  </pre>
-)
+const asRecord = (value: unknown): Record<string, unknown> =>
+  value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {}
 
-const TurnDetail = ({
+function buildFlowSteps(events: AdminAgentRunEvent[]): FlowStep[] {
+  const steps: FlowStep[] = []
+  const byId = new Map<string, FlowStep>()
+  let current: FlowStep | null = null
+
+  for (const event of [...events].sort((a, b) => a.sequence - b.sequence)) {
+    const payload = asRecord(event.payload)
+    const stepId = String(payload.step_id || '')
+    if (event.event_type === 'step.started' && stepId) {
+      current = {
+        stepId,
+        nodeName: String(payload.node_name || 'unknown'),
+        nodeType: String(payload.node_type || 'action'),
+        startedAt: event.created_at,
+        completedAt: null,
+        input: payload.input || {},
+        output: {},
+        error: null,
+        waiting: false,
+        degraded: false,
+        relatedEvents: [],
+      }
+      steps.push(current)
+      byId.set(stepId, current)
+      continue
+    }
+
+    if ((event.event_type === 'step.completed' || event.event_type === 'step.failed') && stepId) {
+      const step = byId.get(stepId)
+      if (step) {
+        step.completedAt = event.created_at
+        step.output = payload.output || {}
+        step.error = event.event_type === 'step.failed' ? String(payload.error || '步骤失败') : null
+        step.waiting = Boolean(payload.waiting)
+        const output = asRecord(payload.output)
+        step.degraded = Boolean(output.fallback || output.notice || output.gate_passed === false)
+        if (current?.stepId === stepId) current = null
+      }
+      continue
+    }
+
+    if (current && event.event_type !== 'message.delta') {
+      current.relatedEvents.push(event)
+    }
+  }
+  return steps
+}
+
+const stepTone = (step: FlowStep) => {
+  if (step.error) return 'failed'
+  if (step.waiting) return 'waiting'
+  if (step.degraded) return 'degraded'
+  if (!step.completedAt) return 'running'
+  return 'completed'
+}
+
+const stepStatusLabel = (step: FlowStep) => {
+  if (step.error) return '失败'
+  if (step.waiting) return '等待输入'
+  if (step.degraded) return '已降级继续'
+  if (!step.completedAt) return '执行中'
+  return '完成'
+}
+
+function EventEvidence({ event }: { event: AdminAgentRunEvent }) {
+  return (
+    <div className="run-flow-event">
+      <div className="run-flow-event__heading">
+        <Text strong>{eventLabels[event.event_type] || '运行事件'}</Text>
+        <Text type="secondary">{dayjs(event.created_at).format('HH:mm:ss.SSS')}</Text>
+      </div>
+      <PlainDataBlock value={event.payload} maxHeight={240} />
+    </div>
+  )
+}
+
+function StepNode({ step, index }: { step: FlowStep; index: number }) {
+  const tone = stepTone(step)
+  const detailItems = [
+    {
+      key: 'io',
+      label: `查看输入、输出与调用证据（${step.relatedEvents.length}）`,
+      children: (
+        <div className="run-flow-io-grid">
+          <div>
+            <Text strong>传入参数与步骤前上下文</Text>
+            <PlainDataBlock value={step.input} maxHeight={320} />
+          </div>
+          <div>
+            <Text strong>步骤输出与分支依据</Text>
+            <PlainDataBlock value={step.error ? { error: step.error } : step.output} maxHeight={320} />
+          </div>
+          {step.relatedEvents.length ? (
+            <div className="run-flow-evidence">
+              <Text strong>步骤内的工具、交互与落库事件</Text>
+              {step.relatedEvents.map((event) => (
+                <EventEvidence event={event} key={`${event.run_id}-${event.id}`} />
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ),
+    },
+  ]
+
+  return (
+    <div className={`run-flow-step is-${tone}`}>
+      <div className="run-flow-step__rail" aria-hidden="true">
+        <span>{index + 1}</span>
+      </div>
+      <div className="run-flow-step__body">
+        <div className="run-flow-step__heading">
+          <div>
+            <Text strong>{nodeLabels[step.nodeName] || step.nodeName}</Text>
+            <Text className="run-flow-step__technical" type="secondary">
+              {step.nodeName} · {step.nodeType}
+            </Text>
+          </div>
+          <Space wrap size={8}>
+            <Tag className={`run-flow-status is-${tone}`}>{stepStatusLabel(step)}</Tag>
+            <Text type="secondary">
+              {dayjs(step.startedAt).format('HH:mm:ss.SSS')}
+              {step.completedAt ? ` → ${dayjs(step.completedAt).format('HH:mm:ss.SSS')}` : ''}
+            </Text>
+          </Space>
+        </div>
+        {step.degraded ? (
+          <Alert
+            message="这一步没有阻塞运行，已按降级分支继续"
+            description={String(asRecord(step.output).notice || '查看步骤输出可确认分支原因。')}
+            showIcon
+            type="warning"
+          />
+        ) : null}
+        {step.error ? <Alert message={step.error} showIcon type="error" /> : null}
+        <Collapse ghost items={detailItems} size="small" />
+      </div>
+    </div>
+  )
+}
+
+function RunLane({
+  run,
+  events,
+  onInspectMemory,
+  onReplay,
+}: {
+  run: AdminAgentRun
+  events: AdminAgentRunEvent[]
+  onInspectMemory: (runId: string) => void
+  onReplay: (runId: string) => void
+}) {
+  const steps = useMemo(() => buildFlowSteps(events), [events])
+  return (
+    <section className={`run-flow-lane is-${run.status}`}>
+      <div className="run-flow-lane__header">
+        <div>
+          <Space wrap size={8}>
+            <Tag color={run.parent_run_id ? 'geekblue' : 'purple'}>
+              {run.parent_run_id ? '业务子运行' : '路由根运行'}
+            </Tag>
+            <Title level={5}>{run.public_title || run.workflow_key}</Title>
+            <Tag color={statusColors[run.status] || 'default'}>
+              {statusLabels[run.status] || run.status}
+            </Tag>
+          </Space>
+          <Text type="secondary">
+            {run.workflow_key}@{run.workflow_version} · {run.id}
+          </Text>
+        </div>
+        <Space wrap>
+          <Button
+            icon={<DatabaseOutlined />}
+            onClick={() => onInspectMemory(run.id)}
+            size="small"
+          >
+            查看上下文与记忆
+          </Button>
+          {!run.parent_run_id ? (
+            <Button icon={<PlayCircleOutlined />} onClick={() => onReplay(run.id)} size="small">
+              重放本轮
+            </Button>
+          ) : null}
+        </Space>
+      </div>
+
+      <div className="run-flow-entry">
+        <BranchesOutlined />
+        <div>
+          <Text strong>运行入口</Text>
+          <Paragraph>{run.input_message || '没有单独的文本输入'}</Paragraph>
+          <Space wrap size={6}>
+            <Tag>模型配置：{run.model_config_id || '继承系统配置'}</Tag>
+            {run.parent_run_id ? <Tag>父 Run：{run.parent_run_id}</Tag> : null}
+          </Space>
+        </div>
+      </div>
+
+      {steps.length ? (
+        <div className="run-flow-steps">
+          {steps.map((step, index) => (
+            <StepNode index={index} key={step.stepId} step={step} />
+          ))}
+        </div>
+      ) : (
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该 Run 还没有步骤事件" />
+      )}
+    </section>
+  )
+}
+
+function TurnFlow({
   turn,
-  selectedEventTypes,
   onInspectMemory,
   onReplay,
 }: {
   turn: AdminAgentTurn
-  selectedEventTypes: string[]
   onInspectMemory: (runId: string) => void
   onReplay: (runId: string) => void
-}) => {
-  const events = turn.events.filter(
-    (event) => selectedEventTypes.length === 0 || selectedEventTypes.includes(event.event_type)
-  )
+}) {
+  const orderedRuns = [...turn.runs].sort((a, b) => {
+    if (a.id === turn.root_run_id) return -1
+    if (b.id === turn.root_run_id) return 1
+    return a.created_at.localeCompare(b.created_at)
+  })
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-      <Card size="small" title="本轮问答">
-        <Space direction="vertical" style={{ width: '100%' }}>
-          <div>
-            <Text type="secondary">用户：</Text>
-            <Paragraph style={{ marginBottom: 0, whiteSpace: 'pre-wrap' }}>
-              {turn.user_message?.content || turn.input_message || '（无文本）'}
-            </Paragraph>
-          </div>
-          <div>
-            <Text type="secondary">Agent：</Text>
-            {turn.assistant_messages.length === 0 ? (
-              <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-                （暂无回复消息）
+    <div className="turn-flow">
+      <div className="turn-flow__conversation">
+        <div>
+          <Text type="secondary">用户输入</Text>
+          <Paragraph>{turn.user_message?.content || turn.input_message || '（无文本）'}</Paragraph>
+        </div>
+        <ArrowDownOutlined aria-hidden="true" />
+        <div>
+          <Text type="secondary">最终回复</Text>
+          {turn.assistant_messages.length ? (
+            turn.assistant_messages.map((item) => (
+              <Paragraph key={item.id} type={item.status === 'failed' ? 'danger' : undefined}>
+                {item.content || '（空消息）'}
               </Paragraph>
-            ) : (
-              turn.assistant_messages.map((assistantMessage) => (
-                <Paragraph
-                  key={assistantMessage.id}
-                  type={assistantMessage.status === 'failed' ? 'danger' : undefined}
-                  style={{ marginBottom: 4, whiteSpace: 'pre-wrap' }}
-                >
-                  {assistantMessage.content || '（空消息）'}
-                </Paragraph>
-              ))
-            )}
-          </div>
-        </Space>
-      </Card>
+            ))
+          ) : (
+            <Paragraph type="secondary">尚未生成回复</Paragraph>
+          )}
+        </div>
+      </div>
 
-      {turn.runs.some((run) => run.safe_error_summary) && (
+      {orderedRuns.some((run) => run.safe_error_summary) ? (
         <Alert
-          type="error"
+          description={orderedRuns.find((run) => run.safe_error_summary)?.safe_error_summary}
+          message="本轮存在真实失败"
           showIcon
-          message="本轮运行失败"
-          description={turn.runs.find((run) => run.safe_error_summary)?.safe_error_summary}
+          type="error"
         />
-      )}
+      ) : null}
 
-      <Collapse
-        size="small"
-        items={[
-          {
-            key: 'runs',
-            label: `运行链路（${turn.runs.length} 个 Run）`,
-            children: (
-              <Space direction="vertical" style={{ width: '100%' }}>
-                {turn.runs.map((run) => (
-                  <Card
-                    key={run.id}
-                    size="small"
-                    title={
-                      <Space wrap>
-                        <Tag color={run.parent_run_id ? 'geekblue' : 'purple'}>
-                          {run.parent_run_id ? '子运行' : '根运行'}
-                        </Tag>
-                        <Text>{run.public_title || run.workflow_key}</Text>
-                        <Tag color={statusColors[run.status] || 'default'}>
-                          {statusLabels[run.status] || run.status}
-                        </Tag>
-                      </Space>
-                    }
-                    extra={
-                      <Space size={2}>
-                        <Button
-                          size="small"
-                          type="link"
-                          icon={<DatabaseOutlined />}
-                          onClick={() => onInspectMemory(run.id)}
-                        >
-                          记忆观测
-                        </Button>
-                        {run.id === turn.root_run_id ? (
-                          <Button
-                            size="small"
-                            type="link"
-                            icon={<PlayCircleOutlined />}
-                            onClick={() => onReplay(run.id)}
-                          >
-                            重放本轮
-                          </Button>
-                        ) : null}
-                      </Space>
-                    }
-                  >
-                    <Descriptions size="small" column={2}>
-                      <Descriptions.Item label="Run ID">{run.id}</Descriptions.Item>
-                      <Descriptions.Item label="父 Run">
-                        {run.parent_run_id || '-'}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="工作流">
-                        {run.workflow_key}@{run.workflow_version}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="当前步骤">
-                        {run.current_step_key || '-'}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="模型配置">
-                        {run.model_config_id || '-'}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="事件数">{run.event_count}</Descriptions.Item>
-                    </Descriptions>
-                  </Card>
-                ))}
-              </Space>
-            ),
-          },
-          {
-            key: 'events',
-            label: `事件流（${events.length}/${turn.events.length}）`,
-            children:
-              events.length === 0 ? (
-                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无匹配事件" />
-              ) : (
-                <Timeline
-                  mode="left"
-                  items={events.map((event) => ({
-                    key: `${event.run_id}-${event.id}`,
-                    color: eventColor(event),
-                    label: dayjs(event.created_at).format('HH:mm:ss.SSS'),
-                    children: (
-                      <div>
-                        <Space wrap style={{ marginBottom: 6 }}>
-                          <Text strong>{getAgentEventTypeLabel(event.event_type)}</Text>
-                          <Tag>{event.run_id.slice(0, 12)}</Tag>
-                          <Text type="secondary">#{event.sequence}</Text>
-                        </Space>
-                        {renderJson(event.payload)}
-                      </div>
-                    ),
-                  }))}
-                />
-              ),
-          },
-          {
-            key: 'interactions',
-            label: `审批与产物（${turn.approvals.length + turn.artifacts.length}）`,
-            children:
-              turn.approvals.length === 0 && turn.artifacts.length === 0 ? (
-                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="本轮没有审批或产物" />
-              ) : (
-                <Space direction="vertical" style={{ width: '100%' }}>
+      <div className="run-flow-map">
+        {orderedRuns.map((run, index) => (
+          <div key={run.id}>
+            {index ? (
+              <div className="run-flow-handoff">
+                <ArrowDownOutlined />
+                <span>父运行把冻结上下文与独立请求交给业务工作流</span>
+              </div>
+            ) : null}
+            <RunLane
+              events={turn.events.filter((event) => event.run_id === run.id)}
+              onInspectMemory={onInspectMemory}
+              onReplay={onReplay}
+              run={run}
+            />
+          </div>
+        ))}
+      </div>
+
+      {turn.approvals.length || turn.artifacts.length ? (
+        <Collapse
+          items={[
+            {
+              key: 'results',
+              label: `本轮审批与产物（${turn.approvals.length + turn.artifacts.length}）`,
+              children: (
+                <div className="run-flow-result-grid">
                   {turn.approvals.map((approval) => (
                     <Card key={approval.id} size="small" title={`审批：${approval.action_key}`}>
-                      <Descriptions size="small" column={2}>
-                        <Descriptions.Item label="状态">{approval.status}</Descriptions.Item>
-                        <Descriptions.Item label="审批人">
-                          {approval.decided_by || '-'}
-                        </Descriptions.Item>
-                      </Descriptions>
-                      {approval.diff_ref ? renderJson(approval.diff_ref) : null}
+                      <PlainDataBlock value={approval} maxHeight={260} />
                     </Card>
                   ))}
                   {turn.artifacts.map((artifact) => (
                     <Card key={artifact.id} size="small" title={`产物：${artifact.type}`}>
-                      {renderJson(artifact.content)}
+                      <PlainDataBlock value={artifact.content} maxHeight={320} />
                     </Card>
                   ))}
-                </Space>
+                </div>
               ),
-          },
-        ]}
-      />
-    </Space>
+            },
+          ]}
+        />
+      ) : null}
+    </div>
   )
 }
 
@@ -282,7 +424,6 @@ const AgentRunDetailPage = () => {
   const { id } = useParams() as { id: string }
   const [session, setSession] = useState<AdminAgentSessionDetail | null>(null)
   const [loading, setLoading] = useState(false)
-  const [selectedEventTypes, setSelectedEventTypes] = useState<string[]>([])
   const [memoryRunId, setMemoryRunId] = useState<string | null>(null)
 
   const fetchSession = useCallback(async () => {
@@ -302,16 +443,6 @@ const AgentRunDetailPage = () => {
     void fetchSession()
   }, [fetchSession])
 
-  const eventTypeOptions = useMemo(() => {
-    const eventTypes = new Set(
-      session?.turns.flatMap((turn) => turn.events.map((event) => event.event_type)) || []
-    )
-    return [...eventTypes].sort().map((eventType) => ({
-      value: eventType,
-      label: getAgentEventTypeLabel(eventType),
-    }))
-  }, [session])
-
   const handleReplay = async (runId: string) => {
     try {
       const response = await agentRunsApi.replayAgentRun(runId)
@@ -322,16 +453,12 @@ const AgentRunDetailPage = () => {
   }
 
   if (loading) {
-    return (
-      <div style={{ display: 'flex', justifyContent: 'center', padding: 64 }}>
-        <Spin size="large" />
-      </div>
-    )
+    return <div className="admin-page-loading"><Spin size="large" /></div>
   }
 
   if (!session) {
     return (
-      <div style={{ padding: 24 }}>
+      <div className="agent-run-detail-page">
         <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/admin/agent-runs')}>
           返回列表
         </Button>
@@ -341,89 +468,70 @@ const AgentRunDetailPage = () => {
   }
 
   return (
-    <div style={{ padding: 24 }}>
-      <Space direction="vertical" size="large" style={{ width: '100%' }}>
-        <Space>
-          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/admin/agent-runs')}>
-            返回列表
-          </Button>
-          <Button icon={<ReloadOutlined />} onClick={() => void fetchSession()}>
-            刷新
-          </Button>
-        </Space>
+    <div className="agent-run-detail-page">
+      <div className="agent-run-detail-page__toolbar">
+        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/admin/agent-runs')}>
+          返回列表
+        </Button>
+        <Button icon={<ReloadOutlined />} onClick={() => void fetchSession()}>
+          刷新
+        </Button>
+      </div>
 
+      <header className="agent-run-detail-hero">
         <div>
-          <Title level={3} style={{ marginBottom: 4 }}>
-            会话详情：{session.title}
-          </Title>
-          <Text type="secondary">每个折叠面板对应一次用户提问及其完整运行事件。</Text>
+          <Text type="secondary">Agent 执行线路图</Text>
+          <Title level={3}>{session.title}</Title>
+          <Paragraph>
+            从用户输入开始，沿节点查看传入参数、步骤输出、分支原因、工具调用和记忆变化入口。
+          </Paragraph>
         </div>
+        <div className="agent-run-detail-hero__stats">
+          <div><span>对话轮次</span><strong>{session.turn_count}</strong></div>
+          <div><span>Run</span><strong>{session.total_run_count}</strong></div>
+          <div><span>事件</span><strong>{session.event_count}</strong></div>
+          <div><span>最新状态</span><strong>{statusLabels[session.latest_status]}</strong></div>
+        </div>
+      </header>
 
-        <Card title="会话信息">
-          <Descriptions bordered column={2}>
-            <Descriptions.Item label="Thread ID">{session.thread_id}</Descriptions.Item>
-            <Descriptions.Item label="用户 ID">{session.user_id}</Descriptions.Item>
-            <Descriptions.Item label="会话状态">{session.thread_status}</Descriptions.Item>
-            <Descriptions.Item label="最新运行状态">
-              <Tag color={statusColors[session.latest_status] || 'default'}>
-                {statusLabels[session.latest_status] || session.latest_status}
-              </Tag>
-            </Descriptions.Item>
-            <Descriptions.Item label="问答轮数">{session.turn_count}</Descriptions.Item>
-            <Descriptions.Item label="Run 总数">{session.total_run_count}</Descriptions.Item>
-            <Descriptions.Item label="事件总数">{session.event_count}</Descriptions.Item>
-            <Descriptions.Item label="最后更新">
-              {dayjs(session.updated_at).format('YYYY-MM-DD HH:mm:ss')}
-            </Descriptions.Item>
-          </Descriptions>
-        </Card>
+      <Descriptions className="agent-run-detail-meta" column={{ xs: 1, sm: 2, lg: 4 }} size="small">
+        <Descriptions.Item label="Thread ID">{session.thread_id}</Descriptions.Item>
+        <Descriptions.Item label="用户 ID">{session.user_id}</Descriptions.Item>
+        <Descriptions.Item label="会话状态">{session.thread_status}</Descriptions.Item>
+        <Descriptions.Item label="最后更新">
+          {dayjs(session.updated_at).format('YYYY-MM-DD HH:mm:ss')}
+        </Descriptions.Item>
+      </Descriptions>
 
-        <Card title="事件筛选">
-          <Select
-            mode="multiple"
-            allowClear
-            placeholder="按事件类型筛选（显示中文与英文原名）"
-            style={{ width: '100%' }}
-            value={selectedEventTypes}
-            options={eventTypeOptions}
-            onChange={setSelectedEventTypes}
-          />
-        </Card>
+      {session.turns.length === 0 ? (
+        <Empty description="该会话暂无问答运行" />
+      ) : (
+        <Collapse
+          className="turn-flow-collapse"
+          defaultActiveKey={[String(session.turns.length)]}
+          items={session.turns.map((turn) => ({
+            key: String(turn.turn_number),
+            label: (
+              <div className="turn-flow-collapse__label">
+                <span>第 {turn.turn_number} 轮</span>
+                <Tag color={statusColors[turn.status] || 'default'}>
+                  {statusLabels[turn.status] || turn.status}
+                </Tag>
+                <strong>{(turn.user_message?.content || turn.input_message || '无输入').slice(0, 90)}</strong>
+                <time>{dayjs(turn.created_at).format('MM-DD HH:mm:ss')}</time>
+              </div>
+            ),
+            children: (
+              <TurnFlow
+                onInspectMemory={setMemoryRunId}
+                onReplay={handleReplay}
+                turn={turn}
+              />
+            ),
+          }))}
+        />
+      )}
 
-        {session.turns.length === 0 ? (
-          <Empty description="该会话暂无问答运行" />
-        ) : (
-          <Collapse
-            accordion
-            defaultActiveKey={[String(session.turns.length)]}
-            items={session.turns.map((turn) => ({
-              key: String(turn.turn_number),
-              label: (
-                <Space wrap>
-                  <Text strong>第 {turn.turn_number} 轮</Text>
-                  <Tag color={statusColors[turn.status] || 'default'}>
-                    {statusLabels[turn.status] || turn.status}
-                  </Tag>
-                  <Text>
-                    {(turn.user_message?.content || turn.input_message || '无输入').slice(0, 80)}
-                  </Text>
-                  <Text type="secondary">
-                    {dayjs(turn.created_at).format('YYYY-MM-DD HH:mm:ss')}
-                  </Text>
-                </Space>
-              ),
-              children: (
-                <TurnDetail
-                  turn={turn}
-                  selectedEventTypes={selectedEventTypes}
-                  onInspectMemory={setMemoryRunId}
-                  onReplay={handleReplay}
-                />
-              ),
-            }))}
-          />
-        )}
-      </Space>
       <RunMemoryDrawer
         onClose={() => setMemoryRunId(null)}
         open={Boolean(memoryRunId)}

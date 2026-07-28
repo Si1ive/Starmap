@@ -88,7 +88,7 @@ const MemoryOutboxPanel = () => {
       const response = await agentRunsApi.getMemoryOutboxDetail(outboxId)
       setDetail(response.data || null)
     } catch {
-      message.error('Memory Outbox 详情加载失败')
+      message.error('记忆派生任务详情加载失败')
     } finally {
       setDetailLoading(false)
     }
@@ -240,10 +240,9 @@ const MemoryOutboxPanel = () => {
     <div className="memory-outbox-panel">
       <div className="memory-outbox-intro">
         <div>
-          <p className="admin-eyebrow">Derived memory queue</p>
-          <Typography.Title level={4}>Memory Outbox</Typography.Title>
+          <Typography.Title level={4}>记忆派生任务</Typography.Title>
           <Typography.Paragraph type="secondary">
-            这里记录的是“对话事实已经产生，等待 Worker 把它投影成长期记忆”的可靠任务；查看具体 Run 可继续追踪上下文选择、记忆前后变化和投影结果。
+            对话先产生可信事实，再由这里的后台任务把事实写成长期记忆。任务失败不会反向把已经完成的回答改成失败；可进入对应 Run 查看事实来自哪一步。
           </Typography.Paragraph>
         </div>
         <div className="memory-outbox-intro__rule">
@@ -324,7 +323,7 @@ const MemoryOutboxPanel = () => {
           columns={columns}
           dataSource={rows}
           loading={loading}
-          locale={{ emptyText: <Empty description="当前筛选下没有 Memory Outbox" /> }}
+          locale={{ emptyText: <Empty description="当前筛选下没有记忆派生任务" /> }}
           pagination={{
             current: pagination.current,
             pageSize: pagination.pageSize,
@@ -344,7 +343,7 @@ const MemoryOutboxPanel = () => {
         className="memory-observability-drawer"
         onClose={() => setDetail(null)}
         open={Boolean(detail) || detailLoading}
-        title="Memory Outbox 详情"
+        title="记忆派生任务详情"
         width="min(760px, 96vw)"
       >
         {detailLoading ? (

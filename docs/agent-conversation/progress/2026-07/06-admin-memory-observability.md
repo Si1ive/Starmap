@@ -1,5 +1,14 @@
 # 2026-07 管理端记忆可观测进展
 
+## 2026-07-28：把 Agent Runs 重构为执行流程图
+
+- 目标：让管理员一眼看出用户输入经过哪些根/子 Run、当前卡在哪个步骤、为什么降级或失败，并就地查看每步传入参数、输出、工具调用和记忆入口。
+- 流程图：`frontend-admin/src/pages/AgentRunDetailPage.tsx::buildFlowSteps`（L118-L178）按 `step_id` 配对事件并把步骤内事件归组；`StepNode`（L194-L256）区分完成、执行中、等待、降级和真实失败；`RunLane`、`TurnFlow`（L259-L419）用纵向信号轨道串联用户输入、根 Run、child Run 和最终回复。RAG 空命中使用“已降级继续”的琥珀提示，只有 failed 使用红色。
+- 记忆语义：`frontend-admin/src/pages/agent-observability/RunMemoryDrawer.tsx::RunMemoryDrawer`（L189-L578）明确“本轮记忆选择→运行上下文→可信事实→长期记忆变化/记忆派生任务”的关系；`MemoryOutboxPanel`（L45-L422）统一改称“记忆派生任务”，移除每块重复英文眉题。
+- 设计与适配：`frontend-admin/src/pages/agent-observability/agent-observability.css`（L14-L420、L727-L817）定义流程轨道、状态颜色、证据双栏和移动端收敛；真实失败与可恢复降级使用不同语义色，保留键盘可展开和纯文本 JSON。
+- 验证：管理端 TypeScript/Vite 构建与 ESLint 通过；无头 Chrome 在 1440×1000 和 390×844 下完成流程图、抽屉和派生任务视觉回归，均无横向溢出、页面异常或未受信任 HTML 执行。
+- 提交信息：`将 Agent Runs 重构为执行流程图`
+
 ## 2026-07-28：同步结构守卫迁移头验收
 
 - 目标：修正全量回归中仍把 `20260727_memory_trace` 写死为项目 head 的旧测试期望，确保启动结构守卫验收与向量/LLM 审计前向迁移一致。
