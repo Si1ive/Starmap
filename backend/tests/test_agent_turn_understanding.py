@@ -88,9 +88,29 @@ def test_build_turn_understanding_extracts_compact_retrieval_query_for_new_topic
         _context(current_input="给我讲解一下 TCP")
     )
 
-    assert understanding.topic_entities == []
-    assert understanding.standalone_request == "给我讲解一下 TCP"
+    assert understanding.topic_entities[0].model_dump() == {
+        "entity_type": "topic",
+        "entity_id": None,
+        "title": "TCP",
+        "source": "current_turn",
+        "aliases": [],
+    }
+    assert understanding.standalone_request == "给用户讲解TCP"
     assert understanding.retrieval_query == "TCP"
+
+
+def test_follow_up_practice_reuses_topic_extracted_from_previous_explanation():
+    first = build_turn_understanding(_context(current_input="给我讲解UDP"))
+    second = build_turn_understanding(
+        _context(
+            current_input="给我出道题",
+            active_topic=first.topic_entities[0].model_dump(),
+        )
+    )
+
+    assert first.topic_entities[0].title == "UDP"
+    assert second.standalone_request == "给用户出一道关于UDP的练习题"
+    assert second.intent_hint == "practice_generation"
 
 
 def test_build_turn_understanding_keeps_question_focus_in_retrieval_query():

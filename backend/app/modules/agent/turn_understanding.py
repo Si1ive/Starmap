@@ -158,6 +158,20 @@ def _derive_retrieval_query(raw_input: str, topic: TopicEntity | None) -> str:
     return (query or raw_input.strip())[:160]
 
 
+def _topic_from_explicit_explanation(raw_input: str) -> TopicEntity | None:
+    """从“讲解 X”类明确请求中保留可跨轮复用的临时主题。"""
+    if not any(hint in raw_input for hint in _EXPLAIN_HINTS):
+        return None
+    title = _derive_retrieval_query(raw_input, None)
+    if not title or len(title) > 60:
+        return None
+    return TopicEntity(
+        entity_type="topic",
+        title=title,
+        source="current_turn",
+    )
+
+
 def _parse_chapter_ordinal(value: str) -> int | None:
     if value.isdigit():
         ordinal = int(value)
@@ -397,6 +411,10 @@ def build_turn_understanding(agent_context: AgentRunContext) -> TurnUnderstandin
             continue
         seen_topics.add(key)
         deduped_topics.append(topic)
+    if not deduped_topics:
+        explicit_topic = _topic_from_explicit_explanation(raw_input)
+        if explicit_topic is not None:
+            deduped_topics.append(explicit_topic)
     standalone_request, intent_hint = _derive_standalone_request(
         raw_input,
         deduped_topics[0] if deduped_topics else None,

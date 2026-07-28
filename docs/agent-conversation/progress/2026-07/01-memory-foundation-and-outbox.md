@@ -296,3 +296,24 @@ fallback 也属于成功讲解，且讲解行为不会被误当成学习掌握�
 ### 提交信息
 
 `落地 Agent 分层记忆契约与基础表`
+
+## 2026-07-28：让讲解主题进入后续专项练习记忆
+
+### 目标
+
+修复“给我讲解 UDP”成功后再说“给我出道题”仍要求补充知识点的问题。
+
+### 实现
+
+- `backend/app/modules/agent/turn_understanding.py::_topic_from_explicit_explanation`（L161-L172）从明确“讲解 X”请求的短检索焦点生成临时主题。
+- `backend/app/modules/agent/turn_understanding.py::build_turn_understanding`（L396-L450）仅在没有 context ref 和 active topic 时采用该主题；它随后随 snapshot 写入线程热状态，下一轮练习请求由 `_derive_standalone_request` 解析成完整主题请求。
+- `backend/tests/test_agent_turn_understanding.py::test_follow_up_practice_reuses_topic_extracted_from_previous_explanation` 固化 UDP 两轮场景。
+
+### 验证
+
+- `cd backend && venv/bin/pytest -q tests/test_agent_turn_understanding.py tests/test_agent_conversation_workflow.py` 通过。
+- `git diff --check` 通过。
+
+### 提交信息
+
+`修复讲解后专项练习的主题记忆`
