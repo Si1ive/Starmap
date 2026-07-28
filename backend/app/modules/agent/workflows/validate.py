@@ -1,11 +1,11 @@
 """
 validate@v1 工作流（用题验证）
 
-load_learning_evidence -> question_discovery_loop -> question_gate ->
-set_composition_gate -> practice.create_draft -> render_practice_artifact -> completed
+load_learning_evidence -> question_discovery -> question_gate | generate_question ->
+composition_gate -> create_draft -> render_artifact -> completed
 """
 
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,6 +18,7 @@ from ..memory_selector import (
     build_practice_query,
     load_practice_bundle,
 )
+from ..model_runtime.practice import PracticeGenerationDeps, practice_generation_runtime
 from ..time_utils import utc_isoformat, utc_now
 
 logger = get_logger(__name__)
@@ -156,6 +157,18 @@ async def _question_discovery_node(context: ExecutionContext, db: AsyncSession) 
     candidates = result.get("results", [])
     context.set("candidates", candidates)
     logger.info("候选题检索", run_id=context.run_id, count=len(candidates))
+    if not candidates:
+        notice = "题库中未找到合适真题，将由模型生成一道练习题"
+        context.set("retrieval_notice", notice)
+        logger.info("候选题为空，转入模型生成", run_id=context.run_id)
+        return NodeResult.success(
+            {
+                "questions_found": 0,
+                "fallback": "llm_generation",
+                "notice": notice,
+            },
+            next_node="generate_question",
+        )
     return NodeResult.success({"questions_found": len(candidates)}, next_node="question_gate")
 
 
@@ -165,14 +178,84 @@ async def _question_gate_node(context: ExecutionContext, db: AsyncSession) -> No
     
     valid = [q for q in candidates if _question_is_eligible(q)]
     
-    # 如果没有有效题目，返回降级
+    # 检索有返回但都不满足资格时仍属于可恢复的题库不足，而非运行失败。
     if not valid:
-        logger.warning("无有效候选题", run_id=context.run_id)
-        return NodeResult.failure("未找到有效候选题")
+        notice = "题库候选均未通过资格检查，将由模型生成一道练习题"
+        context.set("retrieval_notice", notice)
+        logger.info("无有效候选题，转入模型生成", run_id=context.run_id)
+        return NodeResult.success(
+            {
+                "gate_passed": False,
+                "fallback": "llm_generation",
+                "notice": notice,
+            },
+            next_node="generate_question",
+        )
     
     context.set("valid_questions", valid[:5])  # 最多取5道
     logger.info("题目校验通过", run_id=context.run_id, valid_count=len(valid))
     return NodeResult.success({"gate_passed": True}, next_node="composition_gate")
+
+
+async def _generate_question_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
+    """题库无合格题目时生成一道结构化单选题。"""
+    from .contracts import ModelBudgetExceeded
+
+    bundle = context.get("practice_bundle") or {}
+    topic = (bundle.get("topic") or {}).get("title")
+    if not topic:
+        weak_areas = (context.get("learning_evidence") or {}).get("weak_areas") or []
+        topic = weak_areas[0] if weak_areas else None
+    if not topic:
+        return NodeResult.failure("缺少生成练习题所需的明确主题")
+
+    try:
+        context.charge_model_call()
+    except ModelBudgetExceeded as error:
+        return NodeResult.failure(str(error))
+
+    generated = await practice_generation_runtime.generate(
+        deps=PracticeGenerationDeps(
+            run_id=context.run_id,
+            user_id=context.user_id,
+            topic=str(topic),
+            difficulty=str(bundle.get("difficulty") or "medium"),
+        ),
+        db=db,
+    )
+    question_id = f"generated_{context.run_id}"
+    candidate = {
+        "entity_id": question_id,
+        "entity_type": "question",
+        "entity_title": f"{topic} · 模型生成练习题",
+        "content_text": generated.content,
+        "subject_id": None,
+        "source": {"title": "Agent 模型即时生成"},
+        "question_meta": {
+            "question_type": "choice",
+            "difficulty": generated.difficulty,
+            "source": "Agent 模型即时生成",
+            "paper_name": None,
+            "answer_source": "llm",
+            "review_status": "generated",
+            "status": "active",
+            "options": [option.model_dump(mode="json") for option in generated.options],
+            "answer": generated.answer,
+            "explanation": generated.explanation,
+            "generated": True,
+            "topic": str(topic),
+        },
+    }
+    context.set("valid_questions", [candidate])
+    logger.info("模型练习题生成完成", run_id=context.run_id, topic=topic)
+    return NodeResult.success(
+        {
+            "generated": True,
+            "question_id": question_id,
+            "notice": context.get("retrieval_notice"),
+        },
+        next_node="composition_gate",
+    )
 
 
 async def _composition_gate_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
@@ -228,14 +311,46 @@ async def _render_artifact_node(context: ExecutionContext, db: AsyncSession) -> 
         for question in draft.get("questions", [])
         if question.get("entity_id")
     ]
+    questions = draft.get("questions", [])
+    markdown_sections = []
+    generated_questions = []
+    for index, question in enumerate(questions, start=1):
+        meta = question.get("question_meta") or {}
+        content = str(question.get("content_text") or question.get("entity_title") or "").strip()
+        options = list(meta.get("options") or [])
+        lines = [f"### 第 {index} 题", "", content]
+        if options:
+            lines.extend(
+                ["", *[f"- {option.get('key')}. {option.get('text')}" for option in options]]
+            )
+        markdown_sections.append("\n".join(lines))
+        if meta.get("generated"):
+            generated_questions.append(
+                {
+                    "id": question.get("entity_id"),
+                    "question_type": meta.get("question_type"),
+                    "content": content,
+                    "options": options,
+                    "standard_answer": meta.get("answer"),
+                    "answer_source": "llm",
+                    "explanation": meta.get("explanation"),
+                    "difficulty": meta.get("difficulty"),
+                    "topic": meta.get("topic"),
+                }
+            )
+    markdown = "\n\n".join(markdown_sections)
+    if context.get("retrieval_notice"):
+        markdown = f"> {context.get('retrieval_notice')}。\n\n{markdown}"
 
     artifact = {
         "type": "practice",
         "title": draft.get("title", "专项练习"),
         "content": {
+            "content": markdown,
             "question_count": len(draft.get("questions", [])),
             "question_ids": question_ids,
             "composition": composition,
+            "generated_questions": generated_questions,
         },
         "summary": f"共 {len(draft.get('questions', []))} 道题，覆盖 {len(composition.get('subjects', {}))} 个考点",
     }
@@ -265,14 +380,16 @@ def build_validate_workflow() -> WorkflowDefinition:
     wf.add_node(Node(name="load_learning_evidence", node_type="action", execute=_load_learning_evidence_node, description="加载学习证据"))
     wf.add_node(Node(name="question_discovery", node_type="loop", execute=_question_discovery_node, description="检索候选题"))
     wf.add_node(Node(name="question_gate", node_type="gate", execute=_question_gate_node, description="题目校验"))
+    wf.add_node(Node(name="generate_question", node_type="action", execute=_generate_question_node, description="模型生成题目"))
     wf.add_node(Node(name="composition_gate", node_type="gate", execute=_composition_gate_node, description="组合校验"))
     wf.add_node(Node(name="create_draft", node_type="action", execute=_create_draft_node, description="创建草稿"))
     wf.add_node(Node(name="render_artifact", node_type="render", execute=_render_artifact_node, description="渲染产物"))
     wf.add_node(Node(name="completed", node_type="render", execute=_completed_node, description="完成"))
     
     wf.add_edge("load_learning_evidence", ["question_discovery"])
-    wf.add_edge("question_discovery", ["question_gate"])
-    wf.add_edge("question_gate", ["composition_gate"])
+    wf.add_edge("question_discovery", ["question_gate", "generate_question"])
+    wf.add_edge("question_gate", ["composition_gate", "generate_question"])
+    wf.add_edge("generate_question", ["composition_gate"])
     wf.add_edge("composition_gate", ["create_draft"])
     wf.add_edge("create_draft", ["render_artifact"])
     wf.add_edge("render_artifact", ["completed"])

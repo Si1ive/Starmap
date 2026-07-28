@@ -34,11 +34,22 @@ def _decode_text(value: Any) -> str:
     )
 
 
+def _decode_json_text(value: Any) -> Any:
+    """递归解码检索 DTO 中所有展示文本，不改变数值和空值。"""
+    if isinstance(value, str):
+        return _decode_text(value)
+    if isinstance(value, dict):
+        return {key: _decode_json_text(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_decode_json_text(item) for item in value]
+    return value
+
+
 def _agent_result_title(item: Dict[str, Any]) -> str:
     entity = item.get("entity") or {}
     title = item.get("title") or entity.get("title")
     if isinstance(title, str) and title.strip():
-        return title.strip()
+        return _decode_text(title).strip()
     content_text = _decode_text(item.get("content_text")).strip()
     if content_text:
         return content_text[:80]
@@ -46,6 +57,7 @@ def _agent_result_title(item: Dict[str, Any]) -> str:
 
 
 def _normalize_agent_result(item: Dict[str, Any]) -> Dict[str, Any]:
+    item = _decode_json_text(item)
     entity = item.get("entity") or {}
     return {
         "entity_id": item.get("entity_id"),

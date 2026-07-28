@@ -20,6 +20,24 @@ def test_retrieval_result_decodes_literal_unicode_escapes():
     assert result["context_text"] == "传输层"
 
 
+def test_retrieval_result_decodes_nested_titles_and_source_labels():
+    result = _normalize_agent_result(
+        {
+            "entity_id": "question_udp",
+            "entity_type": "question",
+            "title": r"UDP \u7ec3\u4e60\u9898",
+            "entity": {"title": r"\u4f20\u8f93\u5c42\u9898\u76ee"},
+            "source": {"filename": r"\u8ba1\u7b97\u673a\u7f51\u7edc.pdf"},
+            "question_meta": {"paper_name": r"\u6a21\u62df\u5377"},
+        }
+    )
+
+    assert result["entity_title"] == "UDP 练习题"
+    assert result["entity"]["title"] == "传输层题目"
+    assert result["source"]["filename"] == "计算机网络.pdf"
+    assert result["question_meta"]["paper_name"] == "模拟卷"
+
+
 def test_audit_uses_structured_tool_arguments_when_model_has_no_text_part():
     response = ModelResponse(
         parts=[ToolCallPart("final_result", {"content": "UDP 讲解"})]

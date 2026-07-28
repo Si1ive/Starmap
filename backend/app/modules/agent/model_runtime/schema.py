@@ -7,7 +7,7 @@ Loop action Schema（Pydantic model）
 from typing import Optional, Dict, Any, Literal
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ActionType(str, Enum):
@@ -89,6 +89,30 @@ class ExplanationOutput(BaseModel):
     body: str = Field(..., description="讲解正文（Markdown）")
     citations: list = Field(default_factory=list, description="引用列表")
     summary: str = Field(default="", description="一句话总结")
+
+
+class GeneratedQuestionOption(BaseModel):
+    key: str = Field(..., pattern=r"^[A-H]$")
+    text: str = Field(..., min_length=1, max_length=1000)
+
+
+class GeneratedPracticeQuestion(BaseModel):
+    """题库无命中时由模型生成、且可被后续确定性批改的单选题。"""
+
+    content: str = Field(..., min_length=1, max_length=5000)
+    options: list[GeneratedQuestionOption] = Field(..., min_length=2, max_length=8)
+    answer: str = Field(..., pattern=r"^[A-H]$")
+    explanation: str = Field(..., min_length=1, max_length=5000)
+    difficulty: Literal["easy", "medium", "hard"] = "medium"
+
+    @model_validator(mode="after")
+    def validate_answer(self):
+        keys = [option.key for option in self.options]
+        if len(keys) != len(set(keys)):
+            raise ValueError("生成题选项 key 不能重复")
+        if self.answer not in keys:
+            raise ValueError("生成题答案必须属于选项")
+        return self
 
 
 class ArtifactContent(BaseModel):

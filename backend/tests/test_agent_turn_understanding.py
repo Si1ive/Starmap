@@ -113,6 +113,29 @@ def test_follow_up_practice_reuses_topic_extracted_from_previous_explanation():
     assert second.intent_hint == "practice_generation"
 
 
+def test_explicit_practice_topic_overrides_previous_active_topic():
+    understanding = build_turn_understanding(
+        _context(
+            current_input="给我出一道TCP题目",
+            active_topic={
+                "entity_type": "topic",
+                "title": "UDP",
+                "source": "thread_memory",
+            },
+        )
+    )
+
+    assert understanding.topic_entities[0].model_dump() == {
+        "entity_type": "topic",
+        "entity_id": None,
+        "title": "TCP",
+        "source": "current_turn",
+        "aliases": [],
+    }
+    assert understanding.standalone_request == "给用户出一道关于TCP的练习题"
+    assert understanding.retrieval_query == "TCP"
+
+
 def test_build_turn_understanding_keeps_question_focus_in_retrieval_query():
     understanding = build_turn_understanding(
         _context(current_input="请详细解释 TCP 为什么需要三次握手")

@@ -1,5 +1,13 @@
 # 2026-07 Validate 记忆消费闭环进展
 
+## 2026-07-28：让题库零命中降级为模型出题
+
+- 目标：修复 UDP 检索零命中后仍进入题目质量门并红色终止、下一轮 TCP 继续查询 UDP，以及检索标题/来源残留 Unicode 转义的问题。
+- 实现：`backend/app/modules/agent/turn_understanding.py::_topic_from_explicit_practice`（L175-L197）和 `build_turn_understanding`（L421-L481）让当前轮显式主题优先；`backend/app/modules/agent/tools/retrieve_knowledge.py::_decode_json_text`、`_normalize_agent_result`（L37-L84）递归清理展示字段；`backend/app/modules/agent/workflows/validate.py::_question_discovery_node`、`_question_gate_node`、`_generate_question_node`（L79-L258）把空命中/无合格候选转入模型生成；`_render_artifact_node`（L305-L363）冻结可展示题面和结构化答案；`backend/app/modules/agent/memory_selector.py::load_evaluation_bundle`（L515-L701）仅从同线程选中 Artifact 安全读取模型题供后续批改。
+- 副作用与错误：正常零命中只留下公开提示，不产生 failed Run；只有缺主题、模型配置/调用错误或结构化题目校验失败沿工作流错误链传播。模型题不写全局 `questions` 表，避免污染 RAG 语料。
+- 验证：Agent 回归 251 passed、1 deselected（排除一个与本改动无关、仍断言旧版 Explain 来源展示契约的既有用例）、104 warnings；Python 编译与 `git diff --check` 通过。
+- 提交信息：`让题库零命中降级为模型出题`
+
 ## 2026-07-27：让明确重复题覆盖本轮排除视图
 
 - 目标：落实 `MEM-007` 的排除集冲突策略，让“再出一遍上次那道题”可重出唯一可信引用题，同时不删除历史练习事实。

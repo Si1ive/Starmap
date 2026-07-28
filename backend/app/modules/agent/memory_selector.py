@@ -21,6 +21,7 @@ from app.models.mysql_models import (
 from .mastery_decay import calculate_effective_mastery
 from .memory_contracts import MemoryFactType, MemoryNeed, MemoryPartition
 from .models import (
+    AgentArtifact,
     AgentMemoryEvent,
     AgentMemoryItem,
     AgentMemorySnapshot,
@@ -579,7 +580,36 @@ async def load_evaluation_bundle(
             Question.answer_source.in_(("extracted", "manual", "llm")),
         )
     )
-    if question is None or not str(question.answer or "").strip():
+    source_artifact_id = str(reference.get("artifact_id") or "").strip() or None
+    selected_artifact_ids = set(
+        (snapshot.selection_metadata_json or {}).get("selected_artifact_ids") or []
+    )
+    generated_question = None
+    if question is None and source_artifact_id in selected_artifact_ids:
+        artifact = await db.scalar(
+            select(AgentArtifact)
+            .join(AgentRun, AgentRun.id == AgentArtifact.run_id)
+            .where(
+                AgentArtifact.id == source_artifact_id,
+                AgentArtifact.artifact_type == "practice",
+                AgentRun.thread_id == run.thread_id,
+                AgentRun.user_id == user_id,
+            )
+        )
+        generated_rows = (
+            ((artifact.content_json or {}).get("content") or {}).get("generated_questions")
+            if artifact is not None
+            else []
+        ) or []
+        generated_question = next(
+            (
+                row
+                for row in generated_rows
+                if isinstance(row, dict) and str(row.get("id") or "") == question_id
+            ),
+            None,
+        )
+    if question is None and generated_question is None:
         return EvaluationBundle(
             snapshot_id=snapshot.id,
             standalone_request=snapshot.standalone_request,
@@ -587,29 +617,58 @@ async def load_evaluation_bundle(
             unresolved_reason="question_not_eligible",
         )
 
-    linked_knowledge_point_ids = list(
-        (
-            await db.execute(
-                select(QuestionKnowledgeLink.knowledge_point_id)
-                .where(QuestionKnowledgeLink.question_id == question.id)
-                .order_by(
-                    QuestionKnowledgeLink.relevance.desc(),
-                    QuestionKnowledgeLink.knowledge_point_id,
-                )
+    if question is not None:
+        if not str(question.answer or "").strip():
+            return EvaluationBundle(
+                snapshot_id=snapshot.id,
+                standalone_request=snapshot.standalone_request,
+                raw_input=raw_input or None,
+                unresolved_reason="question_not_eligible",
             )
-        ).scalars()
-    )
-    knowledge_point_ids = list(
-        dict.fromkeys(
-            normalized
-            for value in [
-                *(question.knowledge_point_ids or []),
-                *linked_knowledge_point_ids,
-            ]
-            if (normalized := str(value).strip())
+        linked_knowledge_point_ids = list(
+            (
+                await db.execute(
+                    select(QuestionKnowledgeLink.knowledge_point_id)
+                    .where(QuestionKnowledgeLink.question_id == question.id)
+                    .order_by(
+                        QuestionKnowledgeLink.relevance.desc(),
+                        QuestionKnowledgeLink.knowledge_point_id,
+                    )
+                )
+            ).scalars()
         )
-    )
-    user_answer = _extract_user_answer(raw_input, question.type)
+        question_type = question.type
+        content = question.content
+        options = list(question.options or [])
+        standard_answer = question.answer
+        answer_source = question.answer_source
+        explanation = question.explanation
+        subject_id = question.subject_id
+        knowledge_point_ids = list(
+            dict.fromkeys(
+                normalized
+                for value in [*(question.knowledge_point_ids or []), *linked_knowledge_point_ids]
+                if (normalized := str(value).strip())
+            )
+        )
+    else:
+        question_type = str(generated_question.get("question_type") or "")
+        content = str(generated_question.get("content") or "")
+        options = list(generated_question.get("options") or [])
+        standard_answer = str(generated_question.get("standard_answer") or "")
+        answer_source = "llm"
+        explanation = str(generated_question.get("explanation") or "") or None
+        subject_id = None
+        knowledge_point_ids = []
+        if question_type != "choice" or not content or not standard_answer:
+            return EvaluationBundle(
+                snapshot_id=snapshot.id,
+                standalone_request=snapshot.standalone_request,
+                raw_input=raw_input or None,
+                unresolved_reason="question_not_eligible",
+            )
+
+    user_answer = _extract_user_answer(raw_input, question_type)
     if user_answer is None:
         return EvaluationBundle(
             snapshot_id=snapshot.id,
@@ -618,10 +677,6 @@ async def load_evaluation_bundle(
             unresolved_reason="user_answer_missing",
         )
 
-    source_artifact_id = str(reference.get("artifact_id") or "").strip() or None
-    selected_artifact_ids = set(
-        (snapshot.selection_metadata_json or {}).get("selected_artifact_ids") or []
-    )
     if source_artifact_id not in selected_artifact_ids:
         source_artifact_id = None
 
@@ -631,15 +686,15 @@ async def load_evaluation_bundle(
         raw_input=raw_input,
         user_answer=user_answer,
         question=EvaluationQuestion(
-            id=question.id,
-            question_type=question.type,
-            content=question.content,
-            options=list(question.options or []),
-            standard_answer=question.answer,
-            answer_source=question.answer_source,
-            explanation=question.explanation,
+            id=question_id,
+            question_type=question_type,
+            content=content,
+            options=options,
+            standard_answer=standard_answer,
+            answer_source=answer_source,
+            explanation=explanation,
             knowledge_point_ids=knowledge_point_ids,
-            subject_id=question.subject_id,
+            subject_id=subject_id,
             source_artifact_id=source_artifact_id,
         ),
     )

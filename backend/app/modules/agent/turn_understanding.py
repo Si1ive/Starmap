@@ -172,6 +172,31 @@ def _topic_from_explicit_explanation(raw_input: str) -> TopicEntity | None:
     )
 
 
+def _topic_from_explicit_practice(raw_input: str) -> TopicEntity | None:
+    """从“出一道 X 题”中提取当前轮主题，覆盖线程里的旧主题。"""
+    if not any(hint in raw_input for hint in _PRACTICE_HINTS):
+        return None
+    normalized = "".join(raw_input.split())
+    match = re.search(
+        r"(?:出|来)(?:一|两|几)?道(?P<title>.*?)(?:的)?(?:练习)?(?:题目?|题)?[。！？!?]*$",
+        normalized,
+    )
+    if match is None:
+        return None
+    title = match.group("title").strip()
+    title = _CHAPTER_ORDINAL_PATTERN.sub("", title)
+    for hint in (*_EASY_HINTS, *_MEDIUM_HINTS, *_HARD_HINTS):
+        title = title.replace(hint, "")
+    title = title.strip("的 题目练习。！？!?")
+    if not title or title == raw_input.strip() or len(title) > 60:
+        return None
+    return TopicEntity(
+        entity_type="topic",
+        title=title,
+        source="current_turn",
+    )
+
+
 def _parse_chapter_ordinal(value: str) -> int | None:
     if value.isdigit():
         ordinal = int(value)
@@ -395,10 +420,15 @@ def apply_referent_resolution(
 
 def build_turn_understanding(agent_context: AgentRunContext) -> TurnUnderstanding:
     raw_input = agent_context.current_input.strip()
+    explicit_current_topic = (
+        _topic_from_explicit_practice(raw_input)
+        or _topic_from_explicit_explanation(raw_input)
+    )
     topic_entities = [
         topic
         for topic in (
             *(_topic_from_context_ref(ref) for ref in agent_context.context_refs),
+            explicit_current_topic,
             _topic_from_memory(agent_context.active_topic),
         )
         if topic is not None
@@ -411,10 +441,6 @@ def build_turn_understanding(agent_context: AgentRunContext) -> TurnUnderstandin
             continue
         seen_topics.add(key)
         deduped_topics.append(topic)
-    if not deduped_topics:
-        explicit_topic = _topic_from_explicit_explanation(raw_input)
-        if explicit_topic is not None:
-            deduped_topics.append(explicit_topic)
     standalone_request, intent_hint = _derive_standalone_request(
         raw_input,
         deduped_topics[0] if deduped_topics else None,

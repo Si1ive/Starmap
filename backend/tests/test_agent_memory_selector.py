@@ -277,6 +277,103 @@ async def test_load_evaluation_bundle_uses_unique_snapshot_question_and_real_ans
 
 
 @pytest.mark.asyncio
+async def test_load_evaluation_bundle_uses_generated_question_from_selected_artifact(
+    db_session,
+):
+    thread = AgentThread(
+        id="thread_generated_evaluation",
+        user_id="user_001",
+        title="模型题批改",
+        status="active",
+    )
+    practice_run = AgentRun(
+        id="run_generated_practice",
+        thread_id=thread.id,
+        user_id="user_001",
+        workflow_name="validate",
+        status="completed",
+    )
+    grade_run = AgentRun(
+        id="run_generated_grade",
+        thread_id=thread.id,
+        user_id="user_001",
+        workflow_name="grade",
+        status="queued",
+        input_message="我的答案是 A",
+        metadata_json={"memory_snapshot_id": "memsnap_generated_grade"},
+    )
+    db_session.add(thread)
+    await db_session.flush()
+    db_session.add_all([practice_run, grade_run])
+    await db_session.flush()
+    practice_run.root_run_id = practice_run.id
+    grade_run.root_run_id = grade_run.id
+    db_session.add(
+        AgentArtifact(
+            id="artifact_generated_practice",
+            run_id=practice_run.id,
+            artifact_type="practice",
+            content_json={
+                "content": {
+                    "question_ids": ["generated_run_generated_practice"],
+                    "generated_questions": [
+                        {
+                            "id": "generated_run_generated_practice",
+                            "question_type": "choice",
+                            "content": "UDP 是否保证可靠交付？",
+                            "options": [
+                                {"key": "A", "text": "不保证"},
+                                {"key": "B", "text": "保证"},
+                            ],
+                            "standard_answer": "A",
+                            "answer_source": "llm",
+                            "explanation": "UDP 不提供可靠交付保证。",
+                        }
+                    ],
+                }
+            },
+        )
+    )
+    db_session.add(
+        AgentMemorySnapshot(
+            id="memsnap_generated_grade",
+            run_id=grade_run.id,
+            thread_id=thread.id,
+            user_id="user_001",
+            state_version=1,
+            standalone_request="批改模型生成的 UDP 题",
+            understanding_json={
+                "raw_input": "我的答案是 A",
+                "reference_sources": [
+                    {
+                        "type": "question",
+                        "id": "generated_run_generated_practice",
+                        "artifact_id": "artifact_generated_practice",
+                    }
+                ],
+            },
+            selection_metadata_json={
+                "selected_artifact_ids": ["artifact_generated_practice"]
+            },
+        )
+    )
+    await db_session.flush()
+
+    bundle = await load_evaluation_bundle(
+        db_session,
+        run_id=grade_run.id,
+        user_id="user_001",
+    )
+
+    assert bundle.unresolved_reason is None
+    assert bundle.user_answer == "A"
+    assert bundle.question is not None
+    assert bundle.question.id == "generated_run_generated_practice"
+    assert bundle.question.standard_answer == "A"
+    assert bundle.question.answer_source == "llm"
+
+
+@pytest.mark.asyncio
 async def test_load_evaluation_bundle_rejects_cross_user_snapshot_and_ambiguous_question(
     db_session,
 ):

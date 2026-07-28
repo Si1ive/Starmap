@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.modules.agent.memory_selector import PracticeBundle, TopicBundle
+from app.modules.agent.model_runtime.schema import GeneratedPracticeQuestion
 from app.modules.agent.tools import retrieve_knowledge as retrieve_module
 from app.modules.agent.workflows import validate
 from app.modules.agent.workflows.contracts import ExecutionContext, NodeStatus
@@ -82,8 +83,9 @@ async def test_question_gate_filters_deleted_or_source_less_questions():
 
     result = await validate._question_gate_node(context, AsyncMock())
 
-    assert result.status == NodeStatus.FAILED
-    assert result.error == "未找到有效候选题"
+    assert result.status == NodeStatus.COMPLETED
+    assert result.next_node == "generate_question"
+    assert result.output["fallback"] == "llm_generation"
 
 
 @pytest.mark.asyncio
@@ -223,6 +225,84 @@ async def test_validate_uses_practice_bundle_topic_for_query(monkeypatch):
     assert retrieve.await_args.kwargs["filters"] == {"difficulty": "medium"}
     assert retrieve.await_args.kwargs["exclude_entity_ids"] == ["question_old_001"]
     assert retrieve.await_args.kwargs["entity_type"] == "question"
+    assert discovered.next_node == "generate_question"
+    assert discovered.output["fallback"] == "llm_generation"
+
+
+@pytest.mark.asyncio
+async def test_validate_empty_rag_result_bypasses_question_gate(monkeypatch):
+    context = _context()
+    db = AsyncMock()
+    monkeypatch.setattr(
+        validate,
+        "load_practice_bundle",
+        AsyncMock(
+            return_value=PracticeBundle(
+                topic=TopicBundle(
+                    title="UDP",
+                    entity_type="topic",
+                    source="current_turn",
+                )
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        retrieve_module,
+        "retrieve_knowledge",
+        AsyncMock(return_value={"status": "success", "results": [], "total": 0}),
+    )
+
+    await validate._load_learning_evidence_node(context, db)
+    discovered = await validate._question_discovery_node(context, db)
+
+    assert discovered.status == NodeStatus.COMPLETED
+    assert discovered.next_node == "generate_question"
+    assert discovered.output == {
+        "questions_found": 0,
+        "fallback": "llm_generation",
+        "notice": "题库中未找到合适真题，将由模型生成一道练习题",
+    }
+
+
+@pytest.mark.asyncio
+async def test_validate_generates_structured_question_after_empty_rag(monkeypatch):
+    context = _context()
+    context.set(
+        "practice_bundle",
+        PracticeBundle(
+            topic=TopicBundle(title="UDP", entity_type="topic", source="current_turn"),
+            difficulty="medium",
+        ).model_dump(mode="json"),
+    )
+    context.set("retrieval_notice", "题库中未找到合适真题，将由模型生成一道练习题")
+    generate = AsyncMock(
+        return_value=GeneratedPracticeQuestion(
+            content="UDP 校验和的主要作用是什么？",
+            options=[
+                {"key": "A", "text": "检测传输差错"},
+                {"key": "B", "text": "保证可靠重传"},
+            ],
+            answer="A",
+            explanation="UDP 校验和用于差错检测，不提供可靠重传。",
+            difficulty="medium",
+        )
+    )
+    monkeypatch.setattr(validate.practice_generation_runtime, "generate", generate)
+
+    generated = await validate._generate_question_node(context, AsyncMock())
+    composed = await validate._composition_gate_node(context, AsyncMock())
+    drafted = await validate._create_draft_node(context, AsyncMock())
+    rendered = await validate._render_artifact_node(context, AsyncMock())
+
+    assert generated.status == NodeStatus.COMPLETED
+    assert generated.next_node == "composition_gate"
+    assert composed.status == NodeStatus.COMPLETED
+    assert drafted.status == NodeStatus.COMPLETED
+    assert rendered.artifact["content"]["question_ids"] == ["generated_run_validate_001"]
+    assert "UDP 校验和的主要作用是什么" in rendered.artifact["content"]["content"]
+    stored = rendered.artifact["content"]["generated_questions"][0]
+    assert stored["standard_answer"] == "A"
+    assert stored["answer_source"] == "llm"
 
 
 @pytest.mark.asyncio
