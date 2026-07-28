@@ -27,7 +27,7 @@
 | 5.1 | `frontend/src/index.css` | `.practice-answer-conflict` | L3042-L3112 | 两份冲突答案和两个选择动作 | 使用项目纸张、墨色与琥珀边线；桌面双栏、移动端单栏，不调用浏览器原生确认框 | 可键盘操作的冲突面板 | 用户选择后进入 `resolveConflict` |
 | 6 | `backend/app/modules/practice/router.py` | `_assert_answer_version`、`save_practice_answer` | L75-L83、L409-L456 | 会话、题目、答案、累计用时和 `expected_version` | 锁定用户会话并核对状态、截止时间和题目归属；仅当期望版本等于数据库版本时保存并递增，首次保存要求版本 0 | `practice_answers`；旧版本返回可识别 409，超时自动交卷 | 前端冲突选择或继续答题 |
 | 7 | `backend/app/modules/practice/router.py` | `_submit`、`submit_practice_session` | L118-L154、L460-L468 | 当前用户会话 | 幂等交卷；客观答案归一化后与会话快照答案确定性比对，未作答补空答案并计零分 | 固化每题对错/得分和会话总成绩、交卷时间 | 反馈与复盘页 |
-| 8 | `frontend/src/pages/PracticePage.tsx` | `PracticePage` | L275-L495 | 已交卷会话 DTO | 显示总分、逐题对错、用户答案、冻结标准答案与解析 | 用户可逐题复盘；不修改历史事实 | 返回练习历史 |
+| 8 | `frontend/src/pages/PracticePage.tsx` | `PracticePage` | L275-L512 | 已交卷会话 DTO | 显示总分、逐题对错、用户答案、冻结标准答案与解析 | 用户可逐题复盘；不修改历史事实 | 返回练习历史 |
 
 ## 分层提示与模拟考边界
 
