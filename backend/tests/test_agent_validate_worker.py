@@ -36,6 +36,9 @@ from app.modules.agent.memory_selector import PracticeBundle, TopicBundle
 from app.modules.agent.model_runtime.schema import GeneratedPracticeQuestion
 from app.models.mysql_models import Question
 from app.modules.practice.models import PracticeSession, PracticeSessionQuestion
+from app.modules.practice.models import PracticeAnswer
+from app.modules.practice.router import _submit
+from app.modules.learning.models import LearningActivityEvent
 from app.modules.identity.models import User  # noqa: F401 - register identity FK metadata
 
 WORKER_TABLES = [
@@ -56,6 +59,8 @@ WORKER_TABLES = [
     Question.__table__,
     PracticeSession.__table__,
     PracticeSessionQuestion.__table__,
+    PracticeAnswer.__table__,
+    LearningActivityEvent.__table__,
 ]
 
 
@@ -358,3 +363,32 @@ async def test_validate_worker_keeps_generated_answer_out_of_public_artifact(
     assert "generated_questions" not in artifact.content_json["content"]
     assert "standard_answer" not in str(artifact.content_json)
     assert artifact.metadata_json["generated_questions"][0]["standard_answer"] == "A"
+
+    item = await db_session.scalar(
+        select(PracticeSessionQuestion).where(
+            PracticeSessionQuestion.session_id == practice.id
+        )
+    )
+    assert item is not None
+    practice.status = "active"
+    practice.started_at = artifact.created_at
+    db_session.add(
+        PracticeAnswer(
+            session_id=practice.id,
+            session_question_id=item.id,
+            question_id=None,
+            user_answer="A",
+            version=1,
+        )
+    )
+    await db_session.flush()
+    await _submit(db_session, practice)
+    learning_event = await db_session.scalar(
+        select(LearningActivityEvent).where(
+            LearningActivityEvent.source_id == f"{practice.id}:{item.item_id}"
+        )
+    )
+    assert learning_event is not None
+    assert learning_event.source_type == "agent_practice"
+    assert learning_event.topic_keywords_json == ["udp"]
+    assert learning_event.is_correct is True

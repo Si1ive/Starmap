@@ -124,6 +124,17 @@ export interface AdminAgentSessionDetail extends Omit<
     started_at: string | null
     submitted_at: string | null
   }>
+  learning_activities: Array<{
+    id: number
+    event_type: string
+    source_type: string
+    source_id: string
+    run_id: string | null
+    topic_keywords: string[]
+    is_correct: boolean | null
+    quality: number
+    occurred_at: string
+  }>
   turns: AdminAgentTurn[]
 }
 

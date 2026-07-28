@@ -12988,6 +12988,39 @@ summary:focus-visible {
   font-style: normal;
 }
 
+.learning-activity-log > ol {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  list-style: none;
+  margin: 0;
+  padding: 0 18px;
+}
+
+.learning-activity-log > p {
+  color: var(--ink-faint);
+  font-size: 13px;
+}
+
+.learning-activity-log li {
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 10px minmax(0, 1fr) auto auto;
+  min-height: 68px;
+}
+
+.learning-activity-log li:last-child { border-bottom: 0; }
+.learning-activity-log__mark { background: var(--blue); border-radius: 999px; height: 8px; width: 8px; }
+.learning-activity-log__mark.is-agent_discussion { background: var(--amber); }
+.learning-activity-log__mark.is-agent_practice { background: var(--jade); }
+.learning-activity-log li > div { display: grid; gap: 3px; }
+.learning-activity-log strong { font-size: 13px; }
+.learning-activity-log small,
+.learning-activity-log time { color: var(--ink-faint); font-size: 11px; }
+.learning-activity-log button { background: transparent; color: var(--blue); font-size: 11px; }
+
 .learning-week > div {
   align-items: end;
   border-bottom: 1px solid var(--line-strong);

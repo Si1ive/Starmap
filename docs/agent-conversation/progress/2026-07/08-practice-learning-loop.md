@@ -7,3 +7,12 @@
 - 管理端：Agent Runs 会话详情同步返回并展示关联练习、状态、题数、得分和来源 Run。
 - 验证：`pytest` 覆盖 Validate、持久化、私有答案和 MySQL 外键索引替换顺序；用户端与管理端生产构建通过；真实 MySQL 从 `20260728_practice_hints` 前向升级到单 head `20260728_agent_practice_drafts`。首次升级暴露非事务 DDL 的索引依赖后，迁移改为先建替代索引并支持原地重入，全程未使用 stamp。
 - 中文提交信息：`打通 Agent 出题与真实练习入口`。
+
+## 2026-07-28：阶段二——统一学习活动与评价证据
+
+- 目标：Agent 讲解和 Agent/普通练习都进入可回溯学习记录，同时禁止把“讨论过”误写成“已掌握”。
+- 实现：新增 `learning_activity_events`；Explain 完成写无 verdict 的主题 exposure，练习交卷按 Session Item 写正确/错误评价事件；学习进度新事件优先、旧数据兼容且同源去重。
+- 用户端：学习进度页新增最近学习记录，可回到 Agent 对话或练习结果；关键词轨迹标出 Agent 讲解、Agent 练习和普通作答来源。
+- 管理端：Agent Runs 会话详情新增学习事件区，显示主题、事件类型、来源 Run 与“活动/正确/错误”证据层级。
+- 验证：学习事件、Validate→Session→交卷整链、记忆投影、迁移图与 Schema Guard 测试通过；双前端生产构建通过；真实 MySQL 升至 `20260728_learning_activity`。
+- 中文提交信息：`统一 Agent 学习活动与练习证据`。

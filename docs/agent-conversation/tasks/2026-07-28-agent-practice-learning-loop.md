@@ -10,7 +10,7 @@
 | 阶段 | 目标 | 状态 | 验收 |
 | --- | --- | --- | --- |
 | 1 | 出题后创建练习草稿、跳转练习页，并在对话与管理端保留练习轨道 | 已完成 | Validate Worker 产生 `PracticeSession(status=draft)`；用户端与 Agent Runs 可见 |
-| 2 | 普通练习与 Agent 练习产生统一学习活动/评分证据 | 待开始 | 提交后学习记录可回链到 Session、Thread 与 Run |
+| 2 | 普通练习与 Agent 练习产生统一学习活动/评分证据 | 已完成 | 提交后学习记录可回链到 Session、Thread 与 Run；讲解只形成活动事实 |
 | 3 | 统一普通错题与 Agent 评分的薄弱点投影 | 待开始 | 同一知识点按可信证据聚合且可解释 |
 | 4 | 建立受控 Capability/Tool Harness | 待开始 | 模型只见获授权能力；写能力幂等、可审计，不含 MCP |
 
@@ -39,3 +39,17 @@
 学习活动与掌握证据必须分离；讨论完成可记录接触事实，但只有结构化作答和确定性评分才能影响掌握度。
 薄弱点由证据投影产生，不提供“直接设置薄弱点”的模型写工具。Capability Harness 复用领域服务和 Workflow，
 不把数据库表操作直接暴露给模型。
+
+## 阶段二最终执行链
+
+| 执行阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 练习交卷 | `backend/app/modules/practice/router.py` | `_submit` | L118-L158 | 行锁 Session、冻结题目、用户答案 | 按快照确定性判分并在同一事务调用学习事件投影；draft 禁止直接交卷 | submitted Session、答案 verdict | `record_practice_submission` |
+| 评价事件 | `backend/app/modules/learning/events.py` | `record_practice_submission` | L28-L83 | Session、Session Item、已判分答案 | 以 `session:item` 幂等；区分普通题与 Agent 练习，保留关键词、知识点、提示与回链 | `practice_answer_graded` | `LearningProgressService.get` / 薄弱点投影 |
+| 讲解活动 | `backend/app/modules/learning/events.py` | `record_explanation_activity` | L86-L130 | Explain Run、Artifact、冻结 active topic | 只在有可信主题时写 exposure；quality=0.35 且 verdict 为空，不更新掌握度 | `agent_explanation_completed` | 学习记录 |
+| 学习聚合 | `backend/app/modules/learning/service.py` | `LearningProgressService.get`、`_load_activity_events`、`_activity_evidence`、`_activity_payload` | L100-L240 | 当前用户活动事件、历史练习、掌握度 | 新事件优先；旧练习仅在没有同源事件时兼容读取，避免双计数；生成关键词轨迹和最近活动 | progress topics、recent_activities | TodayPage |
+| 学习记录 UI | `frontend/src/pages/TodayPage.tsx` | `TodayPage` | L280-L318 | `recent_activities` | 区分 Agent 讲解、正确/错误练习，并按来源回到对话或练习结果 | 最近学习记录 | 用户复盘 |
+| 管理监控 | `backend/app/modules/agent/admin_router.py` | `get_run_detail` | L486-L604 | 当前 Thread | 查询 `learning_activity_events` 并公开事件类型、主题、证据层级、质量与 Run | Agent Runs `learning_activities[]` | 管理详情 |
+
+讲解完成只能证明用户接触了主题，因此会进入学习记录和保持率轨迹，但 `is_correct=None`，不会成为掌握度 verdict。
+练习完成使用冻结标准答案产生确定性评价事件；重复提交与自动交卷通过 Session 状态和事件唯一键保持幂等。

@@ -5,6 +5,16 @@
 本分卷说明内部 Run 事件如何投影到 thread 时间线，为什么刷新后仍能恢复消息、工作流步骤和工具活动，以及
 失败错误如何既保留管理端审计信息，又向用户公开安全提示。
 
+## 跨域学习活动事件
+
+| 阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理与错误传播 | 输出/消费 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 练习评分投影 | `backend/app/modules/practice/router.py`、`backend/app/modules/learning/events.py` | `_submit`（L118-L158）、`record_practice_submission`（L28-L83） | Session 行锁、冻结题目、PracticeAnswer | 先确定性判分，再以 `session:item` 查询/写唯一事件；任何数据库错误阻止同事务交卷，重试不会重复写 | `learning_activity_events`；学习进度与薄弱点消费 |
+| Agent 讲解投影 | `backend/app/modules/agent/memory_projection.py`、`backend/app/modules/learning/events.py` | `_record_explanation_artifact_created`（L143-L185）、`record_explanation_activity`（L86-L130） | completed Explain Artifact、Run context snapshot | 只接受冻结 active topic；缺主题安全跳过；事件与 Agent Memory fact 同事务，错误沿 Worker 失败链传播 | 无 verdict 的 exposure；学习记录和 Agent Runs 消费 |
+
+`learning_activity_events` 是用户学习记录的可信事实层，不替代 `AgentEvent` 时间线。前者跨普通练习和 Agent 对话，
+后者描述单次 Run 的执行过程；管理端在 Thread 详情中并排展示两者，便于判断 workflow 完成是否真正形成学习事实。
+
 ## 事件写入与公开投影
 
 | 执行阶段 | 文件 | 符号 | 输入 | 处理 | 输出/副作用 | 下一步 |

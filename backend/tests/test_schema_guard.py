@@ -235,4 +235,4 @@ async def test_schema_guard_rejects_non_nullable_agent_model_token_limit():
 
 
 def test_schema_guard_reads_the_project_migration_heads():
-    assert get_expected_revisions() == frozenset({"20260728_agent_practice_drafts"})
+    assert get_expected_revisions() == frozenset({"20260728_learning_activity"})

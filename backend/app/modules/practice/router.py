@@ -153,6 +153,9 @@ async def _submit(db: AsyncSession, session: PracticeSession) -> None:
     session.status = "submitted"
     session.awarded_score = awarded_total
     session.submitted_at = datetime.utcnow()
+    from app.modules.learning.events import record_practice_submission
+
+    await record_practice_submission(db, session=session, rows=rows)
 
 
 async def _session_payload(db: AsyncSession, session: PracticeSession) -> dict:
@@ -494,6 +497,8 @@ async def submit_practice_session(
     db: AsyncSession = Depends(get_db),
 ):
     session = await _owned_session(db, session_id, current.user.id, lock=True)
+    if session.status == "draft":
+        raise HTTPException(status_code=409, detail="请先开始练习再交卷")
     await _submit(db, session)
     await db.commit()
     return ApiResponse(message="交卷完成", data=await _session_payload(db, session))

@@ -13,7 +13,21 @@ export interface LearningTopic {
   correct_count: number;
   curve: RetentionPoint[];
   status: "due" | "stable";
-  source_types: Array<"question" | "knowledge_point">;
+  source_types: string[];
+}
+
+export interface LearningActivity {
+  id: number;
+  event_type: "practice_answer_graded" | "agent_explanation_completed" | string;
+  source_type: "question" | "agent_practice" | "agent_discussion" | string;
+  source_id: string;
+  topic_keywords: string[];
+  is_correct: boolean | null;
+  occurred_at: string;
+  session_id: string | null;
+  thread_id: string | null;
+  run_id: string | null;
+  title: string | null;
 }
 
 export interface LearningProgress {
@@ -27,6 +41,7 @@ export interface LearningProgress {
     study_seconds: number;
   };
   topics: LearningTopic[];
+  recent_activities: LearningActivity[];
   week: Array<{ date: string; study_seconds: number }>;
 }
 

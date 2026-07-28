@@ -23,6 +23,7 @@ AGENT_REQUIRED_TABLES = frozenset(
         "agent_conversation_summaries",
         "agent_memory_items",
         "agent_preference_candidates",
+        "learning_activity_events",
     }
 )
 AGENT_MODEL_NULLABLE_COLUMNS = frozenset({"max_tokens"})
@@ -111,7 +112,8 @@ async def verify_database_schema(
                 "'user_learning_mastery', "
                 "'agent_conversation_summaries', "
                 "'agent_memory_items', "
-                "'agent_preference_candidates'"
+                "'agent_preference_candidates', "
+                "'learning_activity_events'"
                 ")"
             )
         )

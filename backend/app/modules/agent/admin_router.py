@@ -544,6 +544,17 @@ async def get_run_detail(run_id: str, db: AsyncSession = Depends(get_db)):
             )
         ).all()
     )
+    from app.modules.learning.models import LearningActivityEvent
+
+    learning_activities = list(
+        (
+            await db.scalars(
+                sa_select(LearningActivityEvent)
+                .where(LearningActivityEvent.thread_id == thread.id)
+                .order_by(LearningActivityEvent.occurred_at)
+            )
+        ).all()
+    )
     latest_status = turns[-1]["status"] if turns else "queued"
     return {
         "data": {
@@ -573,6 +584,20 @@ async def get_run_detail(run_id: str, db: AsyncSession = Depends(get_db)):
                     "submitted_at": utc_isoformat(item.submitted_at),
                 }
                 for item in practices
+            ],
+            "learning_activities": [
+                {
+                    "id": item.id,
+                    "event_type": item.event_type,
+                    "source_type": item.source_type,
+                    "source_id": item.source_id,
+                    "run_id": item.run_id,
+                    "topic_keywords": item.topic_keywords_json or [],
+                    "is_correct": item.is_correct,
+                    "quality": item.quality,
+                    "occurred_at": utc_isoformat(item.occurred_at),
+                }
+                for item in learning_activities
             ],
             "turns": turns,
         }

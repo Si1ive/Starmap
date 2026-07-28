@@ -174,6 +174,9 @@ async def _record_explanation_artifact_created(
     )
     db.add(memory_event)
     await db.flush()
+    from app.modules.learning.events import record_explanation_activity
+
+    await record_explanation_activity(db, run=run, artifact=artifact)
     await _ensure_memory_update_outbox(db, run, memory_event)
     logger.info(
         "讲解产物事实写入",

@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
+from datetime import datetime
 
 import pytest
 from fastapi import HTTPException
@@ -80,19 +81,33 @@ async def test_submit_grades_against_frozen_snapshot_not_changed_question():
         user_answer="A",
         is_correct=None,
         awarded_score=None,
+        saved_at=datetime.utcnow(),
+        hint_levels_used_json=[],
     )
-    link = SimpleNamespace(max_score=2, snapshot_json={"answer": "A"})
+    link = SimpleNamespace(
+        item_id="item-1",
+        question_id="q-1",
+        max_score=2,
+        snapshot_json={"answer": "A", "topic_terms": ["二分查找"]},
+    )
     changed_question = SimpleNamespace(id="q-1", answer="B")
     execute_result = Mock()
     execute_result.all.return_value = [(link, changed_question, answer)]
     db = AsyncMock()
+    db.add = Mock()
     db.execute.return_value = execute_result
     session = SimpleNamespace(
         id="session-1",
+        user_id="01900000-0000-7000-8000-000000000001",
+        source_type="document",
+        agent_thread_id=None,
+        agent_run_id=None,
+        title="测试练习",
         status="active",
         awarded_score=None,
         submitted_at=None,
     )
+    db.scalar.return_value = None
 
     await _submit(db, session)
 

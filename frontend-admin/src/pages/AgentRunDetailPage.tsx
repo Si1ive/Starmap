@@ -502,6 +502,29 @@ const AgentRunDetailPage = () => {
         ) : <Empty description="该会话尚未创建练习" image={Empty.PRESENTED_IMAGE_SIMPLE} />}
       </Card>
 
+      <Card
+        className="agent-run-learning-activities"
+        size="small"
+        title={`学习事件（${session.learning_activities.length}）`}
+      >
+        {session.learning_activities.length ? (
+          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+            {session.learning_activities.map((activity) => (
+              <Descriptions bordered column={{ xs: 1, md: 4 }} key={activity.id} size="small">
+                <Descriptions.Item label="事件">{activity.event_type}</Descriptions.Item>
+                <Descriptions.Item label="主题">{activity.topic_keywords.join('、') || '-'}</Descriptions.Item>
+                <Descriptions.Item label="证据层级">
+                  <Tag color={activity.is_correct === null ? 'gold' : activity.is_correct ? 'green' : 'red'}>
+                    {activity.is_correct === null ? '学习活动' : activity.is_correct ? '正确证据' : '错误证据'}
+                  </Tag>
+                </Descriptions.Item>
+                <Descriptions.Item label="来源 Run">{activity.run_id || '-'}</Descriptions.Item>
+              </Descriptions>
+            ))}
+          </Space>
+        ) : <Empty description="该会话尚未产生学习事件" image={Empty.PRESENTED_IMAGE_SIMPLE} />}
+      </Card>
+
       {session.turns.length === 0 ? (
         <Empty description="该会话暂无问答运行" />
       ) : (

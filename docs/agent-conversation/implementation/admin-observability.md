@@ -73,7 +73,8 @@ Outbox 的调度状态。Worker 后续仍走 `MemoryOutboxConsumer.process_claim
 2. source 缺失、已删除、版本不符或作用域不匹配都由 `get_snapshot_item_source` 传播相同 404，调用者不能据此枚举其他用户数据。
 3. Snapshot 正文、摘要和候选值只作为 JSON/纯文本数据返回；前端不得用 `dangerouslySetInnerHTML` 或 Markdown 执行器渲染。`memory_trace` 的 before/after 也必须先经过脱敏后再展示。
 4. 事件、Artifact 和错误摘要在既有会话详情序列化时也经过同一脱敏函数，API key、Authorization、DSN 凭证和 traceback 不进入响应。
-5. `backend/app/modules/agent/admin_router.py::get_run_detail`（L486-L579）额外按 Thread 查询 Agent 来源练习，返回来源 Run、状态、题数和成绩；`frontend-admin/src/pages/AgentRunDetailPage.tsx::AgentRunDetailPage` 在会话元数据下展示“会话练习”，管理员可区分 workflow 已完成但练习仍为 draft、正在作答或已经交卷。
+5. `backend/app/modules/agent/admin_router.py::get_run_detail`（L486-L604）额外按 Thread 查询 Agent 来源练习，返回来源 Run、状态、题数和成绩；`frontend-admin/src/pages/AgentRunDetailPage.tsx::AgentRunDetailPage` 在会话元数据下展示“会话练习”，管理员可区分 workflow 已完成但练习仍为 draft、正在作答或已经交卷。
+6. 同一详情现在由 `backend/app/modules/agent/admin_router.py::get_run_detail`（L486-L604）读取 `LearningActivityEvent`，返回主题、source、quality 与可空 verdict；管理 UI 把无 verdict 标为“学习活动”，避免把 Explain 完成误报成正确证据，并能直接识别交卷后事件缺失。
 5. Outbox 重放沿用数据库唯一幂等身份；重复点击只更新同一行，但每次管理员动作都写独立审计记录。
 
 ## 监控采集器自身健康

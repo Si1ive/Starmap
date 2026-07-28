@@ -31,7 +31,7 @@ def test_migration_graph_has_single_head():
     config.set_main_option("script_location", str(backend_dir / "alembic"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_heads() == ["20260728_agent_practice_drafts"]
+    assert scripts.get_heads() == ["20260728_learning_activity"]
 
 
 def test_agent_practice_migration_replaces_fk_backing_indexes_before_drop():

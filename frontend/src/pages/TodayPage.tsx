@@ -237,9 +237,15 @@ export default function TodayPage() {
               {selected.source_types.map((source) => (
                 <SourceBadge
                   key={source}
-                  type={source === "question" ? "question" : "knowledge"}
+                  type={source === "question" || source === "agent_practice" ? "question" : "knowledge"}
                 >
-                  {source === "question" ? "真实作答" : "知识点验证"}
+                  {source === "question"
+                    ? "真实作答"
+                    : source === "agent_practice"
+                      ? "Agent 练习"
+                      : source === "agent_discussion"
+                        ? "Agent 讲解"
+                        : "知识点验证"}
                 </SourceBadge>
               ))}
             </div>
@@ -269,6 +275,41 @@ export default function TodayPage() {
             </button>
           ))}
         </div>
+      </section>
+
+      <section className="learning-activity-log">
+        <SectionHeading meta="讨论记录掌握过程，评分证据决定练习结果" title="最近学习记录" />
+        {progress?.recent_activities.length ? (
+          <ol>
+            {progress.recent_activities.map((activity) => (
+              <li key={activity.id}>
+                <span className={`learning-activity-log__mark is-${activity.source_type}`} />
+                <div>
+                  <strong>{activity.topic_keywords.join("、") || activity.title || "学习活动"}</strong>
+                  <small>
+                    {activity.source_type === "agent_discussion"
+                      ? "完成 Agent 讲解"
+                      : activity.is_correct === true
+                        ? "练习回答正确"
+                        : activity.is_correct === false
+                          ? "练习需要复盘"
+                          : "学习活动"}
+                  </small>
+                </div>
+                <time>{new Date(activity.occurred_at).toLocaleString("zh-CN")}</time>
+                {activity.session_id ? (
+                  <button onClick={() => navigate(`/practice/${activity.session_id}/feedback`)} type="button">
+                    查看记录
+                  </button>
+                ) : activity.thread_id ? (
+                  <button onClick={() => navigate(`/agent/${activity.thread_id}`)} type="button">
+                    返回对话
+                  </button>
+                ) : null}
+              </li>
+            ))}
+          </ol>
+        ) : <p>完成一次 Agent 讲解或练习后，这里会保留可回溯记录。</p>}
       </section>
 
       <section className="learning-week">
