@@ -1,4 +1,4 @@
-"""Persistent user-bound mock exam and focus timer models."""
+"""Persistent user-bound mock exam and practice models."""
 
 from datetime import datetime
 from typing import Optional
@@ -110,7 +110,6 @@ class PracticeAnswer(Base):
     awarded_score: Mapped[Optional[int]] = mapped_column(Integer)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     hint_levels_used_json: Mapped[Optional[list]] = mapped_column(JSON)
-    time_spent_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     saved_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
     )
@@ -121,23 +120,3 @@ class PracticeAnswer(Base):
         ),
         Index("idx_practice_answers_question", "question_id"),
     )
-
-
-class StudyTimerRecord(Base):
-    __tablename__ = "study_timer_records"
-
-    id: Mapped[str] = mapped_column(String(32), primary_key=True)
-    user_id: Mapped[object] = mapped_column(
-        UUIDBinary(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
-    )
-    phase: Mapped[str] = mapped_column(String(16), nullable=False)
-    status: Mapped[str] = mapped_column(String(16), nullable=False, default="running")
-    planned_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
-    actual_seconds: Mapped[Optional[int]] = mapped_column(Integer)
-    context_json: Mapped[Optional[dict]] = mapped_column(JSON)
-    started_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.utcnow
-    )
-    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
-
-    __table_args__ = (Index("idx_study_timer_user_started", "user_id", "started_at"),)

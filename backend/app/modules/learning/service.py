@@ -16,7 +16,6 @@ from app.modules.practice.models import (
     PracticeAnswer,
     PracticeSession,
     PracticeSessionQuestion,
-    StudyTimerRecord,
 )
 from app.modules.learning.models import LearningActivityEvent
 
@@ -135,41 +134,6 @@ class LearningProgressService:
             )
         )
 
-        timers = list(
-            (
-                await self.db.scalars(
-                    select(StudyTimerRecord).where(
-                        StudyTimerRecord.user_id == user_id,
-                        StudyTimerRecord.status == "completed",
-                    )
-                )
-            ).all()
-        )
-        submitted_sessions = list(
-            (
-                await self.db.scalars(
-                    select(PracticeSession).where(
-                        PracticeSession.user_id == user_id,
-                        PracticeSession.status == "submitted",
-                    )
-                )
-            ).all()
-        )
-        total_seconds = sum(int(item.actual_seconds or 0) for item in timers) + sum(
-            min(
-                item.duration_seconds,
-                max(
-                    0,
-                    int(
-                        (
-                            (item.submitted_at or item.started_at) - item.started_at
-                        ).total_seconds()
-                    ),
-                ),
-            )
-            for item in submitted_sessions
-        )
-        week = self._weekly_rhythm(timers, submitted_sessions, now)
         return {
             "generated_at": now.isoformat(),
             "summary": {
@@ -182,11 +146,9 @@ class LearningProgressService:
                     if answered_questions
                     else 0
                 ),
-                "study_seconds": total_seconds,
             },
             "topics": topics,
             "recent_activities": [self._activity_payload(item) for item in activity_events[:20]],
-            "week": week,
         }
 
     async def _load_activity_events(self, user_id: object) -> list[LearningActivityEvent]:
@@ -353,34 +315,3 @@ class LearningProgressService:
                 if len(result) >= 6:
                     return result
         return result
-
-    @staticmethod
-    def _weekly_rhythm(timers, sessions, now: datetime) -> list[dict]:
-        monday = (now - timedelta(days=now.weekday())).date()
-        seconds_by_day = defaultdict(int)
-        for timer in timers:
-            day = (timer.completed_at or timer.started_at).date()
-            if monday <= day <= monday + timedelta(days=6):
-                seconds_by_day[day] += int(timer.actual_seconds or 0)
-        for session in sessions:
-            day = (session.submitted_at or session.started_at).date()
-            if monday <= day <= monday + timedelta(days=6):
-                seconds_by_day[day] += min(
-                    session.duration_seconds,
-                    max(
-                        0,
-                        int(
-                            (
-                                (session.submitted_at or session.started_at)
-                                - session.started_at
-                            ).total_seconds()
-                        ),
-                    ),
-                )
-        return [
-            {
-                "date": (monday + timedelta(days=offset)).isoformat(),
-                "study_seconds": seconds_by_day[monday + timedelta(days=offset)],
-            }
-            for offset in range(7)
-        ]

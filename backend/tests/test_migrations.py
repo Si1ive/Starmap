@@ -31,7 +31,7 @@ def test_migration_graph_has_single_head():
     config.set_main_option("script_location", str(backend_dir / "alembic"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_heads() == ["20260728_learning_activity"]
+    assert scripts.get_heads() == ["20260729_remove_study_timing"]
 
 
 def test_agent_practice_migration_replaces_fk_backing_indexes_before_drop():
@@ -46,6 +46,29 @@ def test_agent_practice_migration_replaces_fk_backing_indexes_before_drop():
     assert migration.index('"uk_practice_answer_item" not in answer_indexes') < migration.index(
         '"uk_practice_answer" in answer_indexes'
     )
+
+
+def test_study_timing_migration_removes_timer_table_and_elapsed_column():
+    backend_dir = Path(__file__).resolve().parents[1]
+    migration_path = (
+        backend_dir / "alembic" / "versions" / "20260729_remove_study_timing.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "remove_study_timing_migration", migration_path
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    output = io.StringIO()
+    context = MigrationContext.configure(
+        dialect=mysql.dialect(), opts={"as_sql": True, "output_buffer": output}
+    )
+    migration.op = Operations(context)
+    migration.upgrade()
+    ddl = output.getvalue()
+    assert "DROP COLUMN time_spent_seconds" in ddl
+    assert "DROP INDEX idx_study_timer_user_started ON study_timer_records" in ddl
+    assert "DROP TABLE study_timer_records" in ddl
 
 
 def test_vector_recall_trace_migration_adds_correlation_fields():

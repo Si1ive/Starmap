@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import {
   ArrowRight,
   BookOpenCheck,
-  Clock3,
   History,
   RefreshCw,
   Target,
@@ -17,12 +16,6 @@ import {
   SectionHeading,
   SourceBadge,
 } from "../components/Primitives";
-
-function formatDuration(seconds: number) {
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  return hours ? `${hours} 小时 ${minutes} 分` : `${minutes} 分钟`;
-}
 
 function curvePath(topic: LearningTopic) {
   const maxDay = Math.max(...topic.curve.map((point) => point.day), 1);
@@ -71,11 +64,6 @@ export default function TodayPage() {
       null,
     [progress, selectedKeyword],
   );
-  const weekMax = Math.max(
-    ...(progress?.week.map((item) => item.study_seconds) ?? [1]),
-    1,
-  );
-
   if (!loading && progress && !progress.topics.length) {
     return (
       <div className="page page--narrow">
@@ -136,14 +124,6 @@ export default function TodayPage() {
           <span>真实作答</span>
           <strong>{progress?.summary.answered_questions ?? 0}</strong>
           <small>正确率 {progress?.summary.accuracy_rate ?? 0}%</small>
-        </div>
-        <div>
-          <Clock3 size={18} />
-          <span>记录时长</span>
-          <strong>
-            {formatDuration(progress?.summary.study_seconds ?? 0)}
-          </strong>
-          <small>模拟考与完成的专注计时</small>
         </div>
       </section>
 
@@ -312,33 +292,6 @@ export default function TodayPage() {
         ) : <p>完成一次 Agent 讲解或练习后，这里会保留可回溯记录。</p>}
       </section>
 
-      <section className="learning-week">
-        <SectionHeading
-          meta="只统计已经发生的模拟考和专注计时"
-          title="本周真实学习节奏"
-        />
-        <div>
-          {progress?.week.map((item) => (
-            <span key={item.date}>
-              <i
-                style={{
-                  height: `${Math.max(3, (item.study_seconds / weekMax) * 100)}%`,
-                }}
-              />
-              <strong>
-                {new Intl.DateTimeFormat("zh-CN", { weekday: "short" }).format(
-                  new Date(`${item.date}T12:00:00`),
-                )}
-              </strong>
-              <small>
-                {item.study_seconds
-                  ? `${Math.round(item.study_seconds / 60)} 分`
-                  : "—"}
-              </small>
-            </span>
-          ))}
-        </div>
-      </section>
     </div>
   );
 }

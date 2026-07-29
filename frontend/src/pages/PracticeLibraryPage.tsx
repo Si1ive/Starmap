@@ -5,19 +5,15 @@ import {
   FileQuestion,
   History,
   Loader2,
-  Pause,
-  Play,
   RotateCcw,
   Target,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import {
-  completeStudyTimer,
   createPracticeSession,
   getPracticeStats,
   listPracticeHistory,
   listPracticePapers,
-  startStudyTimer,
 } from "../api/practice";
 import type {
   PracticeHistoryItem,
@@ -32,10 +28,6 @@ import {
   SourceBadge,
 } from "../components/Primitives";
 
-function formatClock(seconds: number) {
-  return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
-}
-
 export default function PracticeLibraryPage() {
   const navigate = useNavigate();
   const [papers, setPapers] = useState<PracticePaper[]>([]);
@@ -44,9 +36,6 @@ export default function PracticeLibraryPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [startingPaper, setStartingPaper] = useState<string | null>(null);
-  const [timerPhase, setTimerPhase] = useState<"focus" | "rest">("focus");
-  const [timerId, setTimerId] = useState<string | null>(null);
-  const [remaining, setRemaining] = useState(25 * 60);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -72,19 +61,6 @@ export default function PracticeLibraryPage() {
   useEffect(() => {
     void load();
   }, [load]);
-  useEffect(() => {
-    if (!timerId || remaining <= 0) return;
-    const interval = window.setInterval(
-      () => setRemaining((value) => Math.max(0, value - 1)),
-      1000,
-    );
-    return () => window.clearInterval(interval);
-  }, [remaining, timerId]);
-  useEffect(() => {
-    if (!timerId || remaining !== 0) return;
-    const planned = timerPhase === "focus" ? 25 * 60 : 5 * 60;
-    void completeStudyTimer(timerId, planned).finally(() => setTimerId(null));
-  }, [remaining, timerId, timerPhase]);
 
   const activeHistory = useMemo(
     () => history.filter((item) => item.status === "active"),
@@ -117,25 +93,6 @@ export default function PracticeLibraryPage() {
     }
   };
 
-  const toggleTimer = async () => {
-    if (timerId) {
-      const planned = timerPhase === "focus" ? 25 * 60 : 5 * 60;
-      await completeStudyTimer(timerId, planned - remaining);
-      setTimerId(null);
-      return;
-    }
-    const planned = timerPhase === "focus" ? 25 * 60 : 5 * 60;
-    const timer = await startStudyTimer(timerPhase, planned);
-    setRemaining(planned);
-    setTimerId(timer.id);
-  };
-
-  const switchPhase = (phase: "focus" | "rest") => {
-    if (timerId) return;
-    setTimerPhase(phase);
-    setRemaining(phase === "focus" ? 25 * 60 : 5 * 60);
-  };
-
   return (
     <div className="page page--wide practice-library-page practice-real">
       <PageHeading
@@ -165,39 +122,6 @@ export default function PracticeLibraryPage() {
           <small>
             {stats?.covered_chapters ?? 0} / {stats?.total_chapters ?? 0} 个考点
           </small>
-        </div>
-      </section>
-
-      <section className="pomodoro-panel">
-        <div className="pomodoro-copy">
-          <span className="eyebrow">练习节奏</span>
-          <h2>{timerPhase === "focus" ? "刷题" : "休息"}</h2>
-          <p>计时记录绑定当前账号，结束后进入真实学习统计。</p>
-        </div>
-        <strong className="pomodoro-clock">{formatClock(remaining)}</strong>
-        <div className="pomodoro-actions">
-          <button
-            className={timerPhase === "focus" ? "is-active" : ""}
-            disabled={Boolean(timerId)}
-            onClick={() => switchPhase("focus")}
-            type="button"
-          >
-            刷题 25 分钟
-          </button>
-          <button
-            className={timerPhase === "rest" ? "is-active" : ""}
-            disabled={Boolean(timerId)}
-            onClick={() => switchPhase("rest")}
-            type="button"
-          >
-            休息 5 分钟
-          </button>
-          <Button
-            icon={timerId ? <Pause size={16} /> : <Play size={16} />}
-            onClick={() => void toggleTimer()}
-          >
-            {timerId ? "结束并记录" : "开始计时"}
-          </Button>
         </div>
       </section>
 
@@ -239,7 +163,7 @@ export default function PracticeLibraryPage() {
                 onClick={() => void startPaper(paper, "practice")}
                 tone="secondary"
               >
-                25 分钟练习
+                刷题练习
               </Button>
             </div>
           </article>
@@ -300,7 +224,7 @@ export default function PracticeLibraryPage() {
         ) : null}
         {activeHistory.length ? (
           <small className="practice-resume-note">
-            有 {activeHistory.length} 场尚未交卷，计时仍以服务器开始时间为准。
+            有 {activeHistory.length} 场尚未交卷，打开后可以继续作答。
           </small>
         ) : null}
       </section>

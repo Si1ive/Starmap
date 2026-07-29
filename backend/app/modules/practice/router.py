@@ -1,9 +1,9 @@
-"""Real user-bound mock exams, review history, coverage stats, and focus timers."""
+"""Real user-bound mock exams, review history, and coverage stats."""
 
 import re
 import uuid
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -22,7 +22,6 @@ from app.modules.practice.models import (
     PracticeAnswer,
     PracticeSession,
     PracticeSessionQuestion,
-    StudyTimerRecord,
 )
 
 router = APIRouter(prefix="/app/practice", tags=["用户模拟考试"])
@@ -37,23 +36,12 @@ class CreatePracticeSessionRequest(BaseModel):
 
 class SavePracticeAnswerRequest(BaseModel):
     answer: str = Field("", max_length=20000)
-    time_spent_seconds: int = Field(0, ge=0, le=21600)
     expected_version: int = Field(0, ge=0)
 
 
 class RequestPracticeHintRequest(BaseModel):
     level: Literal["direction", "concept", "method"]
     expected_version: int = Field(0, ge=0)
-
-
-class StartTimerRequest(BaseModel):
-    phase: Literal["focus", "rest"]
-    planned_seconds: int = Field(..., ge=60, le=7200)
-    context: Optional[dict] = None
-
-
-class CompleteTimerRequest(BaseModel):
-    actual_seconds: int = Field(..., ge=0, le=21600)
 
 
 def _visible_document(user_id: object):
@@ -140,7 +128,6 @@ async def _submit(db: AsyncSession, session: PracticeSession) -> None:
                 session_question_id=link.id,
                 question_id=link.question_id,
                 user_answer="",
-                time_spent_seconds=0,
             )
             db.add(answer)
         standard_answer = str((link.snapshot_json or {}).get("answer") or "")
@@ -214,7 +201,6 @@ async def _session_payload(db: AsyncSession, session: PracticeSession) -> dict:
                 "user_answer": answer.user_answer if answer else "",
                 "version": answer.version if answer else 0,
                 "hint_levels_used": answer.hint_levels_used_json if answer else [],
-                "time_spent_seconds": answer.time_spent_seconds if answer else 0,
                 "is_correct": answer.is_correct if submitted and answer else None,
                 "awarded_score": answer.awarded_score if submitted and answer else None,
                 "standard_answer": (
@@ -464,7 +450,6 @@ async def save_practice_answer(
     else:
         answer.version += 1
     answer.user_answer = payload.answer
-    answer.time_spent_seconds = payload.time_spent_seconds
     answer.saved_at = datetime.utcnow()
     await db.commit()
     return ApiResponse(
@@ -590,60 +575,4 @@ async def get_practice_stats(
                 round((covered or 0) / total_chapters * 100, 1) if total_chapters else 0
             ),
         }
-    )
-
-
-@router.post("/timers", response_model=ApiResponse)
-async def start_study_timer(
-    payload: StartTimerRequest,
-    current: AuthenticatedSession = Depends(require_csrf_session),
-    db: AsyncSession = Depends(get_db),
-):
-    record = StudyTimerRecord(
-        id=uuid.uuid4().hex,
-        user_id=current.user.id,
-        phase=payload.phase,
-        planned_seconds=payload.planned_seconds,
-        context_json=payload.context,
-    )
-    db.add(record)
-    await db.commit()
-    return ApiResponse(
-        data={
-            "id": record.id,
-            "phase": record.phase,
-            "started_at": record.started_at.isoformat(),
-            "planned_seconds": record.planned_seconds,
-        }
-    )
-
-
-@router.post("/timers/{timer_id}/complete", response_model=ApiResponse)
-async def complete_study_timer(
-    timer_id: str,
-    payload: CompleteTimerRequest,
-    current: AuthenticatedSession = Depends(require_csrf_session),
-    db: AsyncSession = Depends(get_db),
-):
-    record = await db.scalar(
-        select(StudyTimerRecord)
-        .where(
-            StudyTimerRecord.id == timer_id, StudyTimerRecord.user_id == current.user.id
-        )
-        .with_for_update()
-    )
-    if not record:
-        raise HTTPException(status_code=404, detail="计时记录不存在")
-    if record.status != "completed":
-        record.status = "completed"
-        record.actual_seconds = payload.actual_seconds
-        record.completed_at = datetime.utcnow()
-        await db.commit()
-    return ApiResponse(
-        message="计时已记录",
-        data={
-            "id": record.id,
-            "status": record.status,
-            "actual_seconds": record.actual_seconds,
-        },
     )

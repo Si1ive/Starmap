@@ -40,7 +40,6 @@ export interface PracticeQuestion {
   user_answer: string;
   version: number;
   hint_levels_used: Array<"direction" | "concept" | "method">;
-  time_spent_seconds: number;
   is_correct: boolean | null;
   awarded_score: number | null;
   standard_answer: string | null;
@@ -150,7 +149,6 @@ export function savePracticeAnswer(
   sessionId: string,
   questionId: string,
   answer: string,
-  timeSpentSeconds: number,
   expectedVersion: number,
 ) {
   return request<{ saved_at: string; version: number }>(
@@ -159,7 +157,6 @@ export function savePracticeAnswer(
       method: "PUT",
       body: JSON.stringify({
         answer,
-        time_spent_seconds: timeSpentSeconds,
         expected_version: expectedVersion,
       }),
     },
@@ -190,22 +187,5 @@ export function submitPracticeSession(sessionId: string) {
   return request<PracticeSession>(
     `/sessions/${encodeURIComponent(sessionId)}/submit`,
     { method: "POST", body: "{}" },
-  );
-}
-
-export function startStudyTimer(
-  phase: "focus" | "rest",
-  plannedSeconds: number,
-) {
-  return request<{ id: string; started_at: string }>("/timers", {
-    method: "POST",
-    body: JSON.stringify({ phase, planned_seconds: plannedSeconds }),
-  });
-}
-
-export function completeStudyTimer(timerId: string, actualSeconds: number) {
-  return request<{ id: string; status: string }>(
-    `/timers/${encodeURIComponent(timerId)}/complete`,
-    { method: "POST", body: JSON.stringify({ actual_seconds: actualSeconds }) },
   );
 }

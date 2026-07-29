@@ -316,7 +316,6 @@ questions:
     state: answered_incorrect
     user_answer: B
     correct_answer: C
-    time_spent_seconds: 86
     hint_level: 0
   - id: fixture-generated-queue-002
     state: unanswered

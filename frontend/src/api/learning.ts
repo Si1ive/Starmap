@@ -38,11 +38,9 @@ export interface LearningProgress {
     answered_questions: number;
     correct_questions: number;
     accuracy_rate: number;
-    study_seconds: number;
   };
   topics: LearningTopic[];
   recent_activities: LearningActivity[];
-  week: Array<{ date: string; study_seconds: number }>;
 }
 
 export interface WeaknessEvidence {

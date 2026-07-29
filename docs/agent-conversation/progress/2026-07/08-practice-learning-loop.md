@@ -3,7 +3,7 @@
 ## 2026-07-28：阶段一——对话出题落入真实练习
 
 - 目标：让 Validate 的完成状态代表“已创建可练习草稿”，并提供对话内跳转、本会话练习轨道和管理端观测。
-- 实现：新增 Session 原生题目 item/provenance、Agent Thread/Run 来源和 draft 状态；题库题重读完整实体，即时题冻结在 Session；Artifact 输出受控动作，练习页点击后才开始计时。
+- 实现：新增 Session 原生题目 item/provenance、Agent Thread/Run 来源和 draft 状态；题库题重读完整实体，即时题冻结在 Session；Artifact 输出受控动作，练习页点击后才进入 active 会话。
 - 管理端：Agent Runs 会话详情同步返回并展示关联练习、状态、题数、得分和来源 Run。
 - 验证：`pytest` 覆盖 Validate、持久化、私有答案和 MySQL 外键索引替换顺序；用户端与管理端生产构建通过；真实 MySQL 从 `20260728_practice_hints` 前向升级到单 head `20260728_agent_practice_drafts`。首次升级暴露非事务 DDL 的索引依赖后，迁移改为先建替代索引并支持原地重入，全程未使用 stamp。
 - 中文提交信息：`打通 Agent 出题与真实练习入口`。
@@ -34,3 +34,11 @@
 - 管理端：Agent Runs 每个运行入口显示选中 capability 与授权工具；完整响应沿用脱敏规则，旧 Run 保持空态。
 - 验证：Capability 视图隔离、越权 workflow/未知参数拒绝、Router/child 快照、Explain/Validate 等聚焦回归 78 项及用户端/管理端生产构建通过；全量后端 890 项中 889 项通过，唯一失败是 `test_agent_workflow_engine.py::test_explain_workflow_keeps_artifact_through_render_and_completion` 仍按旧契约期待裸正文/字符串引用，而当前既有 Explain 契约会写知识库来源区块和结构化 citation，本阶段未回退正确产物。
 - 中文提交信息：`建立受控 Agent 能力与工具层`。
+
+## 2026-07-29：移除主动学习计时
+
+- 目标：移除需要用户主动点击才会产生记录的专注/休息计时，避免把不完整的停留时长当作学习事实。
+- 实现：删除练习库番茄钟、`/timers` API、`StudyTimerRecord` ORM、学习进度的时长汇总/周节奏和作答每题耗时；学习进度只保留真实作答、评分证据与最近活动。模拟考和刷题会话的服务器限时仍用于自动交卷，不作为学习时长统计。
+- 数据库：新增 `backend/alembic/versions/20260729_remove_study_timing.py::upgrade`（L19-L22），前向删除计时表、计时索引和 `practice_answers.time_spent_seconds`，降级可恢复旧结构。
+- 验证：迁移图、计时迁移 DDL、学习进度定向测试与用户端生产构建通过；提交前另行确认 `git diff --check`。
+- 中文提交信息：`移除主动学习计时`。

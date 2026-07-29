@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Bookmark,
   CheckCircle2,
@@ -34,7 +34,6 @@ interface AnswerConflict {
   localAnswer: string;
   serverAnswer: string;
   serverVersion: number;
-  timeSpentSeconds: number;
 }
 
 export default function PracticePage() {
@@ -50,7 +49,6 @@ export default function PracticePage() {
   const [conflict, setConflict] = useState<AnswerConflict | null>(null);
   const [hint, setHint] = useState<string | null>(null);
   const [hintLoading, setHintLoading] = useState(false);
-  const questionStartedAt = useRef(Date.now());
 
   const load = useCallback(async () => {
     if (!sessionId) return;
@@ -89,7 +87,6 @@ export default function PracticePage() {
     if (conflict?.questionId === question?.id) return;
     setAnswer(question?.user_answer ?? "");
     setHint(null);
-    questionStartedAt.current = Date.now();
   }, [conflict?.questionId, question?.id, question?.user_answer]);
 
   const answeredCount = useMemo(
@@ -106,8 +103,6 @@ export default function PracticePage() {
         session.id,
         question.id,
         answer,
-        question.time_spent_seconds +
-          Math.floor((Date.now() - questionStartedAt.current) / 1000),
         question.version,
       );
       setSession((current) =>
@@ -122,7 +117,6 @@ export default function PracticePage() {
             }
           : current,
       );
-      questionStartedAt.current = Date.now();
       setError(null);
       return true;
     } catch (saveError) {
@@ -137,9 +131,6 @@ export default function PracticePage() {
               localAnswer: answer,
               serverAnswer: serverQuestion.user_answer,
               serverVersion: serverQuestion.version,
-              timeSpentSeconds:
-                question.time_spent_seconds +
-                Math.floor((Date.now() - questionStartedAt.current) / 1000),
             });
             setAnswer(answer);
             setError(null);
@@ -172,7 +163,6 @@ export default function PracticePage() {
         session.id,
         conflict.questionId,
         conflict.localAnswer,
-        conflict.timeSpentSeconds,
         conflict.serverVersion,
       );
       setSession((current) =>
@@ -194,7 +184,6 @@ export default function PracticePage() {
       setAnswer(conflict.localAnswer);
       setConflict(null);
       setError("已按你的选择用本机答案覆盖服务器版本");
-      questionStartedAt.current = Date.now();
     } catch (conflictError) {
       setError(
         conflictError instanceof Error ? conflictError.message : "冲突处理失败，请重新加载",
@@ -380,7 +369,7 @@ export default function PracticePage() {
                 </button>
               ))}
             </div>
-            <p>答题时间和答案都保存到当前账号。</p>
+            <p>答案会保存到当前账号。</p>
           </aside>
           <section className="practice-question-card">
             <div className="question-kicker">

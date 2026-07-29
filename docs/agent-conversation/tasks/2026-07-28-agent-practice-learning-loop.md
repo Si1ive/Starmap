@@ -24,12 +24,12 @@
 | 动作投影 | `backend/app/modules/agent/timeline.py` | `AgentTimelineService._artifact_view` | L648-L665 | 已持久化 Artifact | 只读取服务端生成的 `content.actions` | `WorkflowArtifactView.actions` | 用户端 ArtifactCard |
 | 对话动作消费 | `frontend/src/features/agent/InlineWorkflow.tsx` | `ArtifactCard` | L175-L218 | Artifact 与受控 action | 只消费 `open_practice + target_id`，拼受信任站内路由 | “开始练习”按钮 | PracticePage |
 | 会话练习轨道 | `frontend/src/features/agent/ConversationPracticeRail.tsx` | `ConversationPracticeRail` | L11-L50 | 当前 Thread 的练习列表 | 按 draft/active/submitted 显示连续状态和站内入口 | 对话侧栏或移动端横轨 | 练习/结果页 |
-| 草稿启动 | `backend/app/modules/practice/router.py` | `start_practice_session` | L472-L486 | 用户所有的 draft Session | 行锁校验所有权；首次点击写 started_at，重试幂等 | active Session、计时开始 | 作答 API |
+| 草稿启动 | `backend/app/modules/practice/router.py` | `start_practice_session` | L460-L474 | 用户所有的 draft Session | 行锁校验所有权；首次点击写 started_at，重试幂等 | active Session、服务器限时开始 | 作答 API |
 | 管理监控 | `backend/app/modules/agent/admin_router.py` | `get_run_detail` | L489-L593 | Thread 或历史 Run ID | 随会话查询关联 PracticeSession，返回来源 Run、状态与成绩 | Agent Runs `practices[]` | 管理端会话详情 |
 
 ### 设计原因
 
-- `draft` 与 `active` 分离，避免用户仍在对话时练习计时已经开始。
+- `draft` 与 `active` 分离，避免用户仍在对话时练习会话已经开始并占用服务器限时。
 - Session Item 自带稳定 `item_id` 和冻结快照；题库外键可空，因此 Agent 即时题不需要伪装成公共审核题。
 - 题库候选在持久化前重新读取完整 `Question`，不会把不含答案的公开检索 DTO 当成批改依据；实体失效时整轮安全失败。
 - Run 是写入幂等键，同一 Worker 重试返回同一个练习，不会重复生成历史记录。
