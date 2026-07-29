@@ -299,6 +299,7 @@ export default function AgentPage() {
               }}
             />
           )}
+          <div aria-hidden="true" className="agent-chat-rail-spacer" />
           <div className="agent-chat-composer-dock">
             <div className="agent-chat-composer-wrap">
               <ChatComposer

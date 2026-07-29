@@ -42,3 +42,11 @@
 - 数据库：新增 `backend/alembic/versions/20260729_remove_study_timing.py::upgrade`（L19-L22），前向删除计时表、计时索引和 `practice_answers.time_spent_seconds`，降级可恢复旧结构。
 - 验证：迁移图、计时迁移 DDL、学习进度定向测试与用户端生产构建通过；提交前另行确认 `git diff --check`。
 - 中文提交信息：`移除主动学习计时`。
+
+## 2026-07-29：收紧 Agent 对话练习侧栏布局
+
+- 目标：练习侧栏没有关联练习时不再显示空白占位或无效可访问内容；存在练习时保持对话流、输入区和侧栏边界对齐，并兼容窄屏布局。
+- 实现：`frontend/src/pages/AgentPage.tsx::AgentPage`（L117-L125）继续在 Thread 或时间线 cursor 变化后读取练习列表，失败时回退为空列表；`frontend/src/features/agent/ConversationPracticeRail.tsx::ConversationPracticeRail`（L11-L55）将空列表收敛为隐藏的空侧栏，有数据时保留练习状态和练习/反馈页导航。`AgentPage`（L275-L320）在对话流和输入 dock 之间加入无障碍 spacer；`frontend/src/features/agent/agent-chat.css` 的 `.agent-practice-rail`、`.agent-practice-rail--empty`、`.agent-chat-rail-spacer`（L93-L111）统一桌面宽度，`@media (max-width: 900px)`（L1283-L1306）隐藏 spacer 并压缩空侧栏。
+- 副作用与错误：本次没有新增 API、数据库写入或时间线状态；练习列表接口失败仍只影响侧栏并显示为空，不阻断对话；点击已有练习仍通过站内路由进入继续练习或反馈页。
+- 验证：`cd frontend && npm run build` 通过；涉及 TS 文件的 `npx eslint src/features/agent/ConversationPracticeRail.tsx src/pages/AgentPage.tsx` 无错误，仅保留 `AgentPage.tsx:72` 原有非空断言警告；`git diff --check` 通过。
+- 中文提交信息：`收紧 Agent 对话练习侧栏布局`。
