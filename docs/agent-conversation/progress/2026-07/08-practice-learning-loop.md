@@ -50,3 +50,11 @@
 - 副作用与错误：本次没有新增 API、数据库写入或时间线状态；练习列表接口失败仍只影响侧栏并显示为空，不阻断对话；点击已有练习仍通过站内路由进入继续练习或反馈页。
 - 验证：`cd frontend && npm run build` 通过；涉及 TS 文件的 `npx eslint src/features/agent/ConversationPracticeRail.tsx src/pages/AgentPage.tsx` 无错误，仅保留 `AgentPage.tsx:72` 原有非空断言警告；`git diff --check` 通过。
 - 中文提交信息：`收紧 Agent 对话练习侧栏布局`。
+
+## 2026-07-29：建立自适应学习 Agent 落实步骤
+
+- 目标：在已完成的 Agent 练习、学习活动、掌握度和薄弱点闭环之上，规划 `ConversationTutorAgent`（合并 Router 与 Tutor）、异步 `LearningObserverAgent`、条件触发的开放题 Assessor，以及确定性掌握度/薄弱点 projector 的实施顺序。
+- 关键设计：只问过或听过讲解只产生 exposure/hypothesis，不直接更新权威掌握度；RAG、学习状态和题目检索保持只读能力；题目创建、评分和学习事实写入继续由 workflow、领域服务和幂等投影完成；观察任务复用 silent Agent Run/Agent Run Outbox，不新增第二套模型任务队列。
+- 文档：新增 `docs/agent-conversation/tasks/2026-07-29-adaptive-learning-agent.md`，记录当前代码锚点、目标数据流、七阶段实施步骤、迁移/测试/灰度验收和中文提交拆分；更新任务 README 路由。
+- 验证：使用 `rg -n`、`nl -ba` 重新核对 Router、conversation、Tool Registry、Validate、Grade、学习事件、掌握度、Worker 和 Outbox 代码锚点；提交前运行 Markdown/链接检查、`git diff --check`。
+- 中文提交信息：`建立自适应学习 Agent 落实步骤`。
