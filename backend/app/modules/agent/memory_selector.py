@@ -197,8 +197,11 @@ def _mastery_signal(
     """从不可变统计值派生带策略版本的有效掌握度审计副本。"""
     if mastery.evidence_count <= 0:
         return None
-    evidence_at = mastery.last_graded_at
-    evidence_time_source = "last_graded_at"
+    evidence_at = getattr(mastery, "last_evidence_at", None)
+    evidence_time_source = "last_evidence_at"
+    if evidence_at is None:
+        evidence_at = mastery.last_graded_at
+        evidence_time_source = "last_graded_at"
     if evidence_at is None:
         evidence_at = mastery.updated_at
         evidence_time_source = "updated_at"
@@ -211,6 +214,9 @@ def _mastery_signal(
         mastery.mastery_score,
         evidence_at=evidence_at,
         now=now,
+        state_model_version=(
+            getattr(mastery, "state_model_version", None) or "mastery-beta-v1"
+        ),
     )
     return {
         "mastery_id": mastery.id,
@@ -225,6 +231,11 @@ def _mastery_signal(
         "evidence_time_source": evidence_time_source,
         "age_days": effective.age_days,
         "decay_policy_version": effective.policy_version,
+        "state_model_version": effective.state_model_version,
+        "uncertainty": float(getattr(mastery, "uncertainty", 1.0) or 1.0),
+        "evidence_mass": float(
+            getattr(mastery, "evidence_mass", mastery.evidence_count) or 0.0
+        ),
     }
 
 

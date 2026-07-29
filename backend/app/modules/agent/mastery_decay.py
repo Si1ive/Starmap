@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from .time_utils import as_utc, utc_now
+from .mastery_projector import MASTERY_STATE_MODEL_VERSION
 
 MASTERY_DECAY_POLICY_VERSION = "mastery-decay-v1"
 MASTERY_DECAY_HALF_LIFE_DAYS = 90.0
@@ -21,6 +22,7 @@ class EffectiveMastery:
     evidence_at: datetime
     age_days: float
     policy_version: str = MASTERY_DECAY_POLICY_VERSION
+    state_model_version: str = MASTERY_STATE_MODEL_VERSION
 
 
 def calculate_effective_mastery(
@@ -28,6 +30,7 @@ def calculate_effective_mastery(
     *,
     evidence_at: datetime,
     now: datetime | None = None,
+    state_model_version: str = MASTERY_STATE_MODEL_VERSION,
 ) -> EffectiveMastery:
     """按 90 天半衰期向保留地板衰减，不修改原始累计分数。
 
@@ -55,4 +58,5 @@ def calculate_effective_mastery(
         effective_score=round(effective_score, 4),
         evidence_at=normalized_evidence_at,
         age_days=round(age_days, 4),
+        state_model_version=state_model_version,
     )

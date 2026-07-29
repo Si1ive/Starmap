@@ -707,8 +707,41 @@ class UserLearningMastery(Base):
     evidence_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="证据总数")
     correct_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="正确次数")
     incorrect_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="错误次数")
+    mastery_alpha: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+        nullable=False,
+        comment="加权 Beta 正向证据参数",
+    )
+    mastery_beta: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+        nullable=False,
+        comment="加权 Beta 负向证据参数",
+    )
+    evidence_mass: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+        nullable=False,
+        comment="coverage 和证据强度累计质量",
+    )
+    uncertainty: Mapped[float] = mapped_column(
+        Float,
+        default=1.0,
+        nullable=False,
+        comment="掌握度证据不确定性",
+    )
     last_evidence_id: Mapped[Optional[str]] = mapped_column(String(64), comment="最近一次证据ID")
     last_graded_at: Mapped[Optional[datetime]] = mapped_column(DateTime, comment="最近评分时间")
+    last_evidence_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, comment="最近一条结构化证据发生时间"
+    )
+    state_model_version: Mapped[str] = mapped_column(
+        String(32),
+        default="mastery-beta-v1",
+        nullable=False,
+        comment="掌握度状态模型版本",
+    )
     metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, comment="统计扩展元数据")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(

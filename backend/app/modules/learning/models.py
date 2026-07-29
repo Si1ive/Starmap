@@ -39,6 +39,39 @@ class LearningActivityEvent(Base):
     )
     topic_keywords_json: Mapped[list] = mapped_column(JSON, nullable=False)
     knowledge_point_ids_json: Mapped[Optional[list]] = mapped_column(JSON)
+    evidence_type: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="observation",
+        server_default="observation",
+        comment="结构化证据行为类型",
+    )
+    evidence_outcome: Mapped[str] = mapped_column(
+        String(24),
+        nullable=False,
+        default="unknown",
+        server_default="unknown",
+        comment="结构化证据结果",
+    )
+    assessment_source: Mapped[Optional[str]] = mapped_column(
+        String(32), comment="评价或题目来源"
+    )
+    evidence_strength: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        default=0.0,
+        server_default="0",
+        comment="服务端裁剪后的证据强度",
+    )
+    assessment_confidence: Mapped[Optional[float]] = mapped_column(
+        Float, comment="评价置信度，不等同于掌握度"
+    )
+    model_version: Mapped[Optional[str]] = mapped_column(
+        String(64), comment="产生评价或题目的模型版本"
+    )
+    knowledge_point_coverage_json: Mapped[Optional[dict]] = mapped_column(
+        JSON, comment="知识点 coverage 分摊权重"
+    )
     quality: Mapped[float] = mapped_column(Float, nullable=False)
     is_correct: Mapped[Optional[bool]] = mapped_column(Boolean)
     payload_json: Mapped[Optional[dict]] = mapped_column(JSON)

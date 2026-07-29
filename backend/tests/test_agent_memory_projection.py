@@ -238,6 +238,11 @@ async def test_grade_projection_updates_mastery_and_replays_idempotently(db_sess
     assert mastery.evidence_count == 1
     assert mastery.correct_count == 1
     assert mastery.incorrect_count == 0
+    assert mastery.mastery_alpha == 1.0
+    assert mastery.mastery_beta == 0.0
+    assert mastery.evidence_mass == 1.0
+    assert mastery.uncertainty < 1.0
+    assert mastery.state_model_version == "mastery-beta-v1"
     assert mastery.last_evidence_id == "grade_ev_001"
     assert mastery.subject_id == "subject_ds"
 
@@ -278,6 +283,9 @@ async def test_grade_projection_updates_mastery_and_replays_idempotently(db_sess
     assert mastery.evidence_count == 2
     assert mastery.correct_count == 1
     assert mastery.incorrect_count == 1
+    assert mastery.mastery_alpha == 1.0
+    assert mastery.mastery_beta == 1.0
+    assert mastery.evidence_mass == 2.0
     assert mastery.last_evidence_id == "grade_ev_002"
 
 

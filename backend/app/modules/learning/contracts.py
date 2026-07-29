@@ -360,6 +360,53 @@ class LearningEvidence(BaseModel):
             normalized.setdefault("source_type", source_type)
             return cls.model_validate(normalized)
 
+        column_evidence_type = _read(event, "evidence_type")
+        column_evidence_outcome = _read(event, "evidence_outcome")
+        if column_evidence_type is not None and column_evidence_outcome is not None:
+            if not source_id:
+                return cls(
+                    source_id=source_id,
+                    source_type=source_type,
+                    evidence_type=column_evidence_type,
+                    evidence_outcome=column_evidence_outcome,
+                )
+            column_knowledge_point_ids = _deduplicate_strings(
+                _read(event, "knowledge_point_ids_json", None) or []
+            )
+            column_coverage = _read(event, "knowledge_point_coverage_json", None)
+            if not isinstance(column_coverage, Mapping):
+                column_coverage = _legacy_coverage(payload, column_knowledge_point_ids)
+            raw_confidence = _read(event, "assessment_confidence")
+            normalized_confidence = (
+                float(raw_confidence) if raw_confidence is not None else 0.0
+            )
+            return cls(
+                source_id=str(source_id),
+                source_type=source_type,
+                evidence_type=column_evidence_type,
+                evidence_outcome=column_evidence_outcome,
+                assessment_source=_read(event, "assessment_source"),
+                confidence=normalized_confidence,
+                assessment_confidence=normalized_confidence,
+                evidence_strength=float(_read(event, "evidence_strength", 0.0) or 0.0),
+                model_version=_read(event, "model_version"),
+                error_tags=_known_error_tags(payload.get("error_types") or []),
+                knowledge_point_ids=column_knowledge_point_ids,
+                knowledge_point_coverage=dict(column_coverage),
+                context=EvidenceContext(
+                    question_id=_text(
+                        payload.get("question_id") or payload.get("practice_item_id")
+                    ),
+                    answer_source=_answer_source(payload.get("answer_source")),
+                    hint_levels_used=list(payload.get("hint_levels_used") or []),
+                    answer_exposed=bool(
+                        payload.get(
+                            "answer_exposed", payload.get("answer_revealed", False)
+                        )
+                    ),
+                ),
+            )
+
         is_correct = _read(event, "is_correct")
         outcome = _outcome_from_bool(is_correct)
         question_id = _text(
@@ -407,7 +454,10 @@ class LearningEvidence(BaseModel):
             evidence_type=evidence_type,
             evidence_outcome=outcome,
             assessment_source=assessment_source,
+            confidence=1.0 if outcome in _MASTERY_OUTCOMES else 0.0,
+            assessment_confidence=1.0 if outcome in _MASTERY_OUTCOMES else 0.0,
             evidence_strength=evidence_strength,
+            error_tags=_known_error_tags(payload.get("error_types") or []),
             knowledge_point_ids=knowledge_point_ids,
             knowledge_point_coverage=knowledge_point_coverage,
             context=EvidenceContext(
@@ -498,6 +548,16 @@ def _legacy_coverage(
         return {knowledge_point_ids[0]: 1.0} if knowledge_point_ids else {}
     weight = 1.0 / len(knowledge_point_ids)
     return {point_id: weight for point_id in knowledge_point_ids}
+
+
+def _known_error_tags(values: Any) -> list[ErrorTag]:
+    """只保留统一契约中的错误标签，旧技术诊断仍保留在 payload 中。"""
+    known = {item.value for item in ErrorTag}
+    return [
+        ErrorTag(normalized)
+        for value in values
+        if (normalized := _text(value)) in known
+    ]
 
 
 __all__ = [

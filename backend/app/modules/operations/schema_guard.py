@@ -30,6 +30,27 @@ AGENT_MODEL_NULLABLE_COLUMNS = frozenset({"max_tokens"})
 MEMORY_OUTBOX_UNIQUE_INDEX = "uk_agent_memory_outbox_run_event"
 MEMORY_OUTBOX_UNIQUE_COLUMNS = ("run_id", "event_type")
 MEMORY_OUTBOX_REQUIRED_COLUMNS = frozenset({"last_error_message"})
+LEARNING_ACTIVITY_REQUIRED_COLUMNS = frozenset(
+    {
+        "evidence_type",
+        "evidence_outcome",
+        "assessment_source",
+        "evidence_strength",
+        "assessment_confidence",
+        "model_version",
+        "knowledge_point_coverage_json",
+    }
+)
+MASTERY_MODEL_REQUIRED_COLUMNS = frozenset(
+    {
+        "mastery_alpha",
+        "mastery_beta",
+        "evidence_mass",
+        "uncertainty",
+        "last_evidence_at",
+        "state_model_version",
+    }
+)
 
 
 class DatabaseSchemaError(RuntimeError):
@@ -106,9 +127,9 @@ async def verify_database_schema(
                 "'agent_thread_memory_states', "
                 "'agent_memory_events', "
                 "'agent_memory_snapshots', "
-        "'agent_memory_snapshot_items', "
-        "'agent_memory_traces', "
-        "'agent_memory_update_outbox', "
+                "'agent_memory_snapshot_items', "
+                "'agent_memory_traces', "
+                "'agent_memory_update_outbox', "
                 "'user_learning_mastery', "
                 "'agent_conversation_summaries', "
                 "'agent_memory_items', "
@@ -131,6 +152,53 @@ async def verify_database_schema(
             "数据库结构与 Alembic 版本记录不一致："
             f"缺少 Agent 数据表 [{missing_label}]；"
             "请先在 backend 目录执行 `alembic upgrade head`。"
+        )
+
+    try:
+        result = await session.execute(
+            text(
+                "SELECT table_name, column_name "
+                "FROM information_schema.columns "
+                "WHERE table_schema = DATABASE() "
+                "AND table_name IN ('learning_activity_events', 'user_learning_mastery')"
+            )
+        )
+        column_rows = result.all()
+        learning_columns = {
+            str(row[1])
+            for row in column_rows
+            if str(row[0]) == "learning_activity_events"
+        }
+        mastery_columns = {
+            str(row[1])
+            for row in column_rows
+            if str(row[0]) == "user_learning_mastery"
+        }
+    except Exception as exc:
+        raise DatabaseSchemaError(
+            "无法校验学习证据与掌握度表结构；"
+            "请先在 backend 目录执行 `alembic upgrade head`。"
+        ) from exc
+
+    missing_learning_columns = LEARNING_ACTIVITY_REQUIRED_COLUMNS - learning_columns
+    missing_mastery_columns = MASTERY_MODEL_REQUIRED_COLUMNS - mastery_columns
+    if missing_learning_columns or missing_mastery_columns:
+        missing_parts = []
+        if missing_learning_columns:
+            missing_parts.append(
+                "learning_activity_events[{}]".format(
+                    ", ".join(sorted(missing_learning_columns))
+                )
+            )
+        if missing_mastery_columns:
+            missing_parts.append(
+                "user_learning_mastery[{}]".format(
+                    ", ".join(sorted(missing_mastery_columns))
+                )
+            )
+        raise DatabaseSchemaError(
+            "数据库结构与 Alembic 版本记录不一致：缺少学习模型列 "
+            f"[{'; '.join(missing_parts)}]；请先在 backend 目录执行 `alembic upgrade head`。"
         )
 
     try:

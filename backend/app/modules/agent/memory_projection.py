@@ -7,6 +7,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
+from app.modules.learning.evidence import (
+    EvidenceGate,
+    EvidenceGateError,
+    build_assessment_evidence,
+    finalize_evidence_weight,
+)
 from .memory_contracts import MemoryFactType
 from .models import (
     AgentApproval,
@@ -16,12 +22,10 @@ from .models import (
     AgentRun,
     UserLearningMastery,
 )
+from .mastery_projector import MasteryProjector
 from .time_utils import utc_now
 
 logger = get_logger(__name__)
-
-# 真实评分结论对掌握度的贡献值；不在表内的 verdict 视为无效证据。
-_VERDICT_CONTRIBUTIONS = {"correct": 1.0, "partial": 0.5, "incorrect": 0.0}
 
 
 async def _ensure_memory_update_outbox(
@@ -331,7 +335,11 @@ async def _record_grade_result_confirmed(
             if (normalized := str(kp_id).strip())
         )
     )
-    if verdict not in _VERDICT_CONTRIBUTIONS or not question_id or not knowledge_point_ids:
+    if (
+        verdict not in {"correct", "partial", "incorrect"}
+        or not question_id
+        or not knowledge_point_ids
+    ):
         logger.info(
             "反馈产物缺少结构化评分证据，跳过掌握度回写",
             run_id=run.id,
@@ -352,6 +360,55 @@ async def _record_grade_result_confirmed(
         await _ensure_memory_update_outbox(db, run, existing)
         return
 
+    generated_question = (
+        str(grading.get("assessment_source") or "").strip().lower()
+        == "generated_question"
+        or str(question_id).startswith("generated_")
+    )
+    evidence = build_assessment_evidence(
+        source_id=evidence_id,
+        source_type="agent_grade",
+        verdict=verdict,
+        question_id=question_id,
+        knowledge_point_ids=knowledge_point_ids,
+        answer_source=(
+            "generated_question"
+            if generated_question
+            else grading.get("answer_source") or "manual"
+        ),
+        assessment_source=grading.get("assessment_source")
+        or ("generated_question" if generated_question else "deterministic"),
+        hint_levels_used=list(grading.get("hint_levels_used") or []),
+        answer_exposed=bool(grading.get("answer_exposed", False)),
+        confidence=grading.get("assessment_confidence", grading.get("confidence", 1.0)),
+        model_version=grading.get("model_version"),
+        knowledge_point_coverage=grading.get("knowledge_point_coverage"),
+        error_tags=grading.get("error_tags") or grading.get("error_types") or [],
+        evidence_type=grading.get("evidence_type"),
+    )
+    try:
+        EvidenceGate().validate(
+            evidence,
+            owner_user_id=run.user_id,
+            source_user_id=run.user_id,
+            source_run_id=run.id,
+            expected_question_id=question_id,
+            verified_knowledge_point_ids=knowledge_point_ids,
+        )
+    except EvidenceGateError as error:
+        logger.info(
+            "评分证据门禁未通过，跳过掌握度回写",
+            run_id=run.id,
+            artifact_id=artifact.id,
+            reason=str(error),
+        )
+        return
+    evidence, weight = finalize_evidence_weight(
+        evidence,
+        question_review_status=grading.get("question_review_status"),
+        suggested_weight=grading.get("suggested_weight"),
+    )
+
     memory_event = AgentMemoryEvent(
         user_id=run.user_id,
         thread_id=run.thread_id,
@@ -368,12 +425,16 @@ async def _record_grade_result_confirmed(
             "verdict": verdict,
             "score": grading.get("score"),
             "error_types": grading.get("error_types") or [],
+            "learning_evidence": evidence.to_payload(),
+            "evidence_strength": weight.evidence_strength,
+            "evidence_weight_policy_version": weight.policy_version,
+            "evidence_weight_reasons": list(weight.reasons),
         },
     )
     db.add(memory_event)
 
-    contribution = _VERDICT_CONTRIBUTIONS[verdict]
     subject_id = str(grading.get("subject_id") or "").strip() or None
+    projector = MasteryProjector()
     for kp_id in knowledge_point_ids:
         mastery = await db.scalar(
             select(UserLearningMastery).where(
@@ -382,28 +443,27 @@ async def _record_grade_result_confirmed(
             )
         )
         if mastery is None:
-            mastery = UserLearningMastery(
+            mastery = projector.apply(
+                None,
+                evidence,
+                knowledge_point_id=kp_id,
                 user_id=run.user_id,
                 subject_id=subject_id,
-                knowledge_point_id=kp_id,
-                mastery_score=0.0,
-                evidence_count=0,
-                correct_count=0,
-                incorrect_count=0,
+                evidence_at=artifact.created_at or utc_now(),
+                partial_credit=grading.get("score"),
+                suggested_weight=grading.get("suggested_weight"),
             )
             db.add(mastery)
-        new_count = mastery.evidence_count + 1
-        mastery.mastery_score = round(
-            (mastery.mastery_score * mastery.evidence_count + contribution) / new_count,
-            4,
-        )
-        mastery.evidence_count = new_count
-        if verdict == "correct":
-            mastery.correct_count += 1
-        elif verdict == "incorrect":
-            mastery.incorrect_count += 1
-        mastery.last_evidence_id = evidence_id
-        mastery.last_graded_at = utc_now()
+        else:
+            projector.apply(
+                mastery,
+                evidence,
+                knowledge_point_id=kp_id,
+                subject_id=subject_id,
+                evidence_at=artifact.created_at or utc_now(),
+                partial_credit=grading.get("score"),
+                suggested_weight=grading.get("suggested_weight"),
+            )
 
     await db.flush()
     from app.modules.learning.events import record_agent_grade_activity

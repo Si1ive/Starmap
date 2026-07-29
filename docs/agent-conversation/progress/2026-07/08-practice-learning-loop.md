@@ -91,3 +91,12 @@
 
 - 验证：`backend/venv/bin/pytest tests/test_agent_teaching_policy.py tests/test_agent_router_runtime.py tests/test_agent_capability_harness.py tests/test_agent_answer_runtime.py tests/test_agent_explain_workflow.py tests/test_agent_validate_workflow.py tests/test_agent_grade_worker.py -q`（53 passed，6 个既有 datetime 弃用告警）；`compileall`、Black 检查、Flake8（忽略 Black 与旧代码冲突的 E203/W503）和 `git diff --check` 通过。对话 Worker 整链仍受当前测试 fixture 未加载 `users` 表的既有 SQLite 外键建表问题影响。
 - 中文提交信息：`冻结 Tutor 策略并交接 Agent 子工作流`。
+
+## 2026-07-29：阶段三——升级学习证据与知识点掌握度模型
+
+- 目标：在保留 `LearningActivityEvent`、`quality/is_correct` 和旧掌握度读取字段的前提下，补齐证据类型、结果、评价来源、证据强度、confidence、模型版本和多知识点 coverage，并把 Grade 的简单 verdict 平均值升级为可回放的加权 alpha/beta 状态。
+- 关键实现：`backend/app/modules/learning/evidence.py::EvidenceGate.validate`（L59-L140）、`EvidenceWeightPolicy.calculate`（L164-L240）和 `build_assessment_evidence`（L243-L320）统一门禁/权重；`backend/app/modules/learning/events.py::record_practice_submission`（L44-L158）、`record_explanation_activity`（L161-L238）和 `record_agent_grade_activity`（L241-L371）写入结构化证据列与嵌套审计载荷，旧题目没有知识点映射时仍只记录事实、不进入 mastery。新增 `backend/app/modules/agent/mastery_projector.py::MasteryProjector.apply`（L35-L138），按 coverage 分摊强度，correct/incorrect 更新 alpha/beta，partial 按比例拆分，并维护 `evidence_mass`、`uncertainty`、`last_evidence_at` 和 `mastery-beta-v1`。
+- 数据库：新增 `backend/alembic/versions/20260729_learning_evidence_model.py::upgrade`（L18-L167），按旧 `is_correct` 回填活动证据，讲解历史固定为 `exposure/unknown/0`；按 `mastery_score * evidence_count` 回填 alpha/beta，记录旧证据时间与状态版本。`backend/app/modules/operations/schema_guard.py::verify_database_schema`（L68-L293）同时校验新活动列和掌握度列，未迁移数据库拒绝启动。
+- 读取兼容：学习进度、管理员 Thread 详情和 mastery Snapshot signal 继续提供旧字段，同时增加 evidence/uncertainty/state model 审计字段；读时衰减保留原 `mastery-decay-v1` 语义。
+- 验证：受影响后端测试 `backend/venv/bin/python -m pytest tests/test_learning_evidence_model.py tests/test_agent_memory_projection.py tests/test_learning_activity_events.py tests/test_learning_contracts.py tests/test_agent_grade_worker.py tests/test_migrations.py tests/test_schema_guard.py tests/test_agent_mastery_decay.py -q`（67 passed，6 个既有 datetime 弃用告警）；全量后端为 922 passed、1 个阶段二 Explain 旧断言失败、3 deselected；前端 `npm run build`、新增文件 Black/Flake8、`compileall` 和 `git diff --check` 通过。新增证据门禁、提示/生成题/答案暴露降权、多知识点 coverage、partial、迁移回填和 schema guard 回归。
+- 中文提交信息：`升级知识点掌握度证据模型`。

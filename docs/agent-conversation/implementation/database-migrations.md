@@ -26,13 +26,15 @@
 | Agent 练习草稿 | `backend/alembic/versions/20260728_agent_practice_drafts.py` | `upgrade`、`downgrade` | L42-L195 | Practice hints head | 为 Session 增加 Agent Thread/Run 来源和 draft 启动语义；为题目增加稳定 item ID 与来源，作答改关联 Session Item；先创建替代唯一索引再删除外键依赖的旧索引，并对非事务 DDL 中断提供可重入检查 | 即时题不依赖公共 Question 外键；Run 幂等唯一 | Validate / Practice / Agent Runs |
 | 学习活动事实 | `backend/alembic/versions/20260728_learning_activity.py` | `upgrade`、`downgrade` | L20-L63 | Agent practice draft head | 创建用户归属事件表；按 user/event/source 唯一，保留可空 Thread/Run 回链、主题、知识点、质量和 verdict | 跨 Agent/普通练习的可追溯学习事实 | LearningProgress / Weakness / Agent Runs |
 | 移除主动学习计时 | `backend/alembic/versions/20260729_remove_study_timing.py` | `upgrade`、`downgrade` | L19-L53 | 已存在历史计时表和作答耗时列 | 前向删除 `study_timer_records`、计时索引和 `practice_answers.time_spent_seconds`；降级按旧结构恢复 | 当前数据库不再保存主动学习时长或每题耗时；服务器限时仍由 `practice_sessions` 保留 | 练习 API / 学习进度 API |
+| 学习证据与掌握度升级 | `backend/alembic/versions/20260729_learning_evidence_model.py` | `upgrade`、`downgrade` | L18-L167、L170-L184 | `20260729_remove_study_timing` head；已有活动事件和掌握度平均值 | 先增加活动证据字段并按旧 `is_correct` 回填，讲解映射为 exposure/unknown/0；再用旧 score×count 回填 alpha/beta/evidence mass/uncertainty，记录 `mastery-beta-v1`，最后收紧非空和默认值 | 旧 `quality`、`is_correct`、`mastery_score`、计数列仍可读；新 projector 从后续事实开始使用加权状态 | `EvidenceGate` / `MasteryProjector` / schema guard |
 | 启动期门禁 | `backend/app/main.py` | `lifespan` | L91-L107 | 已连接 MySQL | 在 Worker 和调度器前调用 schema guard | 漂移时关闭连接并中止启动 | Worker 启动 |
-| 版本与真结构校验 | `backend/app/modules/operations/schema_guard.py` | `AGENT_REQUIRED_TABLES`、`MEMORY_OUTBOX_REQUIRED_COLUMNS`、`verify_database_schema` | L13-L30、L45-L221 | Alembic revision 与 information_schema | 同时核对 head、Agent 表/列、Outbox 失败列和唯一索引、模型 nullable 约束 | 通过返回 revision；失败抛 `DatabaseSchemaError` | FastAPI lifespan |
+| 版本与真结构校验 | `backend/app/modules/operations/schema_guard.py` | `AGENT_REQUIRED_TABLES`、`LEARNING_ACTIVITY_REQUIRED_COLUMNS`、`MASTERY_MODEL_REQUIRED_COLUMNS`、`verify_database_schema` | L13-L53、L68-L293 | Alembic revision 与 information_schema | 同时核对 head、Agent 表/列、学习活动/掌握度新字段、Outbox 失败列和唯一索引、模型 nullable 约束 | 通过返回 revision；缺列或版本漂移抛 `DatabaseSchemaError`，阻止应用在半迁移状态启动 | FastAPI lifespan |
 
 ## 当前 Agent 结构契约
 
 | 数据类型 | 文件 | 符号 | 代码范围 | 入口条件与关键参数 | 数据库副作用与错误传播 | 最终消费 |
 | --- | --- | --- | --- | --- | --- | --- |
+| 学习活动事实 | `backend/app/modules/learning/models.py` | `LearningActivityEvent`、`LearningActivityEvent.to_learning_evidence` | L22-L100 | 练习/讲解/Grade 完成事实；旧行可没有新证据 payload | 旧列与新 evidence type/outcome/source/strength/confidence/model/coverage 并存；唯一 `(user,event_type,source_id)` 约束保持重放安全，适配器只读不回写 | LearningProgress、Weakness、Agent Runs 管理详情 |
 | Run 事实 | `backend/app/modules/agent/models.py` | `AgentRun` | L87-L158 | Thread/user/workflow 与状态机字段 | 单一 Run 事实源；外键/唯一约束错误向事务传播 | Worker、timeline、管理端 |
 | 线程时间线投影 | `backend/app/modules/agent/models.py` | `AgentThreadItem`、`AgentThreadEvent` | L202-L261 | thread sequence、visibility 与公开事件 | 单调序号唯一；刷新/SSE 只读这些公开投影 | 用户端与管理端 timeline |
 | Step 与内部 Event | `backend/app/modules/agent/models.py` | `AgentStep`、`AgentEvent` | L264-L328 | Run ID、节点、事件序号和 payload | 保存内部执行顺序；同 Run sequence 冲突回滚 | Worker 恢复与管理审计 |
@@ -40,17 +42,21 @@
 | Artifact / Input / Approval | `backend/app/modules/agent/models.py` | `AgentArtifact`、`AgentInput`、`AgentApproval` | L402-L484 | Run 产物、补充输入或审批动作 | 分别写业务产物与人工决策；状态错误由服务层阻断 | timeline 与管理端详情 |
 | 记忆能力契约 | `backend/app/modules/agent/memory_contracts.py` | `MemoryPartition`、`MemoryNeed`、`MEMORY_NEED_PARTITIONS` | L8-L76 | workflow 声明稳定能力标签 | 无数据库写；非法枚举在构造阶段失败 | selector / workflow |
 | 记忆 Snapshot、状态观测与 Outbox | `backend/app/modules/agent/models.py` | `AgentThreadMemoryState`、`AgentMemoryEvent`、`AgentMemorySnapshot`、`AgentMemorySnapshotItem`、`AgentMemoryTrace`、`AgentMemoryUpdateOutbox` | L487-L694 | user/thread/run/source/version、冻结 payload、before/after 状态副本与调度状态 | Snapshot 不可变追加；Trace 保存事件边界状态；Outbox 用 Run/type 或 task key 幂等，失败摘要只存脱敏文本 | Memory selector、Consumer、管理员运维 |
-| 掌握度与长期项 | `backend/app/modules/agent/models.py` | `UserLearningMastery`、`AgentConversationSummary`、`AgentMemoryItem` | L697-L806 | 可信 Grade、消息序列范围、事实 source | 聚合分数、版本化摘要、active/superseded/deleted 长期项 | Validate / Plan / conversation |
-| 偏好候选 | `backend/app/modules/agent/models.py` | `AgentPreferenceCandidate` | L807-L884 | user/source/key 与治理决定 | 同 source/key 唯一；拒绝和失效不能被重放复活 | preference selector 与用户治理 |
+| 掌握度状态 | `backend/app/modules/agent/models.py` | `UserLearningMastery` | L697-L755 | 可信 Grade、用户/知识点唯一键 | 保存兼容 score/count、加权 alpha/beta、evidence mass、uncertainty、最近证据时间和 state model；新字段由 Alembic 前向迁移提供 | Validate / Plan / conversation / 管理端 Snapshot |
+| 对话摘要 | `backend/app/modules/agent/models.py` | `AgentConversationSummary` | L758-L792 | 消息序列范围和摘要来源 | 版本化摘要、supersede 链和线程唯一范围保持原状态治理 | Conversation memory selector |
+| 长期记忆项 | `backend/app/modules/agent/models.py` | `AgentMemoryItem` | L795-L837 | 用户/线程作用域与来源 Snapshot | active/superseded/deleted 状态和来源回链保持原状态治理 | Memory consumer / 管理端 |
+| 偏好候选 | `backend/app/modules/agent/models.py` | `AgentPreferenceCandidate` | L840-L917 | user/source/key 与治理决定 | 同 source/key 唯一；拒绝和失效不能被重放复活 | preference selector 与用户治理 |
 
 ## 故障定位顺序
 
-1. 先检查 `alembic_version` 是否等于当前 head `20260729_remove_study_timing`，禁止用 `alembic stamp head` 掩盖缺失迁移。
+1. 先检查 `alembic_version` 是否等于当前 head `20260729_learning_evidence_model`，禁止用 `alembic stamp head` 掩盖缺失迁移。
 2. 若应用层已有字段但数据库报列不存在，执行 `alembic upgrade head`，再走 `verify_database_schema` 同时确认真列。
-3. Memory Outbox 没有失败详情时，检查 `last_error_message` 真列以及 `MemoryOutboxStore.fail` 是否收到异常摘要。
-4. 工具活动无法恢复时，确认 `workflow.activity.updated` 已进入数据库 ENUM。
-5. 模型“无限输出 Token”不生效时，确认 `max_tokens` 允许 NULL，再核对 ORM `evaluates_none()`。
-6. `agent_memory_update_outbox` 缺表的实际诊断和修复证据见 `../incidents/2026-07-27-memory-outbox-table-missing.md`。
+3. 学习证据字段缺失时，检查 `learning_activity_events` 的七个新列和 `user_learning_mastery` 的六个状态列；不要只看 ORM 是否能导入。
+4. 旧掌握度回填异常时，对照迁移中的 `mastery_score * evidence_count`、`last_graded_at` 和 `mastery-beta-v1`，禁止用 `alembic stamp head` 跳过回填。
+5. Memory Outbox 没有失败详情时，检查 `last_error_message` 真列以及 `MemoryOutboxStore.fail` 是否收到异常摘要。
+6. 工具活动无法恢复时，确认 `workflow.activity.updated` 已进入数据库 ENUM。
+7. 模型“无限输出 Token”不生效时，确认 `max_tokens` 允许 NULL，再核对 ORM `evaluates_none()`。
+8. `agent_memory_update_outbox` 缺表的实际诊断和修复证据见 `../incidents/2026-07-27-memory-outbox-table-missing.md`。
 
 ## 下一步阅读
 

@@ -3,8 +3,8 @@
 ## 任务定位
 
 任务 ID：`LEARN-001`
-状态：实施中（阶段一已完成）
-阶段状态：阶段一“冻结契约与兼容边界”已完成；阶段二及后续阶段待实施。
+状态：实施中（阶段一至阶段三已完成）
+阶段状态：阶段一“冻结契约与兼容边界”、阶段二“合并 Router 与 Tutor 策略”和阶段三“学习证据与掌握度模型升级”已完成；阶段四及后续阶段待实施。
 目标：在现有 Agent 练习、评分、学习活动和薄弱点闭环之上，补齐“用户对话行为 → 结构化学习证据 → 掌握度/不确定性 → 下一步教学策略”的自适应学习链路。
 
 本任务采用以下总体决策：
@@ -38,12 +38,13 @@
 | 模型出题 | `backend/app/modules/agent/workflows/validate.py` | `_generate_question_node` | L207-L266 | 题库没有合格候选且主题明确 | 调用结构化 PracticeGenerationRuntime，生成带答案、解析、来源标识的单选题 | Agent 即时题候选；不进入公共题库 | composition/create draft |
 | 题目生成运行时 | `backend/app/modules/agent/model_runtime/practice.py` | `PracticeGenerationRuntime.generate` | L37-L65 | Run 模型配置和主题/难度已冻结 | 使用 Pydantic AI `GeneratedPracticeQuestion` 输出并受 request limit 保护 | 结构化题面、选项、答案和解析 | Validate 继续执行 |
 | 客观评分 | `backend/app/modules/agent/workflows/grade.py` | `_objective_grade_node` | L81-L129 | 题面、标准答案和用户答案均来自 EvaluationBundle | 归一化 choice/fill/judge 答案，确定性产生 correct/incorrect 和评分证据 | `objective_result`、`grading_evidence` | rubric/feedback/render |
-| 练习活动事实 | `backend/app/modules/learning/events.py` | `record_practice_submission` | L38-L93 | Session 交卷且答案已判定 | 以 Session Item 幂等写 `practice_answer_graded`，保留题目快照、知识点和提示信息 | LearningActivityEvent | 学习进度/薄弱点读取或投影 |
-| 讲解活动事实 | `backend/app/modules/learning/events.py` | `record_explanation_activity` | L96-L142 | Explain Artifact 完成且主题可信 | 写无 verdict 的主题 exposure；当前 `quality=0.35` 不代表掌握度贡献 | `agent_explanation_completed` | 学习活动展示，不进入权威 mastery |
-| Agent Grade 活动 | `backend/app/modules/learning/events.py` | `record_agent_grade_activity` | L145-L210 | Feedback Artifact 携带 confirmed verdict | 将对话评分映射到统一学习活动事件并回链 Run/Thread | `agent_grade_confirmed` | WeaknessService/学习进度 |
-| 掌握度投影 | `backend/app/modules/agent/memory_projection.py` | `_record_grade_result_confirmed` | L311-L424 | Feedback grading 含可信 verdict、题目和知识点 | 以 evidence ID 幂等写 memory fact，并按 correct/partial/incorrect 更新 `UserLearningMastery` | mastery、AgentMemoryEvent、Memory Outbox | 长期记忆/后续选择 |
-| 掌握度读时衰减 | `backend/app/modules/agent/mastery_decay.py` | `calculate_effective_mastery` | L26-L58 | 有原始分数、证据时间和读取时点 | 按固定策略计算 effective score，不修改原始累计值 | `EffectiveMastery` | Practice/Plan/学习状态读取 |
-| 掌握度模型 | `backend/app/modules/agent/models.py` | `UserLearningMastery` | L697-L722 | 已有可信评分证据 | 保存知识点级 mastery、证据次数、对错次数和最近证据 | 用户级知识点掌握度表 | 新 `LearningSnapshot` 读取 |
+| 练习活动事实 | `backend/app/modules/learning/events.py` | `record_practice_submission` | L44-L158 | Session 交卷且答案已判定 | 以 Session Item 幂等写 `practice_answer_graded`，保留题目快照、知识点和提示信息，并计算 evidence type/source/strength/coverage；旧题目没有服务端 knowledge point 时只记录活动事实，不进入 mastery | LearningActivityEvent | 学习进度/薄弱点读取或投影 |
+| 讲解活动事实 | `backend/app/modules/learning/events.py` | `record_explanation_activity` | L161-L238 | Explain Artifact 完成且主题可信 | 写无 verdict 的主题 exposure；当前 `quality=0.35` 不代表掌握度贡献，同时固化 exposure/unknown/0 | `agent_explanation_completed` | 学习活动展示，不进入权威 mastery |
+| Agent Grade 活动 | `backend/app/modules/learning/events.py` | `record_agent_grade_activity` | L241-L371 | Feedback Artifact 携带 confirmed verdict | 将对话评分映射到统一学习活动事件，经过 EvidenceGate/WeightPolicy 并回链 Run/Thread | `agent_grade_confirmed` | WeaknessService/学习进度 |
+| 证据门禁与权重 | `backend/app/modules/learning/evidence.py` | `EvidenceGate.validate`、`EvidenceWeightPolicy.calculate` | L59-L140、L164-L240 | 服务端评分结果、来源用户/Run、冻结题面和 coverage | 校验用户/Run/题目/知识点/答案来源；按类型、提示、答案暴露、confidence 和题目可信度裁剪强度；练习兼容路径可显式仅记录无 coverage 事实 | `LearningEvidence`、`EvidenceWeight` | 活动事件或 `MasteryProjector.apply` |
+| 掌握度投影 | `backend/app/modules/agent/memory_projection.py`、`mastery_projector.py` | `_record_grade_result_confirmed`、`MasteryProjector.apply` | memory L315-L484；projector L35-L138 | Feedback grading 含可信 verdict、题目和知识点 | 以 evidence ID 幂等写 memory fact；按 coverage 更新 alpha/beta、evidence mass、uncertainty 和兼容 score | mastery、AgentMemoryEvent、Memory Outbox | 长期记忆/后续选择 |
+| 掌握度读时衰减 | `backend/app/modules/agent/mastery_decay.py` | `calculate_effective_mastery` | L28-L62 | 有原始分数、证据时间和读取时点 | 按固定策略计算 effective score，同时保留 state/policy version，不修改原始累计值 | `EffectiveMastery` | Practice/Plan/学习状态读取 |
+| 掌握度模型 | `backend/app/modules/agent/models.py` | `UserLearningMastery` | L697-L755 | 已有可信评分证据 | 保存兼容 score/count、alpha/beta、evidence mass、uncertainty、最近证据时间和 state version | 用户级知识点掌握度表 | 新 `LearningSnapshot` 读取 |
 | Run 完成交接 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | L105-L323 | WorkflowEngine 返回 completed/waiting/failed | 先将 Run metadata 中已冻结的 teaching policy/decision/LearningSnapshot 注入 child ExecutionContext，再持久化 Artifact、投影完成事实、写 Run 状态并投递摘要/偏好任务；异常不覆盖原始事实 | Run/Artifact/Event/Outbox | Observer 触发应接在 completed 事实边界之后 |
 
 ## 目标执行链
@@ -144,6 +145,9 @@ Explain/Validate/Grade 的策略读取均已落地。后续阶段再实现诊断
 - 能验证三种核心输出：只回答、解释后建议诊断、根据薄弱项进入练习。
 ## 阶段三：学习证据与掌握度模型升级
 
+实施状态：已完成；活动事实已增加结构化证据字段，Grade 已接入 EvidenceGate、EvidenceWeightPolicy
+和 MasteryProjector，Alembic 前向迁移、旧数据回填、schema guard、学习进度/管理端读取和回放回归均已落地。
+
 ### 目标
 
 保留当前 `LearningActivityEvent` 作为可回链活动事实，增加明确的证据字段；将当前简单 verdict 平均值升级为带证据强度和不确定性的可解释模型。
@@ -186,6 +190,12 @@ Explain/Validate/Grade 的策略读取均已落地。后续阶段再实现诊断
 - 同一 evidence ID 重放一次或多次都只更新一次。
 - 多知识点题目按 coverage 权重更新，重复知识点 ID 不重复计数。
 - 旧数据迁移后学习进度、管理端详情和现有掌握度测试仍可读取。
+
+### 本阶段落点
+
+- `learning_activity_events` 的旧 `quality/is_correct` 保留为兼容读取字段；新增列和 payload 中的证据快照以 `LearningActivityEvent.to_learning_evidence` 统一读取。
+- `UserLearningMastery` 由 `MasteryProjector.apply` 维护 alpha/beta 和 uncertainty；`memory_projection._record_grade_result_confirmed` 只负责读取可信 grading、幂等写事实并交接 projector/Outbox。
+- 迁移 head 为 `20260729_learning_evidence_model`；未执行 `alembic upgrade head` 或缺少新列时，`verify_database_schema` 在应用启动阶段失败，不允许以 `alembic stamp head` 绕过。
 ## 阶段四：异步 LearningObserverAgent
 
 ### 目标

@@ -31,7 +31,7 @@ def test_migration_graph_has_single_head():
     config.set_main_option("script_location", str(backend_dir / "alembic"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_heads() == ["20260729_remove_study_timing"]
+    assert scripts.get_heads() == ["20260729_learning_evidence_model"]
 
 
 def test_agent_practice_migration_replaces_fk_backing_indexes_before_drop():
@@ -69,6 +69,36 @@ def test_study_timing_migration_removes_timer_table_and_elapsed_column():
     assert "DROP COLUMN time_spent_seconds" in ddl
     assert "DROP INDEX idx_study_timer_user_started ON study_timer_records" in ddl
     assert "DROP TABLE study_timer_records" in ddl
+
+
+def test_learning_evidence_migration_adds_fields_and_backfills_legacy_rows():
+    backend_dir = Path(__file__).resolve().parents[1]
+    migration_path = (
+        backend_dir / "alembic" / "versions" / "20260729_learning_evidence_model.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "learning_evidence_model_migration", migration_path
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    output = io.StringIO()
+    context = MigrationContext.configure(
+        dialect=mysql.dialect(), opts={"as_sql": True, "output_buffer": output}
+    )
+    migration.op = Operations(context)
+    migration.upgrade()
+    ddl = output.getvalue()
+
+    assert "ADD COLUMN evidence_type VARCHAR(32)" in ddl
+    assert "ADD COLUMN knowledge_point_coverage_json JSON" in ddl
+    assert "ADD COLUMN mastery_alpha FLOAT" in ddl
+    assert "ADD COLUMN last_evidence_at DATETIME" in ddl
+    assert "UPDATE learning_activity_events" in ddl
+    assert "agent_explanation_completed" in ddl
+    assert "UPDATE user_learning_mastery" in ddl
+    assert "mastery-beta-v1" in ddl
 
 
 def test_vector_recall_trace_migration_adds_correlation_fields():

@@ -5,9 +5,20 @@ import pytest
 from app.modules.operations.schema_guard import (
     AGENT_REQUIRED_TABLES,
     DatabaseSchemaError,
+    LEARNING_ACTIVITY_REQUIRED_COLUMNS,
+    MASTERY_MODEL_REQUIRED_COLUMNS,
     get_expected_revisions,
     verify_database_schema,
 )
+
+
+def _learning_columns_result():
+    result = Mock()
+    result.all.return_value = [
+        ("learning_activity_events", column)
+        for column in LEARNING_ACTIVITY_REQUIRED_COLUMNS
+    ] + [("user_learning_mastery", column) for column in MASTERY_MODEL_REQUIRED_COLUMNS]
+    return result
 
 
 @pytest.mark.asyncio
@@ -22,6 +33,7 @@ async def test_schema_guard_accepts_database_at_all_alembic_heads():
     ]
     tables_result = Mock()
     tables_result.scalars.return_value.all.return_value = list(AGENT_REQUIRED_TABLES)
+    learning_columns_result = _learning_columns_result()
     memory_outbox_columns_result = Mock()
     memory_outbox_columns_result.scalars.return_value.all.return_value = [
         "last_error_message"
@@ -37,6 +49,7 @@ async def test_schema_guard_accepts_database_at_all_alembic_heads():
         revision_result,
         columns_result,
         tables_result,
+        learning_columns_result,
         memory_outbox_columns_result,
         memory_outbox_index_result,
         nullable_result,
@@ -146,6 +159,7 @@ async def test_schema_guard_rejects_missing_memory_outbox_unique_constraint():
     ]
     tables_result = Mock()
     tables_result.scalars.return_value.all.return_value = list(AGENT_REQUIRED_TABLES)
+    learning_columns_result = _learning_columns_result()
     memory_outbox_columns_result = Mock()
     memory_outbox_columns_result.scalars.return_value.all.return_value = [
         "last_error_message"
@@ -156,6 +170,7 @@ async def test_schema_guard_rejects_missing_memory_outbox_unique_constraint():
         revision_result,
         columns_result,
         tables_result,
+        learning_columns_result,
         memory_outbox_columns_result,
         memory_outbox_index_result,
     ]
@@ -179,12 +194,14 @@ async def test_schema_guard_rejects_missing_memory_outbox_error_column():
     ]
     tables_result = Mock()
     tables_result.scalars.return_value.all.return_value = list(AGENT_REQUIRED_TABLES)
+    learning_columns_result = _learning_columns_result()
     memory_outbox_columns_result = Mock()
     memory_outbox_columns_result.scalars.return_value.all.return_value = []
     session.execute.side_effect = [
         revision_result,
         columns_result,
         tables_result,
+        learning_columns_result,
         memory_outbox_columns_result,
     ]
 
@@ -207,6 +224,7 @@ async def test_schema_guard_rejects_non_nullable_agent_model_token_limit():
     ]
     tables_result = Mock()
     tables_result.scalars.return_value.all.return_value = list(AGENT_REQUIRED_TABLES)
+    learning_columns_result = _learning_columns_result()
     memory_outbox_columns_result = Mock()
     memory_outbox_columns_result.scalars.return_value.all.return_value = [
         "last_error_message"
@@ -222,6 +240,7 @@ async def test_schema_guard_rejects_non_nullable_agent_model_token_limit():
         revision_result,
         columns_result,
         tables_result,
+        learning_columns_result,
         memory_outbox_columns_result,
         memory_outbox_index_result,
         nullable_result,
@@ -235,4 +254,4 @@ async def test_schema_guard_rejects_non_nullable_agent_model_token_limit():
 
 
 def test_schema_guard_reads_the_project_migration_heads():
-    assert get_expected_revisions() == frozenset({"20260729_remove_study_timing"})
+    assert get_expected_revisions() == frozenset({"20260729_learning_evidence_model"})

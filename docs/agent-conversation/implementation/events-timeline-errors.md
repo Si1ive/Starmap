@@ -9,9 +9,9 @@
 
 | 阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理与错误传播 | 输出/消费 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 练习评分投影 | `backend/app/modules/practice/router.py`、`backend/app/modules/learning/events.py` | `_submit`（L118-L158）、`record_practice_submission`（L28-L83） | Session 行锁、冻结题目、PracticeAnswer | 先确定性判分，再以 `session:item` 查询/写唯一事件；任何数据库错误阻止同事务交卷，重试不会重复写 | `learning_activity_events`；学习进度与薄弱点消费 |
-| Agent 讲解投影 | `backend/app/modules/agent/memory_projection.py`、`backend/app/modules/learning/events.py` | `_record_explanation_artifact_created`（L143-L185）、`record_explanation_activity`（L86-L130） | completed Explain Artifact、Run context snapshot | 只接受冻结 active topic；缺主题安全跳过；事件与 Agent Memory fact 同事务，错误沿 Worker 失败链传播 | 无 verdict 的 exposure；学习记录和 Agent Runs 消费 |
-| Agent Grade 投影 | `backend/app/modules/agent/memory_projection.py`、`backend/app/modules/learning/events.py` | `_record_grade_result_confirmed`（L308-L424）、`record_agent_grade_activity`（L145-L210） | 已通过 rubric 的 grading、Feedback Artifact、冻结 topic | 先更新掌握度，再按 evidence ID 写统一评价事件；topic 缺失时从知识点水合，仍缺失则不虚构薄弱点 | `agent_grade_confirmed`；学习进度与薄弱点消费 |
+| 练习评分投影 | `backend/app/modules/practice/router.py`、`backend/app/modules/learning/events.py` | `_submit`（L118-L158）、`record_practice_submission`（L44-L158） | Session 行锁、冻结题目、PracticeAnswer | 先确定性判分，再以 `session:item` 查询/写唯一事件；旧题目无知识点映射时仍可记录事实但不进入 mastery；任何数据库错误阻止同事务交卷，重试不会重复写 | `learning_activity_events`；学习进度与薄弱点消费 |
+| Agent 讲解投影 | `backend/app/modules/agent/memory_projection.py`、`backend/app/modules/learning/events.py` | `_record_explanation_artifact_created`（L147-L190）、`record_explanation_activity`（L161-L238） | completed Explain Artifact、Run context snapshot | 只接受冻结 active topic；缺主题安全跳过；事件与 Agent Memory fact 同事务，错误沿 Worker 失败链传播 | 无 verdict 的 exposure；学习记录和 Agent Runs 消费 |
+| Agent Grade 投影 | `backend/app/modules/agent/memory_projection.py`、`backend/app/modules/learning/events.py` | `_record_grade_result_confirmed`（L315-L484）、`record_agent_grade_activity`（L241-L371） | 已通过 rubric 的 grading、Feedback Artifact、冻结 topic | 先经过证据门禁和权重策略，再更新掌握度并按 evidence ID 写统一评价事件；topic 缺失时从知识点水合，仍缺失则不虚构薄弱点 | `agent_grade_confirmed`；学习进度与薄弱点消费 |
 
 `learning_activity_events` 是用户学习记录的可信事实层，不替代 `AgentEvent` 时间线。前者跨普通练习和 Agent 对话，
 后者描述单次 Run 的执行过程；管理端在 Thread 详情中并排展示两者，便于判断 workflow 完成是否真正形成学习事实。
@@ -30,9 +30,9 @@
 | 知识点字段校验 | `backend/app/modules/learning/contracts.py` | `LearningEvidence.validate_knowledge_point_ids`、`LearningEvidence.validate_coverage_values` | L196-L220 | 知识点 ID 列表和 coverage 映射 | 去重检查、拒绝空 ID 和越界/非正权重，为多知识点总和校验准备规范化输入 | 规范化知识点集合；错误阻止证据继续流转 | `LearningEvidence.validate_contract` |
 | 证据结构校验 | `backend/app/modules/learning/contracts.py` | `LearningEvidence.validate_contract` | L223-L296 | 已通过字段校验的证据对象 | 多知识点必须逐项 coverage 且总和为 1；exposure/observation 强制 `unknown + strength=0`；self-report 只能是低强度 unknown/ungradable；带 verdict 必须声明评价来源 | 只产生不可直接写掌握度的领域对象；结构错误阻止后续投影 | `LearningEvidence.is_mastery_evidence` |
 | 掌握度资格护栏 | `backend/app/modules/learning/contracts.py` | `LearningEvidence.is_mastery_evidence` | L310-L330 | 已通过结构校验的证据对象 | 仅把有 verdict、可信评价来源、正强度和知识点 coverage 的 objective/open/hint/transfer 证据标为候选；不计算分数、不写数据库 | 布尔资格结果；EvidenceGate/`MasteryProjector` 后续继续做来源归属和幂等校验 | 后续阶段的 EvidenceGate/Projector |
-| 旧事件归一化 | `backend/app/modules/learning/contracts.py` | `LearningEvidence.from_legacy_activity_event` | L337-L421 | 当前 `agent_explanation_completed`、`practice_answer_graded`、`agent_grade_confirmed` 行，及其旧 `payload_json` | 讲解固定映射为 exposure/unknown/0；评分保留 correct/incorrect，提示后改为 hint_assisted；旧多知识点缺 coverage 时均分；未知事件降级为 observation/unknown | 只读生成归一化对象，不更新历史行、掌握度、薄弱点或 Outbox；缺少 source ID 由同一 Pydantic 边界拒绝 | `learning_evidence_from_activity_event` |
-| 旧事件模块入口 | `backend/app/modules/learning/contracts.py` | `learning_evidence_from_activity_event` | L431-L436 | 任意 ORM/Mapping 形式的旧活动事实 | 统一转调 `LearningEvidence.from_legacy_activity_event`，避免各读取方复制默认值 | 返回同一 Pydantic 契约或传播 `ValidationError` | `LearningActivityEvent.to_learning_evidence` |
-| ORM 兼容入口 | `backend/app/modules/learning/models.py` | `LearningActivityEvent.to_learning_evidence` | L22-L67 | 已从数据库加载的活动事实 | 调用同一个旧事件适配器，保持现有 `event_type`、`quality`、`is_correct` 和唯一约束不变 | 只读 `LearningEvidence`；异常向调用方传播，不产生数据库副作用 | 需要证据语义的读取服务 |
+| 旧事件归一化 | `backend/app/modules/learning/contracts.py` | `LearningEvidence.from_legacy_activity_event` | L338-L471 | 当前 `agent_explanation_completed`、`practice_answer_graded`、`agent_grade_confirmed` 行，及其旧 `payload_json` 或新证据列 | 讲解固定映射为 exposure/unknown/0；评分保留 correct/incorrect，提示后改为 hint_assisted；新列优先、旧多知识点缺 coverage 时均分；未知事件降级为 observation/unknown | 只读生成归一化对象，不更新历史行、掌握度、薄弱点或 Outbox；缺少 source ID 由同一 Pydantic 边界拒绝 | `learning_evidence_from_activity_event` |
+| 旧事件模块入口 | `backend/app/modules/learning/contracts.py` | `learning_evidence_from_activity_event` | L481-L486 | 任意 ORM/Mapping 形式的旧活动事实 | 统一转调 `LearningEvidence.from_legacy_activity_event`，避免各读取方复制默认值 | 返回同一 Pydantic 契约或传播 `ValidationError` | `LearningActivityEvent.to_learning_evidence` |
+| ORM 兼容入口 | `backend/app/modules/learning/models.py` | `LearningActivityEvent.to_learning_evidence` | L22-L100 | 已从数据库加载的活动事实 | 调用同一个旧事件适配器，保持现有 `event_type`、`quality`、`is_correct` 和唯一约束不变，同时读取新证据字段 | 只读 `LearningEvidence`；异常向调用方传播，不产生数据库副作用 | 需要证据语义的读取服务 |
 
 ### 兼容规则
 
@@ -48,8 +48,41 @@
 
 模型输出缺少 `source_id`、携带未知枚举、越界 confidence/strength、重复知识点或任意 `mastery_score`
 时，`LearningEvidence` 构造失败；调用方应让当前观察/评分链失败或安全跳过，不能创建掌握度副作用。
-归一化本身只读数据库对象，最终结果由后续 EvidenceGate、掌握度投影和薄弱点投影消费；本阶段不新增 Alembic
+归一化本身只读数据库对象，最终结果由后续 EvidenceGate、掌握度投影和薄弱点投影消费；阶段一不新增 Alembic
 迁移，避免 ORM 先于真实数据库结构上线。
+
+## 阶段三：证据门禁、权重与掌握度状态模型
+
+阶段一的契约只回答“这是什么证据”，阶段三才允许它进入权威掌握度。入口事实仍然是
+`LearningActivityEvent` 或 completed Grade Artifact；模型不能直接传入 `mastery_score`、delta
+或未经策略裁剪的权重。服务端先从已验证的题面/评分快照构造 `LearningEvidence`，再由门禁确认
+用户、Run、题目和知识点范围，最后把每个 verdict 按证据强度和 coverage 投影到
+`UserLearningMastery`。
+
+| 执行阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 评分证据构造 | `backend/app/modules/learning/evidence.py` | `build_assessment_evidence` | L243-L320 | 服务端 grading、题目 ID、知识点、答案来源、提示/答案暴露、confidence | 去重知识点并补均分 coverage；把 verdict、答案来源和已知错误标签归一化为唯一 Pydantic 契约；忽略未知技术标签，不接受 mastery 字段 | `LearningEvidence`，尚未写库 | `EvidenceGate.validate` |
+| 来源与归属门禁 | `backend/app/modules/learning/evidence.py` | `EvidenceGate.validate` | L59-L140 | 当前 Session/Run 用户、来源用户/Run、冻结题面题目 ID、已验证知识点集合 | 拒绝跨用户、无稳定 evidence ID、Agent 无来源 Run、题目不一致、题面未验证的知识点和不可信答案来源；默认要求 mastery coverage，练习兼容路径可显式关闭；失败抛 `EvidenceGateError` | 通过则原样返回证据；Grade 门禁失败只跳过 mastery，练习交卷门禁失败沿事务错误传播 | `finalize_evidence_weight` |
+| 服务端权重 | `backend/app/modules/learning/evidence.py` | `EvidenceWeightPolicy.calculate` | L164-L240 | evidence type、assessment source、confidence、提示、答案暴露、题目审核状态和可选 suggested weight | 按类型/来源设上限；提示、答案暴露、模型答案和低 confidence 只会降权；suggested weight 先裁剪到 `[0,1]` 再取策略上限；按 coverage 生成每个知识点的分摊强度 | `EvidenceWeight`（policy version、总强度、point strength、原因码） | `MasteryProjector.apply` 或活动事实列 |
+| 活动事实落库 | `backend/app/modules/learning/events.py` | `record_practice_submission`、`record_explanation_activity`、`record_agent_grade_activity` | L44-L158、L161-L238、L241-L371 | 已确定性判分的 PracticeAnswer、Explain Artifact、Grade Feedback Artifact | 在旧 `quality/is_correct` 之外写 evidence type/outcome/source/strength/confidence/model/coverage，并把完整证据放入 payload；沿原 `(user,event_type,source_id)` 唯一约束幂等 | `learning_activity_events` 新列和旧兼容列；管理员/学习进度读取新字段 | 事件读取或 Agent Grade 掌握度投影 |
+| Grade 事实与幂等 | `backend/app/modules/agent/memory_projection.py` | `_record_grade_result_confirmed` | L315-L484 | completed feedback 的 grading、evidence ID、题目和知识点 | 先按 `(user,evidence_id)` 查 `AgentMemoryEvent`；门禁和权重通过后写 memory fact，再逐知识点调用 projector；重复 Run 只补 Outbox，不重新累计 | `AgentMemoryEvent`、`AgentMemoryUpdateOutbox`、`UserLearningMastery` 同事务更新；门禁失败不创建掌握度副作用 | `record_agent_grade_activity` 与管理端/学习记录 |
+| 加权掌握度投影 | `backend/app/modules/agent/mastery_projector.py` | `MasteryProjector.apply` | L35-L138 | 一个知识点行、LearningEvidence、coverage 分摊权重、partial credit、证据时间 | correct 增加 alpha，incorrect 增加 beta，partial 按比例拆分；`mastery_score=alpha/(alpha+beta)` 保持旧读取字段，`evidence_mass` 累加实际强度，`uncertainty` 随证据质量下降；exposure/unknown/ungradable 直接返回 | 更新 alpha/beta、score、兼容次数、last evidence、state model version 和审计 metadata；不接受模型 delta | `mastery_decay` / `memory_selector` 冻结到下一轮 Snapshot |
+| 读时衰减与选择 | `backend/app/modules/agent/mastery_decay.py`、`memory_selector.py` | `calculate_effective_mastery`、`_mastery_signal` | decay L28-L62；selector L192-L239 | 原始 mastery score、last evidence time、state/policy version | 保留原 90 天半衰期语义，优先使用 `last_evidence_at` 并把 state model/policy version、uncertainty、evidence mass 一并放入派生信号；不修改数据库累计值 | 可回放的 effective mastery signal | Planning/Practice Bundle 和 Conversation Tutor |
+
+### 阶段三的不变量和错误传播
+
+- Explain 只写 `exposure + unknown + strength=0`；其旧 `quality=0.35` 仍服务于活动轨迹，不能进入
+  alpha/beta。用户自我声明仍不会得到评分 verdict。
+- 同一证据在活动层由 `uk_learning_activity_source` 去重，在 Agent Grade 掌握度层由
+  `grade_result_confirmed:{user}:{evidence_id}` 去重；重试不增加 evidence count、alpha 或 beta。
+- 多知识点题目在契约层必须 coverage 总和为 1，projector 每次只消费一个知识点对应的
+  `point_strength`，所以不会把同一题完整计入每个知识点。
+- `_record_grade_result_confirmed` 只捕获来源门禁错误并安全跳过掌握度；数据库唯一键、flush 和
+  Outbox 错误继续向 Worker 事务错误链传播。普通练习交卷的证据门禁发生在 `_submit` 的同一事务内，
+  门禁失败会阻止不完整学习事实与交卷状态一起提交。
+- `learning_progress` 和管理员 Thread 详情只读旧列与新列的并存结果；管理员还可以从
+  `user_learning_mastery` Snapshot item 看到 alpha/beta、uncertainty 和 state model version，
+  用户端不展示模型内部推理文本。
 
 ## 事件写入与公开投影
 

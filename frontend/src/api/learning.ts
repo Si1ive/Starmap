@@ -22,6 +22,14 @@ export interface LearningActivity {
   source_type: "question" | "agent_practice" | "agent_discussion" | string;
   source_id: string;
   topic_keywords: string[];
+  knowledge_point_ids: string[];
+  evidence_type: string;
+  evidence_outcome: "unknown" | "correct" | "partial" | "incorrect" | "ungradable" | string;
+  assessment_source: string | null;
+  evidence_strength: number;
+  assessment_confidence: number | null;
+  model_version: string | null;
+  knowledge_point_coverage: Record<string, number>;
   is_correct: boolean | null;
   occurred_at: string;
   session_id: string | null;
