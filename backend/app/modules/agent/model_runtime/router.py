@@ -126,6 +126,32 @@ def _explicit_workflow_action(current_input: str) -> RouterAction | None:
     return None
 
 
+def build_flag_disabled_conversation_decision(
+    current_input: str,
+    *,
+    allowed_actions: Sequence[RouterAction] = ROUTER_ACTIONS,
+) -> ConversationDecision:
+    """新路由版本未进入本用户灰度时的确定性安全回退。
+
+    显式的出题、批改、计划和讲解请求仍沿既有护栏进入对应 workflow；普通
+    自由提问退回 direct_answer，不调用第二个 Router，也不创建学习副作用。
+    """
+
+    explicit_action = _explicit_workflow_action(current_input)
+    action = explicit_action if explicit_action in allowed_actions else "direct_answer"
+    reason_code = "conversation_decision_v2_disabled"
+    if explicit_action:
+        reason_code = f"flag_fallback_explicit_{explicit_action}"
+    return ConversationDecision(
+        action=action,
+        confidence=1.0 if explicit_action else 0.0,
+        reason_code=reason_code,
+        reason_codes=[reason_code],
+        teaching_mode=_default_teaching_mode(action),
+        public_summary="当前使用兼容路由策略继续处理本轮请求。",
+    )
+
+
 @conversation_tutor_agent.instructions
 def _router_policy(context: RunContext[RouterDeps]) -> str:
     allowed = ", ".join(context.deps.allowed_actions)

@@ -5,6 +5,7 @@ uvicorn[standard]==0.23.0
 # LLM & Agent
 langchain==0.0.300
 pydantic-ai==2.14.1
+pydantic-evals==2.14.1
 openai==2.46.0
 
 # Database

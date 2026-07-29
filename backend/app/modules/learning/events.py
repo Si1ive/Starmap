@@ -15,6 +15,9 @@ from app.modules.practice.models import (
     PracticeSession,
     PracticeSessionQuestion,
 )
+from app.modules.agent.adaptive_learning_flags import (
+    ADAPTIVE_LEARNING_FLAG_POLICY_VERSION,
+)
 
 from .contracts import EvidenceContext, EvidenceOutcome, EvidenceType, LearningEvidence
 from .evidence import (
@@ -165,6 +168,9 @@ async def record_practice_submission(
                 "answer_source": answer_source,
                 "diagnostic_context": snapshot.get("diagnostic_context"),
                 "learning_evidence": evidence.to_payload(),
+                "adaptive_learning_flag_policy_version": (
+                    ADAPTIVE_LEARNING_FLAG_POLICY_VERSION
+                ),
                 "evidence_weight_policy_version": weight.policy_version,
                 "evidence_weight_reasons": list(weight.reasons),
             },
@@ -256,6 +262,10 @@ async def record_explanation_activity(
             "artifact_id": artifact.id,
             "title": artifact.content_json.get("title"),
             "learning_evidence": evidence.to_payload(),
+            "adaptive_learning_flags": metadata.get("adaptive_learning_flags"),
+            "adaptive_learning_flag_policy_version": (
+                ADAPTIVE_LEARNING_FLAG_POLICY_VERSION
+            ),
             "evidence_weight_policy_version": "evidence-weight-v1",
         },
     )
@@ -414,12 +424,16 @@ async def record_agent_grade_activity(
             "rubric_version": grading.get("rubric_version"),
             "feedback_reason": grading.get("feedback_reason"),
             "diagnostic_context": grading.get("diagnostic_context"),
+            "adaptive_learning_flags": metadata.get("adaptive_learning_flags"),
             "answer_source": (
                 "generated_question"
                 if generated_question
                 else grading.get("answer_source") or "manual"
             ),
             "learning_evidence": evidence.to_payload(),
+            "adaptive_learning_flag_policy_version": (
+                ADAPTIVE_LEARNING_FLAG_POLICY_VERSION
+            ),
             "evidence_weight_policy_version": weight.policy_version,
             "evidence_weight_reasons": list(weight.reasons),
         },

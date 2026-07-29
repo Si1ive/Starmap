@@ -91,6 +91,27 @@ Outbox 的调度状态。Worker 后续仍走 `MemoryOutboxConsumer.process_claim
 
 ## 排查建议
 
+## 阶段七：灰度、评估和版本回放运维
+
+管理员排查自适应学习质量时，先按 root Run 找到本轮的
+`adaptive_learning_flags`，再区分“没有进入灰度”“shadow 已执行但未采用”和
+“authoritative 已写入”。开关配置来自环境变量，不允许通过普通用户请求或模型
+输出修改；管理端默认只展示脱敏的 flag mode、bucket、policy version 和模型/策略
+版本，不展示隐藏推理文本。
+
+| 运维场景 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 排查下一步 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Run 灰度审计 | `backend/app/modules/agent/workflows/conversation.py` | `_route_node` | L181-L224 | root Run metadata、用户稳定分桶 | 保存四项 flag snapshot、路由 treatment 和 shadow decision；child 继承同一快照 | 可按版本解释当前 action；无额外数据库表 | 查看 route/child metadata |
+| 评分灰度审计 | `backend/app/modules/agent/workflows/grade.py`、`memory_projection.py` | `_open_answer_assessment_node`、`_record_grade_result_confirmed` | grade L266-L377；projection L315-L526 | Assessor/Mastery flag、结构化评分、证据门禁结果 | Assessor shadow 的模型输出仅留执行上下文并最终 ungradable；Mastery shadow/disabled 保留活动但不写权威 mastery | 活动、memory fact 和 flag rollout 可回放 | 查看 evidence ID、weight policy、mastery metadata |
+| Observer 灰度审计 | `backend/app/modules/agent/learning_observer.py` | `schedule_learning_observation`、`record_turn_observation` | L76-L124、L315-L445 | 根 conversation completed、Observer flag、silent Run | 未入桶不创建 child；已入桶记录输入/输出/flag，失败只终止 silent Run | 来源 Run 保持 completed；用户端不展示内部输出 | 查看 Observer child status/error |
+| 运行配置 | `backend/app/core/config.py`、`backend/app/modules/agent/adaptive_learning_flags.py` | `Settings`、`AdaptiveLearningFeatureFlags._override_values`、`AdaptiveLearningFeatureFlags.decision` | config L174-L194；flags L117-L199 | 环境变量、覆盖字符串、用户 ID | 解析 `flag=mode[:percent]`，canary 使用稳定 hash；非法 mode fail closed | `FeatureFlagDecision`；无业务写入 | 核对发布配置和 bucket |
+
+推荐发布顺序：先 `learning_observer_v1=shadow` 收集人工标注，再运行固定 Evals
+并检查 `tool_policy_violation_count` 为 0；通过后按小比例 canary，最后才把
+Assessor/Mastery 置为 authoritative。发生越权、重复副作用、答案泄露、客观题
+判定错误或回放版本不一致时，立即把对应 flag 设为 disabled；不要用平均准确率
+掩盖单例安全错误。
+
 1. “模型没按选择运行”：先看观测响应的 `model.calls` 和 `final_model_call_id`，再按 config ID 查看模型配置。
 2. “检索范围不对”：只看 `tool_calls` 中来自 `tool.called` 的 query、chapter、difficulty、entity type 和 excludes，不用 Router 计划值代替。
 3. “历史回答无法复现”：先看 Snapshot 是否存在，再检查 ordered items 的 frozen copy；source 404 只说明当前来源不可回查，不等于旧冻结副本未被消费。

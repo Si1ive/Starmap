@@ -13,6 +13,10 @@ from app.modules.learning.evidence import (
     build_assessment_evidence,
     finalize_evidence_weight,
 )
+from .adaptive_learning_flags import (
+    AdaptiveLearningFlag,
+    adaptive_learning_flags,
+)
 from .memory_contracts import MemoryFactType
 from .models import (
     AgentApproval,
@@ -421,6 +425,10 @@ async def _record_grade_result_confirmed(
         question_review_status=grading.get("question_review_status"),
         suggested_weight=grading.get("suggested_weight"),
     )
+    mastery_flag = adaptive_learning_flags.decision(
+        AdaptiveLearningFlag.MASTERY_MODEL_V2,
+        subject_id=run.user_id,
+    )
 
     memory_event = AgentMemoryEvent(
         user_id=run.user_id,
@@ -442,41 +450,58 @@ async def _record_grade_result_confirmed(
             "evidence_strength": weight.evidence_strength,
             "evidence_weight_policy_version": weight.policy_version,
             "evidence_weight_reasons": list(weight.reasons),
+            "adaptive_learning_flags": adaptive_learning_flags.snapshot(
+                subject_id=run.user_id
+            ),
+            "mastery_projection_rollout": mastery_flag.model_dump(mode="json"),
         },
     )
     db.add(memory_event)
 
     subject_id = str(grading.get("subject_id") or "").strip() or None
     projector = MasteryProjector()
-    for kp_id in knowledge_point_ids:
-        mastery = await db.scalar(
-            select(UserLearningMastery).where(
-                UserLearningMastery.user_id == run.user_id,
-                UserLearningMastery.knowledge_point_id == kp_id,
+    if mastery_flag.is_authoritative:
+        for kp_id in knowledge_point_ids:
+            mastery = await db.scalar(
+                select(UserLearningMastery).where(
+                    UserLearningMastery.user_id == run.user_id,
+                    UserLearningMastery.knowledge_point_id == kp_id,
+                )
             )
-        )
-        if mastery is None:
-            mastery = projector.apply(
-                None,
-                evidence,
-                knowledge_point_id=kp_id,
-                user_id=run.user_id,
-                subject_id=subject_id,
-                evidence_at=artifact.created_at or utc_now(),
-                partial_credit=grading.get("score"),
-                suggested_weight=grading.get("suggested_weight"),
-            )
-            db.add(mastery)
-        else:
-            projector.apply(
-                mastery,
-                evidence,
-                knowledge_point_id=kp_id,
-                subject_id=subject_id,
-                evidence_at=artifact.created_at or utc_now(),
-                partial_credit=grading.get("score"),
-                suggested_weight=grading.get("suggested_weight"),
-            )
+            if mastery is None:
+                mastery = projector.apply(
+                    None,
+                    evidence,
+                    knowledge_point_id=kp_id,
+                    user_id=run.user_id,
+                    subject_id=subject_id,
+                    evidence_at=artifact.created_at or utc_now(),
+                    partial_credit=grading.get("score"),
+                    suggested_weight=grading.get("suggested_weight"),
+                )
+                if mastery is not None:
+                    metadata = dict(mastery.metadata_json or {})
+                    metadata["adaptive_learning_flags"] = (
+                        adaptive_learning_flags.snapshot(subject_id=run.user_id)
+                    )
+                    mastery.metadata_json = metadata
+                if mastery is not None:
+                    db.add(mastery)
+            else:
+                projector.apply(
+                    mastery,
+                    evidence,
+                    knowledge_point_id=kp_id,
+                    subject_id=subject_id,
+                    evidence_at=artifact.created_at or utc_now(),
+                    partial_credit=grading.get("score"),
+                    suggested_weight=grading.get("suggested_weight"),
+                )
+                metadata = dict(mastery.metadata_json or {})
+                metadata["adaptive_learning_flags"] = adaptive_learning_flags.snapshot(
+                    subject_id=run.user_id
+                )
+                mastery.metadata_json = metadata
 
     await db.flush()
     from app.modules.learning.events import record_agent_grade_activity
@@ -489,7 +514,11 @@ async def _record_grade_result_confirmed(
     )
     await _ensure_memory_update_outbox(db, run, memory_event)
     logger.info(
-        "评分事实事件写入并更新掌握度",
+        (
+            "评分事实事件写入并更新掌握度"
+            if mastery_flag.is_authoritative
+            else "评分事实事件写入，掌握度仍处于灰度保护"
+        ),
         run_id=run.id,
         artifact_id=artifact.id,
         verdict=verdict,

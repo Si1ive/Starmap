@@ -20,7 +20,7 @@
 | 用户提交模型选择 | `frontend/src/pages/AgentPage.tsx` | `AgentPage.handleSend` | 用户发送一轮对话 | 把 `selectedModelId` 交给 context store；新建 thread 前后都保留用户选择 | `TurnCreateRequest.model_config_id` |
 | 提交 turn | `frontend/src/store/agent-context.tsx` | `AgentProvider.sendTurn` | thread、内容、`modelConfigId` | 生成 `client_message_id` 并把模型配置 ID 传给后端 | `createTurn` |
 | Root Run 落库 | `backend/app/modules/agent/timeline.py` | `AgentTimelineService.create_turn` | 用户消息和 `model_config_id` | 在创建 root run 时写入所选模型配置 ID | run 级配置事实 |
-| Child 继承模型与教学策略 | `backend/app/modules/agent/workflows/conversation.py` | `_child_context_metadata`（L275-L323） | 父 run 的 `model_config_id`、FrozenTeachingPolicy | 只复制模型配置 ID、策略版本和 teaching_mode/目标/诊断/只读意图到 child metadata；不复制函数或密钥 | child run 后续使用同一模型配置和教学策略 |
+| Child 继承模型与教学策略 | `backend/app/modules/agent/workflows/conversation.py` | `_child_context_metadata`（L316-L367） | 父 run 的 `model_config_id`、FrozenTeachingPolicy、adaptive learning flag snapshot | 只复制模型配置 ID、策略版本、teaching_mode/目标/诊断/只读意图和灰度快照到 child metadata；不复制函数或密钥 | child run 后续使用同一模型配置、教学策略和 rollout 版本 |
 | 打开实际模型 | `backend/app/modules/agent/model_runtime/config.py` | `open_agent_model` | run ID | 从 run 或 child metadata 读取配置，创建独立 `AsyncOpenAI` 客户端，并写回运行时审计元数据 | Router/Answer/Explain/Summary runtime |
 
 ## 开放回答 Assessor 与生成题可信度

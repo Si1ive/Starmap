@@ -18,6 +18,10 @@ from app.modules.learning.contracts import (
 from app.modules.learning.evidence import EvidenceGate
 from app.modules.learning.models import LearningActivityEvent
 
+from .adaptive_learning_flags import (
+    AdaptiveLearningFlag,
+    adaptive_learning_flags,
+)
 from .model_runtime.observer import (
     OBSERVER_VERSION,
     TurnObservationOutput,
@@ -84,6 +88,12 @@ async def schedule_learning_observation(
         or not source_run.trigger_message_id
     ):
         return None
+    observer_flag = adaptive_learning_flags.decision(
+        AdaptiveLearningFlag.LEARNING_OBSERVER_V1,
+        subject_id=source_run.user_id,
+    )
+    if not observer_flag.enabled:
+        return None
     metadata = (
         source_run.metadata_json if isinstance(source_run.metadata_json, dict) else {}
     )
@@ -91,6 +101,10 @@ async def schedule_learning_observation(
         "source_run_id": source_run.id,
         "source_message_id": source_run.trigger_message_id,
         "observer_version": OBSERVER_VERSION,
+        "adaptive_learning_flags": adaptive_learning_flags.snapshot(
+            subject_id=source_run.user_id
+        ),
+        "observer_rollout": observer_flag.model_dump(mode="json"),
     }
     if metadata.get("model_config_id"):
         observer_metadata["model_config_id"] = metadata["model_config_id"]
@@ -423,6 +437,7 @@ async def record_turn_observation(
             "hypothesis_expires_at": utc_isoformat(expires_at),
             "public_activity_summary": output.public_activity_summary,
             "learning_evidence": evidence.to_payload(),
+            "adaptive_learning_flags": metadata.get("adaptive_learning_flags"),
             "assistant_content_policy": input_snapshot.get("assistant_content_policy"),
         },
     )

@@ -170,6 +170,27 @@ class Settings(BaseSettings):
         f"openai:{os.getenv('OPENAI_MODEL', 'gpt-4')}",
     )
 
+    # Adaptive learning rollout. Values are disabled/shadow/canary/active;
+    # ``ADAPTIVE_LEARNING_FLAG_OVERRIDES`` accepts flag=mode[:percent] pairs.
+    ADAPTIVE_LEARNING_CONVERSATION_DECISION_V2: str = os.getenv(
+        "ADAPTIVE_LEARNING_CONVERSATION_DECISION_V2", "active"
+    )
+    ADAPTIVE_LEARNING_LEARNING_OBSERVER_V1: str = os.getenv(
+        "ADAPTIVE_LEARNING_LEARNING_OBSERVER_V1", "shadow"
+    )
+    ADAPTIVE_LEARNING_OPEN_ANSWER_ASSESSOR_V1: str = os.getenv(
+        "ADAPTIVE_LEARNING_OPEN_ANSWER_ASSESSOR_V1", "active"
+    )
+    ADAPTIVE_LEARNING_MASTERY_MODEL_V2: str = os.getenv(
+        "ADAPTIVE_LEARNING_MASTERY_MODEL_V2", "active"
+    )
+    ADAPTIVE_LEARNING_CANARY_PERCENT: int = int(
+        os.getenv("ADAPTIVE_LEARNING_CANARY_PERCENT", "10")
+    )
+    ADAPTIVE_LEARNING_FLAG_OVERRIDES: str = os.getenv(
+        "ADAPTIVE_LEARNING_FLAG_OVERRIDES", ""
+    )
+
     # GitHub
     GITHUB_TOKEN: str = os.getenv("GITHUB_TOKEN", "")
 

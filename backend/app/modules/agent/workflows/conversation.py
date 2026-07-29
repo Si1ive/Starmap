@@ -10,11 +10,17 @@ from app.core.logging import get_logger
 from ..capabilities import CapabilitySpec, capability_registry
 from ..context_builder import AgentRunContext, ThreadContextBuilder
 from ..events import event_store
+from ..adaptive_learning_flags import (
+    AdaptiveLearningFlag,
+    FeatureFlagMode,
+    adaptive_learning_flags,
+)
 from ..learning_snapshot import load_learning_snapshot_summary
 from ..model_runtime.answer import DirectAnswerDeps, direct_answer_runtime
 from ..model_runtime.referent import ReferentDeps, referent_runtime
 from ..model_runtime.router import (
     RouterDeps,
+    build_flag_disabled_conversation_decision,
     normalize_conversation_decision,
     router_runtime,
 )
@@ -123,25 +129,48 @@ async def _route_node(context: ExecutionContext, db: AsyncSession) -> NodeResult
             ]
         )
     )
-    context.charge_model_call()
-    decision = await router_runtime.decide(
-        understanding.standalone_request,
-        deps=RouterDeps(
-            thread_id=agent_context.thread_id,
-            user_id=agent_context.user_id,
-            turn_id=agent_context.turn_id,
-            allowed_actions=CONVERSATION_ACTIONS,
-            token_budget=agent_context.token_budget,
-            conversation_summary=agent_context.conversation_summary,
-            capabilities=capability_registry.model_manifest(CONVERSATION_ACTIONS),
-            learning_snapshot=learning_snapshot.model_dump(mode="json"),
-            read_tool_manifest=capability_registry.read_only_model_manifest(),
-            allowed_read_tool_intents=capability_registry.allowed_read_tool_intents(),
-            known_knowledge_point_ids=known_knowledge_point_ids,
-        ),
-        message_history=agent_context.to_message_history(),
-        db=db,
+    route_flag = adaptive_learning_flags.decision(
+        AdaptiveLearningFlag.CONVERSATION_DECISION_V2,
+        subject_id=run.user_id,
     )
+    if route_flag.enabled:
+        context.charge_model_call()
+        v2_decision = await router_runtime.decide(
+            understanding.standalone_request,
+            deps=RouterDeps(
+                thread_id=agent_context.thread_id,
+                user_id=agent_context.user_id,
+                turn_id=agent_context.turn_id,
+                allowed_actions=CONVERSATION_ACTIONS,
+                token_budget=agent_context.token_budget,
+                conversation_summary=agent_context.conversation_summary,
+                capabilities=capability_registry.model_manifest(CONVERSATION_ACTIONS),
+                learning_snapshot=learning_snapshot.model_dump(mode="json"),
+                read_tool_manifest=capability_registry.read_only_model_manifest(),
+                allowed_read_tool_intents=(
+                    capability_registry.allowed_read_tool_intents()
+                ),
+                known_knowledge_point_ids=known_knowledge_point_ids,
+            ),
+            message_history=agent_context.to_message_history(),
+            db=db,
+        )
+        # shadow 只保存模型决策供评估，用户仍使用确定性兼容路径，避免灰度
+        # 版本在未通过质量门槛前改变业务分支或产生子 Run。
+        decision = (
+            build_flag_disabled_conversation_decision(
+                understanding.standalone_request,
+                allowed_actions=CONVERSATION_ACTIONS,
+            )
+            if route_flag.mode is FeatureFlagMode.SHADOW
+            else v2_decision
+        )
+    else:
+        v2_decision = None
+        decision = build_flag_disabled_conversation_decision(
+            understanding.standalone_request,
+            allowed_actions=CONVERSATION_ACTIONS,
+        )
     decision = normalize_conversation_decision(decision)
     teaching_policy = freeze_teaching_policy(decision)
     context.set("agent_run_context", agent_context)
@@ -172,6 +201,17 @@ async def _route_node(context: ExecutionContext, db: AsyncSession) -> NodeResult
     metadata["teaching_policy_version"] = TEACHING_POLICY_VERSION
     metadata["teaching_policy"] = teaching_policy.model_dump(mode="json")
     metadata["learning_snapshot"] = learning_snapshot.model_dump(mode="json")
+    metadata["adaptive_learning_flags"] = adaptive_learning_flags.snapshot(
+        subject_id=run.user_id
+    )
+    metadata["conversation_decision_rollout"] = {
+        **route_flag.model_dump(mode="json"),
+        "shadow_decision": (
+            v2_decision.model_dump(exclude_none=True)
+            if v2_decision is not None and route_flag.mode is FeatureFlagMode.SHADOW
+            else None
+        ),
+    }
     metadata["read_capability_snapshot"] = (
         capability_registry.read_only_audit_manifest()
     )
@@ -203,6 +243,7 @@ async def _route_node(context: ExecutionContext, db: AsyncSession) -> NodeResult
             "target_knowledge_point_ids": decision.target_knowledge_point_ids,
             "need_diagnostic_check": decision.need_diagnostic_check,
             "read_tool_intents": decision.read_tool_intents,
+            "feature_flag_treatment": route_flag.treatment,
         },
         next_node=next_node,
     )
@@ -305,6 +346,9 @@ def _child_context_metadata(
             "selected": capability.key,
             "available": [capability.audit_descriptor()],
         },
+        "adaptive_learning_flags": adaptive_learning_flags.snapshot(
+            subject_id=agent_context.user_id
+        ),
     }
     if teaching_policy is not None:
         policy_payload = teaching_policy.model_dump(mode="json")

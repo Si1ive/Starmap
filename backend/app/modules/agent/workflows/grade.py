@@ -25,6 +25,11 @@ from ..model_runtime.assessor import (
     weighted_criterion_score,
 )
 from ..model_runtime.teaching_policy import load_frozen_teaching_policy
+from ..adaptive_learning_flags import (
+    AdaptiveLearningFlag,
+    FeatureFlagMode,
+    adaptive_learning_flags,
+)
 
 logger = get_logger(__name__)
 
@@ -281,39 +286,66 @@ async def _open_answer_assessment_node(
         )
     else:
         try:
-            context.charge_model_call()
-            assessment = await open_answer_assessor_runtime.assess(
-                question={
-                    "id": attempt.get("question_id"),
-                    "type": attempt.get("question_type"),
-                    "content": attempt.get("question_content"),
-                    "options": attempt.get("options") or [],
-                    "knowledge_point_ids": list(
-                        attempt.get("knowledge_point_ids") or []
+            assessor_flag = adaptive_learning_flags.decision(
+                AdaptiveLearningFlag.OPEN_ANSWER_ASSESSOR_V1,
+                subject_id=context.user_id,
+            )
+            if not assessor_flag.enabled:
+                assessment = OpenAnswerAssessment(
+                    verdict="ungradable",
+                    assessment_confidence=0.0,
+                    evidence_id=evidence_id,
+                    feedback_reason="开放回答评估版本未进入当前灰度，暂不更新掌握度",
+                )
+            else:
+                context.charge_model_call()
+                candidate_assessment = await open_answer_assessor_runtime.assess(
+                    question={
+                        "id": attempt.get("question_id"),
+                        "type": attempt.get("question_type"),
+                        "content": attempt.get("question_content"),
+                        "options": attempt.get("options") or [],
+                        "knowledge_point_ids": list(
+                            attempt.get("knowledge_point_ids") or []
+                        ),
+                    },
+                    rubric=rubric,
+                    user_answer=str(attempt.get("user_answer") or ""),
+                    hint_levels_used=tuple(attempt.get("hint_levels_used") or []),
+                    answer_exposed=bool(attempt.get("answer_exposed", False)),
+                    deps=OpenAnswerAssessorDeps(
+                        run_id=context.run_id,
+                        user_id=context.user_id,
+                        question_id=str(attempt["question_id"]),
+                        rubric_version=rubric.version,
                     ),
-                },
-                rubric=rubric,
-                user_answer=str(attempt.get("user_answer") or ""),
-                hint_levels_used=tuple(attempt.get("hint_levels_used") or []),
-                answer_exposed=bool(attempt.get("answer_exposed", False)),
-                deps=OpenAnswerAssessorDeps(
-                    run_id=context.run_id,
-                    user_id=context.user_id,
-                    question_id=str(attempt["question_id"]),
-                    rubric_version=rubric.version,
-                ),
-                db=db,
-            )
-            assessment = normalize_open_answer_assessment(
-                assessment,
-                deps=OpenAnswerAssessorDeps(
-                    run_id=context.run_id,
-                    user_id=context.user_id,
-                    question_id=str(attempt["question_id"]),
-                    rubric_version=rubric.version,
-                ),
-                rubric=rubric,
-            )
+                    db=db,
+                )
+                candidate_assessment = normalize_open_answer_assessment(
+                    candidate_assessment,
+                    deps=OpenAnswerAssessorDeps(
+                        run_id=context.run_id,
+                        user_id=context.user_id,
+                        question_id=str(attempt["question_id"]),
+                        rubric_version=rubric.version,
+                    ),
+                    rubric=rubric,
+                )
+                # shadow 仅保留结构化输出用于离线评估，不能把未验收的
+                # Assessor 结果展示给用户或投影为权威掌握度。
+                if assessor_flag.mode is FeatureFlagMode.SHADOW:
+                    context.set(
+                        "open_assessor_shadow",
+                        candidate_assessment.model_dump(mode="json"),
+                    )
+                    assessment = OpenAnswerAssessment(
+                        verdict="ungradable",
+                        assessment_confidence=0.0,
+                        evidence_id=evidence_id,
+                        feedback_reason="开放回答评估仍处于 shadow 灰度，暂不采用模型结论",
+                    )
+                else:
+                    assessment = candidate_assessment
         except Exception as error:
             logger.warning(
                 "开放回答评估失败，收敛为 ungradable",
