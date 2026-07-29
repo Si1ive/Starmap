@@ -2,7 +2,7 @@
 
 ## 适用场景
 
-本分卷记录 explain / validate 共用的 `retrieve_knowledge` 工具、底层检索服务、公开工具活动投影，以及
+本分卷记录 Tutor/Explain/Validate 共用的四项只读工具、`retrieve_knowledge` 底层检索服务、公开工具活动投影，以及
 `../tasks/2026-07-26-rag-explain-memory-remediation-completed.md` 中已完成 RAG 与 Explain 整改任务对应的
 真实代码位置。
 
@@ -10,10 +10,10 @@
 
 | 执行阶段 | 文件 | 符号 | 输入 | 处理 | 输出/副作用 | 下一步 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 工具注册与执行门禁 | `backend/app/modules/agent/tools/registry.py`、`backend/app/modules/agent/tools/retrieve_knowledge.py`、`backend/app/modules/agent/tools/__init__.py` | `ToolSpec`、`ToolRegistry.execute`（L15-L103）、`register_retrieve_knowledge`（L438-L450）、模块注册入口（L1-L8） | 工具声明、调用 workflow、参数与服务端 DB/Run 上下文 | 启动导入时注册只读工具；每次执行复核工具存在、workflow 属于 `explain/validate` allowlist、参数属于 schema 或服务端注入字段。未注册、越权、写工具和未知参数均在调用前失败 | 已授权函数返回值；注册/策略错误沿 workflow engine 传播 | Explain / Validate 节点 |
+| 工具注册与执行门禁 | `backend/app/modules/agent/tools/registry.py`、`backend/app/modules/agent/tools/__init__.py`、各工具适配器 | `ToolSpec`、`ToolRegistry.execute`（L17-L104）、`register_get_learning_snapshot`（L67-L78）、`register_get_weakness_findings`（L35-L46）、`register_search_question_candidates`（L66-L77）、模块注册入口（L1-L14） | 工具声明、调用 workflow、参数与服务端 DB/Run 上下文 | 启动导入时注册四项只读能力；每次执行复核工具存在、workflow allowlist、schema 参数和服务端注入字段。未注册、越权、写工具和未知参数均在调用前失败 | 已授权函数返回值；注册/策略错误沿 workflow engine 传播 | Tutor / Explain / Validate 节点 |
 | 冻结检索焦点 | `backend/app/modules/agent/turn_understanding.py` | `TurnUnderstanding`（L65-L73）、`_derive_retrieval_query`（L127-L158）、`_topic_from_explicit_practice`（L175-L197）、`build_turn_understanding`（L421-L481） | 当前用户原文、可信 `context_refs` 或线程 `active_topic` | 显式结构化引用优先；没有引用时解析当前轮讲解/出题主题，再回退线程主题。因此“上一轮 UDP，本轮出 TCP”冻结 TCP，而无主题的“再出一道题”仍继承活跃主题 | 本轮 Snapshot 的 `retrieval_query` 与当前主题；纯字符串处理，无模型、向量或外部副作用 | `load_conversation_bundle` / `load_practice_bundle` |
 | 复现检索焦点 | `backend/app/modules/agent/memory_selector.py` | `load_conversation_bundle`（L1067-L1239） | Run 绑定的不可变 Snapshot、可选唯一题目引用和主题 | 唯一题目引用优先使用题面，已有主题使用标题与别名，否则读取 Snapshot 冻结的 `retrieval_query`；旧 Snapshot 没有该字段时才回退独立请求 | `ConversationBundle.retrieval_query`；题目已失效或被拒绝时不会使用其正文 | Explain 证据循环 |
-| Explain/Validate 发起检索 | `backend/app/modules/agent/workflows/explain.py`、`backend/app/modules/agent/memory_selector.py`、`backend/app/modules/agent/workflows/validate.py`、`backend/app/modules/agent/tools/registry.py`、`backend/app/modules/agent/tools/retrieve_knowledge.py` | `load_conversation_bundle`（L1067-L1236）、`_evidence_loop_node`（工具调用 L133-L148）、`_resolve_explicit_chapter_ids`、`_apply_explicit_question_repeat`（L708-L759、L1239-L1259）、`_question_discovery_node`（工具调用 L144-L162）、`ToolRegistry.execute`（L75-L103）、`retrieve_knowledge` | ConversationBundle / PracticeBundle、范围、服务端 Run ID、可选实体类型 | Explain 复现冻结 history/摘要；Validate 透传知识点、章节、难度和排除题；两者都先经过工具策略门。明确重出唯一引用题时只从本轮排除视图移除该 ID | Tool 调用、等待输入、安全失败，或冻结/严格范围内结果 | `retrieve_knowledge` / waiting checkpoint |
+| Explain/Validate 发起检索 | `backend/app/modules/agent/workflows/explain.py`、`backend/app/modules/agent/memory_selector.py`、`backend/app/modules/agent/workflows/validate.py`、`backend/app/modules/agent/tools/registry.py`、`backend/app/modules/agent/tools/retrieve_knowledge.py` | `load_conversation_bundle`（L1067-L1236）、`_evidence_loop_node`（工具调用 L133-L148）、`_resolve_explicit_chapter_ids`、`_apply_explicit_question_repeat`（L708-L759、L1239-L1259）、`_question_discovery_node`（工具调用 L144-L162）、`ToolRegistry.execute`（L76-L104）、`retrieve_knowledge` | ConversationBundle / PracticeBundle、范围、服务端 Run ID、可选实体类型 | Explain 复现冻结 history/摘要；Validate 透传知识点、章节、难度和排除题；两者都先经过工具策略门。明确重出唯一引用题时只从本轮排除视图移除该 ID | Tool 调用、等待输入、安全失败，或冻结/严格范围内结果 | `retrieve_knowledge` / waiting checkpoint |
 
 ## Capability、Tool 与确定性投影的边界
 
@@ -21,8 +21,20 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | 业务能力 | `backend/app/modules/agent/capabilities.py` | `CapabilitySpec`、`CapabilityRegistry`、`capability_registry` | L15-L126 | Router 需要在本轮允许 action 中选择 | 能力只声明 action、说明、执行模式、副作用类型和工具依赖；不持有数据库函数。重复 action 在启动时失败 | Router 模型清单、Run 审计、child dispatch |
 | 模型上下文 | `backend/app/modules/agent/model_runtime/router.py`、`backend/app/modules/agent/workflows/conversation.py` | `RouterDeps` / `_router_policy`（L31-L41、L100-L122）、`_route_node`（L45-L157） | 服务端本轮 allowlist | 只向模型注入 key/action/description；完整 side effect/tool 列表只写审计。模型越权 action 被 `RouterRuntime.decide` 拒绝 | RouterDecision、root `capability_snapshot` |
-| 内部工具 | `backend/app/modules/agent/tools/registry.py` | `ToolRegistry.execute` | L75-L103 | 已注册工具、允许 workflow、声明参数 | 当前只允许只读 `retrieve_knowledge`；DB 和 Run ID 来自服务端。门禁异常直接使当前节点失败，底层检索仍负责 `tool.called/result` | Explain / Validate evidence |
-| 领域写入与派生视图 | `backend/app/modules/practice/service.py`、`backend/app/modules/learning/events.py`、`backend/app/modules/learning/weaknesses.py` | `PracticeService.create_agent_draft`、`record_practice_submission` / `record_agent_grade_activity`、`WeaknessService.get` | 已通过 workflow/判分门禁的真实业务事实 | 练习草稿通过领域服务按 Run 幂等写；学习记录由完成/判分事实投影；薄弱点由评价事件读时聚合。三者都不注册成模型写工具 | Practice、学习记录、薄弱点页面与 Agent Runs |
+| 内部工具 | `backend/app/modules/agent/tools/registry.py` | `ToolRegistry.execute` | L76-L104 | 已注册工具、允许 workflow、声明参数 | 只允许四项 read-only 工具；DB 和 Run ID 来自服务端，Snapshot/weakness 工具不接受客户端 `user_id`/snapshot ID。门禁异常直接使当前节点失败，RAG 工具仍负责 `tool.called/result` | LearningSnapshot、WeaknessFinding、Explain / Validate evidence |
+| 领域写入与派生视图 | `backend/app/modules/practice/service.py`、`backend/app/modules/learning/events.py`、`backend/app/modules/learning/weaknesses.py` | `PracticeService.create_agent_draft`、`record_practice_submission` / `record_agent_grade_activity`、`WeaknessService.get` | 已通过 workflow/判分门禁的真实业务事实 | 练习草稿通过领域服务按 Run 幂等写；学习记录由完成/判分事实投影；薄弱点由评价事件读时聚合。四项只读工具不能替代这些写入边界，也不注册任意 `record_evidence`、`update_mastery` 或 `set_weakness` | Practice、学习记录、薄弱点页面与 Agent Runs |
+
+## 阶段六只读工具链
+
+只读工具的共同入口是 `ToolRegistry.execute`；注册规格声明 workflow allowlist 和注入字段，真实函数再从持久化 Run 反查所有者或复用已有 RAG 服务。工具返回学习状态/候选，不创建练习、不写 LearningActivityEvent、不调用 MasteryProjector。
+
+| 执行阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 快照工具注册 | `backend/app/modules/agent/tools/get_learning_snapshot.py` | `_load_owned_run`、`get_learning_snapshot`、`register_get_learning_snapshot` | L15-L22、L25-L57、L67-L78 | ToolRegistry 注入的 `run_id` | 只按持久化 Run 读取 user/thread/snapshot metadata，调用 `load_learning_snapshot_summary`；拒绝客户端 user_id/snapshot_id | 返回同一 Snapshot 的 mastery、weakness、hypothesis 和 source item IDs；只发生 Snapshot 读取/冻结 | Tutor / `get_weakness_findings` |
+| 薄弱点工具 | `backend/app/modules/agent/tools/get_weakness_findings.py` | `get_weakness_findings`、`register_get_weakness_findings` | L11-L25、L35-L46 | 服务端注入 `run_id` | 复用快照工具，不重新聚合 live 活动，不接受写字段；错误沿 Registry/workflow 传播 | 返回 finding、diagnostic hypothesis 和 snapshot ID；不修改 ORM | Tutor / Validate 策略 |
+| 题目候选工具 | `backend/app/modules/agent/tools/search_question_candidates.py` | `search_question_candidates`、`register_search_question_candidates` | L15-L42、L45-L77 | query、知识点/章节/排除范围、服务端 Run ID | 复用 `retrieve_knowledge`，强制 `entity_type="question"`，保留用户资料隔离和 RAG activity 审计；不创建 Practice Session | 题目候选 DTO 或安全检索错误 | Validate question discovery |
+| 能力与意图清单 | `backend/app/modules/agent/capabilities.py`、`backend/app/modules/agent/model_runtime/schema.py`、`backend/app/modules/agent/model_runtime/router.py` | `READ_ONLY_CAPABILITIES`、`ReadToolIntent`、`READ_TOOL_INTENTS` | capabilities L15-L36；schema L76-L81、L123-L127；router L33-L38、L66-L80 | Tutor 当前允许能力和冻结 LearningSnapshot | 模型只声明四项意图；服务端 capability snapshot 写入审计，真实执行仍需 Registry 再门禁 | 可回放只读能力快照；非法意图使当前 route 失败 | Router / child workflow |
+| 管理端快照显示 | `backend/app/modules/agent/admin_memory.py` | `_serialize_snapshot_item` | L78-L106 | Run 绑定 Snapshot Item | 将 learning_snapshot_reader/weakness_projector 的冻结 payload 纳入受控审计读取，保留 source kind、版本和选择原因 | 管理端能回看 snapshot version、最终 evidence ID、错误标签和 finding | MEM-008 运维排障 |
 
 这是一种“能力选择 + 受控工作流 + 内部工具 + 事实投影”的混合结构。模型能理解系统会什么，但不能把
 `create_learning_record` 或 `set_weakness` 当成任意命令调用；否则模型重试、提示注入或误判都可能直接污染学习事实。

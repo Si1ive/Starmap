@@ -3,8 +3,8 @@
 ## 任务定位
 
 任务 ID：`LEARN-001`
-状态：实施中（阶段一至阶段五已完成）
-阶段状态：阶段一“冻结契约与兼容边界”、阶段二“合并 Router 与 Tutor 策略”、阶段三“学习证据与掌握度模型升级”、阶段四“异步 LearningObserverAgent”和阶段五“开放题 Assessor 与诊断题闭环”已完成；阶段六及后续阶段待实施。
+状态：实施中（阶段一至阶段六已完成，阶段七待实施）
+阶段状态：阶段一“冻结契约与兼容边界”、阶段二“合并 Router 与 Tutor 策略”、阶段三“学习证据与掌握度模型升级”、阶段四“异步 LearningObserverAgent”、阶段五“开放题 Assessor 与诊断题闭环”和阶段六“LearningSnapshot、薄弱点与工具接入”已完成；阶段七待实施。
 目标：在现有 Agent 练习、评分、学习活动和薄弱点闭环之上，补齐“用户对话行为 → 结构化学习证据 → 掌握度/不确定性 → 下一步教学策略”的自适应学习链路。
 
 本任务采用以下总体决策：
@@ -32,7 +32,7 @@
 | 路由模型 | `backend/app/modules/agent/model_runtime/router.py` | `conversation_tutor_agent` | L61-L80 | 已冻结的请求、历史摘要、LearningSnapshot 和能力清单 | 一次返回 `ConversationDecision` 的 workflow 与教学策略，不直接回答、不直接写学习事实；`router_agent` 仍为兼容别名 | action、teaching_mode、知识点目标、诊断标记、只读意图和理由代码 | `ConversationTutorRuntime.decide` |
 | 路由护栏 | `backend/app/modules/agent/model_runtime/router.py` | `ConversationTutorRuntime.decide` | L233-L320 | 模型返回路由结果 | 校验 action/read intent/知识点范围；显式出题/批改/计划/讲解请求覆盖模型误判；clarify 必须有问题；旧输出补齐默认教学模式 | 受控 `ConversationDecision` | conversation workflow 分支 |
 | Child workflow 交接 | `backend/app/modules/agent/workflows/conversation.py` | `_child_context_metadata`、`_dispatch_workflow_node` | L275-L323、L326-L367 | action 为 explain/validate/grade/plan、冻结 teaching policy | 按 capability、Run/User 和父子关系幂等创建 child Run，冻结上下文、能力快照和 teaching policy；不再次调用 Router | child Run、AgentTimeline workflow item、Agent Run Outbox | Worker 执行 child workflow |
-| 工具门禁 | `backend/app/modules/agent/tools/registry.py` | `ToolRegistry.execute` | L75-L103 | workflow 请求调用已注册工具 | 校验注册状态、workflow allowlist、只读属性、未知参数和必要参数 | 工具执行；异常传播至节点错误链 | `retrieve_knowledge` 或其他领域服务 |
+| 工具门禁 | `backend/app/modules/agent/tools/registry.py` | `ToolRegistry.execute` | L76-L104 | workflow 请求调用已注册工具 | 校验注册状态、workflow allowlist、只读属性、未知参数和必要参数 | 工具执行；异常传播至节点错误链 | `retrieve_knowledge` 或其他领域服务 |
 | 知识库检索 | `backend/app/modules/agent/tools/retrieve_knowledge.py` | `retrieve_knowledge` | L158-L386 | 有合法 Run、query 和范围过滤 | 由 Run 反查用户，执行混合检索，记录稳定 activity/attempt/trace，并过滤私有资料所有权 | 结构化 RAG 结果、`tool.called/result` 事件 | Explain/Validate 消费结果 |
 | 练习候选 | `backend/app/modules/agent/workflows/validate.py` | `_question_discovery_node` | L122-L225 | Validate 已加载 PracticeBundle | 组装知识点/章节/难度/排除集过滤，通过 Tool Registry 检索题目；空命中进入生成分支 | candidates 或题库不足分支 | question gate/generate |
 | 模型出题 | `backend/app/modules/agent/workflows/validate.py` | `_generate_question_node` | L267-L330 | 题库没有合格候选且主题明确 | 调用结构化 PracticeGenerationRuntime，生成带答案、解析、来源标识、模型版本和答案可信度的单选题 | Agent 即时题候选；不进入公共题库 | composition/create draft |
@@ -277,7 +277,7 @@ TurnObservation、零强度活动事实、14 天诊断 hypothesis 冻结、模�
 入口条件、错误传播和消费边界：普通/诊断 Practice 交卷由 `backend/app/modules/practice/router.py::_submit`（L106-L145）完成确定性判分，`record_practice_submission`（L48-L175）消费 Session snapshot 并写 `LearningActivityEvent`；诊断 payload 回链来源解释 Run、Artifact 和目标 KP，随后由学习进度/Weakness 读取。Assessor 失败在 Grade 内收敛为 `ungradable`；EvidenceGate 或数据库失败仍沿 Worker 失败链传播。阶段五未新增表或 Alembic 迁移。
 ## 阶段六：LearningSnapshot、薄弱点与工具接入
 
-实施状态：进行中；LearningSnapshotReader、WeaknessProjector 和学习进度分层已落地，四项只读工具注册与最终验收在后续独立提交中完成。
+实施状态：已完成；LearningSnapshotReader、WeaknessProjector、学习进度分层、四项只读工具注册与 capability harness 均已落地。
 
 ### 目标
 
@@ -297,6 +297,18 @@ TurnObservation、零强度活动事实、14 天诊断 hypothesis 冻结、模�
 - 下一轮 Tutor 能区分：低掌握度、高不确定性、仅有 exposure、明确 misconception、已过期复习。
 - RAG 只返回当前用户有权访问的资料；RAG 结果不会进入用户 mastery。
 - 管理端能看到所选 `teaching_mode`、读取的 snapshot 版本、tool activity 和最终证据 ID。
+
+### 本阶段代码落点
+
+| 执行阶段 | 文件 | 符号 | 代码范围 | 入口条件 | 处理 | 输出/副作用 | 下一步消费 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Snapshot 读取 | `backend/app/modules/agent/learning_snapshot.py` | `LearningSnapshotReader.read`、`LearningSnapshotReader._ensure_learning_state` | L280-L382、L384-L478 | conversation Run 已创建且带用户/线程归属的 memory snapshot | 首次复制 mastery、证据来源、错误标签、薄弱点和 hypothesis，随后只读冻结副本 | `LearningSnapshotSummary`、learning_mastery/learning_weakness Snapshot Item | `conversation._route_node` / Tutor |
+| 薄弱点投影 | `backend/app/modules/agent/weakness_projector.py` | `WeaknessProjector.project`、`WeaknessProjector._project_group` | L85-L127、L144-L305 | 活动/评分事实已完成投影 | 服务端按 verdict、error tag、transfer 和时间衰减派生 finding；exposure/observation 只产生 needs_diagnostic | `WeaknessFinding`，不写 mastery | Snapshot、学习进度和薄弱点 API |
+| 进度读取 | `backend/app/modules/learning/service.py` | `LearningProgressService.get`、`LearningProgressService._load_mastery_states` | L101-L179、L350-L426 | 用户请求学习进度 | 活动保持率与权威掌握度分开计算，保留旧 topics/recent_activities | `activity_retention`、`mastery_evidence` 和兼容字段 | 用户端进度页 / Tutor |
+| 只读快照工具 | `backend/app/modules/agent/tools/get_learning_snapshot.py` | `_load_owned_run`、`get_learning_snapshot`、`register_get_learning_snapshot` | L15-L22、L25-L57、L67-L78 | Registry 注入可信 Run ID | 反查 Run 所有者和冻结 snapshot，拒绝客户端 user/snapshot 参数 | 快照 DTO | Tutor / weakness tool |
+| 只读薄弱点工具 | `backend/app/modules/agent/tools/get_weakness_findings.py` | `get_weakness_findings`、`register_get_weakness_findings` | L11-L25、L35-L46 | Registry 注入可信 Run ID | 复用同一快照读取 finding 和 hypothesis | finding DTO；无领域写入 | Tutor / Validate |
+| 题目检索工具 | `backend/app/modules/agent/tools/search_question_candidates.py` | `search_question_candidates`、`register_search_question_candidates` | L15-L42、L66-L77 | query 和服务端 Run ID 已通过 Registry 参数门禁 | 固定 question 实体类型，复用 RAG 用户所有权和 activity 审计 | 题目候选；不创建练习/证据 | Validate |
+| 工具总门禁 | `backend/app/modules/agent/tools/registry.py` | `ToolSpec`、`ToolRegistry.execute` | L17-L34、L76-L104 | 工具已注册、workflow 和参数来自服务端 | 校验注册、workflow、只读属性、未知/缺失参数后才执行 | 四项只读工具执行或明确错误；无 `record_evidence`/`update_mastery`/`set_weakness` | workflow engine / 管理审计 |
 ## 阶段七：灰度、评估与权重校准
 
 ### 灰度策略
@@ -338,7 +350,7 @@ TurnObservation、零强度活动事实、14 天诊断 hypothesis 冻结、模�
 3. `升级知识点掌握度证据模型`：Alembic、MasteryProjector、旧数据回填和回放测试。
 4. `增加异步学习观察 Agent`：silent Run、Observer workflow、观察事实和失败隔离。
 5. `增加开放回答评估与诊断题闭环`：Assessor、rubric、诊断题回链和证据权重。
-6. `接入自适应学习快照与只读工具`：WeaknessFinding、LearningSnapshot 和 capability harness。
+6. `接入自适应学习快照与只读工具`：WeaknessFinding、LearningSnapshot、四项只读工具和 capability harness（已完成）。
 7. `完成自适应学习 Agent 灰度评估`：feature flag、Pydantic Evals、指标和运维说明。
 
 每个提交前必须执行与范围匹配的后端测试、迁移图/Schema Guard、`git diff --check`；涉及前端契约时补充前端构建。代码提交时同步更新对应 `implementation/` 分卷和本月 `progress/2026-07/08-practice-learning-loop.md`，本任务单只维护跨提交状态和验收入口。

@@ -97,6 +97,8 @@ def _serialize_snapshot_item(item: AgentMemorySnapshotItem) -> dict[str, Any]:
             "artifact",
             "conversation_summary",
             "user_learning_mastery",
+            "learning_snapshot_reader",
+            "weakness_projector",
             "memory_item",
             "preference_candidate",
         },
@@ -381,7 +383,10 @@ def _changed_memory_sections(
 
 
 def _section_token_total(section: str, value: Any) -> int:
-    """Estimate one displayed memory domain, preserving frozen Snapshot budget tokens."""
+    """Estimate one displayed memory domain.
+
+    Preserve frozen Snapshot budget tokens in the displayed total.
+    """
     if value is None or value == {} or value == []:
         return 0
     if section == "snapshot" and isinstance(value, dict):

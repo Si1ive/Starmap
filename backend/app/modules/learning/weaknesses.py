@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.mysql_models import Question
 from app.modules.agent.weakness_projector import WeaknessProjector
+from app.modules.agent.time_utils import utc_now
 from app.modules.learning.service import normalize_keyword
 from app.modules.learning.models import LearningActivityEvent
 from app.modules.practice.models import (
@@ -189,14 +190,13 @@ class WeaknessService:
         self.db = db
 
     async def get(self, user_id: object, *, now: datetime | None = None) -> dict:
-        effective_now = now or datetime.utcnow()
+        effective_now = now or utc_now()
         events = list(
             (
                 await self.db.scalars(
                     select(LearningActivityEvent)
                     .where(
                         LearningActivityEvent.user_id == user_id,
-                        LearningActivityEvent.is_correct.is_not(None),
                     )
                     .order_by(LearningActivityEvent.occurred_at)
                 )

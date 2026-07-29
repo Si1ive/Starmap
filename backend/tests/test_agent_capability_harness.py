@@ -21,7 +21,12 @@ def test_capability_manifest_separates_model_and_audit_views():
     )
     assert "side_effect" not in model_manifest[0]
     assert audit_manifest[0]["side_effect"] == "domain_write"
-    assert audit_manifest[0]["tools"] == ["retrieve_knowledge"]
+    assert audit_manifest[0]["tools"] == [
+        "get_learning_snapshot",
+        "get_weakness_findings",
+        "retrieve_knowledge",
+        "search_question_candidates",
+    ]
 
 
 def test_read_only_tutor_manifest_is_closed_and_has_no_write_descriptor():
@@ -30,12 +35,77 @@ def test_read_only_tutor_manifest_is_closed_and_has_no_write_descriptor():
 
     assert [item["name"] for item in model_manifest] == [
         "get_learning_snapshot",
+        "get_weakness_findings",
         "retrieve_knowledge",
         "search_question_candidates",
     ]
     assert all("read_only" not in item for item in model_manifest)
     assert all(item["read_only"] is True for item in audit_manifest)
     assert all("execute" not in item for item in audit_manifest)
+
+
+def test_learning_read_tools_are_registered_and_have_no_write_surface():
+    assert {tool.name for tool in tool_registry.list_tools()} == {
+        "get_learning_snapshot",
+        "get_weakness_findings",
+        "retrieve_knowledge",
+        "search_question_candidates",
+    }
+    assert all(tool.read_only for tool in tool_registry.list_tools())
+    assert all(
+        "record_evidence" not in tool.name
+        and "update_mastery" not in tool.name
+        and "set_weakness" not in tool.name
+        for tool in tool_registry.list_tools()
+    )
+
+
+@pytest.mark.asyncio
+async def test_learning_snapshot_tools_receive_only_server_injected_run_id():
+    implementation = AsyncMock(return_value={"status": "success"})
+
+    result = await tool_registry.execute(
+        "get_learning_snapshot",
+        workflow="conversation",
+        db=object(),
+        arguments={"run_id": "run_001"},
+        implementation=implementation,
+    )
+
+    assert result == {"status": "success"}
+    assert implementation.await_args.kwargs["run_id"] == "run_001"
+    with pytest.raises(ValueError, match="未知参数"):
+        await tool_registry.execute(
+            "get_weakness_findings",
+            workflow="conversation",
+            db=object(),
+            arguments={"run_id": "run_001", "user_id": "spoofed"},
+            implementation=implementation,
+        )
+
+
+@pytest.mark.asyncio
+async def test_question_candidate_tool_keeps_query_required_and_validate_scoped():
+    implementation = AsyncMock(return_value={"status": "success", "results": []})
+
+    result = await tool_registry.execute(
+        "search_question_candidates",
+        workflow="validate",
+        db=object(),
+        arguments={"query": "二分查找", "run_id": "run_001"},
+        implementation=implementation,
+    )
+
+    assert result["status"] == "success"
+    implementation.assert_awaited_once()
+    with pytest.raises(ValueError, match="缺少必要参数"):
+        await tool_registry.execute(
+            "search_question_candidates",
+            workflow="validate",
+            db=object(),
+            arguments={"run_id": "run_001"},
+            implementation=implementation,
+        )
 
 
 @pytest.mark.asyncio

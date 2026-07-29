@@ -32,6 +32,7 @@ ROUTER_ACTIONS: tuple[RouterAction, ...] = (
 
 READ_TOOL_INTENTS: tuple[ReadToolIntent, ...] = (
     "get_learning_snapshot",
+    "get_weakness_findings",
     "retrieve_knowledge",
     "search_question_candidates",
 )
@@ -74,8 +75,9 @@ conversation_tutor_agent = Agent(
         "缺少执行上述任务所必需的对象或范围时选择 clarify。"
         "teaching_mode 只描述教学方式，不改变 action；解释后需要一次短诊断时"
         "使用 explain_then_micro_check，根据已冻结薄弱证据练习时使用 practice_weakness。"
-        "read_tool_intents 只声明 get_learning_snapshot、retrieve_knowledge 或"
-        "search_question_candidates 的只读意图，不能声明写入掌握度、薄弱点或计划的能力。"
+        "read_tool_intents 只声明 get_learning_snapshot、get_weakness_findings、"
+        "retrieve_knowledge 或 search_question_candidates 的只读意图，不能声明写入"
+        "掌握度、薄弱点或计划的能力。"
     ),
 )
 

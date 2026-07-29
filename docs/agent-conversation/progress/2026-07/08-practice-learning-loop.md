@@ -82,7 +82,7 @@
 
   | 执行阶段 | 文件 | 符号 | 代码范围 | 职责 |
   | --- | --- | --- | --- | --- |
-  | 快照读取 | `backend/app/modules/agent/learning_snapshot.py` | `LearningSnapshotSummary`、`load_learning_snapshot_summary` | L23-L49、L75-L138 | 只读当前 Run 已冻结的 learning_mastery items，按用户/线程/快照校验并输出有限掌握度摘要；找不到快照不读取 live 状态 |
+  | 快照读取 | `backend/app/modules/agent/learning_snapshot.py` | `LearningSnapshotSummary`、`LearningSnapshotReader.read`、`load_learning_snapshot_summary` | L39-L70、L280-L382、L705-L725 | 只读当前 Run 已冻结的 learning_mastery items，按用户/线程/快照校验并输出有限掌握度摘要；找不到快照不读取 live 状态 |
   | 路由主链 | `backend/app/modules/agent/workflows/conversation.py` | `_route_node` | L54-L208 | 构建理解和 snapshot，注入 LearningSnapshot/只读 manifest，写 `conversation_decision`、兼容 `router_decision`、`teaching_policy_version` 与完整审计，决定 direct/clarify/child |
   | 策略冻结 | `backend/app/modules/agent/model_runtime/teaching_policy.py` | `FrozenTeachingPolicy.from_decision`、`load_frozen_teaching_policy`、`freeze_teaching_policy` | L19-L47、L67-L101、L104-L109 | 只复制 workflow action、教学模式、目标知识点、诊断需求、只读意图和理由码；child 缺策略时按 action 兼容默认，不重新路由 |
   | Child 交接 | `backend/app/modules/agent/workflows/conversation.py` | `_child_context_metadata`、`_dispatch_workflow_node` | L275-L323、L326-L367 | 将策略和上下文审计冻结到 child metadata，并保持原有 child Run/时间线幂等副作用 |
@@ -105,7 +105,7 @@
 
 - 目标：让每个已完成根 conversation 异步产生可回链的主题接触、行为信号和诊断需求，同时把模型结论严格限制在 exposure/hypothesis 层，不污染权威掌握度。
 - 关键实现：`backend/app/modules/agent/learning_observer.py::schedule_learning_observation`（L72-L113）由 Worker 完成边界以 `observe:{source_run_id}:learning-observer-v1` 幂等创建 silent child；`build_observer_input_snapshot`（L133-L271）按 user/thread/root 过滤当前用户消息、原 Run 已选历史、相关 Artifact 摘要和数据库确认的知识点候选。`backend/app/modules/agent/model_runtime/observer.py::TurnObservation`、`TurnObservationOutput`、`LearningObserverRuntime.observe`（L37-L87、L131-L192）禁止 mastery/weight、correct/incorrect verdict 和越界知识点。
-- 投影与消费：`backend/app/modules/agent/workflows/learning_observation.py::_prepare_observation_node`、`_observe_turn_node`、`_project_observation_node`（L34-L117）复用 WorkflowEngine/Step/Event/统一模型审计；`backend/app/modules/agent/learning_observer.py::record_turn_observation`（L301-L431）经 EvidenceGate 写 `agent_turn_observed`，固定 `unknown + strength=0` 且不调用 MasteryProjector。`backend/app/modules/agent/learning_snapshot.py::_freeze_diagnostic_hypotheses`、`load_learning_snapshot_summary`（L128-L218、L221-L291）把 14 天内诊断假设冻结成下一轮 `learning_hypothesis` Snapshot item。
+- 投影与消费：`backend/app/modules/agent/workflows/learning_observation.py::_prepare_observation_node`、`_observe_turn_node`、`_project_observation_node`（L34-L117）复用 WorkflowEngine/Step/Event/统一模型审计；`backend/app/modules/agent/learning_observer.py::record_turn_observation`（L301-L431）经 EvidenceGate 写 `agent_turn_observed`，固定 `unknown + strength=0` 且不调用 MasteryProjector。`backend/app/modules/agent/learning_snapshot.py::_freeze_diagnostic_hypotheses`、`LearningSnapshotReader.read`（L159-L248、L280-L382）把 14 天内诊断假设冻结成下一轮 `learning_hypothesis` Snapshot item。
 - 错误与公开边界：助手 Artifact 只作 exposure/answer-leakage 上下文；Observer 不生成 Artifact/公开消息，也不递归派生摘要任务。模型、来源、知识点或落库失败只终止 silent child，来源 conversation 保持 completed，管理员仍可查看输入快照、结构化输出、模型调用和失败原因。
 - 验证：`backend/venv/bin/pytest -q tests/test_agent_learning_observer.py tests/test_agent_conversation_workflow.py tests/test_agent_memory_projection.py tests/test_agent_grade_worker.py tests/test_learning_activity_events.py tests/test_learning_contracts.py tests/test_learning_evidence_model.py tests/test_agent_admin_router.py`（52 passed，23 个既有 datetime 弃用告警）；新增测试覆盖幂等 silent Run、困惑进入下一轮 Snapshot、零掌握度副作用、模型失败隔离和非法 mastery/verdict 拒绝。
 - 中文提交信息：`实现异步学习观察闭环`。
@@ -128,3 +128,11 @@
 - 读取分层：`backend/app/modules/learning/service.py::LearningProgressService.get`（L101-L179）保留旧 `topics` 兼容入口并新增 `activity_retention`、`mastery_evidence`；`LearningProgressService._load_mastery_states`（L350-L426）只读取 UserLearningMastery 的权威证据。`WeaknessService.get`（L187-L266）保留旧 clusters/timeline，同时输出 finding 和 confirmed/diagnostic 统计。
 - 验证：`backend/venv/bin/python -m pytest tests/test_agent_weakness_projector.py tests/test_agent_learning_observer.py tests/test_agent_capability_harness.py tests/test_agent_router_runtime.py tests/test_learning_progress.py tests/test_learning_weaknesses.py tests/test_agent_memory_contracts.py -q`（50 passed，1 个既有 datetime 弃用告警）；变更 Python 文件 Black/Flake8、`compileall` 通过。
 - 中文提交信息：`冻结学习快照并投影薄弱点`。
+
+## 2026-07-29：阶段六完成——接入自适应学习快照与只读工具
+
+- 目标：把四项只读能力接入统一 ToolRegistry，保证 Tutor/Validate 读取的学习状态来自当前 Run 的冻结 Snapshot，并让管理端可以回放能力、版本、finding 和证据来源。
+- 工具链：新增 `backend/app/modules/agent/tools/get_learning_snapshot.py::get_learning_snapshot`（L25-L57）、`get_weakness_findings.py::get_weakness_findings`（L11-L25）和 `search_question_candidates.py::search_question_candidates`（L15-L42）；模块注册函数（快照 L67-L78、薄弱点 L35-L46、题目 L66-L77）与既有 `retrieve_knowledge` 一起进入 `tool_registry`。快照/薄弱点工具只接受服务端注入 `run_id`，题目工具固定 `entity_type=question`，不注册 `record_evidence`、`update_mastery` 或 `set_weakness`；`WeaknessService.get` 同时保留 unknown/observation 活动，确保“只问过”能进入 `needs_diagnostic`。
+- 门禁与审计：`ToolSpec`/`ToolRegistry.execute`（`backend/app/modules/agent/tools/registry.py` L17-L34、L76-L104）统一校验 workflow、read_only、未知参数和必需参数；`READ_ONLY_CAPABILITIES`（`backend/app/modules/agent/capabilities.py` L15-L36）与 `ReadToolIntent`（`backend/app/modules/agent/model_runtime/schema.py` L76-L81）扩展到四项，`admin_memory._serialize_snapshot_item`（L78-L106）能回看新增 Snapshot source kind。
+- 验证：`backend/venv/bin/python -m pytest tests/test_agent_capability_harness.py tests/test_agent_router_runtime.py -q`（26 passed）；阶段六合并定向回归（含 Admin、Observer、LearningProgress、Weakness）60 passed，变更 Python 文件 Black/Flake8、`compileall`、`git diff --check` 通过。
+- 中文提交信息：`接入自适应学习快照只读工具`。

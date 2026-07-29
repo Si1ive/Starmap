@@ -75,6 +75,7 @@ TeachingMode = Literal[
 
 ReadToolIntent = Literal[
     "get_learning_snapshot",
+    "get_weakness_findings",
     "retrieve_knowledge",
     "search_question_candidates",
 ]
@@ -121,7 +122,7 @@ class ConversationDecision(BaseModel):
     )
     read_tool_intents: list[ReadToolIntent] = Field(
         default_factory=list,
-        max_length=3,
+        max_length=4,
         description="只读能力意图；实际执行仍由服务端 ToolRegistry 门禁",
     )
     public_summary: Optional[str] = Field(default=None, max_length=500)

@@ -1,7 +1,8 @@
 """
 Tool 注册表（name -> execute func）
 
-P0 白名单只读工具：仅 retrieve_knowledge
+只注册当前 Tutor 能声明的只读能力；任何学习事实写入仍由 workflow 和领域
+projector 触发。
 """
 
 from typing import Callable, Any, Awaitable, Dict, Optional, List

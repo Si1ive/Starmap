@@ -19,6 +19,11 @@ READ_ONLY_CAPABILITIES: tuple[dict[str, object], ...] = (
         "read_only": True,
     },
     {
+        "name": "get_weakness_findings",
+        "description": "读取本轮快照中由评分事实派生的薄弱点和诊断建议。",
+        "read_only": True,
+    },
+    {
         "name": "retrieve_knowledge",
         "description": "检索当前用户有权访问的知识资料或题目候选。",
         "read_only": True,
@@ -143,7 +148,11 @@ capability_registry = CapabilityRegistry(
             title="整理讲解",
             description="结合冻结对话上下文和授权资料检索，系统讲解知识点。",
             mode="workflow",
-            tools=("retrieve_knowledge",),
+            tools=(
+                "get_learning_snapshot",
+                "get_weakness_findings",
+                "retrieve_knowledge",
+            ),
         ),
         CapabilitySpec(
             key="practice.prepare",
@@ -152,7 +161,12 @@ capability_registry = CapabilityRegistry(
             description="检索或生成题目，并幂等创建可进入练习页的草稿。",
             mode="workflow",
             side_effect="domain_write",
-            tools=("retrieve_knowledge",),
+            tools=(
+                "get_learning_snapshot",
+                "get_weakness_findings",
+                "retrieve_knowledge",
+                "search_question_candidates",
+            ),
         ),
         CapabilitySpec(
             key="assessment.grade",
