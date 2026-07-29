@@ -161,6 +161,12 @@ class EvidenceWeightPolicy:
         AssessmentSource.GENERATED_QUESTION: 0.5,
     }
 
+    @classmethod
+    def source_caps(cls) -> dict[str, float]:
+        """返回当前来源 cap 的只读副本，供离线校准生成候选策略。"""
+
+        return {source.value: cap for source, cap in cls._SOURCE_CAP.items()}
+
     def calculate(
         self,
         evidence: LearningEvidence,
