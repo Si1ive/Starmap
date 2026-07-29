@@ -3,7 +3,16 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, JSON, String, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    JSON,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.mysql import Base
@@ -15,7 +24,9 @@ class LearningActivityEvent(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     user_id: Mapped[object] = mapped_column(
-        UUIDBinary(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+        UUIDBinary(),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
     )
     event_type: Mapped[str] = mapped_column(String(40), nullable=False)
     source_type: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -38,9 +49,19 @@ class LearningActivityEvent(Base):
 
     __table_args__ = (
         UniqueConstraint(
-            "user_id", "event_type", "source_id", name="uk_learning_activity_source"
+            "user_id",
+            "event_type",
+            "source_id",
+            name="uk_learning_activity_source",
         ),
         Index("idx_learning_activity_user_time", "user_id", "occurred_at"),
         Index("idx_learning_activity_thread", "thread_id", "occurred_at"),
         Index("idx_learning_activity_run", "run_id"),
     )
+
+    def to_learning_evidence(self):
+        """按兼容规则读取为自适应学习证据，不修改当前活动事实。"""
+
+        from .contracts import LearningEvidence
+
+        return LearningEvidence.from_legacy_activity_event(self)

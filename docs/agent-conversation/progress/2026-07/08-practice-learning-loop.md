@@ -58,3 +58,11 @@
 - 文档：新增 `docs/agent-conversation/tasks/2026-07-29-adaptive-learning-agent.md`，记录当前代码锚点、目标数据流、七阶段实施步骤、迁移/测试/灰度验收和中文提交拆分；更新任务 README 路由。
 - 验证：使用 `rg -n`、`nl -ba` 重新核对 Router、conversation、Tool Registry、Validate、Grade、学习事件、掌握度、Worker 和 Outbox 代码锚点；提交前运行 Markdown/链接检查、`git diff --check`。
 - 中文提交信息：`建立自适应学习 Agent 落实步骤`。
+
+## 2026-07-29：阶段一——冻结自适应学习证据契约与兼容边界
+
+- 目标：先统一证据类型、结果、评价来源、错误标签和多知识点 coverage，固定模型不能直接写掌握度的边界。
+- 关键实现：新增 `backend/app/modules/learning/contracts.py::EvidenceType`、`EvidenceOutcome`、`AssessmentSource`、`ErrorTag` 和 `LearningEvidence`；证据上下文强制携带答案来源、提示和答案暴露状态，校验 confidence/strength、重复知识点与 coverage 总和，并以 `is_mastery_evidence` 区分可投影候选。新增 `LearningEvidence.from_legacy_activity_event` 与 `LearningActivityEvent.to_learning_evidence`，只读兼容现有三类活动事件；历史讲解固定为 exposure/unknown/0，旧多知识点事件采用均分 coverage。
+- 兼容边界：不修改 `learning_activity_events` 表、不改变 `quality`/`is_correct`/`error_types` 的旧读取语义，不新增迁移；未知历史活动降级为无 verdict 的 observation，模型附加 `mastery_score` 或未知字段直接失败。
+- 验证：`backend/venv/bin/python -m pytest tests/test_learning_contracts.py tests/test_learning_activity_events.py tests/test_learning_weaknesses.py tests/test_learning_progress.py tests/test_agent_memory_projection.py tests/test_agent_grade_worker.py tests/test_agent_explain_worker.py -q`（34 passed）；`black --check`、`flake8 --max-line-length=88` 与 `git diff --check` 通过。
+- 中文提交信息：`冻结自适应学习证据契约与兼容边界`。

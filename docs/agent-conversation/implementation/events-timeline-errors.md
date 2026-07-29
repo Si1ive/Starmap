@@ -16,6 +16,41 @@
 `learning_activity_events` 是用户学习记录的可信事实层，不替代 `AgentEvent` 时间线。前者跨普通练习和 Agent 对话，
 后者描述单次 Run 的执行过程；管理端在 Thread 详情中并排展示两者，便于判断 workflow 完成是否真正形成学习事实。
 
+## 阶段一：自适应学习证据契约与兼容边界
+
+自适应学习的第一阶段只冻结领域语言，不新增数据库列，也不改变现有 Worker、掌握度写入或学习进度读取。
+原因是 `quality`、`is_correct` 和 `error_types` 目前服务于不同的旧页面和投影，直接重命名会让历史事件无法回放。
+新的 Pydantic 契约先作为归一化边界，后续 EvidenceGate 和 Projector 只能消费归一化结果。
+
+| 执行阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 领域枚举 | `backend/app/modules/learning/contracts.py` | `EvidenceType`、`EvidenceOutcome`、`AssessmentSource`、`ErrorTag` | L24-L68 | Observer、Grade 或旧活动事件提供的字符串 | Pydantic Enum 只接受冻结的证据类型、结果、评价来源和六类错误标签；未知值直接抛 `ValidationError` | 不写库；为所有后续 workflow 提供一个权威值集合 | `LearningEvidence` |
+| 证据上下文 | `backend/app/modules/learning/contracts.py` | `EvidenceContext.validate_hint_levels` | L123-L134 | 题目 ID、答案来源、提示级别、答案暴露状态 | 拒绝空/重复提示，并显式区分 `not_applicable` 与 `unknown`；不从 `quality` 猜答案来源 | 结构化 `EvidenceContext`；验证失败在模型输出边界传播 | `LearningEvidence.validate_contract` |
+| 证据字段与模型护栏 | `backend/app/modules/learning/contracts.py` | `LearningEvidence` | L137-L184 | `source_id`、证据类型/结果、confidence、强度、知识点和上下文 | `extra=forbid` 固定输入面；枚举和 confidence/strength 字段由 Pydantic 约束，模型没有 `mastery_score` 写入字段 | 只产生结构化证据对象；未知字段或缺少 source ID 在构造阶段失败 | `LearningEvidence.validate_contract` |
+| 知识点字段校验 | `backend/app/modules/learning/contracts.py` | `LearningEvidence.validate_knowledge_point_ids`、`LearningEvidence.validate_coverage_values` | L196-L220 | 知识点 ID 列表和 coverage 映射 | 去重检查、拒绝空 ID 和越界/非正权重，为多知识点总和校验准备规范化输入 | 规范化知识点集合；错误阻止证据继续流转 | `LearningEvidence.validate_contract` |
+| 证据结构校验 | `backend/app/modules/learning/contracts.py` | `LearningEvidence.validate_contract` | L223-L296 | 已通过字段校验的证据对象 | 多知识点必须逐项 coverage 且总和为 1；exposure/observation 强制 `unknown + strength=0`；self-report 只能是低强度 unknown/ungradable；带 verdict 必须声明评价来源 | 只产生不可直接写掌握度的领域对象；结构错误阻止后续投影 | `LearningEvidence.is_mastery_evidence` |
+| 掌握度资格护栏 | `backend/app/modules/learning/contracts.py` | `LearningEvidence.is_mastery_evidence` | L310-L330 | 已通过结构校验的证据对象 | 仅把有 verdict、可信评价来源、正强度和知识点 coverage 的 objective/open/hint/transfer 证据标为候选；不计算分数、不写数据库 | 布尔资格结果；EvidenceGate/`MasteryProjector` 后续继续做来源归属和幂等校验 | 后续阶段的 EvidenceGate/Projector |
+| 旧事件归一化 | `backend/app/modules/learning/contracts.py` | `LearningEvidence.from_legacy_activity_event` | L337-L421 | 当前 `agent_explanation_completed`、`practice_answer_graded`、`agent_grade_confirmed` 行，及其旧 `payload_json` | 讲解固定映射为 exposure/unknown/0；评分保留 correct/incorrect，提示后改为 hint_assisted；旧多知识点缺 coverage 时均分；未知事件降级为 observation/unknown | 只读生成归一化对象，不更新历史行、掌握度、薄弱点或 Outbox；缺少 source ID 由同一 Pydantic 边界拒绝 | `learning_evidence_from_activity_event` |
+| 旧事件模块入口 | `backend/app/modules/learning/contracts.py` | `learning_evidence_from_activity_event` | L431-L436 | 任意 ORM/Mapping 形式的旧活动事实 | 统一转调 `LearningEvidence.from_legacy_activity_event`，避免各读取方复制默认值 | 返回同一 Pydantic 契约或传播 `ValidationError` | `LearningActivityEvent.to_learning_evidence` |
+| ORM 兼容入口 | `backend/app/modules/learning/models.py` | `LearningActivityEvent.to_learning_evidence` | L22-L67 | 已从数据库加载的活动事实 | 调用同一个旧事件适配器，保持现有 `event_type`、`quality`、`is_correct` 和唯一约束不变 | 只读 `LearningEvidence`；异常向调用方传播，不产生数据库副作用 | 需要证据语义的读取服务 |
+
+### 兼容规则
+
+- `agent_explanation_completed` 的旧 `quality=0.35` 仍可供学习轨迹使用，但归一化后
+  `evidence_type=exposure`、`evidence_outcome=unknown`、`evidence_strength=0`，因此不会进入权威 `UserLearningMastery`。
+- `practice_answer_graded` 和 `agent_grade_confirmed` 继续按现有 `is_correct` 保留正确/错误语义；
+  `source_id` 仍是旧事件的用户内幂等身份，`evidence_id` 缺省沿用它。提示级别、答案来源和答案暴露状态进入嵌套上下文。
+- 旧事件没有 coverage 列时，适配器只使用去重后的知识点并按 `1 / knowledge_point_count` 均分；
+  它不会把一条多知识点题复制成多条完整证据。后续迁移可在新 JSON 字段存在时优先读取显式 coverage。
+- 适配器不会把旧 `answer_mismatch` 等技术诊断字符串冒充六类学习错误标签，原始活动 payload 仍由现有学习进度和薄弱点代码消费。
+
+### 失败传播与消费边界
+
+模型输出缺少 `source_id`、携带未知枚举、越界 confidence/strength、重复知识点或任意 `mastery_score`
+时，`LearningEvidence` 构造失败；调用方应让当前观察/评分链失败或安全跳过，不能创建掌握度副作用。
+归一化本身只读数据库对象，最终结果由后续 EvidenceGate、掌握度投影和薄弱点投影消费；本阶段不新增 Alembic
+迁移，避免 ORM 先于真实数据库结构上线。
+
 ## 事件写入与公开投影
 
 | 执行阶段 | 文件 | 符号 | 输入 | 处理 | 输出/副作用 | 下一步 |
