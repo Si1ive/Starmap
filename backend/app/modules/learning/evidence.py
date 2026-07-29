@@ -215,6 +215,9 @@ class EvidenceWeightPolicy:
                 ),
             )
             reasons.append("answer_source_not_manual")
+        if evidence.context.answer_confidence is not None:
+            strength *= _bounded(evidence.context.answer_confidence)
+            reasons.append("answer_confidence")
         if (
             question_review_status
             and question_review_status != "approved"
@@ -252,6 +255,7 @@ def build_assessment_evidence(
     hint_levels_used: Iterable[str] | None = None,
     answer_exposed: bool = False,
     confidence: object | None = None,
+    answer_confidence: object | None = None,
     model_version: object | None = None,
     knowledge_point_coverage: object | None = None,
     error_tags: Iterable[object] | None = None,
@@ -316,6 +320,9 @@ def build_assessment_evidence(
             "answer_source": normalized_answer_source,
             "hint_levels_used": hints,
             "answer_exposed": bool(answer_exposed),
+            "answer_confidence": (
+                _bounded(answer_confidence) if answer_confidence is not None else None
+            ),
         },
     )
 

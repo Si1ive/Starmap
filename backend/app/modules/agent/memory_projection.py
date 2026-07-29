@@ -171,9 +171,7 @@ async def _record_explanation_artifact_created(
         idempotency_key=idempotency_key,
         payload_json={
             "artifact_id": artifact.id,
-            "memory_snapshot_id": (run.metadata_json or {}).get(
-                "memory_snapshot_id"
-            ),
+            "memory_snapshot_id": (run.metadata_json or {}).get("memory_snapshot_id"),
         },
     )
     db.add(memory_event)
@@ -242,9 +240,7 @@ async def _record_plan_confirmed(
         payload_json={
             "artifact_id": artifact.id,
             "approval_id": approval_id,
-            "memory_snapshot_id": (run.metadata_json or {}).get(
-                "memory_snapshot_id"
-            ),
+            "memory_snapshot_id": (run.metadata_json or {}).get("memory_snapshot_id"),
         },
     )
     db.add(memory_event)
@@ -335,6 +331,22 @@ async def _record_grade_result_confirmed(
             if (normalized := str(kp_id).strip())
         )
     )
+    if verdict == "ungradable":
+        from app.modules.learning.events import record_agent_grade_activity
+
+        await record_agent_grade_activity(
+            db,
+            run=run,
+            artifact=artifact,
+            grading=grading,
+        )
+        logger.info(
+            "开放回答无法安全评分，仅记录活动事实",
+            run_id=run.id,
+            artifact_id=artifact.id,
+        )
+        return
+
     if (
         verdict not in {"correct", "partial", "incorrect"}
         or not question_id
@@ -360,10 +372,10 @@ async def _record_grade_result_confirmed(
         await _ensure_memory_update_outbox(db, run, existing)
         return
 
-    generated_question = (
-        str(grading.get("assessment_source") or "").strip().lower()
-        == "generated_question"
-        or str(question_id).startswith("generated_")
+    generated_question = str(
+        grading.get("assessment_source") or ""
+    ).strip().lower() == "generated_question" or str(question_id).startswith(
+        "generated_"
     )
     evidence = build_assessment_evidence(
         source_id=evidence_id,
@@ -381,6 +393,7 @@ async def _record_grade_result_confirmed(
         hint_levels_used=list(grading.get("hint_levels_used") or []),
         answer_exposed=bool(grading.get("answer_exposed", False)),
         confidence=grading.get("assessment_confidence", grading.get("confidence", 1.0)),
+        answer_confidence=grading.get("answer_confidence"),
         model_version=grading.get("model_version"),
         knowledge_point_coverage=grading.get("knowledge_point_coverage"),
         error_tags=grading.get("error_tags") or grading.get("error_types") or [],

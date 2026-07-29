@@ -109,3 +109,14 @@
 - 错误与公开边界：助手 Artifact 只作 exposure/answer-leakage 上下文；Observer 不生成 Artifact/公开消息，也不递归派生摘要任务。模型、来源、知识点或落库失败只终止 silent child，来源 conversation 保持 completed，管理员仍可查看输入快照、结构化输出、模型调用和失败原因。
 - 验证：`backend/venv/bin/pytest -q tests/test_agent_learning_observer.py tests/test_agent_conversation_workflow.py tests/test_agent_memory_projection.py tests/test_agent_grade_worker.py tests/test_learning_activity_events.py tests/test_learning_contracts.py tests/test_learning_evidence_model.py tests/test_agent_admin_router.py`（52 passed，23 个既有 datetime 弃用告警）；新增测试覆盖幂等 silent Run、困惑进入下一轮 Snapshot、零掌握度副作用、模型失败隔离和非法 mastery/verdict 拒绝。
 - 中文提交信息：`实现异步学习观察闭环`。
+
+## 2026-07-29：阶段五——开放回答评估与诊断题闭环
+
+- 目标：把开放题/用户解释接入受冻结 rubric 约束的 Assessor，同时让 `explain_then_micro_check` 通过现有 Validate、Practice Session 和 Grade/学习活动链路完成诊断回链。
+- Assessor：新增 `backend/app/modules/agent/model_runtime/assessor.py::OpenAnswerRubric`、`OpenAnswerAssessment`、`OpenAnswerAssessorRuntime.assess`（L43-L107、L172-L210、L219-L283）。模型只能输出 `correct/partial/incorrect/ungradable`、criterion scores、错误标签和 confidence；服务端重写 evidence ID、检查 rubric 覆盖和最低置信度，异常/低置信度反馈为 `ungradable`，不携带 mastery/delta。
+- Grade 与证据：`backend/app/modules/agent/workflows/grade.py::_open_answer_assessment_node`、`_open_answer_grading_evidence`（L205-L345）加入开放题分支，partial 按冻结 rubric 权重计算；`backend/app/modules/learning/evidence.py::EvidenceWeightPolicy.calculate`（L164-L243）增加答案可信度降权；`_record_grade_result_confirmed`（L311-L497）对 ungradable 只记录活动、不创建掌握度事实。`record_agent_grade_activity`（L267-L429）保留 verdict、rubric、criterion/error tags 和诊断回链。
+- 诊断闭环：`backend/app/modules/agent/diagnostic.py::schedule_diagnostic_check`（L40-L161）以版本化幂等键为合格解释 Run 创建 Validate child；`validate.py` 的 `_load_learning_evidence_node`、`_question_gate_node`、`_create_draft_node`、`_render_artifact_node`（L52-L119、L227-L264、L364-L397、L400-L502）把目标知识点和来源解释 Run/Artifact 固化到 Practice Session 快照；`PracticeService.create_agent_draft`（L21-L181）与 `record_practice_submission`（L48-L175）在交卷后保留回链，答对不删除历史错误。
+- 生成题可信度：`GeneratedPracticeQuestion`（`backend/app/modules/agent/model_runtime/schema.py::GeneratedPracticeQuestion`，L207-L230）和 `PracticeGenerationRuntime.generate`（L41-L77）记录模型版本/答案可信度，事件层以 `assessment_source=generated_question` 和独立权重降级。
+- 文档：同步更新 `architecture/conversation-mainline.md`、`architecture/workflow-branches.md`、`implementation/model-runtime-streaming.md`、`implementation/events-timeline-errors.md` 和本任务单的阶段状态；无数据库结构变化，无 Alembic 迁移。
+- 验证：`backend/venv/bin/python -m pytest` 覆盖 Assessor、Grade、Observer、Validate、Practice、Memory Selector、学习证据/进度/薄弱点、迁移图和 Schema Guard（135 passed，91 个既有 datetime 弃用告警）；变更 Python 文件 Black/Flake8、`compileall` 和 `git diff --check` 通过。
+- 中文提交信息：`增加开放回答评估与诊断题闭环`。

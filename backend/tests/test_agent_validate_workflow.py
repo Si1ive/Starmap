@@ -272,6 +272,7 @@ async def test_validate_generates_structured_question_after_empty_rag(monkeypatc
         PracticeBundle(
             topic=TopicBundle(title="UDP", entity_type="topic", source="current_turn"),
             difficulty="medium",
+            knowledge_point_ids=["kp_udp"],
         ).model_dump(mode="json"),
     )
     context.set("retrieval_notice", "题库中未找到合适真题，将由模型生成一道练习题")
@@ -303,7 +304,9 @@ async def test_validate_generates_structured_question_after_empty_rag(monkeypatc
     assert generated.next_node == "composition_gate"
     assert composed.status == NodeStatus.COMPLETED
     assert drafted.status == NodeStatus.COMPLETED
-    assert rendered.artifact["content"]["question_ids"] == ["generated_run_validate_001"]
+    assert rendered.artifact["content"]["question_ids"] == [
+        "generated_run_validate_001"
+    ]
     assert rendered.artifact["content"]["practice_session_id"] == "practice_draft_001"
     assert rendered.artifact["content"]["actions"][0]["type"] == "open_practice"
     assert "UDP 校验和的主要作用是什么" in rendered.artifact["content"]["content"]
@@ -312,6 +315,7 @@ async def test_validate_generates_structured_question_after_empty_rag(monkeypatc
     stored = rendered.artifact["_private_metadata"]["generated_questions"][0]
     assert stored["standard_answer"] == "A"
     assert stored["answer_source"] == "llm"
+    assert stored["knowledge_point_ids"] == ["kp_udp"]
 
 
 @pytest.mark.asyncio
@@ -356,6 +360,7 @@ async def test_validate_stops_when_no_topic_or_fallback_terms(monkeypatch):
         "load_practice_bundle",
         AsyncMock(return_value=PracticeBundle()),
     )
+
     class _AgentServiceStub:
         def __init__(self, session):
             self.session = session
@@ -363,7 +368,14 @@ async def test_validate_stops_when_no_topic_or_fallback_terms(monkeypatch):
         async def get_input(self, run_id, input_key):
             return None
 
-        async def create_input(self, run_id, input_key, prompt_ref, input_schema_version="v1", expires_at=None):
+        async def create_input(
+            self,
+            run_id,
+            input_key,
+            prompt_ref,
+            input_schema_version="v1",
+            expires_at=None,
+        ):
             return None
 
     monkeypatch.setattr(validate, "AgentService", _AgentServiceStub)
@@ -379,3 +391,66 @@ async def test_validate_stops_when_no_topic_or_fallback_terms(monkeypatch):
     assert discovered.output["waiting_for_user"] is True
     assert discovered.output["clarification_input_key"] == "practice_topic"
     retrieve.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_validate_freezes_diagnostic_target_and_annotates_question_candidate(
+    monkeypatch,
+):
+    context = _context()
+    context.set(
+        "teaching_policy",
+        {
+            "workflow_action": "validate",
+            "teaching_mode": "practice_weakness",
+            "target_knowledge_point_ids": ["kp_binary_search"],
+            "need_diagnostic_check": True,
+            "read_tool_intents": [],
+            "reason_codes": ["diagnostic_micro_check"],
+        },
+    )
+    context.set(
+        "diagnostic_context",
+        {
+            "kind": "micro_check",
+            "source_run_id": "run_explain_001",
+            "source_artifact_id": "artifact_explain_001",
+            "target_knowledge_point_ids": ["kp_binary_search"],
+            "topic_title": "二分查找",
+        },
+    )
+    monkeypatch.setattr(
+        validate,
+        "load_practice_bundle",
+        AsyncMock(return_value=PracticeBundle()),
+    )
+    loaded = await validate._load_learning_evidence_node(context, AsyncMock())
+
+    assert loaded.status == NodeStatus.COMPLETED
+    assert context.get("practice_bundle")["knowledge_point_ids"] == ["kp_binary_search"]
+    assert context.get("practice_bundle")["topic"]["entity_id"] == "kp_binary_search"
+
+    context.set(
+        "candidates",
+        [
+            {
+                "entity_id": "question_diagnostic_001",
+                "entity_type": "question",
+                "entity_title": "二分查找诊断题",
+                "question_meta": {
+                    "question_type": "choice",
+                    "difficulty": "easy",
+                    "source": "诊断题库",
+                    "answer_source": "manual",
+                    "review_status": "approved",
+                    "status": "active",
+                },
+            }
+        ],
+    )
+    gated = await validate._question_gate_node(context, AsyncMock())
+
+    assert gated.status == NodeStatus.COMPLETED
+    assert context.get("valid_questions")[0]["question_meta"][
+        "knowledge_point_ids"
+    ] == ["kp_binary_search"]

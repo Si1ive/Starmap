@@ -23,6 +23,19 @@
 | Child 继承模型与教学策略 | `backend/app/modules/agent/workflows/conversation.py` | `_child_context_metadata`（L275-L323） | 父 run 的 `model_config_id`、FrozenTeachingPolicy | 只复制模型配置 ID、策略版本和 teaching_mode/目标/诊断/只读意图到 child metadata；不复制函数或密钥 | child run 后续使用同一模型配置和教学策略 |
 | 打开实际模型 | `backend/app/modules/agent/model_runtime/config.py` | `open_agent_model` | run ID | 从 run 或 child metadata 读取配置，创建独立 `AsyncOpenAI` 客户端，并写回运行时审计元数据 | Router/Answer/Explain/Summary runtime |
 
+## 开放回答 Assessor 与生成题可信度
+
+开放题的模型调用只负责受冻结 rubric 约束的结构化评价。证据 ID、partial credit、证据强度和
+掌握度仍由 Grade、EvidenceWeightPolicy 与 MasteryProjector 计算；模型输出携带
+`mastery`/`delta` 等额外字段会在 Pydantic 边界被拒绝。Validate 生成题则记录题目生成模型版本和
+标准答案可信度，后续证据策略会再次降权。
+
+| 执行阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Rubric 冻结 | `backend/app/modules/agent/model_runtime/assessor.py` | `OpenAnswerRubricCriterion`、`OpenAnswerRubric`、`CriterionScore`、`OpenAnswerAssessment`、`OpenAnswerAssessorDeps` | L33-L118 | 服务端题面标准答案/解析、答案来源、Run/User/Question ID | `extra=forbid`；criterion ID 唯一、权重总和为 1；Assessment 只允许四种 verdict、criterion scores、错误标签和 confidence，不提供掌握度字段 | 受控 Assessor 输入/输出契约；无数据库副作用 | `OpenAnswerAssessorRuntime.assess` |
+| Assessor 调用与归一化 | `backend/app/modules/agent/model_runtime/assessor.py` | `normalize_open_answer_assessment`、`OpenAnswerAssessorRuntime.assess` | L172-L210、L219-L283 | 冻结题面、rubric、用户回答、知识点 ID、提示级别、答案暴露状态、Run 模型配置 | 通过 Pydantic AI 结构化调用并限制最多两次请求；服务端重写 evidence ID，校验 rubric 完整性/criterion 覆盖/最低置信度，低置信度、不完整或模型异常收敛为 `ungradable`；实际请求写统一 LLM 审计 | `OpenAnswerAssessment`；模型错误向 Grade 节点收敛为安全反馈，不写 mastery | `grade._open_answer_assessment_node` |
+| 生成题可信度 | `backend/app/modules/agent/model_runtime/schema.py`、`backend/app/modules/agent/model_runtime/practice.py` | `GeneratedPracticeQuestion`、`PracticeGenerationRuntime.generate`、`_model_version` | schema L207-L230；practice L41-L77、L93-L99 | 冻结主题/难度、Run 模型配置 | 结构化生成题保留 `model_version` 和 `answer_confidence`；运行时在模型没有返回版本时用绑定配置补齐；答案仍由 schema 校验必须属于选项 | Validate 私有题目元数据中的生成模型/答案可信度；后续 EvidenceWeightPolicy 进行独立降权 | Validate Practice Session / Grade |
+
 ## Token 与请求保护语义
 
 | 执行阶段 | 文件 | 符号 | 入口条件 | 处理与副作用 | 最终消费 |

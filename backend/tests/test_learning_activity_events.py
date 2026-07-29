@@ -99,6 +99,55 @@ async def test_practice_activity_records_hint_weight_and_multi_point_coverage():
 
 
 @pytest.mark.asyncio
+async def test_generated_question_records_model_version_and_answer_confidence():
+    db = AsyncMock()
+    db.add = Mock()
+    db.scalar.return_value = None
+    session = SimpleNamespace(
+        id="session_generated_001",
+        user_id="01900000-0000-7000-8000-000000000001",
+        source_type="agent",
+        agent_thread_id="thread_001",
+        agent_run_id="run_generated_001",
+        title="诊断检查",
+    )
+    link = SimpleNamespace(
+        item_id="item_generated_001",
+        question_id=None,
+        snapshot_json={
+            "content": "UDP 是否保证可靠交付？",
+            "answer_source": "llm",
+            "answer_confidence": 0.4,
+            "model_version": "question-model-v1",
+            "topic_terms": ["UDP"],
+            "knowledge_point_ids": ["kp-udp"],
+            "provenance": {"source_type": "agent_generated"},
+        },
+    )
+    answer = SimpleNamespace(
+        user_answer="A",
+        is_correct=False,
+        saved_at=datetime(2026, 7, 29, 12, 0, 0),
+        hint_levels_used_json=[],
+    )
+
+    events = await record_practice_submission(
+        db,
+        session=session,
+        rows=[(link, None, answer)],
+    )
+
+    assert len(events) == 1
+    event = events[0]
+    assert event.assessment_source == "generated_question"
+    assert event.model_version == "question-model-v1"
+    assert event.evidence_strength == 0.2
+    assert (
+        event.payload_json["learning_evidence"]["context"]["answer_confidence"] == 0.4
+    )
+
+
+@pytest.mark.asyncio
 async def test_agent_grade_activity_preserves_wrong_evidence_for_weakness_projection():
     db = AsyncMock()
     db.add = Mock()

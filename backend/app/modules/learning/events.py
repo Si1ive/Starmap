@@ -10,7 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.mysql_models import KnowledgePoint
 from app.modules.agent.models import AgentArtifact, AgentRun
-from app.modules.practice.models import PracticeAnswer, PracticeSession, PracticeSessionQuestion
+from app.modules.practice.models import (
+    PracticeAnswer,
+    PracticeSession,
+    PracticeSessionQuestion,
+)
 
 from .contracts import EvidenceContext, EvidenceOutcome, EvidenceType, LearningEvidence
 from .evidence import (
@@ -50,7 +54,11 @@ async def record_practice_submission(
     """Write one idempotent assessment event for every answered session item."""
     created: list[LearningActivityEvent] = []
     for link, _question, answer in rows:
-        if answer is None or not answer.user_answer.strip() or answer.is_correct is None:
+        if (
+            answer is None
+            or not answer.user_answer.strip()
+            or answer.is_correct is None
+        ):
             continue
         source_id = f"{session.id}:{link.item_id}"
         existing = await db.scalar(
@@ -73,8 +81,7 @@ async def record_practice_submission(
         if not keywords:
             keywords = _keywords([snapshot.get("content")])
         generated_question = (
-            (snapshot.get("provenance") or {}).get("source_type")
-            == "agent_generated"
+            (snapshot.get("provenance") or {}).get("source_type") == "agent_generated"
             or snapshot.get("answer_source") == "llm"
             and session.source_type == "agent"
         )
@@ -88,7 +95,9 @@ async def record_practice_submission(
         )
         evidence = build_assessment_evidence(
             source_id=source_id,
-            source_type="agent_practice" if session.source_type == "agent" else "question",
+            source_type=(
+                "agent_practice" if session.source_type == "agent" else "question"
+            ),
             verdict="correct" if answer.is_correct else "incorrect",
             question_id=question_id,
             knowledge_point_ids=list(snapshot.get("knowledge_point_ids") or []),
@@ -99,10 +108,13 @@ async def record_practice_submission(
             hint_levels_used=list(answer.hint_levels_used_json or []),
             answer_exposed=bool(snapshot.get("answer_exposed", False)),
             confidence=1.0,
-            model_version=(snapshot.get("model_version") or {}).get("version")
-            if isinstance(snapshot.get("model_version"), dict)
-            else snapshot.get("model_version")
-            or (snapshot.get("provenance") or {}).get("model_version"),
+            answer_confidence=snapshot.get("answer_confidence"),
+            model_version=(
+                (snapshot.get("model_version") or {}).get("version")
+                if isinstance(snapshot.get("model_version"), dict)
+                else snapshot.get("model_version")
+                or (snapshot.get("provenance") or {}).get("model_version")
+            ),
             knowledge_point_coverage=snapshot.get("knowledge_point_coverage"),
         )
         EvidenceGate().validate(
@@ -111,7 +123,9 @@ async def record_practice_submission(
             source_user_id=session.user_id,
             source_run_id=session.agent_run_id,
             expected_question_id=question_id,
-            verified_knowledge_point_ids=list(snapshot.get("knowledge_point_ids") or []),
+            verified_knowledge_point_ids=list(
+                snapshot.get("knowledge_point_ids") or []
+            ),
             require_knowledge_point_coverage=False,
         )
         evidence, weight = finalize_evidence_weight(
@@ -121,7 +135,9 @@ async def record_practice_submission(
         event = LearningActivityEvent(
             user_id=session.user_id,
             event_type="practice_answer_graded",
-            source_type="agent_practice" if session.source_type == "agent" else "question",
+            source_type=(
+                "agent_practice" if session.source_type == "agent" else "question"
+            ),
             source_id=source_id,
             thread_id=session.agent_thread_id,
             run_id=session.agent_run_id,
@@ -129,9 +145,9 @@ async def record_practice_submission(
             knowledge_point_ids_json=evidence.knowledge_point_ids,
             evidence_type=evidence.evidence_type.value,
             evidence_outcome=evidence.evidence_outcome.value,
-            assessment_source=evidence.assessment_source.value
-            if evidence.assessment_source
-            else None,
+            assessment_source=(
+                evidence.assessment_source.value if evidence.assessment_source else None
+            ),
             evidence_strength=weight.evidence_strength,
             assessment_confidence=evidence.assessment_confidence,
             model_version=evidence.model_version,
@@ -147,6 +163,7 @@ async def record_practice_submission(
                 "content": snapshot.get("content"),
                 "hint_levels_used": list(answer.hint_levels_used_json or []),
                 "answer_source": answer_source,
+                "diagnostic_context": snapshot.get("diagnostic_context"),
                 "learning_evidence": evidence.to_payload(),
                 "evidence_weight_policy_version": weight.policy_version,
                 "evidence_weight_reasons": list(weight.reasons),
@@ -177,8 +194,16 @@ async def record_explanation_activity(
     if existing is not None:
         return existing
     metadata = run.metadata_json if isinstance(run.metadata_json, dict) else {}
-    snapshot = metadata.get("context_snapshot") if isinstance(metadata.get("context_snapshot"), dict) else {}
-    active_topic = snapshot.get("active_topic") if isinstance(snapshot.get("active_topic"), dict) else {}
+    snapshot = (
+        metadata.get("context_snapshot")
+        if isinstance(metadata.get("context_snapshot"), dict)
+        else {}
+    )
+    active_topic = (
+        snapshot.get("active_topic")
+        if isinstance(snapshot.get("active_topic"), dict)
+        else {}
+    )
     keywords = _keywords(
         [active_topic.get("title"), *((active_topic.get("aliases") or []))]
     )
@@ -215,7 +240,8 @@ async def record_explanation_activity(
         topic_keywords_json=keywords,
         knowledge_point_ids_json=(
             [active_topic["entity_id"]]
-            if active_topic.get("entity_type") == "knowledge_point" and active_topic.get("entity_id")
+            if active_topic.get("entity_type") == "knowledge_point"
+            and active_topic.get("entity_id")
             else []
         ),
         evidence_type=evidence.evidence_type.value,
@@ -249,7 +275,7 @@ async def record_agent_grade_activity(
     if not _valid_user_id(run.user_id):
         return None
     verdict = str(grading.get("verdict") or "").strip().lower()
-    if verdict not in {"correct", "partial", "incorrect"}:
+    if verdict not in {"correct", "partial", "incorrect", "ungradable"}:
         return None
     source_id = str(grading.get("evidence_id") or artifact.id)
     existing = await db.scalar(
@@ -262,20 +288,39 @@ async def record_agent_grade_activity(
     if existing is not None:
         return existing
     metadata = run.metadata_json if isinstance(run.metadata_json, dict) else {}
-    snapshot = metadata.get("context_snapshot") if isinstance(metadata.get("context_snapshot"), dict) else {}
-    active_topic = snapshot.get("active_topic") if isinstance(snapshot.get("active_topic"), dict) else {}
-    keywords = _keywords([active_topic.get("title"), *((active_topic.get("aliases") or []))])
+    snapshot = (
+        metadata.get("context_snapshot")
+        if isinstance(metadata.get("context_snapshot"), dict)
+        else {}
+    )
+    active_topic = (
+        snapshot.get("active_topic")
+        if isinstance(snapshot.get("active_topic"), dict)
+        else {}
+    )
+    keywords = _keywords(
+        [active_topic.get("title"), *((active_topic.get("aliases") or []))]
+    )
     knowledge_point_ids = list(grading.get("knowledge_point_ids") or [])
     if not keywords and knowledge_point_ids:
         points = list(
             (
                 await db.scalars(
-                    select(KnowledgePoint).where(KnowledgePoint.id.in_(knowledge_point_ids))
+                    select(KnowledgePoint).where(
+                        KnowledgePoint.id.in_(knowledge_point_ids)
+                    )
                 )
             ).all()
         )
         keywords = _keywords(
-            [value for point in points for value in [point.canonical_title or point.title, *(point.aliases or [])]]
+            [
+                value
+                for point in points
+                for value in [
+                    point.canonical_title or point.title,
+                    *(point.aliases or []),
+                ]
+            ]
         )
     if not keywords:
         return None
@@ -283,11 +328,15 @@ async def record_agent_grade_activity(
     if not question_id:
         return None
     artifact_content = artifact.content_json or {}
-    feedback = artifact_content.get("content") if isinstance(artifact_content.get("content"), dict) else {}
-    generated_question = (
-        str(grading.get("assessment_source") or "").strip().lower()
-        == "generated_question"
-        or str(question_id).startswith("generated_")
+    feedback = (
+        artifact_content.get("content")
+        if isinstance(artifact_content.get("content"), dict)
+        else {}
+    )
+    generated_question = str(
+        grading.get("assessment_source") or ""
+    ).strip().lower() == "generated_question" or str(question_id).startswith(
+        "generated_"
     )
     evidence = build_assessment_evidence(
         source_id=source_id,
@@ -305,6 +354,7 @@ async def record_agent_grade_activity(
         hint_levels_used=list(grading.get("hint_levels_used") or []),
         answer_exposed=bool(grading.get("answer_exposed", False)),
         confidence=grading.get("assessment_confidence", grading.get("confidence", 1.0)),
+        answer_confidence=grading.get("answer_confidence"),
         model_version=grading.get("model_version"),
         knowledge_point_coverage=grading.get("knowledge_point_coverage"),
         error_tags=grading.get("error_tags") or grading.get("error_types") or [],
@@ -334,9 +384,9 @@ async def record_agent_grade_activity(
         knowledge_point_ids_json=evidence.knowledge_point_ids,
         evidence_type=evidence.evidence_type.value,
         evidence_outcome=evidence.evidence_outcome.value,
-        assessment_source=evidence.assessment_source.value
-        if evidence.assessment_source
-        else None,
+        assessment_source=(
+            evidence.assessment_source.value if evidence.assessment_source else None
+        ),
         evidence_strength=weight.evidence_strength,
         assessment_confidence=evidence.assessment_confidence,
         model_version=evidence.model_version,
@@ -344,18 +394,26 @@ async def record_agent_grade_activity(
         quality=(
             1.0
             if verdict == "correct"
-            else 0.5
-            if verdict == "partial"
-            else 0.25
+            else (
+                0.5 if verdict == "partial" else 0.25 if verdict == "incorrect" else 0.0
+            )
         ),
-        is_correct=True if verdict == "correct" else False if verdict == "incorrect" else None,
+        is_correct=(
+            True if verdict == "correct" else False if verdict == "incorrect" else None
+        ),
         occurred_at=artifact.created_at,
         payload_json={
             "artifact_id": artifact.id,
             "question_id": grading.get("question_id"),
-            "content": "；".join(feedback.get("weaknesses") or []) or feedback.get("overall"),
+            "content": "；".join(feedback.get("weaknesses") or [])
+            or feedback.get("overall"),
             "source": "Agent 对话内批改",
             "error_types": list(grading.get("error_types") or []),
+            "error_tags": list(grading.get("error_tags") or []),
+            "criterion_scores": list(grading.get("criterion_scores") or []),
+            "rubric_version": grading.get("rubric_version"),
+            "feedback_reason": grading.get("feedback_reason"),
+            "diagnostic_context": grading.get("diagnostic_context"),
             "answer_source": (
                 "generated_question"
                 if generated_question

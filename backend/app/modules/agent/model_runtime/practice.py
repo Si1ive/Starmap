@@ -38,7 +38,9 @@ class PracticeGenerationRuntime:
     def __init__(self, model: Model | str | None = None):
         self.model = model
 
-    async def generate(self, *, deps: PracticeGenerationDeps, db=None) -> GeneratedPracticeQuestion:
+    async def generate(
+        self, *, deps: PracticeGenerationDeps, db=None
+    ) -> GeneratedPracticeQuestion:
         prompt = (
             f"练习主题：{deps.topic}\n"
             f"目标难度：{deps.difficulty}\n"
@@ -46,8 +48,11 @@ class PracticeGenerationRuntime:
         )
         if self.model is not None:
             result = await self._run(prompt, deps=deps, model=self.model)
+            model_version = _model_version(self.model)
         elif db is not None:
-            async with open_agent_model(db, run_id=deps.run_id, purpose="Agent 练习题生成") as session:
+            async with open_agent_model(
+                db, run_id=deps.run_id, purpose="Agent 练习题生成"
+            ) as session:
                 logger.info(
                     "练习题生成模型调用开始",
                     run_id=deps.run_id,
@@ -60,9 +65,16 @@ class PracticeGenerationRuntime:
                     model=session.model,
                     model_settings=session.config.model_settings,
                 )
+                model_version = session.config.model_name
         else:
-            result = await self._run(prompt, deps=deps, model=settings.AGENT_ROUTER_MODEL)
-        return result.output
+            result = await self._run(
+                prompt, deps=deps, model=settings.AGENT_ROUTER_MODEL
+            )
+            model_version = str(settings.AGENT_ROUTER_MODEL)
+        output = result.output
+        if model_version and not output.model_version:
+            output = output.model_copy(update={"model_version": model_version[:64]})
+        return output
 
     @staticmethod
     async def _run(prompt, *, deps, model, model_settings=None):
@@ -76,3 +88,12 @@ class PracticeGenerationRuntime:
 
 
 practice_generation_runtime = PracticeGenerationRuntime()
+
+
+def _model_version(model: Model | str) -> str | None:
+    model_name = getattr(model, "model_name", None)
+    if model_name:
+        return str(model_name)
+    if isinstance(model, str):
+        return model
+    return None

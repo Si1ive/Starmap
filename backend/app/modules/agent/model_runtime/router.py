@@ -87,7 +87,7 @@ _EXPLICIT_WORKFLOW_PATTERNS: tuple[tuple[RouterAction, re.Pattern[str]], ...] = 
     (
         "grade",
         re.compile(
-            r"批改|评分|打分|评阅|我的(?:答案|作答)|答案.{0,8}(?:对不对|哪里错|错在哪)"
+            r"批改|评分|打分|评阅|我的(?:答案|作答|回答|解释)|答案.{0,8}(?:对不对|哪里错|错在哪)"
         ),
     ),
     (

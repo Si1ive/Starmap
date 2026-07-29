@@ -17,6 +17,7 @@ from ..memory_selector import (
     build_practice_filters,
     build_practice_query,
     load_practice_bundle,
+    TopicBundle,
 )
 from ..model_runtime.practice import PracticeGenerationDeps, practice_generation_runtime
 from ..model_runtime.teaching_policy import load_frozen_teaching_policy
@@ -62,12 +63,40 @@ async def _load_learning_evidence_node(
         run_id=context.run_id,
         user_id=context.user_id,
     )
+    diagnostic_context = context.get("diagnostic_context") or {}
+    diagnostic_target_ids = list(
+        dict.fromkeys(
+            str(value).strip()
+            for value in (
+                diagnostic_context.get("target_knowledge_point_ids")
+                or teaching_policy.target_knowledge_point_ids
+            )
+            if str(value).strip()
+        )
+    )
+    if diagnostic_target_ids:
+        updates: dict[str, Any] = {"knowledge_point_ids": diagnostic_target_ids}
+        if practice_bundle.topic is None and diagnostic_context.get("topic_title"):
+            updates["topic"] = TopicBundle(
+                title=str(diagnostic_context["topic_title"])[:200],
+                entity_type="knowledge_point",
+                entity_id=diagnostic_target_ids[0],
+                source="diagnostic_check",
+            )
+        practice_bundle = practice_bundle.model_copy(update=updates)
+        diagnostic_context = {
+            **diagnostic_context,
+            "target_knowledge_point_ids": diagnostic_target_ids,
+        }
+        context.set("diagnostic_context", diagnostic_context)
     topic = practice_bundle.topic
     weak_areas = (
         [topic.title]
         if topic is not None
         else list(context.get("weak_areas", []) or [])
     )
+    if not weak_areas and diagnostic_context.get("topic_title"):
+        weak_areas = [str(diagnostic_context["topic_title"])]
     recent_topics = (
         [topic.title] if topic is not None else context.get("recent_topics", [])
     )
@@ -80,6 +109,7 @@ async def _load_learning_evidence_node(
         "teaching_mode": teaching_policy.teaching_mode,
         "target_knowledge_point_ids": teaching_policy.target_knowledge_point_ids,
         "need_diagnostic_check": teaching_policy.need_diagnostic_check,
+        "diagnostic_context": diagnostic_context or None,
     }
     context.set("practice_bundle", practice_bundle.model_dump(mode="json"))
     context.set("learning_evidence", evidence)
@@ -201,6 +231,19 @@ async def _question_gate_node(
     candidates = context.get("candidates", [])
 
     valid = [q for q in candidates if _question_is_eligible(q)]
+    diagnostic_context = context.get("diagnostic_context") or {}
+    diagnostic_target_ids = list(
+        diagnostic_context.get("target_knowledge_point_ids") or []
+    )
+    if diagnostic_target_ids:
+        annotated: list[Dict[str, Any]] = []
+        for candidate in valid:
+            copy = dict(candidate)
+            meta = dict(copy.get("question_meta") or {})
+            meta["knowledge_point_ids"] = diagnostic_target_ids
+            copy["question_meta"] = meta
+            annotated.append(copy)
+        valid = annotated
 
     # 检索有返回但都不满足资格时仍属于可恢复的题库不足，而非运行失败。
     if not valid:
@@ -216,7 +259,7 @@ async def _question_gate_node(
             next_node="generate_question",
         )
 
-    context.set("valid_questions", valid[:5])  # 最多取5道
+    context.set("valid_questions", valid[:1] if diagnostic_target_ids else valid[:5])
     logger.info("题目校验通过", run_id=context.run_id, valid_count=len(valid))
     return NodeResult.success({"gate_passed": True}, next_node="composition_gate")
 
@@ -267,6 +310,8 @@ async def _generate_question_node(
             "status": "active",
             "options": [option.model_dump(mode="json") for option in generated.options],
             "answer": generated.answer,
+            "model_version": generated.model_version,
+            "answer_confidence": generated.answer_confidence,
             "explanation": generated.explanation,
             "generated": True,
             "topic": str(topic),
@@ -325,9 +370,14 @@ async def _create_draft_node(context: ExecutionContext, db: AsyncSession) -> Nod
     if not topic:
         weak_areas = (context.get("learning_evidence") or {}).get("weak_areas") or []
         topic = weak_areas[0] if weak_areas else "专项"
+    diagnostic_context = context.get("diagnostic_context") or {}
+    if diagnostic_context:
+        title = f"{topic}诊断检查"
+    else:
+        title = f"{topic}专项练习"
 
     draft = {
-        "title": f"{topic}专项练习",
+        "title": title,
         "questions": valid_questions,
         "composition": composition,
         "created_at": utc_isoformat(utc_now()),
@@ -337,6 +387,7 @@ async def _create_draft_node(context: ExecutionContext, db: AsyncSession) -> Nod
         user_id=context.user_id,
         title=draft["title"],
         questions=valid_questions,
+        diagnostic_context=context.get("diagnostic_context"),
     )
     draft["session_id"] = session.id
     context.set("practice_draft", draft)
@@ -387,9 +438,12 @@ async def _render_artifact_node(
                     "options": options,
                     "standard_answer": meta.get("answer"),
                     "answer_source": "llm",
+                    "model_version": meta.get("model_version"),
+                    "answer_confidence": meta.get("answer_confidence"),
                     "explanation": meta.get("explanation"),
                     "difficulty": meta.get("difficulty"),
                     "topic": meta.get("topic"),
+                    "knowledge_point_ids": list(meta.get("knowledge_point_ids") or []),
                 }
             )
     markdown = "\n\n".join(markdown_sections)
@@ -429,6 +483,16 @@ async def _render_artifact_node(
             ),
         },
     }
+    diagnostic_context = context.get("diagnostic_context") or {}
+    if diagnostic_context:
+        artifact["content"]["diagnostic"] = {
+            "kind": "micro_check",
+            "source_run_id": diagnostic_context.get("source_run_id"),
+            "source_artifact_id": diagnostic_context.get("source_artifact_id"),
+            "target_knowledge_point_ids": list(
+                diagnostic_context.get("target_knowledge_point_ids") or []
+            ),
+        }
 
     logger.info("产物渲染完成", run_id=context.run_id)
     return NodeResult.success(

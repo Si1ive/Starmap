@@ -13,6 +13,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from app.db.mysql import Base
+from app.modules.agent.diagnostic import (
+    DIAGNOSTIC_CHECK_VERSION,
+    schedule_diagnostic_check,
+)
 from app.modules.agent.learning_observer import schedule_learning_observation
 from app.modules.agent.learning_snapshot import load_learning_snapshot_summary
 from app.modules.agent.model_runtime.observer import (
@@ -31,6 +35,8 @@ from app.modules.agent.models import (
     AgentRunOutbox,
     AgentStep,
     AgentThread,
+    AgentThreadEvent,
+    AgentThreadItem,
     UserLearningMastery,
 )
 from app.modules.agent.worker import AgentWorker
@@ -46,6 +52,8 @@ OBSERVER_TABLES = [
     AgentRunOutbox.__table__,
     AgentCheckpoint.__table__,
     AgentStep.__table__,
+    AgentThreadEvent.__table__,
+    AgentThreadItem.__table__,
     AgentArtifact.__table__,
     AgentMemorySnapshot.__table__,
     AgentMemorySnapshotItem.__table__,
@@ -142,6 +150,79 @@ async def test_completed_root_conversation_creates_one_silent_observer_run(db_se
             )
         )
         == 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_explain_then_micro_check_creates_one_validate_child_with_source_link(
+    db_session,
+):
+    source_run = await _completed_conversation(
+        db_session,
+        user_message="请讲解二分查找的循环不变量",
+    )
+    source_run.workflow_name = "explain"
+    source_run.workflow_key = "explain"
+    source_run.metadata_json = {
+        "memory_snapshot_id": "source_snapshot_001",
+        "context_snapshot": {
+            "active_topic": {
+                "entity_type": "knowledge_point",
+                "entity_id": "kp_binary_search",
+                "title": "二分查找",
+            },
+            "selected_message_ids": [source_run.trigger_message_id],
+            "selected_artifact_ids": [],
+        },
+        "teaching_policy": {
+            "policy_version": "conversation-tutor-v1",
+            "workflow_action": "explain",
+            "teaching_mode": "explain_then_micro_check",
+            "target_knowledge_point_ids": ["kp_binary_search"],
+            "need_diagnostic_check": True,
+            "read_tool_intents": [],
+            "reason_codes": ["confusion"],
+        },
+    }
+    artifact = AgentArtifact(
+        id="artifact_explain_diagnostic_001",
+        run_id=source_run.id,
+        artifact_type="explanation",
+        content_json={"title": "二分查找讲解", "content": "讲解正文"},
+    )
+    db_session.add(artifact)
+    await db_session.flush()
+
+    first = await schedule_diagnostic_check(
+        db_session,
+        source_run=source_run,
+        source_artifact=artifact,
+    )
+    second = await schedule_diagnostic_check(
+        db_session,
+        source_run=source_run,
+        source_artifact=artifact,
+    )
+
+    assert first is not None
+    assert second.id == first.id
+    assert first.workflow_name == "validate"
+    assert first.parent_run_id == source_run.id
+    assert first.presentation == "compact"
+    assert first.client_idempotency_key == (
+        f"diagnostic:{source_run.id}:{DIAGNOSTIC_CHECK_VERSION}"
+    )
+    assert first.metadata_json["diagnostic_context"] == {
+        "kind": "micro_check",
+        "version": DIAGNOSTIC_CHECK_VERSION,
+        "source_run_id": source_run.id,
+        "source_artifact_id": artifact.id,
+        "target_knowledge_point_ids": ["kp_binary_search"],
+        "topic_title": "二分查找",
+    }
+    assert first.metadata_json["teaching_policy"]["workflow_action"] == "validate"
+    assert (
+        first.metadata_json["teaching_policy"]["teaching_mode"] == "practice_weakness"
     )
 
 

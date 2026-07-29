@@ -97,6 +97,8 @@ class EvaluationQuestion(BaseModel):
     knowledge_point_ids: list[str] = Field(default_factory=list)
     subject_id: str | None = None
     source_artifact_id: str | None = None
+    model_version: str | None = None
+    answer_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class EvaluationBundle(BaseModel):
@@ -105,18 +107,23 @@ class EvaluationBundle(BaseModel):
     raw_input: str | None = None
     user_answer: str | None = None
     question: EvaluationQuestion | None = None
-    unresolved_reason: Literal[
-        "run_not_found",
-        "snapshot_not_found",
-        "question_reference_missing",
-        "question_reference_ambiguous",
-        "question_not_eligible",
-        "user_answer_missing",
-    ] | None = None
+    hint_levels_used: list[str] = Field(default_factory=list, max_length=16)
+    answer_exposed: bool = False
+    unresolved_reason: (
+        Literal[
+            "run_not_found",
+            "snapshot_not_found",
+            "question_reference_missing",
+            "question_reference_ambiguous",
+            "question_not_eligible",
+            "user_answer_missing",
+        ]
+        | None
+    ) = None
 
 
 _ANSWER_PREFIX_PATTERN = re.compile(
-    r"(?:(?:我的\s*)?(?:答案|作答)\s*(?:是|为|：|:)\s*|我\s*选(?:择)?\s*)(.+)",
+    r"(?:(?:我的\s*)?(?:答案|作答|回答|解释)\s*(?:是|为|：|:)\s*|我\s*选(?:择)?\s*)(.+)",
     re.IGNORECASE,
 )
 _ANSWER_SUFFIX_PATTERN = re.compile(
@@ -134,7 +141,18 @@ def _extract_user_answer(raw_input: str, question_type: str) -> str | None:
         choice_match = _CHOICE_ANSWER_PATTERN.search(answer_text)
         return choice_match.group(1).upper() if choice_match else None
     if question_type == "judge":
-        for token in ("不正确", "不对", "错误", "正确", "对", "错", "√", "×", "true", "false"):
+        for token in (
+            "不正确",
+            "不对",
+            "错误",
+            "正确",
+            "对",
+            "错",
+            "√",
+            "×",
+            "true",
+            "false",
+        ):
             if token.casefold() in answer_text.casefold():
                 return token
         return None
@@ -144,7 +162,9 @@ def _extract_user_answer(raw_input: str, question_type: str) -> str | None:
     return answer_text or None
 
 
-def _bundle_topic_from_understanding(understanding: dict[str, Any]) -> TopicBundle | None:
+def _bundle_topic_from_understanding(
+    understanding: dict[str, Any],
+) -> TopicBundle | None:
     topic_entities = understanding.get("topic_entities") or []
     if not topic_entities:
         return None
@@ -173,7 +193,9 @@ def _bundle_topic(snapshot: AgentMemorySnapshot) -> TopicBundle | None:
 
 
 def _bundle_difficulty(constraints: list[str]) -> str | None:
-    normalized_constraints = [str(item).strip() for item in constraints if str(item).strip()]
+    normalized_constraints = [
+        str(item).strip() for item in constraints if str(item).strip()
+    ]
     for constraint in normalized_constraints:
         if constraint.startswith("difficulty:"):
             difficulty = constraint.split(":", 1)[1].strip().lower()
@@ -431,8 +453,7 @@ async def load_planning_bundle(
                 snapshot_id=snapshot.id,
                 memory_need=MemoryNeed.PLANNING_GOAL,
                 masteries_by_id={
-                    mastery.id: mastery
-                    for _signal, mastery in selected_candidates
+                    mastery.id: mastery for _signal, mastery in selected_candidates
                 },
                 signals=[signal for signal, _mastery in selected_candidates],
             )
@@ -629,7 +650,11 @@ async def load_evaluation_bundle(
         )
 
     if question is not None:
-        if not str(question.answer or "").strip():
+        if not str(question.answer or "").strip() and question.type not in {
+            "short_answer",
+            "design",
+            "analysis",
+        }:
             return EvaluationBundle(
                 snapshot_id=snapshot.id,
                 standalone_request=snapshot.standalone_request,
@@ -655,10 +680,15 @@ async def load_evaluation_bundle(
         answer_source = question.answer_source
         explanation = question.explanation
         subject_id = question.subject_id
+        model_version = None
+        answer_confidence = None
         knowledge_point_ids = list(
             dict.fromkeys(
                 normalized
-                for value in [*(question.knowledge_point_ids or []), *linked_knowledge_point_ids]
+                for value in [
+                    *(question.knowledge_point_ids or []),
+                    *linked_knowledge_point_ids,
+                ]
                 if (normalized := str(value).strip())
             )
         )
@@ -670,7 +700,17 @@ async def load_evaluation_bundle(
         answer_source = "llm"
         explanation = str(generated_question.get("explanation") or "") or None
         subject_id = None
-        knowledge_point_ids = []
+        model_version = (
+            str(generated_question.get("model_version") or "").strip() or None
+        )
+        answer_confidence = generated_question.get("answer_confidence")
+        knowledge_point_ids = list(
+            dict.fromkeys(
+                normalized
+                for value in generated_question.get("knowledge_point_ids") or []
+                if (normalized := str(value).strip())
+            )
+        )
         if question_type != "choice" or not content or not standard_answer:
             return EvaluationBundle(
                 snapshot_id=snapshot.id,
@@ -696,6 +736,16 @@ async def load_evaluation_bundle(
         standalone_request=snapshot.standalone_request,
         raw_input=raw_input,
         user_answer=user_answer,
+        hint_levels_used=list(
+            understanding.get("hint_levels_used")
+            or understanding.get("hint_levels_used_json")
+            or []
+        ),
+        answer_exposed=bool(
+            understanding.get(
+                "answer_exposed", understanding.get("answer_revealed", False)
+            )
+        ),
         question=EvaluationQuestion(
             id=question_id,
             question_type=question_type,
@@ -707,6 +757,8 @@ async def load_evaluation_bundle(
             knowledge_point_ids=knowledge_point_ids,
             subject_id=subject_id,
             source_artifact_id=source_artifact_id,
+            model_version=model_version,
+            answer_confidence=answer_confidence,
         ),
     )
 
@@ -957,7 +1009,8 @@ async def load_practice_bundle(
             chapter_scope_source="knowledge_point" if chapter_ids else None,
             mastery_signals=mastery_signals,
             selected_artifact_ids=list(
-                (metadata.get("context_snapshot") or {}).get("selected_artifact_ids") or []
+                (metadata.get("context_snapshot") or {}).get("selected_artifact_ids")
+                or []
             ),
             excluded_question_ids=excluded_question_ids,
         )
@@ -1012,9 +1065,13 @@ async def load_practice_bundle(
             understanding["topic_entities"] = payload.get("topic_entities")
         if not understanding.get("constraints") and payload.get("constraints"):
             understanding["constraints"] = payload.get("constraints")
-        if not understanding.get("reference_sources") and payload.get("reference_sources"):
+        if not understanding.get("reference_sources") and payload.get(
+            "reference_sources"
+        ):
             understanding["reference_sources"] = payload.get("reference_sources")
-    context_snapshot = snapshot.selection_metadata_json or metadata.get("context_snapshot") or {}
+    context_snapshot = (
+        snapshot.selection_metadata_json or metadata.get("context_snapshot") or {}
+    )
     topic = _bundle_topic_from_understanding(understanding)
     mastery_signals: list[dict[str, Any]] = []
     if topic is None:
@@ -1033,12 +1090,10 @@ async def load_practice_bundle(
         else []
     )
     constraints = list(understanding.get("constraints") or [])
-    explicit_chapter_ids, unresolved_constraints = (
-        await _resolve_explicit_chapter_ids(
-            db,
-            constraints=constraints,
-            knowledge_point_ids=knowledge_point_ids,
-        )
+    explicit_chapter_ids, unresolved_constraints = await _resolve_explicit_chapter_ids(
+        db,
+        constraints=constraints,
+        knowledge_point_ids=knowledge_point_ids,
     )
     if explicit_chapter_ids is not None:
         chapter_ids = explicit_chapter_ids
@@ -1059,7 +1114,9 @@ async def load_practice_bundle(
         reference_sources=list(understanding.get("reference_sources") or []),
         selected_artifact_ids=list(context_snapshot.get("selected_artifact_ids") or []),
         mastery_signals=mastery_signals,
-        excluded_question_ids=_apply_explicit_question_repeat(excluded_question_ids, understanding),
+        excluded_question_ids=_apply_explicit_question_repeat(
+            excluded_question_ids, understanding
+        ),
     )
 
 
@@ -1119,12 +1176,19 @@ class ConversationBundle(BaseModel):
 
     def to_message_history(self):
         """把 snapshot 选中的可见消息转换为 Pydantic AI 历史。"""
-        from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
+        from pydantic_ai.messages import (
+            ModelRequest,
+            ModelResponse,
+            TextPart,
+            UserPromptPart,
+        )
 
         history = []
         for message in self.messages:
             if message.role == "user":
-                history.append(ModelRequest(parts=[UserPromptPart(content=message.content)]))
+                history.append(
+                    ModelRequest(parts=[UserPromptPart(content=message.content)])
+                )
             else:
                 history.append(ModelResponse(parts=[TextPart(content=message.content)]))
         return history
@@ -1173,8 +1237,10 @@ async def load_conversation_bundle(
                     select(AgentMemorySnapshotItem)
                     .where(
                         AgentMemorySnapshotItem.snapshot_id == snapshot.id,
-                        AgentMemorySnapshotItem.memory_need == "conversation_continuity",
-                        AgentMemorySnapshotItem.memory_partition == "historical_summaries",
+                        AgentMemorySnapshotItem.memory_need
+                        == "conversation_continuity",
+                        AgentMemorySnapshotItem.memory_partition
+                        == "historical_summaries",
                         AgentMemorySnapshotItem.source_kind == "conversation_summary",
                         AgentMemorySnapshotItem.source_id == conversation_summary_id,
                         AgentMemorySnapshotItem.selected.is_(True),
@@ -1197,7 +1263,9 @@ async def load_conversation_bundle(
             if frozen_text and summary_item.version == summary_source.version:
                 conversation_summary = frozen_text
                 conversation_summary_version = summary_item.version
-    selected_message_ids = list(dict.fromkeys(metadata.get("selected_message_ids") or []))
+    selected_message_ids = list(
+        dict.fromkeys(metadata.get("selected_message_ids") or [])
+    )
     message_rows = []
     if selected_message_ids:
         message_rows = (
@@ -1231,7 +1299,9 @@ async def load_conversation_bundle(
         if (content := str(message.content_text or "").strip())
     ]
 
-    selected_artifact_ids = list(dict.fromkeys(metadata.get("selected_artifact_ids") or []))
+    selected_artifact_ids = list(
+        dict.fromkeys(metadata.get("selected_artifact_ids") or [])
+    )
     artifacts = []
     if selected_artifact_ids:
         artifacts = list(
@@ -1297,7 +1367,9 @@ async def load_conversation_bundle(
         topic=topic,
         messages=messages,
         conversation_summary=conversation_summary,
-        conversation_summary_id=(conversation_summary_id if conversation_summary else None),
+        conversation_summary_id=(
+            conversation_summary_id if conversation_summary else None
+        ),
         conversation_summary_version=conversation_summary_version,
         artifact_summaries=artifact_summaries,
         reference_sources=reference_sources,

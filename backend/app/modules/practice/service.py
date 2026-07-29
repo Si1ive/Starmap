@@ -26,6 +26,7 @@ class PracticeService:
         title: str,
         questions: list[dict[str, Any]],
         duration_seconds: int = 1500,
+        diagnostic_context: dict[str, Any] | None = None,
     ) -> PracticeSession:
         """Idempotently freeze workflow questions into a user-owned draft session."""
         existing = await self.db.scalar(
@@ -86,24 +87,79 @@ class PracticeService:
             original_id = str(item.get("entity_id") or "").strip()
             stored = stored_questions.get(original_id)
             question_id = stored.id if stored is not None else None
-            source_type = "agent_generated" if meta.get("generated") else "question_bank"
+            source_type = (
+                "agent_generated" if meta.get("generated") else "question_bank"
+            )
             if source_type == "question_bank" and stored is None:
                 raise ValueError("题库候选已失效，请重新生成练习")
             snapshot = {
-                "type": stored.type if stored else meta.get("question_type") or "choice",
-                "content": stored.content if stored else item.get("content_text") or item.get("entity_title") or "",
-                "options": list(stored.options or []) if stored else list(meta.get("options") or []),
+                "type": (
+                    stored.type if stored else meta.get("question_type") or "choice"
+                ),
+                "content": (
+                    stored.content
+                    if stored
+                    else item.get("content_text") or item.get("entity_title") or ""
+                ),
+                "options": (
+                    list(stored.options or [])
+                    if stored
+                    else list(meta.get("options") or [])
+                ),
                 "answer": stored.answer if stored else meta.get("answer"),
-                "explanation": stored.explanation if stored else meta.get("explanation"),
-                "source": stored.source if stored else meta.get("source") or (item.get("source") or {}).get("title"),
-                "question_no": stored.question_no if stored else meta.get("question_no"),
-                "chapter_id": (stored.primary_chapter_id or stored.chapter_id) if stored else meta.get("chapter_id"),
-                "answer_source": stored.answer_source if stored else meta.get("answer_source"),
-                "explanation_source": stored.explanation_source if stored else meta.get("explanation_source"),
-                "topic_terms": list(stored.topic_terms or []) if stored else list(meta.get("topic_terms") or ([meta["topic"]] if meta.get("topic") else [])),
-                "tags": list(stored.tags or []) if stored else list(meta.get("tags") or []),
-                "knowledge_point_ids": list(stored.knowledge_point_ids or []) if stored else list(meta.get("knowledge_point_ids") or []),
+                "explanation": (
+                    stored.explanation if stored else meta.get("explanation")
+                ),
+                "source": (
+                    stored.source
+                    if stored
+                    else meta.get("source") or (item.get("source") or {}).get("title")
+                ),
+                "question_no": (
+                    stored.question_no if stored else meta.get("question_no")
+                ),
+                "chapter_id": (
+                    (stored.primary_chapter_id or stored.chapter_id)
+                    if stored
+                    else meta.get("chapter_id")
+                ),
+                "answer_source": (
+                    stored.answer_source if stored else meta.get("answer_source")
+                ),
+                "explanation_source": (
+                    stored.explanation_source
+                    if stored
+                    else meta.get("explanation_source")
+                ),
+                "topic_terms": list(
+                    dict.fromkeys(
+                        [
+                            *(
+                                list(stored.topic_terms or [])
+                                if stored
+                                else list(
+                                    meta.get("topic_terms")
+                                    or ([meta["topic"]] if meta.get("topic") else [])
+                                )
+                            ),
+                            *(
+                                [str(diagnostic_context["topic_title"])]
+                                if diagnostic_context
+                                and diagnostic_context.get("topic_title")
+                                else []
+                            ),
+                        ]
+                    )
+                ),
+                "tags": (
+                    list(stored.tags or []) if stored else list(meta.get("tags") or [])
+                ),
+                "knowledge_point_ids": list(meta.get("knowledge_point_ids") or [])
+                or (list(stored.knowledge_point_ids or []) if stored else []),
                 "difficulty": stored.difficulty if stored else meta.get("difficulty"),
+                "model_version": meta.get("model_version"),
+                "answer_confidence": meta.get("answer_confidence"),
+                "diagnostic_context": diagnostic_context,
                 "provenance": {
                     "source_type": source_type,
                     "agent_run_id": run.id,

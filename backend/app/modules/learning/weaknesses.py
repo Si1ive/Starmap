@@ -81,15 +81,18 @@ def _weakness_evidence_from_events(events: list[LearningActivityEvent]) -> list[
                 "source_id": event.source_id,
                 "session_id": payload.get("session_id"),
                 "session_title": payload.get("session_title") or "Agent 对话练习",
-                "question_id": payload.get("question_id") or payload.get("practice_item_id"),
+                "question_id": payload.get("question_id")
+                or payload.get("practice_item_id"),
                 "question_no": None,
                 "content": payload.get("content") or "Agent 已完成一次确定性批改",
-                "source": payload.get("source") or ("Agent 练习" if event.thread_id else "练习记录"),
+                "source": payload.get("source")
+                or ("Agent 练习" if event.thread_id else "练习记录"),
                 "is_correct": bool(event.is_correct),
                 "occurred_at": event.occurred_at,
                 "hint_levels_used": list(payload.get("hint_levels_used") or []),
                 "thread_id": event.thread_id,
                 "run_id": event.run_id,
+                "diagnostic_context": payload.get("diagnostic_context"),
                 "keywords": [
                     keyword
                     for value in event.topic_keywords_json or []

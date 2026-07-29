@@ -101,7 +101,9 @@ class LearningProgressService:
         activity_events = await self._load_activity_events(user_id)
         activity_source_ids = {item.source_id for item in activity_events}
         evidence = self._activity_evidence(activity_events)
-        evidence.extend(await self._load_question_evidence(user_id, activity_source_ids))
+        evidence.extend(
+            await self._load_question_evidence(user_id, activity_source_ids)
+        )
         evidence.extend(await self._load_mastery_evidence(user_id))
         answered_questions, correct_questions = await self._question_totals(user_id)
         grouped: dict[str, list[LearningEvidence]] = defaultdict(list)
@@ -148,22 +150,31 @@ class LearningProgressService:
                 ),
             },
             "topics": topics,
-            "recent_activities": [self._activity_payload(item) for item in activity_events[:20]],
+            "recent_activities": [
+                self._activity_payload(item) for item in activity_events[:20]
+            ],
         }
 
-    async def _load_activity_events(self, user_id: object) -> list[LearningActivityEvent]:
+    async def _load_activity_events(
+        self, user_id: object
+    ) -> list[LearningActivityEvent]:
         return list(
             (
                 await self.db.scalars(
                     select(LearningActivityEvent)
                     .where(LearningActivityEvent.user_id == user_id)
-                    .order_by(LearningActivityEvent.occurred_at.desc(), LearningActivityEvent.id.desc())
+                    .order_by(
+                        LearningActivityEvent.occurred_at.desc(),
+                        LearningActivityEvent.id.desc(),
+                    )
                 )
             ).all()
         )
 
     @staticmethod
-    def _activity_evidence(events: list[LearningActivityEvent]) -> list[LearningEvidence]:
+    def _activity_evidence(
+        events: list[LearningActivityEvent],
+    ) -> list[LearningEvidence]:
         evidence: list[LearningEvidence] = []
         for event in events:
             for keyword in event.topic_keywords_json or []:
@@ -205,6 +216,7 @@ class LearningProgressService:
             "thread_id": event.thread_id,
             "run_id": event.run_id,
             "title": payload.get("session_title") or payload.get("title"),
+            "diagnostic_context": payload.get("diagnostic_context"),
         }
 
     async def _load_question_evidence(

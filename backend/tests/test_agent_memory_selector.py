@@ -26,7 +26,8 @@ from app.modules.agent.memory_selector import (
     load_practice_bundle,
 )
 from app.modules.agent.models import (
-    AgentArtifact, AgentConversationSummary,
+    AgentArtifact,
+    AgentConversationSummary,
     AgentMemoryItem,
     AgentMessage,
     AgentMemoryEvent,
@@ -47,7 +48,8 @@ SELECTOR_TABLES = [
     AgentArtifact.__table__,
     AgentMemoryEvent.__table__,
     AgentMemorySnapshot.__table__,
-    AgentMemorySnapshotItem.__table__, AgentConversationSummary.__table__,
+    AgentMemorySnapshotItem.__table__,
+    AgentConversationSummary.__table__,
     AgentMemoryItem.__table__,
     AgentPreferenceCandidate.__table__,
     Subject.__table__,
@@ -157,7 +159,9 @@ async def test_load_planning_bundle_uses_approved_goals_and_real_weak_mastery(
 
 
 @pytest.mark.asyncio
-async def test_load_planning_bundle_returns_no_targets_without_real_evidence(db_session):
+async def test_load_planning_bundle_returns_no_targets_without_real_evidence(
+    db_session,
+):
     thread = AgentThread(
         id="thread_plan_empty",
         user_id="user_001",
@@ -320,19 +324,22 @@ async def test_load_evaluation_bundle_uses_generated_question_from_selected_arti
             },
             metadata_json={
                 "generated_questions": [
-                        {
-                            "id": "generated_run_generated_practice",
-                            "question_type": "choice",
-                            "content": "UDP 是否保证可靠交付？",
-                            "options": [
-                                {"key": "A", "text": "不保证"},
-                                {"key": "B", "text": "保证"},
-                            ],
-                            "standard_answer": "A",
-                            "answer_source": "llm",
-                            "explanation": "UDP 不提供可靠交付保证。",
-                        }
-                    ],
+                    {
+                        "id": "generated_run_generated_practice",
+                        "question_type": "choice",
+                        "content": "UDP 是否保证可靠交付？",
+                        "options": [
+                            {"key": "A", "text": "不保证"},
+                            {"key": "B", "text": "保证"},
+                        ],
+                        "standard_answer": "A",
+                        "answer_source": "llm",
+                        "explanation": "UDP 不提供可靠交付保证。",
+                        "knowledge_point_ids": ["kp_udp"],
+                        "model_version": "question-model-v1",
+                        "answer_confidence": 0.4,
+                    }
+                ],
             },
         )
     )
@@ -373,10 +380,13 @@ async def test_load_evaluation_bundle_uses_generated_question_from_selected_arti
     assert bundle.question.id == "generated_run_generated_practice"
     assert bundle.question.standard_answer == "A"
     assert bundle.question.answer_source == "llm"
+    assert bundle.question.knowledge_point_ids == ["kp_udp"]
+    assert bundle.question.model_version == "question-model-v1"
+    assert bundle.question.answer_confidence == 0.4
 
 
 @pytest.mark.asyncio
-async def test_load_evaluation_bundle_rejects_cross_user_snapshot_and_ambiguous_question(
+async def test_load_evaluation_bundle_rejects_cross_user_snapshot_and_ambiguous(
     db_session,
 ):
     thread = AgentThread(
@@ -671,7 +681,9 @@ async def _seed_knowledge_point(
     if subject is None:
         db_session.add(Subject(id="subject_ds", name="数据结构", code="ds"))
         await db_session.flush()
-        db_session.add(Chapter(id="chapter_ds_01", subject_id="subject_ds", name="查找"))
+        db_session.add(
+            Chapter(id="chapter_ds_01", subject_id="subject_ds", name="查找")
+        )
         await db_session.flush()
     db_session.add(
         KnowledgePoint(
@@ -704,7 +716,9 @@ async def db_session():
 
 
 @pytest.mark.asyncio
-async def test_load_practice_bundle_uses_snapshot_topic_and_context_metadata(db_session):
+async def test_load_practice_bundle_uses_snapshot_topic_and_context_metadata(
+    db_session,
+):
     thread = AgentThread(
         id="thread_001",
         user_id="user_001",
@@ -746,7 +760,9 @@ async def test_load_practice_bundle_uses_snapshot_topic_and_context_metadata(db_
                 }
             ],
             "constraints": ["难度适中"],
-            "reference_sources": [{"type": "knowledge_point", "id": "kp_binary_search"}],
+            "reference_sources": [
+                {"type": "knowledge_point", "id": "kp_binary_search"}
+            ],
         },
         selection_metadata_json={
             "selected_message_ids": ["msg_001"],
@@ -1044,7 +1060,9 @@ async def test_load_practice_bundle_falls_back_to_unique_weak_point(db_session):
 
 
 @pytest.mark.asyncio
-async def test_load_practice_bundle_skips_weak_point_when_multiple_candidates(db_session):
+async def test_load_practice_bundle_skips_weak_point_when_multiple_candidates(
+    db_session,
+):
     run = await _create_run_without_snapshot(db_session, run_id="run_weak_multi")
     await _seed_knowledge_point(
         db_session,
@@ -1216,9 +1234,7 @@ async def test_explicit_repeat_removes_only_unique_referenced_question_from_excl
         standalone_request="再次生成用户明确引用的题目",
         understanding_json={
             "constraints": ["repeat_referenced_question"],
-            "reference_sources": [
-                {"type": "question", "id": "question_repeat"}
-            ],
+            "reference_sources": [{"type": "question", "id": "question_repeat"}],
         },
         selection_metadata_json={},
     )

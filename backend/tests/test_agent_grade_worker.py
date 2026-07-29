@@ -2,6 +2,7 @@
 
 import pytest
 import pytest_asyncio
+from unittest.mock import AsyncMock
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
@@ -35,8 +36,12 @@ from app.modules.agent.models import (
     UserLearningMastery,
 )
 from app.modules.agent.worker import AgentWorker
+from app.modules.agent.model_runtime.assessor import (
+    CriterionScore,
+    OpenAnswerAssessment,
+)
+from app.modules.agent.workflows import grade as grade_workflow
 from app.modules.agent.workflows.grade import _normalize_answer
-
 
 GRADE_TABLES = [
     AgentThread.__table__,
@@ -139,9 +144,7 @@ async def _create_grade_run(
             standalone_request=raw_input,
             understanding_json={
                 "raw_input": raw_input,
-                "reference_sources": [
-                    {"type": "question", "id": question.id}
-                ],
+                "reference_sources": [{"type": "question", "id": question.id}],
             },
         )
     )
@@ -217,7 +220,10 @@ async def test_grade_worker_records_incorrect_objective_verdict(db_session):
 
 
 @pytest.mark.asyncio
-async def test_grade_worker_rejects_subjective_question_before_artifact(db_session):
+async def test_grade_worker_returns_ungradable_subjective_feedback_without_mastery(
+    db_session,
+    monkeypatch,
+):
     run = await _create_grade_run(
         db_session,
         run_id="grade_subjective_001",
@@ -226,14 +232,79 @@ async def test_grade_worker_rejects_subjective_question_before_artifact(db_sessi
         raw_input="我的答案是 保持左右边界，请帮我批改",
     )
 
+    monkeypatch.setattr(
+        grade_workflow.open_answer_assessor_runtime,
+        "assess",
+        AsyncMock(
+            return_value=OpenAnswerAssessment(
+                verdict="partial",
+                criterion_scores=[
+                    CriterionScore(criterion_id="core_concepts", score=0.5),
+                    CriterionScore(criterion_id="reasoning", score=0.2),
+                ],
+                assessment_confidence=0.42,
+            )
+        ),
+    )
+
     assert await AgentWorker().process_run(db_session, run) is True
-    assert run.status == "failed"
-    assert "当前仅支持选择题、填空题和判断题" in run.error_message
-    assert await db_session.scalar(
+    assert run.status == "completed"
+    artifact = await db_session.scalar(
         select(AgentArtifact).where(AgentArtifact.run_id == run.id)
-    ) is None
+    )
+    assert artifact is not None
+    assert artifact.content_json["content"]["overall"] == "需要更明确回答"
+    assert artifact.content_json["content"]["grading"]["verdict"] == "ungradable"
     assert await db_session.scalar(select(AgentMemoryEvent)) is None
     assert await db_session.scalar(select(UserLearningMastery)) is None
+
+
+@pytest.mark.asyncio
+async def test_grade_worker_projects_partial_open_answer_with_server_weight(
+    db_session,
+    monkeypatch,
+):
+    run = await _create_grade_run(
+        db_session,
+        run_id="grade_open_partial_001",
+        question_type="short_answer",
+        standard_answer="目标始终位于当前搜索区间内",
+        raw_input="我的回答是 目标在区间内，但没有说明边界更新，请帮我批改",
+    )
+    monkeypatch.setattr(
+        grade_workflow.open_answer_assessor_runtime,
+        "assess",
+        AsyncMock(
+            return_value=OpenAnswerAssessment(
+                verdict="partial",
+                criterion_scores=[
+                    CriterionScore(criterion_id="core_concepts", score=0.8),
+                    CriterionScore(criterion_id="reasoning", score=0.4),
+                ],
+                assessment_confidence=0.9,
+                error_tags=["procedure_gap"],
+            )
+        ),
+    )
+
+    assert await AgentWorker().process_run(db_session, run) is True
+    assert run.status == "completed"
+    artifact = await db_session.scalar(
+        select(AgentArtifact).where(AgentArtifact.run_id == run.id)
+    )
+    grading = artifact.content_json["content"]["grading"]
+    assert grading["verdict"] == "partial"
+    assert grading["assessment_source"] == "llm_rubric"
+    assert grading["evidence_id"] == (
+        "open:grade_open_partial_001:question_grade_open_partial_001"
+    )
+    assert grading["score"] == 0.68
+    mastery = await db_session.scalar(select(UserLearningMastery))
+    assert mastery is not None
+    assert mastery.evidence_count == 1
+    assert mastery.correct_count == 0
+    assert mastery.incorrect_count == 0
+    assert mastery.metadata_json["partial_count"] == 1
 
 
 def test_grade_normalizes_fill_and_negative_judge_answers():

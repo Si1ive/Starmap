@@ -22,6 +22,7 @@ from .outbox import outbox_store
 from .service import AgentService
 from .checkpoints import checkpoint_store
 from .conversation_summary import enqueue_conversation_summary_maintenance
+from .diagnostic import schedule_diagnostic_check
 from .memory_projection import project_completed_run_facts
 from .memory_outbox import memory_outbox_consumer
 from .preference_memory import enqueue_preference_candidate_extraction
@@ -196,6 +197,8 @@ class AgentWorker:
                 context.set("router_decision", run_metadata["router_decision"])
             if isinstance(run_metadata.get("learning_snapshot"), dict):
                 context.set("learning_snapshot", run_metadata["learning_snapshot"])
+            if isinstance(run_metadata.get("diagnostic_context"), dict):
+                context.set("diagnostic_context", run_metadata["diagnostic_context"])
             context.max_model_calls = run.max_model_calls
             context.model_call_count = run.model_call_count
 
@@ -278,6 +281,11 @@ class AgentWorker:
                 if run.workflow_name != "learning_observation":
                     await enqueue_conversation_summary_maintenance(db, run)
                 await enqueue_preference_candidate_extraction(db, run)
+                await schedule_diagnostic_check(
+                    db,
+                    source_run=run,
+                    source_artifact=artifact,
+                )
                 await schedule_learning_observation(db, source_run=run)
 
             elif result.status == NodeStatus.WAITING:

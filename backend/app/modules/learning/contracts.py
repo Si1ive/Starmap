@@ -119,6 +119,12 @@ class EvidenceContext(BaseModel):
         default=False,
         validation_alias=AliasChoices("answer_exposed", "answer_revealed"),
     )
+    answer_confidence: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="模型生成题标准答案的可信度，不等同于评分置信度",
+    )
 
     @field_validator("hint_levels_used")
     @classmethod

@@ -212,6 +212,13 @@ class GeneratedPracticeQuestion(BaseModel):
     answer: str = Field(..., pattern=r"^[A-H]$")
     explanation: str = Field(..., min_length=1, max_length=5000)
     difficulty: Literal["easy", "medium", "hard"] = "medium"
+    model_version: str | None = Field(default=None, max_length=64)
+    answer_confidence: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="模型对自身标准答案的可信度，最终仍由服务端权重策略裁剪",
+    )
 
     @model_validator(mode="after")
     def validate_answer(self):
