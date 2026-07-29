@@ -153,3 +153,11 @@
 - 权重校准：`WeightCalibrationSample`、`calibrate_weight_caps`（L241-L374）按 `AssessmentSource` 汇总人工参考结果，样本不足保持当前 cap，达到门槛时只提出不高于当前 cap 的候选，并在 `WeightCalibrationReport.manual_approval_required` 中固化人工审批要求；`backend/app/modules/learning/evidence.py::EvidenceWeightPolicy.source_caps`（L164-L168）只提供策略 cap 的副本。
 - 验证：`backend/venv/bin/python -m pytest tests/test_adaptive_learning_metrics.py tests/test_learning_evidence_model.py tests/test_learning_contracts.py -q`（21 passed）；变更 Python 文件 Black/Flake8、`compileall` 和 `git diff --check` 通过。
 - 中文提交信息：`增加自适应学习评估指标与权重校准`。
+
+## 2026-07-29：阶段七完成——固定场景 Pydantic Evals
+
+- 目标：把任务单十个必测场景固定为可重复的 Pydantic Evals Dataset，统一检查指标、工具策略安全、重试键保留和 evaluator version；fixture adapter 不调用模型、不连接数据库，也不写学习事件。
+- 关键实现：`backend/evals/adaptive_learning.py::AdaptiveLearningMetricsEvaluator.evaluate`（L53-L80）复用 `calculate_adaptive_learning_metrics`；`fixed_adaptive_learning_cases`（L145-L266）覆盖只问、无作答、客观题对错、提示、变式题、开放题低置信度、多知识点、Observer/Assessor 重试和 RAG 工具拒绝；`build_adaptive_learning_evaluation_dataset`、`run_fixed_adaptive_learning_evals_sync`（L268-L287）提供版本化 Dataset 和同步报告入口。
+- 消费边界：报告由 `EvaluationReport.averages()` 聚合，历史结果按 `adaptive-learning-evals-v1` 区分；该链路只产出评估结果，不改变 feature flag、`EvidenceWeightPolicy`、mastery 或线上 Outbox。
+- 验证：`backend/venv/bin/python -m pytest backend/tests/test_adaptive_learning_evals.py -q`（3 passed）；变更 Python 文件 Black/Flake8、`compileall` 和 `git diff --check` 通过。
+- 中文提交信息：`接入自适应学习固定场景评估`。

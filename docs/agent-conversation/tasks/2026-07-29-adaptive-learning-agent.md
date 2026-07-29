@@ -3,8 +3,8 @@
 ## 任务定位
 
 任务 ID：`LEARN-001`
-状态：实施中（阶段一至阶段六已完成，阶段七实施中）
-阶段状态：阶段一“冻结契约与兼容边界”、阶段二“合并 Router 与 Tutor 策略”、阶段三“学习证据与掌握度模型升级”、阶段四“异步 LearningObserverAgent”、阶段五“开放题 Assessor 与诊断题闭环”和阶段六“LearningSnapshot、薄弱点与工具接入”已完成；阶段七已开始接入灰度开关，评估与权重校准待完成。
+状态：已完成（阶段一至阶段七均已完成）
+阶段状态：阶段一“冻结契约与兼容边界”、阶段二“合并 Router 与 Tutor 策略”、阶段三“学习证据与掌握度模型升级”、阶段四“异步 LearningObserverAgent”、阶段五“开放题 Assessor 与诊断题闭环”、阶段六“LearningSnapshot、薄弱点与工具接入”和阶段七“灰度、评估与权重校准”均已完成。
 目标：在现有 Agent 练习、评分、学习活动和薄弱点闭环之上，补齐“用户对话行为 → 结构化学习证据 → 掌握度/不确定性 → 下一步教学策略”的自适应学习链路。
 
 本任务采用以下总体决策：
@@ -341,6 +341,8 @@ TurnObservation、零强度活动事实、14 天诊断 hypothesis 冻结、模�
 - `weakness_recovery_rate`：薄弱项经过干预后被变式题验证修复的比例；
 - `tool_policy_violation_count`：越权工具调用和任意写入次数，目标为 0。
 
+阶段七已经提供版本化的脱敏指标函数、人工审批校准报告和 Pydantic Evals 固定数据集；线上仍由 feature flag 决定是否 authoritative，离线评估不会写学习事实或自动替换权重策略。
+
 ## 提交拆分与完成条件
 
 按照仓库规则，每个可独立验证阶段单独提交，提交信息使用中文：
@@ -351,7 +353,7 @@ TurnObservation、零强度活动事实、14 天诊断 hypothesis 冻结、模�
 4. `增加异步学习观察 Agent`：silent Run、Observer workflow、观察事实和失败隔离。
 5. `增加开放回答评估与诊断题闭环`：Assessor、rubric、诊断题回链和证据权重。
 6. `接入自适应学习快照与只读工具`：WeaknessFinding、LearningSnapshot、四项只读工具和 capability harness（已完成）。
-7. `完成自适应学习 Agent 灰度评估`：feature flag、Pydantic Evals、指标和运维说明。
+7. `完成自适应学习 Agent 灰度评估`：feature flag、Pydantic Evals、指标和运维说明（已完成）。
 
 每个提交前必须执行与范围匹配的后端测试、迁移图/Schema Guard、`git diff --check`；涉及前端契约时补充前端构建。代码提交时同步更新对应 `implementation/` 分卷和本月 `progress/2026-07/08-practice-learning-loop.md`，本任务单只维护跨提交状态和验收入口。
 
