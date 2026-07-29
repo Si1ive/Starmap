@@ -84,6 +84,24 @@
   `user_learning_mastery` Snapshot item 看到 alpha/beta、uncertainty 和 state model version，
   用户端不展示模型内部推理文本。
 
+## 阶段四：静默 LearningObserver 与诊断 hypothesis
+
+Observer 复用 Agent Run 主链，但它是来源 conversation 的异步派生事实，不是第二条用户回答。来源 Run
+先完成 Artifact 和既有学习事实投影，再创建 silent child；因此观察失败不能回滚用户已经看到的正文，且
+`thread_events` 会按既有 silent 规则拒绝公开 Observer 的 step、错误和内部结构化输出。
+
+| 执行阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 完成交接 | `backend/app/modules/agent/worker.py`、`backend/app/modules/agent/learning_observer.py` | `AgentWorker.process_run`、`schedule_learning_observation` | worker L212-L281；observer L72-L113 | completed Run、来源 message、parent/root 和 observer version | Worker 先落 Artifact、调用 `project_completed_run_facts`、写 `run.completed`，再只为根 conversation 以稳定 key 创建 silent child；Observer workflow 自身不触发摘要维护 | `agent_runs`、`agent_events`、`agent_run_outbox`；来源 Run 保持 completed | `learning_observation@v1` |
+| 输入权限与冻结 | `backend/app/modules/agent/learning_observer.py`、`backend/app/modules/agent/workflows/learning_observation.py` | `build_observer_input_snapshot`、`_prepare_observation_node` | observer L133-L271；workflow L34-L49 | source Run/message ID、user/thread/root、原 context audit 与相关 Artifact | 逐项复核来源归属，只复制原 Run 已选消息、同 root 已完成非 silent Artifact 摘要、active topic 和数据库存在的知识点；文本截断，助手内容标为 context-only，越权或缺来源抛错 | 冻结 `observer_input_snapshot` 写 Run metadata 和下一节点上下文 | `_observe_turn_node` |
+| 模型结构护栏 | `backend/app/modules/agent/model_runtime/observer.py`、`backend/app/modules/agent/workflows/learning_observation.py` | `TurnObservation`、`TurnObservationOutput`、`LearningObserverRuntime.observe`、`_observe_turn_node` | runtime L37-L87、L131-L192；workflow L52-L88 | 冻结输入、source message ID、允许知识点 ID、一次调用预算 | Pydantic AI 只允许 exposure/confusion/hypothesis/self-report/open-response-candidate，outcome 限 unknown/ungradable；禁止额外 mastery/weight 字段，再复核模型返回的 message 和知识点范围 | 结构化输出写 Run metadata、Step output 和统一 LLM audit；模型错误进入 silent Run 失败链 | `_project_observation_node` |
+| 非掌握度活动投影 | `backend/app/modules/agent/learning_observer.py`、`backend/app/modules/agent/workflows/learning_observation.py` | `record_turn_observation`、`_project_observation_node` | observer L301-L431；workflow L91-L117 | 结构化 observations、source Run/version、知识点候选 | 以 source Run/version 查询唯一事件，经 EvidenceGate 校验归属和范围；统一写 `unknown + strength=0`，exposure 与 observation 均不调用 MasteryProjector；困惑/假设/开放回答候选带 14 天 expiry | `agent_turn_observed` 和可回链 payload；`UserLearningMastery` 不变化 | 下一轮 LearningSnapshot / 学习活动 / 管理端 |
+| 下一轮冻结消费 | `backend/app/modules/agent/learning_snapshot.py` | `_freeze_diagnostic_hypotheses`、`load_learning_snapshot_summary` | L128-L218、L221-L291 | 当前用户 Snapshot、14 天内 Observer 活动及 payload expiry | 优先读取本 snapshot 已冻结项；首次读取时复制未过期 hypothesis 为 `learning_hypothesis` item，过滤过期/非法 payload，非 UUID 兼容标识安全空读 | `diagnostic_hypotheses`、source item IDs；原活动和 mastery 不修改 | ConversationTutorAgent |
+
+错误传播分三层：模型或结构验证失败由 WorkflowEngine 写 `step.failed`，Worker 只把 Observer child 标记 failed；
+来源越权/知识点越界同样失败且不写活动；活动唯一键或数据库失败沿 Observer 事务传播并由 Outbox 重试。
+由于来源 conversation 在调度前已经 completed，以上失败都不会覆盖来源 Artifact、SSE、活动事实或 mastery。
+
 ## 事件写入与公开投影
 
 | 执行阶段 | 文件 | 符号 | 输入 | 处理 | 输出/副作用 | 下一步 |
@@ -128,6 +146,7 @@
 | Explain 最终 Artifact 不再丢失 | `backend/tests/test_agent_workflow_engine.py` | `test_explain_workflow_keeps_artifact_through_render_and_completion` | 真正执行 explain workflow 到 `render_artifact -> completed`，确认 `NodeResult.success(..., artifact=...)` 可把 artifact 保留到最终结果 |
 | Explain 无资料回退在 worker 持久化后仍可刷新恢复 | `backend/tests/test_agent_explain_worker.py` | `test_worker_persists_zero_hit_fallback_answer_without_citations`、`test_worker_persists_retrieval_error_fallback_answer_without_citations` | 真实执行 `AgentWorker.process_run`，覆盖零命中和检索异常两条路径的活动卡片、artifact、最终消息与线程刷新恢复 |
 | Plan 拒绝与恢复守卫 | `backend/tests/test_agent_plan_worker.py` | `test_rejected_plan_stops_without_outbox_or_artifact`（L165-L201）、`test_plan_apply_node_rejects_unapproved_checkpoint`（L205-L220）、`test_approved_plan_resumes_and_creates_artifact`（L224-L283） | 覆盖拒绝不重投递/不产物/不写记忆、错误恢复仍被节点拒绝，以及批准后生成计划并幂等写确认事实 |
+| LearningObserver 隔离与下一轮消费 | `backend/tests/test_agent_learning_observer.py` | `test_completed_root_conversation_creates_one_silent_observer_run`、`test_observer_confusion_is_zero_strength_and_visible_in_next_snapshot`、`test_observer_failure_does_not_change_completed_source_run` | 覆盖 source/version 幂等 silent child、零强度活动且不写 mastery、14 天 hypothesis 冻结到下一轮 Snapshot，以及模型失败不改变来源 Run |
 
 ## 当前整改关注点
 

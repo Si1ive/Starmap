@@ -3,8 +3,8 @@
 ## 任务定位
 
 任务 ID：`LEARN-001`
-状态：实施中（阶段一至阶段三已完成）
-阶段状态：阶段一“冻结契约与兼容边界”、阶段二“合并 Router 与 Tutor 策略”和阶段三“学习证据与掌握度模型升级”已完成；阶段四及后续阶段待实施。
+状态：实施中（阶段一至阶段四已完成）
+阶段状态：阶段一“冻结契约与兼容边界”、阶段二“合并 Router 与 Tutor 策略”、阶段三“学习证据与掌握度模型升级”和阶段四“异步 LearningObserverAgent”已完成；阶段五及后续阶段待实施。
 目标：在现有 Agent 练习、评分、学习活动和薄弱点闭环之上，补齐“用户对话行为 → 结构化学习证据 → 掌握度/不确定性 → 下一步教学策略”的自适应学习链路。
 
 本任务采用以下总体决策：
@@ -45,7 +45,7 @@
 | 掌握度投影 | `backend/app/modules/agent/memory_projection.py`、`mastery_projector.py` | `_record_grade_result_confirmed`、`MasteryProjector.apply` | memory L315-L484；projector L35-L138 | Feedback grading 含可信 verdict、题目和知识点 | 以 evidence ID 幂等写 memory fact；按 coverage 更新 alpha/beta、evidence mass、uncertainty 和兼容 score | mastery、AgentMemoryEvent、Memory Outbox | 长期记忆/后续选择 |
 | 掌握度读时衰减 | `backend/app/modules/agent/mastery_decay.py` | `calculate_effective_mastery` | L28-L62 | 有原始分数、证据时间和读取时点 | 按固定策略计算 effective score，同时保留 state/policy version，不修改原始累计值 | `EffectiveMastery` | Practice/Plan/学习状态读取 |
 | 掌握度模型 | `backend/app/modules/agent/models.py` | `UserLearningMastery` | L697-L755 | 已有可信评分证据 | 保存兼容 score/count、alpha/beta、evidence mass、uncertainty、最近证据时间和 state version | 用户级知识点掌握度表 | 新 `LearningSnapshot` 读取 |
-| Run 完成交接 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | L105-L323 | WorkflowEngine 返回 completed/waiting/failed | 先将 Run metadata 中已冻结的 teaching policy/decision/LearningSnapshot 注入 child ExecutionContext，再持久化 Artifact、投影完成事实、写 Run 状态并投递摘要/偏好任务；异常不覆盖原始事实 | Run/Artifact/Event/Outbox | Observer 触发应接在 completed 事实边界之后 |
+| Run 完成交接 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | L106-L331 | WorkflowEngine 返回 completed/waiting/failed | 先将 Run metadata 中已冻结的 teaching policy/decision/LearningSnapshot 注入 ExecutionContext，再持久化 Artifact、投影完成事实、写 Run 状态并投递摘要/偏好；根 conversation 同边界幂等调度 Observer，Observer 自身不递归派生摘要 | Run/Artifact/Event/Outbox/Observer child | 业务或 Observer Outbox |
 
 ## 目标执行链
 
@@ -198,6 +198,9 @@ Explain/Validate/Grade 的策略读取均已落地。后续阶段再实现诊断
 - 迁移 head 为 `20260729_learning_evidence_model`；未执行 `alembic upgrade head` 或缺少新列时，`verify_database_schema` 在应用启动阶段失败，不允许以 `alembic stamp head` 绕过。
 ## 阶段四：异步 LearningObserverAgent
 
+实施状态：已完成；根 conversation 完成后的幂等 silent child Run、受控输入快照、结构化
+TurnObservation、零强度活动事实、14 天诊断 hypothesis 冻结、模型审计和失败隔离均已落地。
+
 ### 目标
 
 对每个完成的用户 conversation turn 生成“知识点/行为/诊断需求”观察，但将模型结论限制在 hypothesis/exposure 层，避免自然语言分析污染权威掌握度。
@@ -220,6 +223,22 @@ Explain/Validate/Grade 的策略读取均已落地。后续阶段再实现诊断
 - 明确表达困惑时，下一轮 `LearningSnapshot` 能看到 `diagnostic_need`。
 - 同一 source Run 和 observer version 不会创建重复 observation。
 - 管理端能按 source Run 查看 Observer 的模型调用、输入快照、结构化输出和失败原因；用户端不展示内部推理文本。
+
+### 本阶段落点
+
+- `AgentWorker.process_run` 在 Artifact/事实投影、`run.completed`、摘要和偏好任务之后调用
+  `schedule_learning_observation`；后者只接受根 `conversation`，用
+  `observe:{source_run_id}:learning-observer-v1` 创建一个 `presentation=silent` child Run。
+- `learning_observation@v1` 依次执行输入冻结、模型观察和活动投影。输入只包含当前用户消息、原 Run
+  已选历史、同 root 已完成公开 Artifact 摘要、active topic 和数据库确认存在的知识点候选；助手内容被显式标记为
+  context-only。模型输出禁止 mastery/weight 和 correct/incorrect verdict，并由运行时复核 message/知识点范围。
+- `record_turn_observation` 把同一 source Run/version 收敛为一条 `agent_turn_observed`，经
+  `EvidenceGate` 写 `observation|exposure + unknown + strength=0`，不调用 `MasteryProjector`。
+  困惑、错误假设、开放回答候选或显式诊断需求保留 14 天 TTL。
+- 下一轮 `load_learning_snapshot_summary` 把未过期 hypothesis 复制到本轮
+  `AgentMemorySnapshotItem(memory_partition=learning_hypothesis)`；同一 Run 后续只读冻结副本，过期项不再进入 Tutor。
+- Observer 的输入快照、结构化输出、模型配置/调用引用和错误保存在 silent Run/Step/Event/metadata 既有审计链；
+  Observer 失败只终止 child Run，来源 conversation 保持 completed，且 Observer 不再派生对话摘要任务。
 ## 阶段五：开放题 Assessor 与诊断题闭环
 
 ### 目标

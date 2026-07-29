@@ -14,6 +14,7 @@ def test_memory_partitions_cover_the_planned_foundation():
         "recent_conversation",
         "topic_summary",
         "learning_mastery",
+        "learning_hypothesis",
         "artifact_and_task",
         "pending_interaction",
         "user_preference",
@@ -46,4 +47,10 @@ def test_every_memory_need_maps_to_at_least_one_partition():
 def test_planning_goal_declares_learning_mastery_partition():
     assert MemoryPartition.LEARNING_MASTERY in MEMORY_NEED_PARTITIONS[
         MemoryNeed.PLANNING_GOAL
+    ]
+
+
+def test_topic_focus_declares_learning_hypothesis_partition():
+    assert MemoryPartition.LEARNING_HYPOTHESIS in MEMORY_NEED_PARTITIONS[
+        MemoryNeed.TOPIC_FOCUS
     ]

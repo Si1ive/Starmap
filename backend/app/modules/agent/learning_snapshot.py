@@ -1,23 +1,30 @@
 """ConversationTutorAgent 使用的只读 LearningSnapshot 摘要。
 
-阶段二不新增学习状态表，也不把掌握度计算搬进在线路由。这里仅从当前 Run 已
-冻结的 AgentMemorySnapshot 及其 selected learning_mastery items 读取最小摘要，
-供 ConversationTutorAgent 选择教学策略；真实掌握度仍由既有 projector 写入。
+这里不把掌握度计算搬进在线路由：掌握度仍由既有 projector 写入，Tutor 只读取当前
+Run 已冻结的 mastery signals 和未过期的 Observer diagnostic hypotheses。Observer
+hypothesis 首次进入下一轮时复制为 Snapshot item，保证同一 Run 内不会混用 live 状态。
 """
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import Any
+import uuid
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.learning.models import LearningActivityEvent
+
 from .memory_contracts import MemoryPartition
 from .models import AgentMemorySnapshot, AgentMemorySnapshotItem
+from .time_utils import utc_now
 
 LEARNING_SNAPSHOT_POLICY_VERSION = "learning-snapshot-v1"
 _MAX_MASTERY_SIGNALS = 16
+_MAX_DIAGNOSTIC_HYPOTHESES = 16
+_HYPOTHESIS_TTL_DAYS = 14
 
 
 class LearningSnapshotSummary(BaseModel):
@@ -46,6 +53,10 @@ class LearningSnapshotSummary(BaseModel):
             point_id = str(signal.get("knowledge_point_id") or "").strip()
             if point_id:
                 values.append(point_id)
+        for hypothesis in self.diagnostic_hypotheses:
+            point_id = str(hypothesis.get("knowledge_point_id") or "").strip()
+            if point_id:
+                values.append(point_id)
         return tuple(dict.fromkeys(values))
 
 
@@ -70,6 +81,141 @@ def _safe_mastery_signal(payload: dict[str, Any]) -> dict[str, Any] | None:
         if key in payload:
             signal[key] = payload[key]
     return signal
+
+
+def _parse_expiry(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(UTC).replace(tzinfo=None)
+    return parsed
+
+
+def _safe_hypothesis(
+    payload: dict[str, Any], *, now: datetime
+) -> dict[str, Any] | None:
+    """只复制 Observer 的稳定 hypothesis 字段，并在读时执行 TTL。"""
+
+    expires_at = _parse_expiry(payload.get("expires_at"))
+    if expires_at is None or expires_at <= now:
+        return None
+    source_message_id = str(payload.get("source_message_id") or "").strip()
+    signal = str(payload.get("signal") or "").strip()
+    if not source_message_id or not signal:
+        return None
+    return {
+        key: payload[key]
+        for key in (
+            "knowledge_point_id",
+            "signal",
+            "outcome",
+            "error_tags",
+            "model_confidence",
+            "diagnostic_need",
+            "source_message_id",
+            "observer_version",
+            "source_run_id",
+            "expires_at",
+        )
+        if key in payload
+    }
+
+
+async def _freeze_diagnostic_hypotheses(
+    db: AsyncSession,
+    *,
+    snapshot: AgentMemorySnapshot,
+    now: datetime,
+) -> tuple[list[dict[str, Any]], list[int]]:
+    """把当前有效 Observer hypothesis 复制到本轮 Snapshot，避免在线漂移。"""
+
+    frozen_items = list(
+        (
+            await db.scalars(
+                select(AgentMemorySnapshotItem)
+                .where(
+                    AgentMemorySnapshotItem.snapshot_id == snapshot.id,
+                    AgentMemorySnapshotItem.memory_partition
+                    == MemoryPartition.LEARNING_HYPOTHESIS.value,
+                    AgentMemorySnapshotItem.selected.is_(True),
+                )
+                .order_by(AgentMemorySnapshotItem.id)
+            )
+        ).all()
+    )
+    if frozen_items:
+        hypotheses = [
+            safe
+            for item in frozen_items
+            if (safe := _safe_hypothesis(dict(item.payload_json or {}), now=now))
+            is not None
+        ]
+        return hypotheses[:_MAX_DIAGNOSTIC_HYPOTHESES], [
+            item.id for item in frozen_items[:_MAX_DIAGNOSTIC_HYPOTHESES]
+        ]
+
+    # 旧测试/迁移数据可能仍使用非 UUID 的兼容用户标识；LearningActivityEvent
+    # 的 UUIDBinary 边界不能绑定这类值，明确按“没有 Observer 事实”处理。
+    try:
+        uuid.UUID(str(snapshot.user_id))
+    except (TypeError, ValueError, AttributeError):
+        return [], []
+
+    events = list(
+        (
+            await db.scalars(
+                select(LearningActivityEvent)
+                .where(
+                    LearningActivityEvent.user_id == snapshot.user_id,
+                    LearningActivityEvent.event_type == "agent_turn_observed",
+                    LearningActivityEvent.occurred_at
+                    >= now - timedelta(days=_HYPOTHESIS_TTL_DAYS),
+                )
+                .order_by(
+                    LearningActivityEvent.occurred_at.desc(),
+                    LearningActivityEvent.id.desc(),
+                )
+                .limit(_MAX_DIAGNOSTIC_HYPOTHESES)
+            )
+        ).all()
+    )
+    hypotheses: list[dict[str, Any]] = []
+    source_item_ids: list[int] = []
+    for event in events:
+        payload = event.payload_json if isinstance(event.payload_json, dict) else {}
+        for raw in payload.get("diagnostic_hypotheses") or []:
+            if not isinstance(raw, dict):
+                continue
+            safe = _safe_hypothesis(
+                {**raw, "source_run_id": payload.get("source_run_id")},
+                now=now,
+            )
+            if safe is None:
+                continue
+            item = AgentMemorySnapshotItem(
+                snapshot_id=snapshot.id,
+                memory_need="topic_focus",
+                memory_partition=MemoryPartition.LEARNING_HYPOTHESIS.value,
+                source_kind="learning_activity_event",
+                source_id=str(event.id),
+                item_key=f"diagnostic_hypothesis:{event.id}:{len(hypotheses)}",
+                version=1,
+                selected=True,
+                selection_reason="active_observer_hypothesis_within_ttl",
+                token_estimate=0,
+                payload_json=safe,
+            )
+            db.add(item)
+            await db.flush()
+            hypotheses.append(safe)
+            source_item_ids.append(item.id)
+            if len(hypotheses) >= _MAX_DIAGNOSTIC_HYPOTHESES:
+                return hypotheses, source_item_ids
+    return hypotheses, source_item_ids
 
 
 async def load_learning_snapshot_summary(
@@ -129,12 +275,19 @@ async def load_learning_snapshot_summary(
         mastery_signals.append(signal)
         source_item_ids.append(item.id)
 
+    diagnostic_hypotheses, hypothesis_item_ids = await _freeze_diagnostic_hypotheses(
+        db,
+        snapshot=snapshot,
+        now=utc_now(),
+    )
+
     return LearningSnapshotSummary(
         snapshot_id=snapshot.id,
         state_version=snapshot.state_version,
         active_topic=active_topic,
         mastery_signals=mastery_signals,
-        source_item_ids=source_item_ids,
+        diagnostic_hypotheses=diagnostic_hypotheses,
+        source_item_ids=[*source_item_ids, *hypothesis_item_ids],
     )
 
 

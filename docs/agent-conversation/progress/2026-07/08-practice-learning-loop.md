@@ -100,3 +100,12 @@
 - 读取兼容：学习进度、管理员 Thread 详情和 mastery Snapshot signal 继续提供旧字段，同时增加 evidence/uncertainty/state model 审计字段；读时衰减保留原 `mastery-decay-v1` 语义。
 - 验证：受影响后端测试 `backend/venv/bin/python -m pytest tests/test_learning_evidence_model.py tests/test_agent_memory_projection.py tests/test_learning_activity_events.py tests/test_learning_contracts.py tests/test_agent_grade_worker.py tests/test_migrations.py tests/test_schema_guard.py tests/test_agent_mastery_decay.py -q`（67 passed，6 个既有 datetime 弃用告警）；全量后端为 922 passed、1 个阶段二 Explain 旧断言失败、3 deselected；前端 `npm run build`、新增文件 Black/Flake8、`compileall` 和 `git diff --check` 通过。新增证据门禁、提示/生成题/答案暴露降权、多知识点 coverage、partial、迁移回填和 schema guard 回归。
 - 中文提交信息：`升级知识点掌握度证据模型`。
+
+## 2026-07-29：阶段四——异步 LearningObserverAgent
+
+- 目标：让每个已完成根 conversation 异步产生可回链的主题接触、行为信号和诊断需求，同时把模型结论严格限制在 exposure/hypothesis 层，不污染权威掌握度。
+- 关键实现：`backend/app/modules/agent/learning_observer.py::schedule_learning_observation`（L72-L113）由 Worker 完成边界以 `observe:{source_run_id}:learning-observer-v1` 幂等创建 silent child；`build_observer_input_snapshot`（L133-L271）按 user/thread/root 过滤当前用户消息、原 Run 已选历史、相关 Artifact 摘要和数据库确认的知识点候选。`backend/app/modules/agent/model_runtime/observer.py::TurnObservation`、`TurnObservationOutput`、`LearningObserverRuntime.observe`（L37-L87、L131-L192）禁止 mastery/weight、correct/incorrect verdict 和越界知识点。
+- 投影与消费：`backend/app/modules/agent/workflows/learning_observation.py::_prepare_observation_node`、`_observe_turn_node`、`_project_observation_node`（L34-L117）复用 WorkflowEngine/Step/Event/统一模型审计；`backend/app/modules/agent/learning_observer.py::record_turn_observation`（L301-L431）经 EvidenceGate 写 `agent_turn_observed`，固定 `unknown + strength=0` 且不调用 MasteryProjector。`backend/app/modules/agent/learning_snapshot.py::_freeze_diagnostic_hypotheses`、`load_learning_snapshot_summary`（L128-L218、L221-L291）把 14 天内诊断假设冻结成下一轮 `learning_hypothesis` Snapshot item。
+- 错误与公开边界：助手 Artifact 只作 exposure/answer-leakage 上下文；Observer 不生成 Artifact/公开消息，也不递归派生摘要任务。模型、来源、知识点或落库失败只终止 silent child，来源 conversation 保持 completed，管理员仍可查看输入快照、结构化输出、模型调用和失败原因。
+- 验证：`backend/venv/bin/pytest -q tests/test_agent_learning_observer.py tests/test_agent_conversation_workflow.py tests/test_agent_memory_projection.py tests/test_agent_grade_worker.py tests/test_learning_activity_events.py tests/test_learning_contracts.py tests/test_learning_evidence_model.py tests/test_agent_admin_router.py`（52 passed，23 个既有 datetime 弃用告警）；新增测试覆盖幂等 silent Run、困惑进入下一轮 Snapshot、零掌握度副作用、模型失败隔离和非法 mastery/verdict 拒绝。
+- 中文提交信息：`实现异步学习观察闭环`。

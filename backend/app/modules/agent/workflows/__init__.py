@@ -10,6 +10,7 @@ from . import conversation
 from . import validate
 from . import grade
 from . import plan
+from . import learning_observation
 
 __all__ = [
     "NodeResult", "WorkflowDefinition", "Node",

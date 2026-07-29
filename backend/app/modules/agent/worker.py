@@ -25,6 +25,7 @@ from .conversation_summary import enqueue_conversation_summary_maintenance
 from .memory_projection import project_completed_run_facts
 from .memory_outbox import memory_outbox_consumer
 from .preference_memory import enqueue_preference_candidate_extraction
+from .learning_observer import schedule_learning_observation
 from .workflows.contracts import NodeStatus
 from .public_errors import classify_agent_error
 from .time_utils import utc_now
@@ -272,8 +273,12 @@ class AgentWorker:
                         ),
                     },
                 )
-                await enqueue_conversation_summary_maintenance(db, run)
+                # Observer 是对已完成用户轮次的内部派生任务，本身没有新的对话
+                # 内容；不能再次触发摘要维护，避免静默 Run 形成递归派生链。
+                if run.workflow_name != "learning_observation":
+                    await enqueue_conversation_summary_maintenance(db, run)
                 await enqueue_preference_candidate_extraction(db, run)
+                await schedule_learning_observation(db, source_run=run)
 
             elif result.status == NodeStatus.WAITING:
                 waiting_output = result.output or {}
