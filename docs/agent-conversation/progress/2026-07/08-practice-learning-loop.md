@@ -120,3 +120,11 @@
 - 文档：同步更新 `architecture/conversation-mainline.md`、`architecture/workflow-branches.md`、`implementation/model-runtime-streaming.md`、`implementation/events-timeline-errors.md` 和本任务单的阶段状态；无数据库结构变化，无 Alembic 迁移。
 - 验证：`backend/venv/bin/python -m pytest` 覆盖 Assessor、Grade、Observer、Validate、Practice、Memory Selector、学习证据/进度/薄弱点、迁移图和 Schema Guard（135 passed，91 个既有 datetime 弃用告警）；变更 Python 文件 Black/Flake8、`compileall` 和 `git diff --check` 通过。
 - 中文提交信息：`增加开放回答评估与诊断题闭环`。
+
+## 2026-07-29：阶段六前置——冻结 LearningSnapshot 与薄弱点 finding
+
+- 目标：让 ConversationTutorAgent 在同一 memory snapshot 中读取知识点级 mastery、effective mastery、uncertainty、证据来源、错误标签、薄弱点和诊断需求，并把活动保持率与权威掌握度分成两个读取契约。
+- 关键实现：新增 `backend/app/modules/agent/learning_snapshot.py::LearningSnapshotReader.read`（L280-L382）和 `_ensure_learning_state`（L384-L478），首次读取最多冻结 16 条 mastery/finding，复制 evidence source、error tag、衰减版本和推荐复习原因；`_build_mastery_signal`（L575-L669）保留 raw/effective 分数，不让 exposure quality 进入 mastery。`backend/app/modules/agent/weakness_projector.py::WeaknessProjector.project` / `_project_group`（L85-L127、L144-L305）按 verdict、error tag、迁移类型和 45 天衰减产出 `WeaknessFinding`，只问/观察进入 `needs_diagnostic`，后续答对进入 `awaiting_interval_verification`。
+- 读取分层：`backend/app/modules/learning/service.py::LearningProgressService.get`（L101-L179）保留旧 `topics` 兼容入口并新增 `activity_retention`、`mastery_evidence`；`LearningProgressService._load_mastery_states`（L350-L426）只读取 UserLearningMastery 的权威证据。`WeaknessService.get`（L187-L266）保留旧 clusters/timeline，同时输出 finding 和 confirmed/diagnostic 统计。
+- 验证：`backend/venv/bin/python -m pytest tests/test_agent_weakness_projector.py tests/test_agent_learning_observer.py tests/test_agent_capability_harness.py tests/test_agent_router_runtime.py tests/test_learning_progress.py tests/test_learning_weaknesses.py tests/test_agent_memory_contracts.py -q`（50 passed，1 个既有 datetime 弃用告警）；变更 Python 文件 Black/Flake8、`compileall` 通过。
+- 中文提交信息：`冻结学习快照并投影薄弱点`。

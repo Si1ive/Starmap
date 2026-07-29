@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.mysql_models import Question
+from app.modules.agent.weakness_projector import WeaknessProjector
 from app.modules.learning.service import normalize_keyword
 from app.modules.learning.models import LearningActivityEvent
 from app.modules.practice.models import (
@@ -241,4 +242,25 @@ class WeaknessService:
         deduplicated = {
             (item["source_type"], item["source_id"]): item for item in records
         }
-        return project_weakness_evidence(list(deduplicated.values()), effective_now)
+        projected = project_weakness_evidence(
+            list(deduplicated.values()), effective_now
+        )
+        findings = WeaknessProjector().project(
+            [*events, *_weakness_evidence_from_rows(legacy_rows)],
+            now=effective_now,
+        )
+        projected["findings"] = [
+            finding.model_dump(mode="json") for finding in findings
+        ]
+        projected["summary"].update(
+            {
+                "finding_count": len(findings),
+                "confirmed_finding_count": sum(
+                    finding.status == "confirmed" for finding in findings
+                ),
+                "diagnostic_finding_count": sum(
+                    finding.status == "needs_diagnostic" for finding in findings
+                ),
+            }
+        )
+        return projected

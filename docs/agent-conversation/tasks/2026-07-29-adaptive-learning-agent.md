@@ -277,6 +277,8 @@ TurnObservation、零强度活动事实、14 天诊断 hypothesis 冻结、模�
 入口条件、错误传播和消费边界：普通/诊断 Practice 交卷由 `backend/app/modules/practice/router.py::_submit`（L106-L145）完成确定性判分，`record_practice_submission`（L48-L175）消费 Session snapshot 并写 `LearningActivityEvent`；诊断 payload 回链来源解释 Run、Artifact 和目标 KP，随后由学习进度/Weakness 读取。Assessor 失败在 Grade 内收敛为 `ungradable`；EvidenceGate 或数据库失败仍沿 Worker 失败链传播。阶段五未新增表或 Alembic 迁移。
 ## 阶段六：LearningSnapshot、薄弱点与工具接入
 
+实施状态：进行中；LearningSnapshotReader、WeaknessProjector 和学习进度分层已落地，四项只读工具注册与最终验收在后续独立提交中完成。
+
 ### 目标
 
 让 ConversationTutorAgent 每轮读取同一份冻结的掌握度、证据、薄弱项和诊断需求，保证决策可复现。

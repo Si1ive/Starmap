@@ -11,7 +11,9 @@ from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.mysql_models import KnowledgePoint, Question
+from app.modules.agent.mastery_decay import calculate_effective_mastery
 from app.modules.agent.models import UserLearningMastery
+from app.modules.agent.time_utils import utc_isoformat, utc_now
 from app.modules.practice.models import (
     PracticeAnswer,
     PracticeSession,
@@ -97,17 +99,17 @@ class LearningProgressService:
         self.db = db
 
     async def get(self, user_id: object, *, now: datetime | None = None) -> dict:
-        now = now or datetime.utcnow()
+        now = now or utc_now()
         activity_events = await self._load_activity_events(user_id)
         activity_source_ids = {item.source_id for item in activity_events}
-        evidence = self._activity_evidence(activity_events)
-        evidence.extend(
+        activity_evidence = self._activity_evidence(activity_events)
+        activity_evidence.extend(
             await self._load_question_evidence(user_id, activity_source_ids)
         )
-        evidence.extend(await self._load_mastery_evidence(user_id))
+        mastery_states = await self._load_mastery_states(user_id, now=now)
         answered_questions, correct_questions = await self._question_totals(user_id)
         grouped: dict[str, list[LearningEvidence]] = defaultdict(list)
-        for item in evidence:
+        for item in activity_evidence:
             grouped[item.keyword].append(item)
 
         topics = []
@@ -140,6 +142,7 @@ class LearningProgressService:
             "generated_at": now.isoformat(),
             "summary": {
                 "learned_keywords": len(topics),
+                "activity_retention_keywords": len(topics),
                 "due_keywords": sum(1 for item in topics if item["status"] == "due"),
                 "answered_questions": answered_questions,
                 "correct_questions": correct_questions,
@@ -148,11 +151,31 @@ class LearningProgressService:
                     if answered_questions
                     else 0
                 ),
+                "mastery_knowledge_points": len(mastery_states),
+                "mastery_evidence_count": sum(
+                    int(item["evidence_count"]) for item in mastery_states
+                ),
             },
             "topics": topics,
             "recent_activities": [
                 self._activity_payload(item) for item in activity_events[:20]
             ],
+            # 保留 topics 作为旧前端入口，但明确它是活动保持率轨迹；掌握度
+            # 只能从 mastery_evidence 读取，不能从 exposure 的 quality=0.35 推断。
+            "activity_retention": {
+                "generated_at": now.isoformat(),
+                "topics": topics,
+                "recent_activities": [
+                    self._activity_payload(item) for item in activity_events[:20]
+                ],
+            },
+            "mastery_evidence": {
+                "generated_at": now.isoformat(),
+                "knowledge_points": mastery_states,
+                "evidence_count": sum(
+                    int(item["evidence_count"]) for item in mastery_states
+                ),
+            },
         }
 
     async def _load_activity_events(
@@ -297,7 +320,7 @@ class LearningProgressService:
                     KnowledgePoint.id == UserLearningMastery.knowledge_point_id,
                 )
                 .where(
-                    UserLearningMastery.user_id == user_id.hex,
+                    UserLearningMastery.user_id.in_(self._user_id_values(user_id)),
                     UserLearningMastery.evidence_count > 0,
                     UserLearningMastery.last_graded_at.is_not(None),
                 )
@@ -323,6 +346,92 @@ class LearningProgressService:
                     )
                 )
         return evidence
+
+    async def _load_mastery_states(
+        self,
+        user_id: object,
+        *,
+        now: datetime,
+    ) -> list[dict]:
+        """读取权威掌握度证据，不混入活动保持率轨迹。"""
+
+        rows = (
+            await self.db.execute(
+                select(UserLearningMastery, KnowledgePoint)
+                .join(
+                    KnowledgePoint,
+                    KnowledgePoint.id == UserLearningMastery.knowledge_point_id,
+                )
+                .where(
+                    UserLearningMastery.user_id.in_(self._user_id_values(user_id)),
+                    UserLearningMastery.evidence_count > 0,
+                    KnowledgePoint.status == "active",
+                )
+                .order_by(
+                    UserLearningMastery.updated_at.desc(),
+                    UserLearningMastery.knowledge_point_id,
+                )
+            )
+        ).all()
+        states = []
+        for mastery, point in rows:
+            evidence_at = (
+                mastery.last_evidence_at
+                or mastery.last_graded_at
+                or mastery.updated_at
+                or mastery.created_at
+                or now
+            )
+            effective = calculate_effective_mastery(
+                mastery.mastery_score,
+                evidence_at=evidence_at,
+                now=now,
+                state_model_version=(
+                    getattr(mastery, "state_model_version", None) or "mastery-beta-v1"
+                ),
+            )
+            states.append(
+                {
+                    "knowledge_point_id": mastery.knowledge_point_id,
+                    "knowledge_point_title": point.title,
+                    "knowledge_point_aliases": list(point.aliases or []),
+                    "mastery_score": effective.effective_score,
+                    "raw_mastery_score": effective.raw_score,
+                    "effective_mastery_score": effective.effective_score,
+                    "uncertainty": float(mastery.uncertainty or 1.0),
+                    "evidence_mass": float(
+                        mastery.evidence_mass or mastery.evidence_count or 0.0
+                    ),
+                    "evidence_count": int(mastery.evidence_count or 0),
+                    "correct_count": int(mastery.correct_count or 0),
+                    "incorrect_count": int(mastery.incorrect_count or 0),
+                    "last_evidence_id": mastery.last_evidence_id,
+                    "evidence_at": utc_isoformat(effective.evidence_at),
+                    "decay_policy_version": effective.policy_version,
+                    "state_model_version": effective.state_model_version,
+                    "evidence_sources": (
+                        [
+                            {
+                                "source_id": mastery.last_evidence_id,
+                                "source_type": "mastery_projector",
+                                "evidence_count": int(mastery.evidence_count or 0),
+                                "occurred_at": utc_isoformat(effective.evidence_at),
+                            }
+                        ]
+                        if mastery.last_evidence_id
+                        else []
+                    ),
+                }
+            )
+        return states
+
+    @staticmethod
+    def _user_id_values(user_id: object) -> list[str]:
+        values = [str(user_id)]
+        hex_value = getattr(user_id, "hex", None)
+        if hex_value and str(hex_value) not in values:
+            values.append(str(hex_value))
+        return values
 
     @staticmethod
     def _keywords(*groups: Iterable[str]) -> list[str]:

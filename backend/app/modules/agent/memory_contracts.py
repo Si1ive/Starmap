@@ -13,6 +13,7 @@ class MemoryPartition(str, Enum):
     RECENT_CONVERSATION = "recent_conversation"
     TOPIC_SUMMARY = "topic_summary"
     LEARNING_MASTERY = "learning_mastery"
+    LEARNING_WEAKNESS = "learning_weakness"
     LEARNING_HYPOTHESIS = "learning_hypothesis"
     ARTIFACT_AND_TASK = "artifact_and_task"
     PENDING_INTERACTION = "pending_interaction"
@@ -53,6 +54,8 @@ MEMORY_NEED_PARTITIONS: dict[MemoryNeed, tuple[MemoryPartition, ...]] = {
         MemoryPartition.THREAD_TOPIC_STATE,
         MemoryPartition.TOPIC_SUMMARY,
         MemoryPartition.LEARNING_HYPOTHESIS,
+        MemoryPartition.LEARNING_MASTERY,
+        MemoryPartition.LEARNING_WEAKNESS,
     ),
     MemoryNeed.PRACTICE_GENERATION: (
         MemoryPartition.THREAD_TOPIC_STATE,
