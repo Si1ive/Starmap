@@ -13,6 +13,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 
 from .config import open_agent_model
+from .teaching_policy import TEACHING_POLICY_VERSION as _TEACHING_POLICY_VERSION
 
 from .schema import (
     ConversationDecision,
@@ -35,7 +36,7 @@ READ_TOOL_INTENTS: tuple[ReadToolIntent, ...] = (
     "search_question_candidates",
 )
 
-TEACHING_POLICY_VERSION = "conversation-tutor-v1"
+TEACHING_POLICY_VERSION = _TEACHING_POLICY_VERSION
 
 logger = get_logger(__name__)
 

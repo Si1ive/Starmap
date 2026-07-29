@@ -19,6 +19,7 @@ from ..memory_selector import (
     load_practice_bundle,
 )
 from ..model_runtime.practice import PracticeGenerationDeps, practice_generation_runtime
+from ..model_runtime.teaching_policy import load_frozen_teaching_policy
 from app.modules.practice.service import PracticeService
 from ..time_utils import utc_isoformat, utc_now
 from ..tools import tool_registry
@@ -47,8 +48,15 @@ def _question_is_eligible(candidate: Dict[str, Any]) -> bool:
     return has_source or answer_source in {"extracted", "manual", "llm"}
 
 
-async def _load_learning_evidence_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
+async def _load_learning_evidence_node(
+    context: ExecutionContext, db: AsyncSession
+) -> NodeResult:
     """读取用户学习证据"""
+    teaching_policy = load_frozen_teaching_policy(
+        context,
+        workflow_action="validate",
+    )
+    context.set("teaching_policy", teaching_policy.model_dump(mode="json"))
     practice_bundle = await load_practice_bundle(
         db,
         run_id=context.run_id,
@@ -61,9 +69,7 @@ async def _load_learning_evidence_node(context: ExecutionContext, db: AsyncSessi
         else list(context.get("weak_areas", []) or [])
     )
     recent_topics = (
-        [topic.title]
-        if topic is not None
-        else context.get("recent_topics", [])
+        [topic.title] if topic is not None else context.get("recent_topics", [])
     )
     # P1 简化：从上下文获取
     evidence = {
@@ -71,14 +77,21 @@ async def _load_learning_evidence_node(context: ExecutionContext, db: AsyncSessi
         "weak_areas": weak_areas,
         "strong_areas": context.get("strong_areas", ["计算机网络"]),
         "recent_topics": recent_topics,
+        "teaching_mode": teaching_policy.teaching_mode,
+        "target_knowledge_point_ids": teaching_policy.target_knowledge_point_ids,
+        "need_diagnostic_check": teaching_policy.need_diagnostic_check,
     }
     context.set("practice_bundle", practice_bundle.model_dump(mode="json"))
     context.set("learning_evidence", evidence)
-    logger.info("学习证据加载", run_id=context.run_id, weak_areas=evidence["weak_areas"])
+    logger.info(
+        "学习证据加载", run_id=context.run_id, weak_areas=evidence["weak_areas"]
+    )
     return NodeResult.success({"evidence_loaded": True}, next_node="question_discovery")
 
 
-async def _question_discovery_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
+async def _question_discovery_node(
+    context: ExecutionContext, db: AsyncSession
+) -> NodeResult:
     """检索候选题"""
     from ..tools.retrieve_knowledge import retrieve_knowledge
 
@@ -160,7 +173,7 @@ async def _question_discovery_node(context: ExecutionContext, db: AsyncSession) 
         },
         implementation=retrieve_knowledge,
     )
-    
+
     candidates = result.get("results", [])
     context.set("candidates", candidates)
     logger.info("候选题检索", run_id=context.run_id, count=len(candidates))
@@ -176,15 +189,19 @@ async def _question_discovery_node(context: ExecutionContext, db: AsyncSession) 
             },
             next_node="generate_question",
         )
-    return NodeResult.success({"questions_found": len(candidates)}, next_node="question_gate")
+    return NodeResult.success(
+        {"questions_found": len(candidates)}, next_node="question_gate"
+    )
 
 
-async def _question_gate_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
+async def _question_gate_node(
+    context: ExecutionContext, db: AsyncSession
+) -> NodeResult:
     """题目资格校验"""
     candidates = context.get("candidates", [])
-    
+
     valid = [q for q in candidates if _question_is_eligible(q)]
-    
+
     # 检索有返回但都不满足资格时仍属于可恢复的题库不足，而非运行失败。
     if not valid:
         notice = "题库候选均未通过资格检查，将由模型生成一道练习题"
@@ -198,13 +215,15 @@ async def _question_gate_node(context: ExecutionContext, db: AsyncSession) -> No
             },
             next_node="generate_question",
         )
-    
+
     context.set("valid_questions", valid[:5])  # 最多取5道
     logger.info("题目校验通过", run_id=context.run_id, valid_count=len(valid))
     return NodeResult.success({"gate_passed": True}, next_node="composition_gate")
 
 
-async def _generate_question_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
+async def _generate_question_node(
+    context: ExecutionContext, db: AsyncSession
+) -> NodeResult:
     """题库无合格题目时生成一道结构化单选题。"""
     from .contracts import ModelBudgetExceeded
 
@@ -266,10 +285,12 @@ async def _generate_question_node(context: ExecutionContext, db: AsyncSession) -
     )
 
 
-async def _composition_gate_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
+async def _composition_gate_node(
+    context: ExecutionContext, db: AsyncSession
+) -> NodeResult:
     """题目组合校验"""
     valid_questions = context.get("valid_questions", [])
-    
+
     # P1 简化：检查题目组合是否均衡
     # 实际项目中应根据题型、难度、考点等维度进行组合校验
     composition = {
@@ -278,16 +299,18 @@ async def _composition_gate_node(context: ExecutionContext, db: AsyncSession) ->
         "difficulties": {},
         "subjects": {},
     }
-    
+
     for q in valid_questions:
         meta = q.get("question_meta") or {}
         q_type = meta.get("question_type", "unknown")
         difficulty = meta.get("difficulty", "unknown")
         subject = q.get("subject_id") or "unknown"
         composition["types"][q_type] = composition["types"].get(q_type, 0) + 1
-        composition["difficulties"][difficulty] = composition["difficulties"].get(difficulty, 0) + 1
+        composition["difficulties"][difficulty] = (
+            composition["difficulties"].get(difficulty, 0) + 1
+        )
         composition["subjects"][subject] = composition["subjects"].get(subject, 0) + 1
-    
+
     context.set("composition", composition)
     logger.info("组合校验", run_id=context.run_id, **composition)
     return NodeResult.success({"gate_passed": True}, next_node="create_draft")
@@ -302,7 +325,7 @@ async def _create_draft_node(context: ExecutionContext, db: AsyncSession) -> Nod
     if not topic:
         weak_areas = (context.get("learning_evidence") or {}).get("weak_areas") or []
         topic = weak_areas[0] if weak_areas else "专项"
-    
+
     draft = {
         "title": f"{topic}专项练习",
         "questions": valid_questions,
@@ -317,11 +340,15 @@ async def _create_draft_node(context: ExecutionContext, db: AsyncSession) -> Nod
     )
     draft["session_id"] = session.id
     context.set("practice_draft", draft)
-    logger.info("练习草稿创建", run_id=context.run_id, question_count=len(valid_questions))
+    logger.info(
+        "练习草稿创建", run_id=context.run_id, question_count=len(valid_questions)
+    )
     return NodeResult.success({"draft_created": True}, next_node="render_artifact")
 
 
-async def _render_artifact_node(context: ExecutionContext, db: AsyncSession) -> NodeResult:
+async def _render_artifact_node(
+    context: ExecutionContext, db: AsyncSession
+) -> NodeResult:
     """渲染练习产物"""
     draft = context.get("practice_draft", {})
     composition = context.get("composition", {})
@@ -335,12 +362,20 @@ async def _render_artifact_node(context: ExecutionContext, db: AsyncSession) -> 
     generated_questions = []
     for index, question in enumerate(questions, start=1):
         meta = question.get("question_meta") or {}
-        content = str(question.get("content_text") or question.get("entity_title") or "").strip()
+        content = str(
+            question.get("content_text") or question.get("entity_title") or ""
+        ).strip()
         options = list(meta.get("options") or [])
         lines = [f"### 第 {index} 题", "", content]
         if options:
             lines.extend(
-                ["", *[f"- {option.get('key')}. {option.get('text')}" for option in options]]
+                [
+                    "",
+                    *[
+                        f"- {option.get('key')}. {option.get('text')}"
+                        for option in options
+                    ],
+                ]
             )
         markdown_sections.append("\n".join(lines))
         if meta.get("generated"):
@@ -379,10 +414,22 @@ async def _render_artifact_node(context: ExecutionContext, db: AsyncSession) -> 
                 }
             ],
         },
-        "summary": f"共 {len(draft.get('questions', []))} 道题，覆盖 {len(composition.get('subjects', {}))} 个考点",
-        "_private_metadata": {"generated_questions": generated_questions},
+        "summary": (
+            f"共 {len(draft.get('questions', []))} 道题，覆盖 "
+            f"{len(composition.get('subjects', {}))} 个考点"
+        ),
+        "_private_metadata": {
+            "generated_questions": generated_questions,
+            "teaching_policy": (
+                context.get("teaching_policy")
+                or load_frozen_teaching_policy(
+                    context,
+                    workflow_action="validate",
+                ).model_dump(mode="json")
+            ),
+        },
     }
-    
+
     logger.info("产物渲染完成", run_id=context.run_id)
     return NodeResult.success(
         {"artifact_ready": True, "question_count": len(question_ids)},
@@ -404,16 +451,72 @@ def build_validate_workflow() -> WorkflowDefinition:
         entry_node="load_learning_evidence",
         max_model_calls=3,
     )
-    
-    wf.add_node(Node(name="load_learning_evidence", node_type="action", execute=_load_learning_evidence_node, description="加载学习证据"))
-    wf.add_node(Node(name="question_discovery", node_type="loop", execute=_question_discovery_node, description="检索候选题"))
-    wf.add_node(Node(name="question_gate", node_type="gate", execute=_question_gate_node, description="题目校验"))
-    wf.add_node(Node(name="generate_question", node_type="action", execute=_generate_question_node, description="模型生成题目"))
-    wf.add_node(Node(name="composition_gate", node_type="gate", execute=_composition_gate_node, description="组合校验"))
-    wf.add_node(Node(name="create_draft", node_type="action", execute=_create_draft_node, description="创建草稿"))
-    wf.add_node(Node(name="render_artifact", node_type="render", execute=_render_artifact_node, description="渲染产物"))
-    wf.add_node(Node(name="completed", node_type="render", execute=_completed_node, description="完成"))
-    
+
+    wf.add_node(
+        Node(
+            name="load_learning_evidence",
+            node_type="action",
+            execute=_load_learning_evidence_node,
+            description="加载学习证据",
+        )
+    )
+    wf.add_node(
+        Node(
+            name="question_discovery",
+            node_type="loop",
+            execute=_question_discovery_node,
+            description="检索候选题",
+        )
+    )
+    wf.add_node(
+        Node(
+            name="question_gate",
+            node_type="gate",
+            execute=_question_gate_node,
+            description="题目校验",
+        )
+    )
+    wf.add_node(
+        Node(
+            name="generate_question",
+            node_type="action",
+            execute=_generate_question_node,
+            description="模型生成题目",
+        )
+    )
+    wf.add_node(
+        Node(
+            name="composition_gate",
+            node_type="gate",
+            execute=_composition_gate_node,
+            description="组合校验",
+        )
+    )
+    wf.add_node(
+        Node(
+            name="create_draft",
+            node_type="action",
+            execute=_create_draft_node,
+            description="创建草稿",
+        )
+    )
+    wf.add_node(
+        Node(
+            name="render_artifact",
+            node_type="render",
+            execute=_render_artifact_node,
+            description="渲染产物",
+        )
+    )
+    wf.add_node(
+        Node(
+            name="completed",
+            node_type="render",
+            execute=_completed_node,
+            description="完成",
+        )
+    )
+
     wf.add_edge("load_learning_evidence", ["question_discovery"])
     wf.add_edge("question_discovery", ["question_gate", "generate_question"])
     wf.add_edge("question_gate", ["composition_gate", "generate_question"])
@@ -421,7 +524,7 @@ def build_validate_workflow() -> WorkflowDefinition:
     wf.add_edge("composition_gate", ["create_draft"])
     wf.add_edge("create_draft", ["render_artifact"])
     wf.add_edge("render_artifact", ["completed"])
-    
+
     return wf
 
 

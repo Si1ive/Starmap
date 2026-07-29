@@ -8,14 +8,14 @@ import uuid
 import asyncio
 from contextlib import suppress
 from datetime import timedelta
-from typing import Optional, List
+from typing import Optional
 
-from sqlalchemy import select, update, func
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.db.mysql import mysql_client
-from .models import AgentRun, AgentRunOutbox, AgentEvent
+from .models import AgentRun
 from .state_machine import RunStatus, state_machine
 from .events import event_store
 from .outbox import outbox_store
@@ -41,46 +41,47 @@ class AgentWorker:
     def __init__(self):
         self.running = False
 
-    async def acquire_lease(self, db: AsyncSession, run: AgentRun, lease_duration: int = 300) -> bool:
+    async def acquire_lease(
+        self, db: AsyncSession, run: AgentRun, lease_duration: int = 300
+    ) -> bool:
         """
         获取Run的租约
-        
+
         Args:
             run: AgentRun 实例
             lease_duration: 租约持续时间（秒）
-            
+
         Returns:
             bool: 是否成功获取
         """
         now = utc_now()
         expires_at = now + timedelta(seconds=lease_duration)
-        
+
         # 更新租约
         result = await db.execute(
             update(AgentRun)
             .where(AgentRun.id == run.id)
-            .where(
-                (AgentRun.lease_owner.is_(None)) |
-                (AgentRun.lease_expires_at < now)
-            )
+            .where((AgentRun.lease_owner.is_(None)) | (AgentRun.lease_expires_at < now))
             .values(
                 lease_owner=WORKER_ID,
                 lease_expires_at=expires_at,
             )
         )
         await db.flush()
-        
+
         if result.rowcount > 0:
             logger.info("租约获取成功", run_id=run.id, worker=WORKER_ID)
             return True
-        
+
         return False
 
-    async def extend_lease(self, db: AsyncSession, run: AgentRun, lease_duration: int = 300) -> bool:
+    async def extend_lease(
+        self, db: AsyncSession, run: AgentRun, lease_duration: int = 300
+    ) -> bool:
         """延长租约"""
         now = utc_now()
         expires_at = now + timedelta(seconds=lease_duration)
-        
+
         result = await db.execute(
             update(AgentRun)
             .where(AgentRun.id == run.id)
@@ -88,7 +89,7 @@ class AgentWorker:
             .values(lease_expires_at=expires_at)
         )
         await db.flush()
-        
+
         return result.rowcount > 0
 
     async def release_lease(self, db: AsyncSession, run: AgentRun) -> None:
@@ -104,10 +105,10 @@ class AgentWorker:
     async def process_run(self, db: AsyncSession, run: AgentRun) -> bool:
         """
         处理单个Run
-        
+
         Args:
             run: AgentRun 实例
-            
+
         Returns:
             bool: 是否成功处理
         """
@@ -131,10 +132,15 @@ class AgentWorker:
             # 状态转移：queued -> running
             if run.status == RunStatus.QUEUED.value:
                 state_machine.transition(run, RunStatus.RUNNING)
-                await event_store.append(db, run.id, "run.status_changed", {
-                    "from": "queued",
-                    "to": "running",
-                })
+                await event_store.append(
+                    db,
+                    run.id,
+                    "run.status_changed",
+                    {
+                        "from": "queued",
+                        "to": "running",
+                    },
+                )
                 # 运行态先提交，随后每个 WorkflowEngine 节点再提交自己的
                 # 公开进度，SSE 才能在长任务执行期间持续读取。
                 await db.commit()
@@ -173,12 +179,30 @@ class AgentWorker:
 
             context.set("input_message", run.input_message)
             context.set("workflow", run.workflow_name)
+            run_metadata = (
+                run.metadata_json if isinstance(run.metadata_json, dict) else {}
+            )
+            # child workflow 只读取父 Run 已冻结的策略事实；不存在时由具体
+            # workflow 按兼容默认值构造，绝不重新调用 Router 选择 workflow。
+            if isinstance(run_metadata.get("teaching_policy"), dict):
+                context.set("teaching_policy", run_metadata["teaching_policy"])
+            if isinstance(run_metadata.get("conversation_decision"), dict):
+                context.set(
+                    "conversation_decision",
+                    run_metadata["conversation_decision"],
+                )
+            elif isinstance(run_metadata.get("router_decision"), dict):
+                context.set("router_decision", run_metadata["router_decision"])
+            if isinstance(run_metadata.get("learning_snapshot"), dict):
+                context.set("learning_snapshot", run_metadata["learning_snapshot"])
             context.max_model_calls = run.max_model_calls
             context.model_call_count = run.model_call_count
 
             # 执行工作流
             engine = WorkflowEngine(db)
-            result = await engine.execute(workflow, context, run, resume_from=resume_from)
+            result = await engine.execute(
+                workflow, context, run, resume_from=resume_from
+            )
 
             # 延长租约
             await self.extend_lease(db, run)
@@ -202,11 +226,16 @@ class AgentWorker:
                         ),
                     )
                     run.result_artifact_id = artifact.id
-                    await event_store.append(db, run.id, "artifact.rendered", {
-                        "run_id": run.id,
-                        "artifact_id": artifact.id,
-                        "artifact_type": artifact.artifact_type,
-                    })
+                    await event_store.append(
+                        db,
+                        run.id,
+                        "artifact.rendered",
+                        {
+                            "run_id": run.id,
+                            "artifact_id": artifact.id,
+                            "artifact_type": artifact.artifact_type,
+                        },
+                    )
                     await project_completed_run_facts(db, run, artifact)
 
                 display_result = None
@@ -214,24 +243,35 @@ class AgentWorker:
                     artifact_content = result.artifact.get("content")
                     if isinstance(artifact_content, str):
                         display_result = artifact_content
-                        await event_store.append(db, run.id, "message.completed", {
-                            "run_id": run.id,
-                            "content": artifact_content,
-                            "artifact_id": artifact.id if artifact else None,
-                        })
-                    else:
-                        display_result = (
-                            result.artifact.get("summary")
-                            or result.artifact.get("title")
+                        await event_store.append(
+                            db,
+                            run.id,
+                            "message.completed",
+                            {
+                                "run_id": run.id,
+                                "content": artifact_content,
+                                "artifact_id": artifact.id if artifact else None,
+                            },
                         )
+                    else:
+                        display_result = result.artifact.get(
+                            "summary"
+                        ) or result.artifact.get("title")
 
                 state_machine.transition(run, RunStatus.COMPLETED)
-                await event_store.append(db, run.id, "run.completed", {
-                    "run_id": run.id,
-                    "result": display_result,
-                    "result_artifact_id": artifact.id if artifact else None,
-                    "artifacts": result.output.get("artifacts", []) if result.output else [],
-                })
+                await event_store.append(
+                    db,
+                    run.id,
+                    "run.completed",
+                    {
+                        "run_id": run.id,
+                        "result": display_result,
+                        "result_artifact_id": artifact.id if artifact else None,
+                        "artifacts": (
+                            result.output.get("artifacts", []) if result.output else []
+                        ),
+                    },
+                )
                 await enqueue_conversation_summary_maintenance(db, run)
                 await enqueue_preference_candidate_extraction(db, run)
 
@@ -247,11 +287,16 @@ class AgentWorker:
 
                 state_machine.transition(run, waiting_status, reason=waiting_reason)
                 run.error_message = None
-                await event_store.append(db, run.id, "run.status_changed", {
-                    "from": RunStatus.RUNNING.value,
-                    "to": waiting_status.value,
-                    "reason": waiting_reason,
-                })
+                await event_store.append(
+                    db,
+                    run.id,
+                    "run.status_changed",
+                    {
+                        "from": RunStatus.RUNNING.value,
+                        "to": waiting_status.value,
+                        "reason": waiting_reason,
+                    },
+                )
                 logger.info(
                     "Run 进入等待状态",
                     run_id=run.id,
@@ -320,7 +365,7 @@ class AgentWorker:
     async def scan_and_process(self, limit: int = 10) -> int:
         """
         扫描outbox并处理待执行的Run
-        
+
         Returns:
             int: 处理的数量
         """
@@ -379,17 +424,19 @@ class AgentWorker:
     async def start(self, interval: int = 5):
         """
         启动Worker循环
-        
+
         Args:
             interval: 扫描间隔（秒）
         """
         self.running = True
         logger.info("Worker 启动", worker_id=WORKER_ID)
-        
+
         while self.running:
             try:
                 processed = await self.scan_and_process(limit=10)
-                memory_processed = await memory_outbox_consumer.scan_and_process(limit=10)
+                memory_processed = await memory_outbox_consumer.scan_and_process(
+                    limit=10
+                )
                 if processed > 0 or memory_processed > 0:
                     logger.info(
                         "Worker 处理完成",
@@ -399,7 +446,7 @@ class AgentWorker:
                     )
             except Exception as e:
                 logger.error("Worker 扫描异常", error=str(e))
-            
+
             await asyncio.sleep(interval)
 
     async def stop(self):

@@ -10,9 +10,18 @@ from app.core.logging import get_logger
 from ..capabilities import CapabilitySpec, capability_registry
 from ..context_builder import AgentRunContext, ThreadContextBuilder
 from ..events import event_store
+from ..learning_snapshot import load_learning_snapshot_summary
 from ..model_runtime.answer import DirectAnswerDeps, direct_answer_runtime
 from ..model_runtime.referent import ReferentDeps, referent_runtime
-from ..model_runtime.router import RouterDeps, router_runtime
+from ..model_runtime.router import (
+    RouterDeps,
+    normalize_conversation_decision,
+    router_runtime,
+)
+from ..model_runtime.teaching_policy import (
+    TEACHING_POLICY_VERSION,
+    freeze_teaching_policy,
+)
 from ..models import AgentRun
 from ..service import AgentService
 from ..timeline import AgentTimelineService
@@ -95,6 +104,25 @@ async def _route_node(context: ExecutionContext, db: AsyncSession) -> NodeResult
         agent_context.active_topic = understanding.topic_entities[0].model_dump(
             mode="json"
         )
+    learning_snapshot = await load_learning_snapshot_summary(
+        db,
+        snapshot_id=snapshot.id,
+        user_id=run.user_id,
+        thread_id=run.thread_id,
+        active_topic=agent_context.active_topic,
+    )
+    known_knowledge_point_ids = tuple(
+        dict.fromkeys(
+            [
+                *learning_snapshot.known_knowledge_point_ids,
+                *(
+                    topic.entity_id
+                    for topic in understanding.topic_entities
+                    if topic.entity_type == "knowledge_point" and topic.entity_id
+                ),
+            ]
+        )
+    )
     context.charge_model_call()
     decision = await router_runtime.decide(
         understanding.standalone_request,
@@ -106,11 +134,19 @@ async def _route_node(context: ExecutionContext, db: AsyncSession) -> NodeResult
             token_budget=agent_context.token_budget,
             conversation_summary=agent_context.conversation_summary,
             capabilities=capability_registry.model_manifest(CONVERSATION_ACTIONS),
+            learning_snapshot=learning_snapshot.model_dump(mode="json"),
+            read_tool_manifest=capability_registry.read_only_model_manifest(),
+            allowed_read_tool_intents=capability_registry.allowed_read_tool_intents(),
+            known_knowledge_point_ids=known_knowledge_point_ids,
         ),
         message_history=agent_context.to_message_history(),
         db=db,
     )
+    decision = normalize_conversation_decision(decision)
+    teaching_policy = freeze_teaching_policy(decision)
     context.set("agent_run_context", agent_context)
+    context.set("learning_snapshot", learning_snapshot.model_dump(mode="json"))
+    context.set("conversation_decision", decision)
     context.set("router_decision", decision)
 
     metadata = dict(run.metadata_json or {})
@@ -128,7 +164,17 @@ async def _route_node(context: ExecutionContext, db: AsyncSession) -> NodeResult
     }
     metadata["memory_snapshot_id"] = snapshot.id
     metadata["turn_understanding"] = understanding.model_dump(mode="json")
-    metadata["router_decision"] = decision.model_dump(exclude_none=True)
+    decision_payload = decision.model_dump(exclude_none=True)
+    metadata["conversation_decision"] = decision_payload
+    # 旧管理端和历史排障脚本继续读取 router_decision；两个键在同一事务中
+    # 写入同一份结构化结果，避免兼容读取产生两个事实源。
+    metadata["router_decision"] = decision_payload
+    metadata["teaching_policy_version"] = TEACHING_POLICY_VERSION
+    metadata["teaching_policy"] = teaching_policy.model_dump(mode="json")
+    metadata["learning_snapshot"] = learning_snapshot.model_dump(mode="json")
+    metadata["read_capability_snapshot"] = (
+        capability_registry.read_only_audit_manifest()
+    )
     selected_capability = capability_registry.require(decision.action)
     metadata["capability_snapshot"] = {
         "policy_version": capability_registry.policy_version,
@@ -152,6 +198,11 @@ async def _route_node(context: ExecutionContext, db: AsyncSession) -> NodeResult
             "action": decision.action,
             "confidence": decision.confidence,
             "reason_code": decision.reason_code,
+            "reason_codes": decision.reason_codes,
+            "teaching_mode": decision.teaching_mode,
+            "target_knowledge_point_ids": decision.target_knowledge_point_ids,
+            "need_diagnostic_check": decision.need_diagnostic_check,
+            "read_tool_intents": decision.read_tool_intents,
         },
         next_node=next_node,
     )
@@ -178,9 +229,14 @@ async def _direct_answer_node(
         await db.commit()
 
     context.charge_model_call()
+    decision = normalize_conversation_decision(context.get("router_decision"))
     output = await direct_answer_runtime.answer(
         agent_context.standalone_request or agent_context.current_input,
-        deps=DirectAnswerDeps.from_context(agent_context),
+        deps=DirectAnswerDeps.from_context(
+            agent_context,
+            teaching_mode=decision.teaching_mode,
+            need_diagnostic_check=decision.need_diagnostic_check,
+        ),
         message_history=agent_context.to_message_history(),
         db=db,
         on_delta=publish_delta,
@@ -221,6 +277,7 @@ def _child_context_metadata(
     *,
     model_config_id: str | None,
     capability: CapabilitySpec,
+    teaching_policy=None,
 ) -> dict[str, Any]:
     """只向 child run 传递经过上下文策略筛选后的引用和审计信息。"""
     metadata = {
@@ -249,6 +306,18 @@ def _child_context_metadata(
             "available": [capability.audit_descriptor()],
         },
     }
+    if teaching_policy is not None:
+        policy_payload = teaching_policy.model_dump(mode="json")
+        metadata["teaching_policy"] = policy_payload
+        metadata["teaching_policy_version"] = policy_payload["policy_version"]
+        metadata["conversation_decision"] = {
+            "action": policy_payload["workflow_action"],
+            "teaching_mode": policy_payload["teaching_mode"],
+            "target_knowledge_point_ids": policy_payload["target_knowledge_point_ids"],
+            "need_diagnostic_check": policy_payload["need_diagnostic_check"],
+            "read_tool_intents": policy_payload["read_tool_intents"],
+            "reason_codes": policy_payload["reason_codes"],
+        }
     if model_config_id:
         metadata["model_config_id"] = model_config_id
     return metadata
@@ -269,6 +338,8 @@ async def _dispatch_workflow_node(
     agent_context = context.get("agent_run_context")
     if not isinstance(agent_context, AgentRunContext):
         return NodeResult.failure("缺少受控 AgentRunContext")
+    decision = normalize_conversation_decision(context.get("router_decision"))
+    teaching_policy = freeze_teaching_policy(decision)
 
     child_run = await AgentService(db).create_run(
         user_id=parent_run.user_id,
@@ -291,6 +362,7 @@ async def _dispatch_workflow_node(
             agent_context,
             model_config_id=(parent_run.metadata_json or {}).get("model_config_id"),
             capability=capability,
+            teaching_policy=teaching_policy,
         ),
     )
     await AgentTimelineService(db).ensure_workflow_item(

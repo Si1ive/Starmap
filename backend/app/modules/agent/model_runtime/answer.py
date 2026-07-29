@@ -12,7 +12,7 @@ from app.core.logging import get_logger
 
 from ..context_builder import AgentRunContext
 from .config import open_agent_model
-from .schema import DirectAnswerOutput
+from .schema import DirectAnswerOutput, TeachingMode
 
 logger = get_logger(__name__)
 
@@ -30,10 +30,18 @@ class DirectAnswerDeps:
     attachment_names: tuple[str, ...] = ()
     context_reference_ids: tuple[str, ...] = ()
     conversation_summary: str | None = None
+    teaching_mode: TeachingMode = "answer_only"
+    need_diagnostic_check: bool = False
     token_budget: int = 4096
 
     @classmethod
-    def from_context(cls, context: AgentRunContext) -> "DirectAnswerDeps":
+    def from_context(
+        cls,
+        context: AgentRunContext,
+        *,
+        teaching_mode: TeachingMode = "answer_only",
+        need_diagnostic_check: bool = False,
+    ) -> "DirectAnswerDeps":
         return cls(
             thread_id=context.thread_id,
             user_id=context.user_id,
@@ -50,6 +58,8 @@ class DirectAnswerDeps:
                 str(item.get("id")) for item in context.context_refs if item.get("id")
             ),
             conversation_summary=context.conversation_summary,
+            teaching_mode=teaching_mode,
+            need_diagnostic_check=need_diagnostic_check,
             token_budget=context.token_budget,
         )
 
@@ -72,6 +82,11 @@ def _controlled_context(context: RunContext[DirectAnswerDeps]) -> str:
     sections: list[str] = []
     if deps.conversation_summary:
         sections.append("冻结的历史对话摘要：\n" + deps.conversation_summary)
+    sections.append(
+        "冻结教学策略："
+        f"{deps.teaching_mode}"
+        + ("；完成回答后建议一次短诊断" if deps.need_diagnostic_check else "")
+    )
     if deps.artifact_summaries:
         sections.append("既有公开产物摘要：\n- " + "\n- ".join(deps.artifact_summaries))
     if deps.attachment_names:
@@ -119,7 +134,9 @@ class DirectAnswerRuntime:
                 )
                 output = result.output
         elif db is not None:
-            async with open_agent_model(db, run_id=deps.turn_id, purpose="Agent 直接回答") as session:
+            async with open_agent_model(
+                db, run_id=deps.turn_id, purpose="Agent 直接回答"
+            ) as session:
                 logger.info(
                     "Agent 回答模型调用开始",
                     thread_id=deps.thread_id,
@@ -195,7 +212,7 @@ class DirectAnswerRuntime:
                 # 结构化 partial validation 可能修正尚未闭合的字段。只有当前
                 # content 延续已发布前缀时才追加，最终 completed 会用完整正文收敛。
                 if content.startswith(published_content):
-                    delta = content[len(published_content):]
+                    delta = content[len(published_content) :]
                     if delta:
                         await on_delta(delta)
                         published_content = content

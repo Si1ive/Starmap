@@ -11,7 +11,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 
 from .config import open_agent_model
-from .schema import ExplanationOutput, LoopDecision
+from .schema import ExplanationOutput, LoopDecision, TeachingMode
 
 logger = get_logger(__name__)
 
@@ -26,6 +26,9 @@ class ExplanationDeps:
     conversation_summary: str | None = None
     artifact_summaries: tuple[str, ...] = ()
     reference_ids: tuple[str, ...] = ()
+    teaching_mode: TeachingMode = "explain"
+    need_diagnostic_check: bool = False
+    target_knowledge_point_ids: tuple[str, ...] = ()
     token_budget: int = 8192
 
 
@@ -59,6 +62,11 @@ def _controlled_context(context: RunContext[ExplanationDeps]) -> str:
     sections = []
     if deps.topic_title:
         sections.append(f"本轮冻结主题：{deps.topic_title}")
+    sections.append(
+        "冻结教学策略："
+        f"{deps.teaching_mode}"
+        + ("；完成讲解后建议一次短诊断" if deps.need_diagnostic_check else "")
+    )
     if deps.conversation_summary:
         sections.append("冻结的历史对话摘要：\n" + deps.conversation_summary)
     if deps.artifact_summaries:
@@ -110,7 +118,9 @@ class ExplanationRuntime:
                 model=self.decision_model,
             )
         elif db is not None:
-            async with open_agent_model(db, run_id=deps.run_id, purpose="Agent 证据行动决策") as session:
+            async with open_agent_model(
+                db, run_id=deps.run_id, purpose="Agent 证据行动决策"
+            ) as session:
                 logger.info(
                     "讲解资料规划模型调用开始",
                     run_id=deps.run_id,
@@ -156,7 +166,9 @@ class ExplanationRuntime:
                 model=self.generation_model,
             )
         elif db is not None:
-            async with open_agent_model(db, run_id=deps.run_id, purpose="Agent 讲解生成") as session:
+            async with open_agent_model(
+                db, run_id=deps.run_id, purpose="Agent 讲解生成"
+            ) as session:
                 logger.info(
                     "讲解正文模型调用开始",
                     run_id=deps.run_id,

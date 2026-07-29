@@ -28,10 +28,10 @@
 
 | 执行阶段 | 文件 | 符号 | 代码范围 | 入口条件 | 处理 | 输出/副作用 | 下一步 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 上下文与路由 | `backend/app/modules/agent/workflows/conversation.py` | `_route_node` | L45-L157 | conversation Run 已创建 | 构建线程上下文、指代理解和 memory snapshot，调用 Pydantic AI Router，冻结 capability/context 元数据 | `AgentRunContext`、`RouterDecision`、root Run metadata | direct/clarify 或 `_dispatch_workflow_node` |
-| 路由模型 | `backend/app/modules/agent/model_runtime/router.py` | `router_agent` | L31-L58 | 已冻结的请求、历史摘要和能力清单 | 只返回 `RouterDecision`，不直接回答、不直接写学习事实 | 高层 `action`、置信度和理由编码 | `RouterRuntime.decide` |
-| 路由护栏 | `backend/app/modules/agent/model_runtime/router.py` | `RouterRuntime.decide` | L124-L196 | 模型返回路由结果 | 校验 action allowlist；显式出题/批改/计划/讲解请求覆盖模型误判；clarify 必须有问题 | 受控 `RouterDecision` | conversation workflow 分支 |
-| Child workflow 交接 | `backend/app/modules/agent/workflows/conversation.py` | `_dispatch_workflow_node` | L257-L307 | action 为 explain/validate/grade/plan | 按 capability、Run/User 和父子关系幂等创建 child Run，冻结上下文与能力快照 | child Run、AgentTimeline workflow item、Agent Run Outbox | Worker 执行 child workflow |
+| 上下文与路由 | `backend/app/modules/agent/workflows/conversation.py` | `_route_node` | L54-L208 | conversation Run 已创建 | 构建线程上下文、指代理解和 memory snapshot，读取同一 snapshot 的 LearningSnapshot 摘要，调用合并后的 ConversationTutorRuntime，冻结 capability/context/decision/teaching policy 元数据 | `AgentRunContext`、`ConversationDecision`、root Run metadata | direct/clarify 或 `_dispatch_workflow_node` |
+| 路由模型 | `backend/app/modules/agent/model_runtime/router.py` | `conversation_tutor_agent` | L61-L80 | 已冻结的请求、历史摘要、LearningSnapshot 和能力清单 | 一次返回 `ConversationDecision` 的 workflow 与教学策略，不直接回答、不直接写学习事实；`router_agent` 仍为兼容别名 | action、teaching_mode、知识点目标、诊断标记、只读意图和理由代码 | `ConversationTutorRuntime.decide` |
+| 路由护栏 | `backend/app/modules/agent/model_runtime/router.py` | `ConversationTutorRuntime.decide` | L233-L320 | 模型返回路由结果 | 校验 action/read intent/知识点范围；显式出题/批改/计划/讲解请求覆盖模型误判；clarify 必须有问题；旧输出补齐默认教学模式 | 受控 `ConversationDecision` | conversation workflow 分支 |
+| Child workflow 交接 | `backend/app/modules/agent/workflows/conversation.py` | `_child_context_metadata`、`_dispatch_workflow_node` | L275-L323、L326-L367 | action 为 explain/validate/grade/plan、冻结 teaching policy | 按 capability、Run/User 和父子关系幂等创建 child Run，冻结上下文、能力快照和 teaching policy；不再次调用 Router | child Run、AgentTimeline workflow item、Agent Run Outbox | Worker 执行 child workflow |
 | 工具门禁 | `backend/app/modules/agent/tools/registry.py` | `ToolRegistry.execute` | L75-L103 | workflow 请求调用已注册工具 | 校验注册状态、workflow allowlist、只读属性、未知参数和必要参数 | 工具执行；异常传播至节点错误链 | `retrieve_knowledge` 或其他领域服务 |
 | 知识库检索 | `backend/app/modules/agent/tools/retrieve_knowledge.py` | `retrieve_knowledge` | L158-L386 | 有合法 Run、query 和范围过滤 | 由 Run 反查用户，执行混合检索，记录稳定 activity/attempt/trace，并过滤私有资料所有权 | 结构化 RAG 结果、`tool.called/result` 事件 | Explain/Validate 消费结果 |
 | 练习候选 | `backend/app/modules/agent/workflows/validate.py` | `_question_discovery_node` | L81-L179 | Validate 已加载 PracticeBundle | 组装知识点/章节/难度/排除集过滤，通过 Tool Registry 检索题目；空命中进入生成分支 | candidates 或题库不足分支 | question gate/generate |
@@ -44,7 +44,7 @@
 | 掌握度投影 | `backend/app/modules/agent/memory_projection.py` | `_record_grade_result_confirmed` | L311-L424 | Feedback grading 含可信 verdict、题目和知识点 | 以 evidence ID 幂等写 memory fact，并按 correct/partial/incorrect 更新 `UserLearningMastery` | mastery、AgentMemoryEvent、Memory Outbox | 长期记忆/后续选择 |
 | 掌握度读时衰减 | `backend/app/modules/agent/mastery_decay.py` | `calculate_effective_mastery` | L26-L58 | 有原始分数、证据时间和读取时点 | 按固定策略计算 effective score，不修改原始累计值 | `EffectiveMastery` | Practice/Plan/学习状态读取 |
 | 掌握度模型 | `backend/app/modules/agent/models.py` | `UserLearningMastery` | L697-L722 | 已有可信评分证据 | 保存知识点级 mastery、证据次数、对错次数和最近证据 | 用户级知识点掌握度表 | 新 `LearningSnapshot` 读取 |
-| Run 完成交接 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | L104-L281 | WorkflowEngine 返回 completed/waiting/failed | 持久化 Artifact，投影完成事实，写 Run 状态并投递摘要/偏好任务；异常不覆盖原始事实 | Run/Artifact/Event/Outbox | Observer 触发应接在 completed 事实边界之后 |
+| Run 完成交接 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | L105-L323 | WorkflowEngine 返回 completed/waiting/failed | 先将 Run metadata 中已冻结的 teaching policy/decision/LearningSnapshot 注入 child ExecutionContext，再持久化 Artifact、投影完成事实、写 Run 状态并投递摘要/偏好任务；异常不覆盖原始事实 | Run/Artifact/Event/Outbox | Observer 触发应接在 completed 事实边界之后 |
 
 ## 目标执行链
 
@@ -107,9 +107,10 @@ ConversationTutorAgent 选择下一步教学动作
 - 为旧事件定义明确默认值，不把历史讲解事件回填成 mastery evidence。
 ## 阶段二：合并 Router 与 Tutor 策略
 
-实施状态：进行中；本提交已完成 ConversationDecision 契约、ConversationTutorRuntime
-兼容别名、只读能力 allowlist 和模型输出边界，下一提交接入 conversation Run、child
-Run 与 Explain/Validate/Grade 的策略冻结。
+实施状态：已完成；ConversationDecision 契约、ConversationTutorRuntime 兼容别名、
+只读能力 allowlist、LearningSnapshot 摘要、conversation/child Run 策略冻结以及
+Explain/Validate/Grade 的策略读取均已落地。后续阶段再实现诊断题、Observer 和更完整
+的学习状态模型。
 
 ### 目标
 

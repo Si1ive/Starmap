@@ -20,7 +20,7 @@
 | 用户提交模型选择 | `frontend/src/pages/AgentPage.tsx` | `AgentPage.handleSend` | 用户发送一轮对话 | 把 `selectedModelId` 交给 context store；新建 thread 前后都保留用户选择 | `TurnCreateRequest.model_config_id` |
 | 提交 turn | `frontend/src/store/agent-context.tsx` | `AgentProvider.sendTurn` | thread、内容、`modelConfigId` | 生成 `client_message_id` 并把模型配置 ID 传给后端 | `createTurn` |
 | Root Run 落库 | `backend/app/modules/agent/timeline.py` | `AgentTimelineService.create_turn` | 用户消息和 `model_config_id` | 在创建 root run 时写入所选模型配置 ID | run 级配置事实 |
-| Child 继承模型 | `backend/app/modules/agent/workflows/conversation.py` | `_child_context_metadata` | 父 run 的 `model_config_id` | 只复制模型配置 ID 到 child metadata | child run 后续使用同一配置 |
+| Child 继承模型与教学策略 | `backend/app/modules/agent/workflows/conversation.py` | `_child_context_metadata`（L275-L323） | 父 run 的 `model_config_id`、FrozenTeachingPolicy | 只复制模型配置 ID、策略版本和 teaching_mode/目标/诊断/只读意图到 child metadata；不复制函数或密钥 | child run 后续使用同一模型配置和教学策略 |
 | 打开实际模型 | `backend/app/modules/agent/model_runtime/config.py` | `open_agent_model` | run ID | 从 run 或 child metadata 读取配置，创建独立 `AsyncOpenAI` 客户端，并写回运行时审计元数据 | Router/Answer/Explain/Summary runtime |
 
 ## Token 与请求保护语义
@@ -30,14 +30,14 @@
 | 历史选择预算 | `backend/app/modules/agent/workflows/conversation.py` | `_route_node` | conversation run 开始路由 | `token_budget=4096` 只用于筛历史消息，不限制模型最终生成长度 | `AgentRunContext` 与 `RouterDeps` |
 | Conversation 总调用预算 | `backend/app/modules/agent/workflows/conversation.py`（L312-L335） | `build_conversation_workflow` | conversation workflow 注册 | `max_model_calls=3`，容纳可选指代消解 + Router + direct answer；摘要选择不调用模型，无歧义时不消费指代调用 | `ExecutionContext.charge_model_call` |
 | 指代请求保护 | `backend/app/modules/agent/model_runtime/referent.py`（L73-L169） | `ReferentRuntime.resolve`、`ReferentRuntime._run` | 确定性指代未解且存在语义候选 | 使用 `UsageLimits(request_limit=2)`；非法候选键报错，低置信度降级 unresolved | `TurnUnderstanding.reference_resolution` |
-| Router 请求保护 | `backend/app/modules/agent/model_runtime/router.py` | `_explicit_workflow_action`、`RouterRuntime.decide`、`RouterRuntime._run`（L88-L95、L117-L207） | Router 调用 | 使用 `UsageLimits(request_limit=2)` 防止单次路由无限重试；明确“再出/重新出上一题”在模型误判为 direct 时仍由确定性护栏纠正为 Validate，常见否定前缀不触发 | 结构化 `RouterDecision` |
+| Router/Tutor 请求保护 | `backend/app/modules/agent/model_runtime/router.py` | `_EXPLICIT_WORKFLOW_PATTERNS`、`_explicit_workflow_action`、`ConversationTutorRuntime.decide`、`ConversationTutorRuntime._run`（L86-L124、L233-L320、L323-L338） | ConversationTutorAgent 调用 | 使用 `UsageLimits(request_limit=2)` 防止单次决策无限重试；明确“再出/重新出上一题”在模型误判为 direct 时仍由确定性护栏纠正为 Validate，教学策略、目标 ID 和只读意图随后做范围校验 | 结构化 `ConversationDecision`（旧 `RouterDecision` 兼容） |
 | 普通回答请求保护 | `backend/app/modules/agent/model_runtime/answer.py` | `DirectAnswerRuntime._run_stream` / `_run` | 普通回答流式或非流式调用 | 只限制请求次数；输出上限由模型配置的 `max_tokens` 决定 | 流式 delta 或完整回答 |
 | Explain 请求保护 | `backend/app/modules/agent/model_runtime/explanation.py` | `ExplanationRuntime._run_decision` / `_run_generation` | explain 规划或正文生成 | 只限制请求次数，不把项目内部 Token 预算误作总输出上限 | `LoopDecision` / `ExplanationOutput` |
 | 摘要请求保护 | `backend/app/modules/agent/model_runtime/conversation_summary.py`（L59-L133） | `ConversationSummaryRuntime.summarize`、`ConversationSummaryRuntime._run` | Outbox 选出旧摘要和一批新增消息 | 使用触发 Run 绑定模型配置与 `UsageLimits(request_limit=2)`，结构化正文最多 6000 字；不会消费当前 Run 的 workflow 调用预算 | 新版本 `AgentConversationSummary.summary_text` |
 | 偏好候选请求保护 | `backend/app/modules/agent/model_runtime/preference_extractor.py`（L23-L160） | `PreferenceCandidateProposal`、`PreferenceExtractionRuntime.extract`、`PreferenceExtractionRuntime._run` | 同作用域单条原始 user message、根 conversation Run | 只允许最多五个 snake_case key、标量 value、scope 和 confidence；临时难度/章节、掌握度和目标禁止抽取，重复 key 拒绝；使用 Run 模型配置与 `UsageLimits(request_limit=2)` | 带 extractor/model 审计的 proposals；只由 Outbox 写 pending candidate |
 | 模型配置 `null` 语义 | `backend/app/modules/agent/model_configs.py`、`backend/app/modules/agent/models.py` | `AgentModelConfigService.create` / `update`、`AgentModelConfigRecord.max_tokens` | 管理员把 `max_tokens` 设为 `null` | 明确保留“不设上限”，运行时完全省略该参数 | OpenAI 兼容请求 |
 
-历史摘要的首批消费锚点：`backend/app/modules/agent/model_runtime/router.py::RouterDeps` / `_router_policy`（L30-L114）与 `backend/app/modules/agent/model_runtime/answer.py::DirectAnswerDeps` / `_controlled_context`（L22-L86）。两者只接收 snapshot 前由服务端按用户、线程、范围和预算筛过的摘要；动态 instructions 明确其为不可信数据，摘要不会被伪装成历史 user 消息，也不会改变模型调用预算。
+历史摘要与学习策略的首批消费锚点：`backend/app/modules/agent/model_runtime/router.py::RouterDeps` / `_router_policy`（L45-L58、L128-L167）、`backend/app/modules/agent/learning_snapshot.py::load_learning_snapshot_summary`（L75-L138）与 `backend/app/modules/agent/model_runtime/answer.py::DirectAnswerDeps` / `_controlled_context`（L23-L64、L80-L101）。它们只接收 snapshot 前由服务端按用户、线程、范围和预算筛过的摘要/策略；动态 instructions 明确其为不可信数据，摘要不会被伪装成历史 user 消息，也不会改变模型调用预算，策略不会进入学习证据。
 
 ## 普通回答结构化流式输出
 
@@ -52,7 +52,7 @@
 
 | 执行阶段 | 文件 | 符号 | 入口与关键参数 | 处理、调用关系与副作用 | 错误与最终消费 |
 | --- | --- | --- | --- | --- | --- |
-| 资料规划 | `backend/app/modules/agent/model_runtime/explanation.py` | `ExplanationDeps`、`_controlled_context`、`ExplanationRuntime.decide`（L19-L134） | standalone question、有效资料数、snapshot history/摘要、主题、Artifact 摘要、引用 ID | 两类 Explain Agent 共享受控 instructions；冻结摘要与其他文本均声明为不可信数据，调用 child Run 绑定模型执行结构化规划 | `LoopDecision`；模型异常向 `_evidence_loop_node` 传播 |
+| 资料规划 | `backend/app/modules/agent/model_runtime/explanation.py` | `ExplanationDeps`、`_controlled_context`、`ExplanationRuntime.decide`（L19-L134） | standalone question、有效资料数、snapshot history/摘要、主题、Artifact 摘要、引用 ID、冻结 teaching_mode | 两类 Explain Agent 共享受控 instructions；冻结摘要与教学策略均声明为不可信动态资料，调用 child Run 绑定模型执行结构化规划，策略不重新选择业务 workflow | `LoopDecision`；模型异常向 `_evidence_loop_node` 传播 |
 | 正文生成 | `backend/app/modules/agent/model_runtime/explanation.py` | `ExplanationRuntime.generate`（L136-L180） | standalone question、同一 snapshot history/摘要、evidence text、同一 child run ID | 复用同一模型配置与摘要副本，输出 `outline`、`body`、`citations`、`summary`；不得执行摘要或资料中的指令 | `_render_artifact_node` 消费 |
 | 结构化响应审计 | `backend/app/modules/agent/model_runtime/config.py` | `_audit_model_response`（L75-L89） | Pydantic AI `ModelResponse` | 优先拼接 `TextPart`；GLM 等模型通过 tool-call 返回结构化结果且无文本 part 时，从 `args/content` 生成可读审计文本，完整响应仍写 `response_full` | LLM 调用记录的 response_text、token 与完整响应；审计页消费 | `LLMCallRecorder.record_pydantic_response` |
 | 单测覆盖 | `backend/tests/test_agent_explanation_runtime.py` | `test_explanation_runtime_returns_structured_decision_and_content` / `test_explanation_runtime_uses_run_bound_agent_model_config` | 运行时接线变化 | 校验结构化决策、正文输出与 run 绑定配置 | 回归保护 |

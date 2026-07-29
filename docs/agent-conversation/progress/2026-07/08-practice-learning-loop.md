@@ -72,5 +72,22 @@
 - 目标：让在线入口一次模型调用同时产出业务 `action` 和 `teaching_mode`，并固定知识点目标、诊断需求、稳定原因代码与只读能力意图。
 - 关键实现：新增兼容的 `ConversationDecision`/旧 `RouterDecision` 别名、`ConversationTutorRuntime`/旧 `RouterRuntime` 别名；`RouterDeps` 增加冻结学习快照摘要、三项只读能力 allowlist 和知识点目标范围。显式讲解、出题、批改、计划护栏仍在运行时生效，模型输出禁止掌握度写字段。
 - 安全边界：`get_learning_snapshot`、`retrieve_knowledge`、`search_question_candidates` 只作为结构化 intent，真实执行继续由 ToolRegistry 和 workflow/参数/用户归属门禁负责；教学策略不进入学习证据投影。
-- 验证：`backend/venv/bin/pytest tests/test_agent_router_runtime.py tests/test_agent_capability_harness.py -q`（21 passed）；对话 Worker 基线因测试 fixture 未加载 `users` 表而有既有 SQLite 外键建表错误，未归因于本次改动。
+- 验证：`backend/venv/bin/pytest tests/test_agent_router_runtime.py tests/test_agent_capability_harness.py -q`（25 passed）；对话 Worker 基线因测试 fixture 未加载 `users` 表而有既有 SQLite 外键建表错误，未归因于本次改动。
 - 中文提交信息：`合并 Agent 路由与教学策略契约`。
+
+## 2026-07-29：阶段二完成——冻结 Tutor 策略并交接 child workflow
+
+- 目标：让 Router/Tutor 的单次决策进入真实 conversation Run 主链，保证同一份 LearningSnapshot、teaching policy 和 ConversationDecision 可被 direct answer 及 Explain/Validate/Grade child workflow 回放消费。
+- 关键代码锚点：
+
+  | 执行阶段 | 文件 | 符号 | 代码范围 | 职责 |
+  | --- | --- | --- | --- | --- |
+  | 快照读取 | `backend/app/modules/agent/learning_snapshot.py` | `LearningSnapshotSummary`、`load_learning_snapshot_summary` | L23-L49、L75-L138 | 只读当前 Run 已冻结的 learning_mastery items，按用户/线程/快照校验并输出有限掌握度摘要；找不到快照不读取 live 状态 |
+  | 路由主链 | `backend/app/modules/agent/workflows/conversation.py` | `_route_node` | L54-L208 | 构建理解和 snapshot，注入 LearningSnapshot/只读 manifest，写 `conversation_decision`、兼容 `router_decision`、`teaching_policy_version` 与完整审计，决定 direct/clarify/child |
+  | 策略冻结 | `backend/app/modules/agent/model_runtime/teaching_policy.py` | `FrozenTeachingPolicy.from_decision`、`load_frozen_teaching_policy`、`freeze_teaching_policy` | L19-L47、L67-L101、L104-L109 | 只复制 workflow action、教学模式、目标知识点、诊断需求、只读意图和理由码；child 缺策略时按 action 兼容默认，不重新路由 |
+  | Child 交接 | `backend/app/modules/agent/workflows/conversation.py` | `_child_context_metadata`、`_dispatch_workflow_node` | L275-L323、L326-L367 | 将策略和上下文审计冻结到 child metadata，并保持原有 child Run/时间线幂等副作用 |
+  | Worker 恢复 | `backend/app/modules/agent/worker.py` | `AgentWorker.process_run` | L105-L323 | 运行 workflow 前把 metadata 策略注入 ExecutionContext；Artifact 的私有 metadata 可记录策略，公开消息/SSE 不展示内部策略 |
+  | 策略消费 | `backend/app/modules/agent/workflows/explain.py`、`validate.py`、`grade.py` | `_load_scope_node`、`_load_learning_evidence_node`、`_load_attempt_snapshot_node` | Explain L38-L59；Validate L51-L89；Grade L41-L86 | 分别读取冻结 `teaching_mode`；Explain 传给规划/生成 deps，Validate 写入学习证据上下文但不投影，Grade 保持确定性评分；策略不会选择 workflow 或直接更新掌握度 |
+
+- 验证：`backend/venv/bin/pytest tests/test_agent_teaching_policy.py tests/test_agent_router_runtime.py tests/test_agent_capability_harness.py tests/test_agent_answer_runtime.py tests/test_agent_explain_workflow.py tests/test_agent_validate_workflow.py tests/test_agent_grade_worker.py -q`（53 passed，6 个既有 datetime 弃用告警）；`compileall`、Black 检查、Flake8（忽略 Black 与旧代码冲突的 E203/W503）和 `git diff --check` 通过。对话 Worker 整链仍受当前测试 fixture 未加载 `users` 表的既有 SQLite 外键建表问题影响。
+- 中文提交信息：`冻结 Tutor 策略并交接 Agent 子工作流`。
