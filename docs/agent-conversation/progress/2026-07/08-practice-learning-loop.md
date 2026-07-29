@@ -66,3 +66,11 @@
 - 兼容边界：不修改 `learning_activity_events` 表、不改变 `quality`/`is_correct`/`error_types` 的旧读取语义，不新增迁移；未知历史活动降级为无 verdict 的 observation，模型附加 `mastery_score` 或未知字段直接失败。
 - 验证：`backend/venv/bin/python -m pytest tests/test_learning_contracts.py tests/test_learning_activity_events.py tests/test_learning_weaknesses.py tests/test_learning_progress.py tests/test_agent_memory_projection.py tests/test_agent_grade_worker.py tests/test_agent_explain_worker.py -q`（34 passed）；`black --check`、`flake8 --max-line-length=88` 与 `git diff --check` 通过。
 - 中文提交信息：`冻结自适应学习证据契约与兼容边界`。
+
+## 2026-07-29：阶段二——合并 Router 与 Tutor 决策契约
+
+- 目标：让在线入口一次模型调用同时产出业务 `action` 和 `teaching_mode`，并固定知识点目标、诊断需求、稳定原因代码与只读能力意图。
+- 关键实现：新增兼容的 `ConversationDecision`/旧 `RouterDecision` 别名、`ConversationTutorRuntime`/旧 `RouterRuntime` 别名；`RouterDeps` 增加冻结学习快照摘要、三项只读能力 allowlist 和知识点目标范围。显式讲解、出题、批改、计划护栏仍在运行时生效，模型输出禁止掌握度写字段。
+- 安全边界：`get_learning_snapshot`、`retrieve_knowledge`、`search_question_candidates` 只作为结构化 intent，真实执行继续由 ToolRegistry 和 workflow/参数/用户归属门禁负责；教学策略不进入学习证据投影。
+- 验证：`backend/venv/bin/pytest tests/test_agent_router_runtime.py tests/test_agent_capability_harness.py -q`（21 passed）；对话 Worker 基线因测试 fixture 未加载 `users` 表而有既有 SQLite 外键建表错误，未归因于本次改动。
+- 中文提交信息：`合并 Agent 路由与教学策略契约`。

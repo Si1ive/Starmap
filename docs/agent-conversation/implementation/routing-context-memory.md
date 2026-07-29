@@ -19,6 +19,28 @@
 | Child 元数据交接 | `backend/app/modules/agent/workflows/conversation.py` | `_child_context_metadata` | L219-L254；父 run 的上下文审计、active topic、独立请求、选定能力和模型配置 | 复制筛选后的消息/Artifact ID、`active_topic`、`standalone_request`、`memory_snapshot_id`、模型配置和当前能力审计，不复制敏感密钥或可执行函数 | child run metadata | `_dispatch_workflow_node` |
 | Child Run 派发 | `backend/app/modules/agent/workflows/conversation.py` | `_dispatch_workflow_node` | Router action、parent/root run、独立请求 | 创建 child run 和 workflow 时间线项；child run 的 `input_message` 改为 `standalone_request`，从而不再只依赖原始短句和消息 ID | queue 中的 child run | worker |
 
+## 阶段二：ConversationTutorAgent 决策契约
+
+当前在线入口只有一个 `ConversationTutorAgent`。`action` 是需要持久化的业务分支，
+`teaching_mode` 是该分支采用的教学策略；两者必须由同一次结构化模型调用产出，
+避免 Router 先选 `validate`、另一个 Tutor 再次选择 `validate`。策略事实只用于
+冻结 child workflow 的输入，不是学习证据，也不能直接更新掌握度或薄弱点。
+
+| 执行阶段 | 文件 | 符号 | 代码范围 | 输入 | 处理 | 输出/副作用 | 下一步 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 决策 Schema | `backend/app/modules/agent/model_runtime/schema.py` | `ConversationDecision`、`TeachingMode`、`ReadToolIntent` | L65-L183 | 当前请求和模型结构化输出 | 校验 action、confidence、稳定 `reason_code(s)`、教学模式、知识点 ID、诊断标记和只读意图；`extra=forbid` 拒绝 `mastery_score` 等写字段；`RouterDecision` 仍是兼容别名 | 单次 `ConversationDecision`；不写数据库 | `ConversationTutorRuntime.decide` |
+| Tutor 运行时 | `backend/app/modules/agent/model_runtime/router.py` | `RouterDeps`、`_router_policy`、`ConversationTutorRuntime.decide` | L43-L57、L126-L166、L232-L319 | 用户/线程/Run ID、允许 action、冻结 LearningSnapshot 摘要、能力清单和只读意图 allowlist | 将历史摘要和学习快照标为不可信动态资料；模型只声明只读意图，不获得 session、ORM 或写函数；显式讲解/出题/批改/计划护栏覆盖错误 action，并补齐旧输出的默认教学模式 | 受控 `ConversationDecision`；非法 action、知识点目标或只读意图沿 route 节点失败 | `_route_node` |
+| 只读能力目录 | `backend/app/modules/agent/capabilities.py` | `CapabilityRegistry.read_only_model_manifest`、`read_only_audit_manifest`、`allowed_read_tool_intents` | L94-L121 | 阶段二固定的三个只读意图 | 模型视图只暴露名称/描述，审计视图额外记录 policy version；真实执行仍须进入 `ToolRegistry` 的 workflow、参数和用户所有权门禁 | `get_learning_snapshot`、`retrieve_knowledge`、`search_question_candidates` allowlist | 路由或业务 workflow |
+
+### 策略默认值与错误传播
+
+旧测试模型或历史 Run 未携带 `teaching_mode` 时，运行时按 action 补齐：
+`direct_answer → answer_only`、`explain → explain`、`validate → practice_weakness`、
+`grade → feedback`、`plan → plan`、`clarify → clarify`；`need_diagnostic_check=true`
+且 action 为 direct/explain 时使用 `explain_then_micro_check`。结构化输出失败、
+action 不在本轮能力清单、目标知识点不在冻结范围或只读意图未授权时，当前
+conversation Run 失败，不创建 child Run；任何教学策略字段都不会进入学习证据投影。
+
 ## 已落库的记忆基础契约
 
 | 执行阶段 | 文件 | 符号 | 输入 | 处理 | 输出/副作用 | 下一步 |

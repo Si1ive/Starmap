@@ -107,6 +107,10 @@ ConversationTutorAgent 选择下一步教学动作
 - 为旧事件定义明确默认值，不把历史讲解事件回填成 mastery evidence。
 ## 阶段二：合并 Router 与 Tutor 策略
 
+实施状态：进行中；本提交已完成 ConversationDecision 契约、ConversationTutorRuntime
+兼容别名、只读能力 allowlist 和模型输出边界，下一提交接入 conversation Run、child
+Run 与 Explain/Validate/Grade 的策略冻结。
+
 ### 目标
 
 将当前只判断高层 action 的 Router 演进为一个在线 `ConversationTutorAgent`，一次模型调用同时返回业务 workflow 和教学策略；不改变 child workflow 的持久化职责。

@@ -6,10 +6,29 @@
 from dataclasses import dataclass
 from typing import Literal
 
-from .model_runtime.schema import RouterAction
+from .model_runtime.schema import ReadToolIntent, RouterAction
 
 CapabilityMode = Literal["response", "workflow", "interaction"]
 SideEffect = Literal["none", "domain_write"]
+
+READ_ONLY_CAPABILITY_POLICY_VERSION = "agent-read-capabilities-v1"
+READ_ONLY_CAPABILITIES: tuple[dict[str, object], ...] = (
+    {
+        "name": "get_learning_snapshot",
+        "description": "读取本轮已按用户、线程和版本冻结的学习状态摘要。",
+        "read_only": True,
+    },
+    {
+        "name": "retrieve_knowledge",
+        "description": "检索当前用户有权访问的知识资料或题目候选。",
+        "read_only": True,
+    },
+    {
+        "name": "search_question_candidates",
+        "description": "按服务端冻结的知识点和题目范围读取题目候选。",
+        "read_only": True,
+    },
+)
 
 
 @dataclass(frozen=True)
@@ -71,6 +90,35 @@ class CapabilityRegistry:
     ) -> list[dict[str, object]]:
         allowed = actions or self.actions()
         return [self.require(action).audit_descriptor() for action in allowed]
+
+    @staticmethod
+    def read_only_model_manifest() -> tuple[dict[str, object], ...]:
+        """返回 Tutor 可声明的只读能力，不包含执行函数或写入参数。"""
+        return tuple(
+            {
+                "name": capability["name"],
+                "description": capability["description"],
+            }
+            for capability in READ_ONLY_CAPABILITIES
+        )
+
+    @staticmethod
+    def read_only_audit_manifest() -> list[dict[str, object]]:
+        """返回只读能力的审计视图；实际调用仍由 ToolRegistry 再次门禁。"""
+        return [
+            {
+                **capability,
+                "policy_version": READ_ONLY_CAPABILITY_POLICY_VERSION,
+            }
+            for capability in READ_ONLY_CAPABILITIES
+        ]
+
+    @staticmethod
+    def allowed_read_tool_intents() -> tuple[ReadToolIntent, ...]:
+        return tuple(
+            capability["name"]  # type: ignore[return-value]
+            for capability in READ_ONLY_CAPABILITIES
+        )
 
 
 capability_registry = CapabilityRegistry(

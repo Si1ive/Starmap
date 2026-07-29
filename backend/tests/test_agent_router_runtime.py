@@ -3,7 +3,12 @@
 import pytest
 from pydantic_ai.models.test import TestModel
 
-from app.modules.agent.model_runtime.router import RouterDeps, RouterRuntime
+from app.modules.agent.model_runtime.router import (
+    ConversationTutorRuntime,
+    RouterDeps,
+    RouterRuntime,
+)
+from app.modules.agent.model_runtime.schema import ConversationDecision
 
 
 def _deps(**overrides) -> RouterDeps:
@@ -164,3 +169,120 @@ async def test_router_accepts_frozen_summary_without_treating_it_as_authority():
     )
 
     assert decision.action == "direct_answer"
+
+
+@pytest.mark.asyncio
+async def test_conversation_tutor_returns_workflow_and_teaching_policy_together():
+    runtime = ConversationTutorRuntime(
+        TestModel(
+            custom_output_args={
+                "action": "explain",
+                "confidence": 0.88,
+                "reason_code": "uncertain_concept",
+                "teaching_mode": "explain_then_micro_check",
+                "target_knowledge_point_ids": ["kp_binary_search"],
+                "need_diagnostic_check": True,
+                "read_tool_intents": [
+                    "get_learning_snapshot",
+                    "retrieve_knowledge",
+                ],
+                "reason_codes": ["uncertain_concept", "recent_error"],
+            }
+        )
+    )
+
+    decision = await runtime.decide(
+        "我还是不理解二分查找",
+        deps=_deps(
+            learning_snapshot={
+                "snapshot_id": "snapshot_001",
+                "mastery_signals": [{"knowledge_point_id": "kp_binary_search"}],
+            },
+            known_knowledge_point_ids=("kp_binary_search",),
+        ),
+    )
+
+    assert decision.action == "explain"
+    assert decision.teaching_mode == "explain_then_micro_check"
+    assert decision.target_knowledge_point_ids == ["kp_binary_search"]
+    assert decision.need_diagnostic_check is True
+    assert decision.read_tool_intents == [
+        "get_learning_snapshot",
+        "retrieve_knowledge",
+    ]
+    assert decision.reason_codes == ["uncertain_concept", "recent_error"]
+
+
+@pytest.mark.asyncio
+async def test_legacy_router_output_gets_action_specific_teaching_mode():
+    runtime = RouterRuntime(
+        TestModel(
+            custom_output_args={
+                "action": "validate",
+                "confidence": 0.9,
+                "reason_code": "weak_topic",
+            }
+        )
+    )
+
+    decision = await runtime.decide("继续练习", deps=_deps())
+
+    assert decision.teaching_mode == "practice_weakness"
+    assert decision.reason_codes == ["weak_topic"]
+
+
+@pytest.mark.asyncio
+async def test_explicit_workflow_guard_also_freezes_compatible_teaching_mode():
+    runtime = RouterRuntime(
+        TestModel(
+            custom_output_args={
+                "action": "direct_answer",
+                "confidence": 0.95,
+                "reason_code": "generic_question",
+                "teaching_mode": "answer_only",
+            }
+        )
+    )
+
+    decision = await runtime.decide("给我讲解二分查找", deps=_deps())
+
+    assert decision.action == "explain"
+    assert decision.teaching_mode == "explain"
+    assert decision.reason_codes[0] == "explicit_explain_request"
+
+
+@pytest.mark.asyncio
+async def test_router_rejects_read_intent_or_target_outside_frozen_scope():
+    runtime = RouterRuntime(
+        TestModel(
+            custom_output_args={
+                "action": "validate",
+                "confidence": 0.9,
+                "reason_code": "weak_topic",
+                "read_tool_intents": ["search_question_candidates"],
+                "target_knowledge_point_ids": ["kp_foreign"],
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="未授权只读意图"):
+        await runtime.decide(
+            "给我出题",
+            deps=_deps(allowed_read_tool_intents=("get_learning_snapshot",)),
+        )
+
+    with pytest.raises(ValueError, match="未冻结的知识点"):
+        await runtime.decide(
+            "给我出题",
+            deps=_deps(known_knowledge_point_ids=("kp_binary_search",)),
+        )
+
+
+def test_conversation_decision_forbids_mastery_write_fields():
+    with pytest.raises(ValueError, match="mastery_score"):
+        ConversationDecision(
+            action="validate",
+            confidence=0.8,
+            reason_code="weak_topic",
+            mastery_score=0.99,
+        )

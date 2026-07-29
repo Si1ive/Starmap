@@ -24,6 +24,20 @@ def test_capability_manifest_separates_model_and_audit_views():
     assert audit_manifest[0]["tools"] == ["retrieve_knowledge"]
 
 
+def test_read_only_tutor_manifest_is_closed_and_has_no_write_descriptor():
+    model_manifest = capability_registry.read_only_model_manifest()
+    audit_manifest = capability_registry.read_only_audit_manifest()
+
+    assert [item["name"] for item in model_manifest] == [
+        "get_learning_snapshot",
+        "retrieve_knowledge",
+        "search_question_candidates",
+    ]
+    assert all("read_only" not in item for item in model_manifest)
+    assert all(item["read_only"] is True for item in audit_manifest)
+    assert all("execute" not in item for item in audit_manifest)
+
+
 @pytest.mark.asyncio
 async def test_registered_tool_executes_only_for_allowed_workflow():
     implementation = AsyncMock(return_value={"status": "success"})
